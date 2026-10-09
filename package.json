@@ -1,0 +1,60 @@
+{
+  "name": "recruiters-companion",
+  "version": "3.4.0",
+  "private": true,
+  "description": "Local career tools for Codex and Claude",
+  "main": "src/main.mjs",
+  "type": "module",
+  "packageManager": "pnpm@10.28.0",
+  "engines": { "node": ">=22.12.0" },
+  "scripts": {
+    "build:runtime": "node build/runtime.mjs",
+    "build": "pnpm build:runtime",
+    "start": "pnpm build:runtime && electron .",
+    "start:local": "pnpm build:runtime && electron . --local-product",
+    "package:local": "pnpm build:runtime && electron-builder --mac --arm64 --dir --publish never -c.mac.identity=- -c.mac.notarize=false -c.directories.output=dist/local -c.extraMetadata.localProduct=true",
+    "package:adhoc": "pnpm build:runtime && electron-builder --mac zip dmg --arm64 --publish never -c.mac.identity=- -c.mac.notarize=false -c.directories.output=dist/adhoc -c.extraMetadata.localProduct=false",
+    "package:release": "pnpm build:runtime && node src/package-release.mjs",
+    "package:mcp": "node build/package-mcp.mjs",
+    "check": "node --check src/main.mjs && node --check src/vault.mjs && node --check src/client.mjs && node --check src/native-host.cjs && node --check src/mcp/server.mjs && node --check src/mcp/broker.mjs && node --check src/mcp/state.mjs && node --check src/mcp/profile-tools.mjs && node --check src/mcp/application-tools.mjs && node --check src/mcp/files.mjs && node --check ui/settings.js && node --check src/preload.cjs && node --check src/package-release.mjs && node --check build/after-pack.cjs",
+    "test": "pnpm build:runtime && node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "@nestjs/common": "^10.4.15",
+    "@pdf-lib/fontkit": "1.1.1",
+    "ajv": "8.17.1",
+    "ajv-formats": "3.0.1",
+    "ajv-legacy": "npm:ajv@6.12.6",
+    "mammoth": "^1.12.0",
+    "pdf-lib": "1.17.1",
+    "pdf-parse": "^2.4.5",
+    "saxes": "^6.0.0",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.1",
+    "yauzl": "^3.4.0"
+  },
+  "devDependencies": { "electron": "^40.0.0", "electron-builder": "^26.0.12", "esbuild": "^0.25.0", "typescript": "5.9.3" },
+  "pnpm": { "onlyBuiltDependencies": ["electron", "esbuild"] },
+  "build": {
+    "appId": "rip.recruiters.companion",
+    "productName": "Recruiters.rip Companion",
+    "artifactName": "recruiters-rip-companion-${version}-${os}-${arch}.${ext}",
+    "icon": "build/icon.png",
+    "protocols": [{ "name": "Recruiters.rip account connection", "schemes": ["recruiters-companion"] }],
+    "files": ["src/**/*", "!src/package-release.mjs", "!src/documents/**/*", "ui/**/*", "package.json"],
+    "asar": true,
+    "asarUnpack": ["src/native-host.cjs", "src/generated/mcp-host.cjs", "src/generated/*.mcpb", "src/generated/recruiters-rip-plugin/**/*", "node_modules/@napi-rs/**/*", "node_modules/pdf-parse/**/*"],
+    "afterPack": "build/after-pack.cjs",
+    "electronFuses": { "runAsNode": true },
+    "mac": {
+      "category": "public.app-category.productivity",
+      "hardenedRuntime": true,
+      "target": [{ "target": "zip", "arch": ["arm64"] }, { "target": "dmg", "arch": ["arm64"] }],
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist"
+    },
+    "dmg": { "sign": false },
+    "linux": { "target": ["AppImage"], "category": "Office" }
+  }
+}

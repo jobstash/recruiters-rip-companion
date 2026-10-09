@@ -1,0 +1,15 @@
+node_modules/
+dist/
+src/generated/
+.env*
+.DS_Store
+*.log
+*.p12
+*.p8
+*.pem
+*.key
+vault.bin
+device/
+local-device/
+userdata/
+coverage/

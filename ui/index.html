@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-src 'none'; object-src 'none'">
+<title>Recruiters.rip Companion</title>
+<link rel="stylesheet" href="settings.css">
+<script src="settings.js" defer></script>
+</head>
+<body>
+<dialog id="approval-dialog" aria-labelledby="approval-title" aria-describedby="approval-detail"><h2 id="approval-title"></h2><pre id="approval-detail" tabindex="0"></pre><div class="actions"><button id="approval-cancel" type="button" autofocus>Cancel</button><button id="approval-allow" class="primary" type="button">Allow this action</button></div></dialog>
+<main>
+<header><h1>Recruiters.rip Companion</h1><button id="pause" type="button">Pause work</button></header>
+<p id="notice" role="status" aria-live="polite"></p>
+<section id="storage" hidden><h2>Local storage</h2><p id="storage-message"></p><button id="unlock" type="button">Open local storage</button></section>
+<div id="settings">
+<section><h2>Platform account</h2><p id="account">Reading account…</p><button id="connect-account" type="button">Connect account</button><p class="hint">Connect your paid Recruiters.rip account to access new job data. Continue your profile and application preparation in Codex or Claude. Saved local work remains available without an active membership.</p></section>
+<section><h2>Connect your chat app</h2><p id="execution" role="status"></p><p id="mcp-status" role="status" aria-live="polite"></p>
+<h3>ChatGPT desktop · local Work/Codex</h3><p>Install the Recruiters.rip plugin, then start a new local Work/Codex task with it enabled. The plugin includes both the MCP connection and its conversation skill. Ordinary ChatGPT chats do not inherit this local connection.</p><button id="install-chatgpt" class="primary" type="button">Install ChatGPT local plugin</button><details><summary>Manual local MCP connection</summary><p>For a compatible local MCP host, register this command as <strong>recruiters-rip</strong>. This alone does not connect an ordinary ChatGPT chat.</p><label>Local MCP command<input id="mcp-command" readonly spellcheck="false"></label><button id="copy-command" type="button">Copy command</button></details>
+<h3>Claude Desktop</h3><p>Install the local extension, then enable Recruiters.rip in your conversation.</p><button id="install-claude" type="button">Install Claude extension</button><details><summary>Manual Claude configuration</summary><p>Add this entry to Claude Desktop’s MCP configuration without removing your other servers.</p><pre id="mcp-config"></pre><button id="copy-config" type="button">Copy configuration</button></details>
+<p>Ask: “Use Recruiters.rip. Show my saved matches, then score new jobs in concurrent batches using my current preferences.” Scores appear as they are saved. Use native worker agents for large catalogues; voice and worker support depend on the host app.</p><p class="hint">ChatGPT or Claude handles your AI login and subscription. This companion never asks for provider keys or starts inference requests.</p></section>
+<section><h2>Your local career data</h2><p id="career-counts"></p><p id="activity"></p><p>Source CVs, profile facts and application drafts are encrypted locally. Content read by your chat app is shared with its model provider, not uploaded to Recruiters.rip.</p><div class="actions"><button id="open-exports" type="button">Open exported PDFs</button><button id="backup" type="button">Export career backup</button></div><p class="hint">Exported PDFs and backups are ordinary local files. Choose a private location when sharing or copying them.</p></section>
+<details><summary>Connection recovery</summary><p id="archive-status"></p><p>Reset only to switch platform accounts or replace a revoked device. Your current local career data is archived, not exposed to the next account. Revoke the old device in your platform account separately.</p><div class="actions"><button id="install" type="button">Repair local connections</button><button id="unpair" type="button">Reset device identity</button></div></details>
+</div>
+</main>
+</body>
+</html>

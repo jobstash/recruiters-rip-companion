@@ -1,0 +1,4 @@
+interface:
+  display_name: "Recruiters.rip"
+  short_description: "Batch scoring and immediately available job matches"
+  default_prompt: "Use Recruiters.rip. Show saved matches now. Read my candidate brief once, assign new job IDs to native workers, score complete original ads in batches, and save each batch. Apply my current preferences without starting over. Do not search the web or request inference credentials."

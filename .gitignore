@@ -13,3 +13,6 @@ device/
 local-device/
 userdata/
 coverage/
+
+*.tgz
+vault.node.bin

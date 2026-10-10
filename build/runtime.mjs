@@ -25,4 +25,4 @@ for (const name of ['NotoSans-Regular.ttf', 'OFL.txt', 'job-screening-prompt.txt
   await copyFile(path.join(root, 'src', 'documents', 'assets', name), path.join(generated, 'assets', name));
 await copyFile(path.join(root, 'src', 'mcp', 'local-runner.cjs'), path.join(generated, 'mcp-host.cjs'));
 await packageMcp();
-console.log('Built local MCP bridge, desktop extension packages and shared document engine. No provider runtime is bundled.');
+console.log('Built local MCP bridge, AI app integrations and shared document engine. No provider runtime is bundled.');

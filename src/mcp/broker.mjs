@@ -4,10 +4,12 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { writeFile, chmod, unlink } from 'node:fs/promises';
 import { privateDirectory } from '../vault.mjs';
 
+import { mcpSocket } from '../node/paths.mjs';
+
 const MAX_FRAME = 16 * 1024 * 1024;
 export async function startMcpBroker({ directory, createServer, onConnections = () => {} }) {
   await privateDirectory(directory);
-  const socketPath = path.join(directory, 'mcp.sock');
+  const socketPath = mcpSocket(directory);
   try { await unlink(socketPath); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   const token = randomBytes(32).toString('hex');
   const clients = new Set();
@@ -54,12 +56,12 @@ export async function startMcpBroker({ directory, createServer, onConnections = 
     });
   });
   await new Promise((resolve, reject) => { listener.once('error', reject); listener.listen(socketPath, resolve); });
-  await chmod(socketPath, 0o600);
+  if (process.platform !== 'win32') await chmod(socketPath, 0o600);
   const config = path.join(directory, 'mcp-bridge.json');
   await writeFile(config, JSON.stringify({ socket: socketPath, token }), { mode: 0o600 });
   await chmod(config, 0o600);
   return {
     disconnect() { for (const socket of clients) socket.destroy(); },
-    close() { for (const socket of clients) socket.destroy(); listener.close(); },
+    close() { for (const socket of clients) socket.destroy(); return new Promise(resolve => listener.close(resolve)); },
   };
 }

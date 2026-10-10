@@ -1,55 +1,63 @@
 # Recruiters.rip Companion
 
-The local career-data app for Recruiters.rip. Version 3.4.0 separates the companion from the website without changing its installed identity or career-data format.
+A Node package that connects your own AI subscription app to local career tools. No Electron app, browser extension, provider API key or paid npm account is needed.
 
-## Account and installation
+## One-command setup
 
-1. Visit https://recruiters.rip, connect your account, and complete the $9.99/month membership checkout.
-2. Download the macOS Apple Silicon installer from the website, move **Recruiters.rip Companion.app** to Applications, and open it.
-3. Choose **Connect account**. The companion opens `/settings/provider?deviceId=…&publicKey=…&deviceLabel=…` on the website. Complete website pairing, then approve the account in the companion's native confirmation.
-4. Install the local Work/Codex plugin or Claude Desktop extension from the companion's settings and start a conversation with Recruiters.rip enabled. The manual MCP command also supports compatible local Codex hosts. Ordinary ChatGPT chats do not inherit a local MCP connection.
-
-AI authentication and inference belong to the user's official Codex/ChatGPT or Claude subscription app. The companion does not accept provider keys or call inference APIs. The user's host app sees content returned by its tools.
-
-## Repository boundary and privacy
-
-This repository owns the Electron app, encrypted local vault, MCP server and launcher, conversation skill, scoring/decision storage, source-preserving CV tools, and CareerCup-style PDF rendering. `recruiters-rip-frontend` owns website authentication, checkout, installer delivery, pairing, and the signed-device proxy. Middleware owns account/device authorization and the paid job feed. There is no server database, backend inference service, website runtime, or sibling-checkout dependency here.
-
-CVs, profile facts, assessments and drafts stay in the local encrypted vault. Fresh job data requires current paid membership; saved local data remains available without payment. Exported PDFs, CSVs and backups are ordinary files: choose a private destination. Do not commit vaults, exports, credentials, certificates, or user data.
-
-Installed identity is intentionally unchanged: app ID `rip.recruiters.companion`, displayed app **Recruiters.rip Companion**, Electron storage/keychain name **Recruiters Companion**, protocol `recruiters-companion://`, and production vault `~/Library/Application Support/Recruiters Companion/device` on macOS. Never reset or relocate that vault during an upgrade.
-
-## Build from a fresh clone
-
-Requires Node.js 22.12+, pnpm 10.28.0, and `zip`. macOS ARM64 packaging also requires macOS and its standard signing tools.
+Install **Node.js 22.12 or newer** (including npm) and Git, then run:
 
 ```sh
-pnpm install --frozen-lockfile
-pnpm build
-pnpm check
-pnpm test
+npx --yes github:jobstash/recruiters-rip-companion
 ```
 
-`pnpm test` builds runtime assets first. Tests use temporary synthetic local data; they must not use a real vault or invoke a model. `pnpm start` uses https://recruiters.rip. Only explicit developer commands `pnpm start:local` / `pnpm package:local` select `http://127.0.0.1:3001` and the separate `local-device` directory; no fixture server is bundled.
+**Distribution note:** the repository is currently private. This command needs GitHub repository access until a public source/package is released. Use a published commit or release tag for reproducible installs; do not describe a private repository as accessible to everyone.
 
-The package version is the source of truth for Electron, the MCP server, and generated plugin manifests. `build/runtime.mjs` bundles owned document source and emits `src/generated/document-engine.cjs`, font/rubric assets, the local MCP launcher, `recruiters-rip.mcpb`, a developer-only `recruiters-rip-local.mcpb`, and the `recruiters-rip-plugin` directory. `pnpm package:mcp` emits the portable extension/plugin packages without Electron packaging. Generated output and `dist/` are ignored by Git.
+Setup keeps its runtime in your user account, opens controls in your browser, and continues in the background after you close the terminal. No administrator privileges are needed.
 
-`src/documents/package.json` declares a CommonJS source boundary because the document build transpiles TypeScript to CommonJS before bundling. Keep that boundary separate from the Electron application's root ES-module package.
+1. Choose **Set up Codex** or **Set up Claude Desktop**. Codex is installed if missing. Its skill and MCP connection are registered automatically. Claude Desktop's settings are merged with its other servers; its career instructions are delivered by the local MCP connection. Restart Claude after setup.
+2. Choose **Sign in with ChatGPT** if needed, or sign in inside Claude. The official app owns your AI login and subscription. The companion does not perform inference or collect provider credentials.
+3. Choose **Connect account**, sign in on recruiters.rip and pair this device. Follow **Confirm account on this computer**, then approve the named account in your local controls. Membership gates fresh jobs; your saved work remains available without membership.
+4. Start a new conversation in your AI app and ask **“Use Recruiters.rip. Help me find jobs that match my experience.”** When your AI app asks for your CV, the local controls open a file chooser.
 
-## Distribution
+Ordinary ChatGPT web chats do not inherit a local MCP connection. Use Codex or Claude Desktop. A configured connection is not evidence that a conversation has used its tools; the controls show actual active connections.
+
+## Controls
+
+Run the same command again to open your controls. Append an action when useful:
 
 ```sh
-pnpm package:release
+npx --yes github:jobstash/recruiters-rip-companion status
+npx --yes github:jobstash/recruiters-rip-companion stop
+npx --yes github:jobstash/recruiters-rip-companion start
+npx --yes github:jobstash/recruiters-rip-companion pause
+npx --yes github:jobstash/recruiters-rip-companion resume
 ```
 
-This creates signed, notarized macOS ARM64 ZIP and DMG artifacts under `dist/release/`, never publishes, and fails rather than claiming signing succeeded without credentials. Supply a Developer ID Application certificate using `CSC_LINK` / `CSC_KEY_PASSWORD`, or its keychain identity using `CSC_NAME`; also supply Apple's API-key notarization credentials (`APPLE_API_KEY`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER`) or Apple-ID credentials (`APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`). Keep all credentials outside this repository.
+The browser controls also provide pause/resume, lock, stop, account connection/disconnection, CV selection, career backups and PDF/CSV downloads. Pause prevents local mutations while retaining reads; lock disconnects tools and persists until explicitly unlocked. Supported OS session lock signals also lock the tools. AI usage is controlled by the AI app, not by pausing this companion.
 
-If signing credentials are unavailable, explicitly use `pnpm package:adhoc`. It builds production-origin ZIP and DMG artifacts under `dist/adhoc/` with ad-hoc signing and **no notarization**; Gatekeeper may block them. Do not describe these as notarized releases or silently disable OS protections.
+Stopping closes local connections. A later AI-app connection can start the installed process again. There is no login daemon, public tunnel or listening network interface other than loopback. The installed runtime is retained outside the temporary npx cache, so clearing that cache does not break AI-app configuration.
 
-Artifact basenames are `recruiters-rip-companion-3.4.0-mac-arm64.zip` and `.dmg`. The website operator mounts the actual ZIP on its private host volume and sets `COMPANION_INSTALLER_PATH`; `/api/companion/download` serves that file. A private GitHub repository is not a public installer URL.
+## Existing desktop data
 
-## Document source and asset notices
+On macOS, quit the old desktop companion before setup. The first run reads its `vault.bin` using **Recruiters Companion Safe Storage** in Keychain and creates `vault.node.bin` encrypted with AES-256-GCM and a new OS-protected key. It preserves identity, pairing, sources, facts, assessments, drafts, receipts and archives. The original file is never overwritten. Approve Keychain access if macOS asks. Never run the old app and Node companion at the same time.
 
-The owned document closure in `src/documents/` consists of `candidate-document-codec.ts`, `candidate-document-provenance.ts`, `cv-source-baseline.ts`, `cv-document-layout.ts`, and `career-pdf.ts`. The codec owns the canonical preference-field list; no SQL/helper/service module is imported. Its legacy schema semantics remain on the explicit `ajv-legacy` alias (Ajv 6.12.6), separate from MCP's Ajv 8. TypeScript is an explicit build dependency.
+New installations use macOS Keychain, Windows Credential Manager, or Linux Secret Service. Linux requires an unlocked persistent Secret Service; there is no plaintext or volatile key fallback. Automatic transfer of older Linux/Windows Electron vault formats is not supported: setup stops rather than replacing existing data. The previously distributed desktop build was macOS Apple Silicon.
 
-`src/documents/assets/NotoSans-Regular.ttf` is Copyright 2018 The Noto Project Authors, distributed under the SIL Open Font License 1.1 in the adjacent `OFL.txt`; both are included in the app. `job-screening-prompt.txt` preserves the existing screening rubric. The app icon and source were migrated from the JobStash prototype; no separate third-party icon license was supplied. CareerCup is a layout reference linked by the conversation skill, not a bundled CareerCup document or asset. Dependency licenses remain with their npm packages.
+Source documents and career state stay local. Tool results are visible to the user's chosen AI provider. Backups and exported PDFs/CSVs are ordinary files; save them privately. Device disconnection archives existing career data locally instead of exposing it to the next account.
+
+## Development and packaging
+
+```sh
+npm ci
+npm run check
+npm test
+npm pack
+```
+
+Git installations run `prepare`, compiling the owned document engine and packaging its font/license, scoring rubric and conversation skill. Runtime installation uses the shrinkwrap and excludes development packages; no Electron dependency is shipped. The package has one executable, `recruiters`. `recruiters mcp` is strictly an MCP standard-input/output connection; progress goes to stderr, never the protocol stream.
+
+Tests use temporary synthetic vaults and injected key storage. They never inspect a user's actual vault or run inference. `--local-product` uses the isolated `local-device` directory and `http://127.0.0.1:3001`; it does not supply authentication or payment fixtures.
+
+Website changes in `recruiters-rip-frontend` must be deployed with this release for the loopback pairing return and Node setup instructions. Existing desktop deep links remain supported by the website during the transition.
+
+The Noto Sans font in `src/documents/assets` remains under its accompanying SIL Open Font License. The shared document implementation, evidence and review rules remain unchanged.

@@ -40,3 +40,6 @@ summary { cursor: pointer; padding: var(--space-3) 0; }
 #mcp-config { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; padding: var(--space-3); border: 1px solid var(--line); }
 [hidden] { display: none !important; }
 @media (max-width: 520px) { main { padding: var(--space-4); } .row { grid-template-columns: 1fr; } h1 { font-size: 24px; } }
+#approval-detail { white-space: pre-line; padding: 0; border: 0; }
+#error { color: var(--ink); padding: 16px 0; border-block: 1px solid var(--control-line); }
+header span { color: var(--secondary); }

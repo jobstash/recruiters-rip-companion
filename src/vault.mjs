@@ -13,8 +13,8 @@ function identity() {
   const pair = generateKeyPairSync('ed25519');
   return { deviceId: randomUUID(), publicKey: pair.publicKey.export({ type: 'spki', format: 'der' }).toString('base64url'), privateKey: pair.privateKey.export({ type: 'pkcs8', format: 'pem' }) };
 }
-export function createVault(safeStorage, directory) {
-  const filename = path.join(directory, 'vault.bin');
+export function createVault(safeStorage, directory, { filename: basename = 'vault.bin' } = {}) {
+  const filename = path.join(directory, basename);
   let state, writes = Promise.resolve();
   function available() { return safeStorage.isEncryptionAvailable() && !(process.platform === 'linux' && safeStorage.getSelectedStorageBackend() === 'basic_text'); }
   function requireEncryption() { if (!available()) throw new Error('Unlock operating system key storage to use the companion.'); }

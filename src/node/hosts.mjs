@@ -11,8 +11,8 @@ export async function findCodex(base) {
   }
   return null;
 }
-export async function codexStatus(host) {
-  try { const { stdout, stderr } = await exec(host.command, [...host.prefix, 'login', 'status'], { env: cleanEnvironment(), timeout: 15000 }); return /ChatGPT/i.test(stdout + stderr) ? 'signed_in' : 'subscription_required'; }
+export async function codexStatus(host, execute = exec) {
+  try { const { stdout, stderr } = await execute(host.command, [...host.prefix, 'login', 'status'], { env: cleanEnvironment(), timeout: 15000 }); return /ChatGPT/i.test(stdout + stderr) ? 'signed_in' : 'subscription_required'; }
   catch { return 'sign_in_required'; }
 }
 export async function mergeClaudeConfig(filename, transport) {
@@ -43,7 +43,7 @@ export async function installHost(kind, paths, { notify = () => {}, home = os.ho
     await mkdir(path.dirname(skill), { recursive: true }); await cp(path.join(root, 'skills/recruiters-rip'), skill, { recursive: true });
     const registered = JSON.parse((await run(['mcp', 'get', 'recruiters-rip', '--json'])).stdout);
     if (registered.transport?.command !== transport.command || JSON.stringify(registered.transport?.args) !== JSON.stringify(transport.args)) throw new Error('Codex did not retain the MCP settings. Check its settings file permissions.');
-    return { kind, installed: true, auth: await codexStatus(host), host, message: 'Skill and local tools installed. Start a new Codex conversation and ask “Use Recruiters.rip”.' };
+    return { kind, installed: true, auth: await codexStatus(host, execute), host, message: 'Skill and local tools installed. Start a new Codex conversation and ask “Use Recruiters.rip”.' };
   }
   if (kind === 'claude') {
     if (!['darwin','win32'].includes(process.platform)) throw new Error('Claude Desktop is supported on macOS and Windows. Choose Codex on Linux.');

@@ -8,7 +8,7 @@ import { randomBytes, createCipheriv, pbkdf2Sync } from 'node:crypto';
 import { encryption, nodeVault } from '../src/node/storage.mjs';
 import { createVault } from '../src/vault.mjs';
 import { startService, validatePairing } from '../src/node/service.mjs';
-import { mergeClaudeConfig } from '../src/node/hosts.mjs';
+import { mergeClaudeConfig, installHost } from '../src/node/hosts.mjs';
 import { privateJSON, request } from '../src/node/launcher.mjs';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
@@ -55,4 +55,42 @@ test('real Node service and stdio MCP: connection, pause, lock, browser isolatio
  await request(paths,'resume');assert.equal((await request(paths,'state')).paused,false);
  await request(paths,'lock');assert.equal((await request(paths,'state')).locked,true);await client.close();
  await request(paths,'unlock');await service.close();const again=await startService(paths,{vaultFactory:factory,open:async()=>{},monitor:()=>()=>{},isScreenLocked:async()=>false});t.after(()=>again.close());assert.equal(again.status().locked,false);await again.close();
+});
+
+test('Codex setup installs the complete skill, preserves other skills and verifies saved MCP settings',async t=>{
+ const home=await temp(t),base=path.join(home,'Recruiters Companion');
+ const existing=path.join(home,'.agents/skills/other');await mkdir(existing,{recursive:true});await writeFile(path.join(existing,'SKILL.md'),'Keep this skill');
+ const owned=path.join(home,'.agents/skills/recruiters-rip');await mkdir(owned);await writeFile(path.join(owned,'SKILL.md'),'Earlier career skill');
+ let registered, added=0;
+ const execute=async(_command,args)=>{
+   if(args[0]==='login')return {stdout:'Logged in using ChatGPT',stderr:''};
+   if(args[1]==='get'){if(!registered)throw new Error('Not configured');return {stdout:JSON.stringify(registered)};}
+   assert.deepEqual(args.slice(0,4),['mcp','add','recruiters-rip','--']);added++;registered={transport:{command:args[4],args:args.slice(5)}};return {stdout:''};
+ };
+ const result=await installHost('codex',{base,directory:base+'/device',localOnly:true},{home,discover:async()=>({command:'synthetic-codex',prefix:[]}),execute});
+ assert.equal(result.auth,'signed_in');assert.equal(added,1);
+ assert.deepEqual(await readFile(path.join(owned,'SKILL.md')),await readFile(new URL('../skills/recruiters-rip/SKILL.md',import.meta.url)));
+ assert.equal(await readFile(path.join(existing,'SKILL.md'),'utf8'),'Keep this skill');
+ assert(registered.transport.args.includes('--local-product'));
+ registered={transport:{command:'/other-server',args:[]}};
+ await assert.rejects(installHost('codex',{base},{home,discover:async()=>({command:'synthetic-codex',prefix:[]}),execute}),/different MCP server/);
+ assert.equal(added,1);
+});
+test('browser pairing consumes its return once and requires local approval before activation',async t=>{
+ const base=await temp(t),directory=path.join(base,'device'),paths={base,directory,control:directory+'/node-control.json',lock:directory+'/node.lock',localOnly:true};
+ const key=randomBytes(32);let saved,opened,activations=0;
+ const service=await startService(paths,{vaultFactory:async d=>{saved=createVault(encryption(key),d,{filename:'vault.node.bin'});await saved.open();return saved;},open:async url=>{if(url.includes('/settings/provider'))opened=new URL(url);},monitor:()=>()=>{},isScreenLocked:async()=>false,deviceClientFactory:()=>({request:async(method,url,body)=>{assert.equal(url,'/device/activate');activations++;return {deviceId:saved.get().deviceId,account:body.account};}})});t.after(()=>service.close());
+ await request(paths,'connect-account');
+ const config=await privateJSON(paths.control),payload={productOrigin:'http://127.0.0.1:3001',pairing:{deviceId:saved.get().deviceId,challenge:'a'.repeat(43),expiresAt:new Date(Date.now()+60000).toISOString(),account:{id:1,label:'Synthetic account'}}};
+ const handoff=()=>fetch(config.origin+'/pair',{method:'POST',headers:{'content-type':'application/json',origin:config.origin},body:JSON.stringify({payload,state:opened.searchParams.get('companionState')})});
+ assert.equal((await handoff()).status,200);
+ for(let i=0;i<20&&!service.status().approval;i++)await new Promise(r=>setTimeout(r,10));
+ assert.equal(activations,0);assert.equal(service.status().paired,false);assert(service.status().approval);
+ assert.equal((await handoff()).status,403);
+ await request(paths,'approval',{id:service.status().approval.id,allow:true});
+ for(let i=0;i<20&&!service.status().paired;i++)await new Promise(r=>setTimeout(r,10));
+ assert.equal(activations,1);assert.equal(service.status().account.label,'Synthetic account');
+ await request(paths,'lock');await service.close();
+ const restarted=await startService(paths,{vaultFactory:async()=>saved,open:async()=>{},monitor:()=>()=>{},isScreenLocked:async()=>false});t.after(()=>restarted.close());assert.equal(restarted.status().locked,true);
+ await Promise.all([request(paths,'unlock'),request(paths,'unlock')]);assert.equal(restarted.status().paired,true);
 });

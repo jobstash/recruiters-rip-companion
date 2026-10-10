@@ -49,7 +49,7 @@ export function validatePairing(payload, { productOrigin, deviceId, existing, no
   if (existing && (String(existing.account.id) !== String(p.account.id) || existing.origin !== payload.productOrigin)) throw new Error('This computer is connected to another account. Disconnect it in local settings before switching.');
   return p;
 }
-export async function startService(paths, { vaultFactory = nodeVault, open = openBrowser, documents: injectedDocuments, monitor = watchScreenLock, isScreenLocked = screenLocked } = {}) {
+export async function startService(paths, { vaultFactory = nodeVault, open = openBrowser, documents: injectedDocuments, deviceClientFactory = createDeviceClient, monitor = watchScreenLock, isScreenLocked = screenLocked } = {}) {
   const release = await acquireLock(paths);
   let vault, bridge, control, heartbeat, approval, sourceRequest, hostState = null, failure = '', closed = false, sessionEpoch = 0, mcpConnections = 0, lastTool = null, locked = true, pauseRequested = false;
   let openingVault, stopScreenMonitor, pairState, approvalQueue = Promise.resolve(), heartbeatBusy = false, hostBusy = false;
@@ -57,7 +57,7 @@ export async function startService(paths, { vaultFactory = nodeVault, open = ope
   const documents = injectedDocuments ?? createRequire(import.meta.url)('../generated/document-engine.cjs');
   function assertAvailable(mutation) { if (locked || !vault) fail('LOCAL_LOCKED','Open the companion controls and unlock local storage.'); if (mutation && (pauseRequested || vault.get().userPaused)) fail('LOCAL_PAUSED','Local changes are paused. Resume them in the companion controls.'); }
   const store = { get(){assertAvailable(false);return vault.get();}, update(change){assertAvailable(false);return vault.update(async s=>{assertAvailable(false);await change(s);assertAvailable(false);});} };
-  const client = createDeviceClient(store, paths.localOnly);
+  const client = deviceClientFactory(store, paths.localOnly);
   const files = createDocumentFiles({directory:paths.directory,store,assertAvailable});
   async function initialize(explicit = false) {
     if (await isScreenLocked()) throw new Error('Unlock this computer before opening local storage.');

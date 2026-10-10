@@ -9,6 +9,8 @@ const args=process.argv.slice(2),localOnly=args.includes('--local-product');
 const positional=args.filter(a=>a!=='--local-product'),command=positional[0]??'setup';
 const help=`Recruiters.rip ${version}\n\nrecruiters              Set up and open your companion\nrecruiters open         Open your controls\nrecruiters status       Show connection status\nrecruiters start        Start local tools in the background\nrecruiters stop         Stop local tools\nrecruiters pause        Pause local changes\nrecruiters resume       Resume local changes\nrecruiters lock         Lock local tools\nrecruiters mcp          Connect an AI app (standard input/output)\n\nRun the same npx Git command with any of these actions. Node.js 22.12+ is required.\n`;
 async function main(){
+  const [major,minor] = process.versions.node.split('.').map(Number);
+  if (major < 22 || (major === 22 && minor < 12)) throw new Error('Install Node.js 22.12 or newer from nodejs.org, then run this command again.');
   if(['--help','help','-h'].includes(command)){process.stdout.write(help);return;}
   if(['--version','-v'].includes(command)){console.log(version);return;}
   if(positional.length>1||!['setup','open','start','stop','status','pause','resume','lock','mcp','serve'].includes(command))throw new Error('Unknown command. Run recruiters --help.');

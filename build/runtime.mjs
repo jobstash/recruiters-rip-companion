@@ -1,12 +1,12 @@
 import { build } from 'esbuild';
 import ts from 'typescript';
-import { copyFile, mkdir, readFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, rm } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { packageMcp } from './package-mcp.mjs';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const generated = path.join(root, 'src', 'generated');
+await rm(path.join(generated, 'recruiters-rip-plugin'), {recursive:true, force:true});
 await mkdir(path.join(generated, 'assets'), { recursive: true });
 await build({
   entryPoints: [path.join(root, 'build', 'document-engine.cts')], outfile: path.join(generated, 'document-engine.cjs'),
@@ -24,5 +24,4 @@ await build({
 for (const name of ['NotoSans-Regular.ttf', 'OFL.txt', 'job-screening-prompt.txt'])
   await copyFile(path.join(root, 'src', 'documents', 'assets', name), path.join(generated, 'assets', name));
 await copyFile(path.join(root, 'src', 'mcp', 'local-runner.cjs'), path.join(generated, 'mcp-host.cjs'));
-await packageMcp();
 console.log('Built local MCP bridge, AI app integrations and shared document engine. No provider runtime is bundled.');

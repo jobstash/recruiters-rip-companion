@@ -167,19 +167,19 @@ test('complete CSV export uses native MCP resources alongside existing PDF expor
   await assert.rejects(newFiles.readResource(result.export.uri), { code: 'ENOENT' });
 });
 
-test('CSV and PDF exports reject corrupt bytes, changed permissions, symlinks and arbitrary resource paths', async t => {
+test('document exports reject corrupt bytes, changed permissions, symlinks and arbitrary resource paths', async t => {
   const f = fixture(), directory = await mkdtemp(path.join(os.tmpdir(), 'mcp-export-safety-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const files = createDocumentFiles({ directory, store: f.scoped.store, assertAvailable: f.scoped.assertAvailable });
-  for (const [mediaType, bytes] of [['text/plain', Buffer.from('private')],
-    ['text/csv', Buffer.from([0xff, 0xfe])], ['application/pdf', Buffer.from('not a PDF')],
-    ['text/csv', Buffer.alloc(0)], ['text/csv', Buffer.alloc(12 * 1024 * 1024 + 1)]])
+  for (const [mediaType, bytes] of [['text/html', Buffer.from('private')],
+    ['text/plain', Buffer.from([0xff, 0xfe])], ['text/csv', Buffer.from([0xff, 0xfe])], ['application/pdf', Buffer.from('not a PDF')],
+    ['text/plain', Buffer.alloc(0)], ['text/csv', Buffer.alloc(0)], ['text/csv', Buffer.alloc(12 * 1024 * 1024 + 1)]])
     await assert.rejects(files.exportDocument({ mediaType, bytes }), { code: 'INVALID_INPUT' });
   const csvBytes = Buffer.from('"id","reason"\r\n"node:a","Société"\r\n');
   const csv = await files.exportDocument({ mediaType: 'text/csv', bytes: csvBytes });
   assert.deepEqual(await files.exportDocument({ mediaType: 'text/csv', bytes: csvBytes }), csv);
   for (const uri of [`file://${csv.path}`, 'recruiters://exports/../../secret.csv',
-    `recruiters://exports/${csv.sha256}.txt`, `recruiters://exports/${csv.sha256}.csv?path=secret`,
+    `recruiters://exports/${csv.sha256}.docx`, `recruiters://exports/${csv.sha256}.csv?path=secret`,
     `recruiters://exports/%2e%2e/${csv.sha256}.csv`])
     await assert.rejects(files.readResource(uri), { code: 'NOT_FOUND' });
   await chmod(csv.path, 0o644);
@@ -220,4 +220,20 @@ test('export ancestor symlinks and malformed device identities cannot redirect p
   const malformed = createDocumentFiles({ directory, store: f.store, assertAvailable: () => {} });
   await assert.rejects(malformed.exportDocument({ mediaType: 'text/csv', bytes: Buffer.from('"id"\r\n') }), { code: 'EXPORT_CORRUPT' });
   await assert.rejects(malformed.listResources(), { code: 'EXPORT_CORRUPT' });
+});
+
+test('plain-text CV resources retain Unicode and enforce private-file integrity', async t => {
+  const f = fixture(), directory = await mkdtemp(path.join(os.tmpdir(), 'mcp-txt-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const files = createDocumentFiles({ directory, store: f.scoped.store, assertAvailable: f.scoped.assertAvailable });
+  const text = 'Zoë Candidate\nzoe@example.test\n\nExpérience\n• Built reliable services.\n';
+  const exported = await files.exportDocument({ mediaType: 'text/plain', bytes: Buffer.from(text) });
+  assert.match(exported.uri, /^recruiters:\/\/exports\/[a-f0-9]{64}\.txt$/);
+  const resource = await files.readResource(exported.uri);
+  assert.equal(resource.text, text);
+  assert.equal(resource.mimeType, 'text/plain');
+  assert.equal((await stat(exported.path)).mode & 0o777, 0o600);
+  assert.ok((await files.listResources()).some(resource => resource.uri === exported.uri && resource.mimeType === 'text/plain'));
+  await writeFile(exported.path, 'Tampered CV');
+  await assert.rejects(files.readResource(exported.uri), { code: 'EXPORT_CORRUPT' });
 });

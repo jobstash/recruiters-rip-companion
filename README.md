@@ -19,6 +19,19 @@ CVs, profile facts, assessments and drafts stay in the local encrypted vault. Fr
 
 Installed identity is intentionally unchanged: app ID `rip.recruiters.companion`, displayed app **Recruiters.rip Companion**, Electron storage/keychain name **Recruiters Companion**, protocol `recruiters-companion://`, and production vault `~/Library/Application Support/Recruiters Companion/device` on macOS. Never reset or relocate that vault during an upgrade.
 
+## CV customization
+
+The companion prepares the application document. It does not ask the candidate to approve each rewrite, layout, or check.
+
+- The host reads the selected job and saved local facts, then writes and saves the tailored CV directly.
+- Classic A4 is the default. Modern or Letter is used only when the candidate already asked for it.
+- Unsupported numbers are left out. The companion does not ask the candidate to supply or certify them.
+- Writing checks stay private and are fixed before export. There is no candidate checklist and no ATS score.
+- PDF is the normal export. TXT is available on request. PDF text is checked automatically before the file is saved.
+
+Facts, drafts, and documents remain in the local companion vault. Exporting a document does not submit an application.
+
+
 ## Build from a fresh clone
 
 Requires Node.js 22.12+, pnpm 10.28.0, and `zip`. macOS ARM64 packaging also requires macOS and its standard signing tools.

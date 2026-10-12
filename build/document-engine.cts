@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { CandidateDocumentCodec, CandidateDocumentFile } from "../src/documents/candidate-document-codec";
 
 export { buildCvBaseline, applyCvBaselineChanges, assertCvBaselineCurrent } from "../src/documents/cv-source-baseline";
-export { measureCareerCvLayout, renderCareerCvPdf, renderCareerPdf } from "../src/documents/career-pdf";
+export { measureCareerCvLayout, renderCareerCvPdf, renderCareerCvText, validateCareerPdfText, renderCareerPdf } from "../src/documents/career-pdf";
 export { buildCvPresentation } from "../src/documents/cv-document-layout";
 export { CandidateDocumentCodec };
 

@@ -49,9 +49,9 @@ async function fixture(t, options = {}) {
   };
   const exportDocument = async input => {
     exported.push(input);
-    const sha256 = digest(input.bytes), destination = path.join(directory, `${sha256}.pdf`);
+    const sha256 = digest(input.bytes), extension = path.extname(input.filename), destination = path.join(directory, `${sha256}${extension}`);
     await writeFile(destination, input.bytes, { mode: 0o600 });
-    return { path: destination, sha256, bytes: input.bytes.length, uri: `recruiters://exports/${sha256}.pdf` };
+    return { path: destination, sha256, bytes: input.bytes.length, mediaType: input.mediaType, uri: `recruiters://exports/${sha256}${extension}` };
   };
   const tools = new Map(createApplicationTools({ store, platform, documents: options.documents ?? documents, exportDocument }).map(tool => [tool.name, tool]));
   const profileTools = new Map(createProfileTools({ store }).map(tool => [tool.name, tool]));
@@ -692,4 +692,94 @@ test('full local corpus and new-conversation answers can be explicitly refreshed
   assert.equal(history.total, 2);
   assert.equal(f.store.get().career.facts[conversation.facts[0].id].source.conversationId, 'new-conversation');
   assert.ok(f.requests.every(request => request.operation === 'job_read' && Object.keys(request.args).length === 1));
+});
+
+test('tailored wording and presentation save directly without an approval queue', async t => {
+  const f = await fixture(t), app = await f.create();
+  assert.equal(f.tools.has('career_application_suggestions_save'), false);
+  assert.equal(f.tools.has('career_application_suggestions_resolve'), false);
+  const entries = f.store.get().career.applications[app.applicationId].baseline.entries;
+  const role = entries.find(entry => entry.text.includes('Acme'));
+  const education = entries.find(entry => entry.text.includes('University'));
+  const saved = await f.saveCv(app, {
+    presentation: { template: 'modern', paper: 'LETTER' },
+    changes: [
+      { entryId: role.id, text: role.text.replace('Built reliable', 'Delivered reliable'), evidence: [f.candidateRef] },
+      { entryId: education.id, text: education.text.replace('Completed a computing degree.', 'Earned a computing degree.'), evidence: [{ kind: 'source', sourceId: f.sourceId, quote: education.text }] },
+    ],
+  });
+  assert.equal(saved.cvVersion, 1);
+  const current = (await f.call('application_read', { applicationId: app.applicationId })).application;
+  assert.equal(current.suggestions, undefined);
+  assert.deepEqual(current.cv.presentation, { template: 'modern', paper: 'LETTER' });
+  assert.match(current.cv.baseline.entries.find(entry => entry.id === role.id).text, /Delivered reliable/);
+  assert.match(current.cv.baseline.entries.find(entry => entry.id === education.id).text, /Earned a computing degree/);
+  assert.equal(f.store.get().career.facts[f.factId].statement, 'Built reliable data services.');
+});
+
+test('an invented number is omitted by rejecting the save, while a saved number applies directly', async t => {
+  const f = await fixture(t), app = await f.create();
+  const entry = f.store.get().career.applications[app.applicationId].baseline.entries.find(entry => entry.text.includes('Acme'));
+  const before = f.store.get();
+  await assert.rejects(f.saveCv(app, { changes: [{ entryId: entry.id, text: `${entry.text}\nReduced failures by 37%.`, evidence: [f.candidateRef] }] }),
+    error => error.code === 'INVALID_EVIDENCE' && /Leave out unsupported numbers/.test(error.message));
+  assert.deepEqual(f.store.get(), before);
+  const fact = await f.profileCall('facts_add', f.mutation({ facts: [{ kind: 'achievement', statement: 'Reduced failures by 37%.',
+    source: { kind: 'conversation', quote: 'I reduced failures by 37%.' } }] }));
+  const refreshed = await f.call('application_refresh', f.mutation({ applicationId: app.applicationId, jobHash: app.jobHash, sourceId: app.sourceId }));
+  await f.saveCv({ ...app, evidenceRevision: refreshed.evidenceRevision }, { changes: [{ entryId: entry.id, text: `${entry.text}\nReduced failures by 37%.`,
+    evidence: [{ kind: 'fact', factId: fact.facts[0].id }] }] });
+  assert.match(f.store.get().career.applications[app.applicationId].cv.baseline.entries.find(item => item.id === entry.id).text, /37%/);
+});
+
+test('chosen presentation survives refresh and is not offered as a candidate decision', async t => {
+  const f = await fixture(t), app = await f.create();
+  await f.saveCv(app, { presentation: { template: 'modern', paper: 'LETTER' } });
+  await f.call('application_refresh', f.mutation({ applicationId: app.applicationId, sourceId: app.sourceId, jobHash: app.jobHash }));
+  await f.saveCv(app);
+  const current = f.store.get().career.applications[app.applicationId].cv;
+  assert.deepEqual(current.presentation, { template: 'modern', paper: 'LETTER' });
+  assert.equal(current.layout.paper, 'LETTER');
+  const context = await f.call('application_context', { applicationId: app.applicationId });
+  assert.match(context.customization.instructions, /Do not stage alternatives/);
+  assert.equal(context.application.suggestions, undefined);
+});
+
+test('presentation and TXT export preserve wording, review gates and separate stale requirement coverage', async t => {
+  const f = await fixture(t), app = await f.create();
+  await f.saveCv(app);
+  await assert.rejects(f.call('application_export', f.mutation({ ...f.binding(app), kind: 'cv', format: 'txt' })), { code: 'CV_REVIEW_REQUIRED' });
+  await f.reviewBoth(app);
+  const before = f.store.get().career.applications[app.applicationId].cv;
+  let checks = await f.call('application_cv_check', { applicationId: app.applicationId });
+  assert.equal(checks.requirementCoverage.state, 'current');
+  await f.saveCv(app, { presentation: { template: 'modern', paper: 'LETTER' } });
+  const after = f.store.get().career.applications[app.applicationId].cv;
+  assert.deepEqual(after.baseline, before.baseline);
+  assert.deepEqual(after.presentation, { template: 'modern', paper: 'LETTER' });
+  assert.equal(after.layout.paper, 'LETTER');
+  checks = await f.call('application_cv_check', { applicationId: app.applicationId });
+  assert.equal(checks.requirementCoverage.state, 'stale');
+  assert.equal(checks.reviewReadiness.ready, false);
+  await f.review(app, 'adversarial');
+  const exported = await f.call('application_export', f.mutation({ ...f.binding(app), kind: 'cv', format: 'txt' }));
+  const text = await readFile(exported.export.path, 'utf8');
+  assert.equal(text, documents.renderCareerCvText(after));
+  assert.equal(exported.export.mediaType, 'text/plain');
+  assert.equal(exported.export.textValidation, null);
+  assert.equal(exported.export.visualInspection, 'not_applicable');
+  assert.doesNotMatch(text, /factId|sourceId|evidenceRevision/);
+});
+
+test('PDF export refuses actual lost text before publishing while keeping the draft', async t => {
+  const f = await fixture(t, { documents: { ...documents,
+    renderCareerCvPdf: () => documents.renderCareerPdf('Jane Candidate', ['This broken renderer omitted the career history.']),
+  } });
+  const app = await f.create();
+  await f.saveCv(app);
+  await f.reviewBoth(app);
+  const before = f.store.get();
+  await assert.rejects(f.call('application_export', f.mutation({ ...f.binding(app), kind: 'cv' })), { code: 'EXPORT_CORRUPT' });
+  assert.deepEqual(f.store.get(), before);
+  assert.deepEqual(f.exported, []);
 });

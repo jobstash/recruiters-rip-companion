@@ -6,11 +6,11 @@ import { privateDirectory } from '../vault.mjs';
 import { fail } from './state.mjs';
 
 const MAX_SOURCE = 5 * 1024 * 1024, MAX_EXPORT = 12 * 1024 * 1024;
-const exportTypes = { pdf: 'application/pdf', csv: 'text/csv' };
+const exportTypes = { pdf: 'application/pdf', csv: 'text/csv', txt: 'text/plain' };
 function validExport(bytes, extension) {
   if (!Buffer.isBuffer(bytes) || !bytes.length || bytes.length > MAX_EXPORT) return false;
   if (extension === 'pdf') return bytes.subarray(0, 5).toString() === '%PDF-';
-  if (extension !== 'csv') return false;
+  if (!['csv', 'txt'].includes(extension)) return false;
   try { new TextDecoder('utf-8', { fatal: true }).decode(bytes); return true; } catch { return false; }
 }
 export async function readSelectedSource(filename) {
@@ -45,7 +45,7 @@ export function createDocumentFiles({ directory, store, assertAvailable }) {
   async function exportDocument({ bytes, mediaType }) {
     assertAvailable(true);
     const extension = Object.keys(exportTypes).find(key => exportTypes[key] === mediaType);
-    if (!validExport(bytes, extension)) fail('INVALID_INPUT', 'Export a bounded PDF or UTF-8 CSV document.');
+    if (!validExport(bytes, extension)) fail('INVALID_INPUT', 'Export a bounded PDF, UTF-8 TXT or CSV document.');
     const sha256 = createHash('sha256').update(bytes).digest('hex');
     const dir = await privateRoot(true);
     const filename = path.join(dir, `${sha256}.${extension}`);
@@ -72,19 +72,19 @@ export function createDocumentFiles({ directory, store, assertAvailable }) {
     } finally { await handle.close(); }
   }
   async function readResource(uri) {
-    const matched = /^recruiters:\/\/exports\/([a-f0-9]{64})\.(pdf|csv)$/.exec(uri);
+    const matched = /^recruiters:\/\/exports\/([a-f0-9]{64})\.(pdf|csv|txt)$/.exec(uri);
     if (!matched) fail('NOT_FOUND', 'Choose a URI returned by document or ranking export. Arbitrary file access is unavailable.');
     const bytes = await readExport(matched[1], matched[2]);
-    return { uri, mimeType: exportTypes[matched[2]], ...(matched[2] === 'csv' ? { text: bytes.toString('utf8') } : { blob: bytes.toString('base64') }) };
+    return { uri, mimeType: exportTypes[matched[2]], ...(matched[2] !== 'pdf' ? { text: bytes.toString('utf8') } : { blob: bytes.toString('base64') }) };
   }
   async function listResources() {
     assertAvailable(false);
     try {
       const dir = await privateRoot();
-      const names = (await readdir(dir)).filter(name => /^[a-f0-9]{64}\.(pdf|csv)$/.test(name)).sort().slice(0, 200);
+      const names = (await readdir(dir)).filter(name => /^[a-f0-9]{64}\.(pdf|csv|txt)$/.test(name)).sort().slice(0, 200);
       assertAvailable(false);
       return names.map(name => ({ uri: `recruiters://exports/${name}`, name, mimeType: exportTypes[path.extname(name).slice(1)],
-        description: name.endsWith('.csv') ? 'Saved complete assessment ranking CSV snapshot.' : 'Saved local PDF; read current application state to check whether a newer revision exists.' }));
+        description: name.endsWith('.csv') ? 'Saved complete assessment ranking CSV snapshot.' : 'Saved local document; read current application state to check whether a newer revision exists.' }));
     } catch (error) { if (error.code === 'ENOENT') return []; throw error; }
   }
   return { exportDocument, readResource, listResources, exportDirectory: root };

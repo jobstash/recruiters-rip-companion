@@ -6,6 +6,11 @@ import { join } from "node:path";
 import type { CvDraftBaseline } from "./cv-source-baseline";
 import { buildCvPresentation, type CvHeaderOverride } from "./cv-document-layout";
 
+// Match the codec's Node worker initialization before loading PDFParse.
+const { getPath }: { getPath(): string } = require("pdf-parse/worker");
+import { PDFParse } from "pdf-parse";
+PDFParse.setWorker(getPath());
+
 // PDF extraction commonly uses BLACK CIRCLE for a list marker. Render the
 // equivalent typographic bullet; the owned source and baseline remain exact.
 const cleanPdfText = (text: string): string => text
@@ -20,28 +25,35 @@ interface TextRun {
   leading: number;
   height: number;
 }
+export interface CareerCvPresentation {
+  template: "classic" | "modern";
+  paper: "A4" | "LETTER";
+}
 export interface CareerCvInput {
   heading: { name?: string; contact?: string; location?: string };
   baseline: CvDraftBaseline;
   headerOverride?: CvHeaderOverride;
+  presentation?: CareerCvPresentation;
 }
 export interface CareerCvLayout {
   version: typeof CAREER_CV_LAYOUT_VERSION;
   fits: boolean;
   pages?: number;
   maxPages: null;
-  paper: "A4";
+  paper: CareerCvPresentation["paper"];
+  template: CareerCvPresentation["template"];
   fontSize: 11;
   error?: string;
 }
 
 export async function measureCareerCvLayout(input: CareerCvInput): Promise<CareerCvLayout> {
+  const settings = input.presentation ?? { template: "classic" as const, paper: "A4" as const };
   try {
     const pdf = await layoutCareerCvPdf(input);
-    return { version: CAREER_CV_LAYOUT_VERSION, fits: true, pages: pdf.getPageCount(), maxPages: null, paper: "A4", fontSize: 11 };
+    return { version: CAREER_CV_LAYOUT_VERSION, fits: true, pages: pdf.getPageCount(), maxPages: null, ...settings, fontSize: 11 };
   } catch (error) {
     if (!(error instanceof BadRequestException)) throw error;
-    return { version: CAREER_CV_LAYOUT_VERSION, fits: false, maxPages: null, paper: "A4", fontSize: 11, error: error.message };
+    return { version: CAREER_CV_LAYOUT_VERSION, fits: false, maxPages: null, ...settings, fontSize: 11, error: error.message };
   }
 }
 
@@ -50,14 +62,33 @@ export async function renderCareerCvPdf(input: CareerCvInput): Promise<Buffer> {
   return Buffer.from(await pdf.save());
 }
 
-/** CareerCup-inspired serif hierarchy; authored content flows without a page cap. */
-async function layoutCareerCvPdf({ heading, baseline, headerOverride }: CareerCvInput): Promise<PDFDocument> {
+/** Text and PDF share the same source/header interpretation and reading order. */
+export function renderCareerCvText({ heading, baseline, headerOverride }: CareerCvInput): string {
+  const presentation = buildCvPresentation(baseline, heading, headerOverride);
+  const lines = [presentation.header.name ?? "", ...presentation.header.contactLines].filter(Boolean);
+  for (const block of presentation.blocks) {
+    lines.push("");
+    if (block.kind === "experience") {
+      lines.push(block.company, block.role);
+      if (block.dates) lines.push(block.dates);
+      if (block.location) lines.push(block.location);
+      for (const item of block.items) lines.push(`${item.kind === "bullet" ? "• " : ""}${item.text}`);
+    } else lines.push(block.kind === "section" ? block.title : `${block.kind === "bullet" ? "• " : ""}${block.text}`);
+  }
+  return `${lines.join("\n").trim()}\n`;
+}
+
+/** Both templates flow authored content at 11pt without a page cap. */
+async function layoutCareerCvPdf(input: CareerCvInput): Promise<PDFDocument> {
+  const { heading, baseline, headerOverride } = input;
+  const { template, paper } = input.presentation ?? { template: "classic", paper: "A4" };
+  const modern = template === "modern";
   const pdf = await PDFDocument.create();
   pdf.setTitle((headerOverride ? headerOverride.name : heading.name) || "Career CV");
   pdf.setProducer("JobStash");
-  const regular = await pdf.embedFont(StandardFonts.TimesRoman);
-  const bold = await pdf.embedFont(StandardFonts.TimesRomanBold);
-  const boldItalic = await pdf.embedFont(StandardFonts.TimesRomanBoldItalic);
+  const regular = await pdf.embedFont(modern ? StandardFonts.Helvetica : StandardFonts.TimesRoman);
+  const bold = await pdf.embedFont(modern ? StandardFonts.HelveticaBold : StandardFonts.TimesRomanBold);
+  const boldItalic = await pdf.embedFont(modern ? StandardFonts.HelveticaBoldOblique : StandardFonts.TimesRomanBoldItalic);
   const latin = new Set(regular.getCharacterSet());
   const presentation = buildCvPresentation(baseline, heading, headerOverride);
   const strings = [presentation.header.name ?? "", ...presentation.header.contactLines];
@@ -101,12 +132,13 @@ async function layoutCareerCvPdf({ heading, baseline, headerOverride }: CareerCv
     }
     return lines;
   };
-  const left = 54, right = 541.28, top = 793.89, bottom = 48, body = 11, leading = 13.2;
-  let page = pdf.addPage([595.28, 841.89]), y = top;
+  const [pageWidth, pageHeight] = paper === "LETTER" ? [612, 792] : [595.28, 841.89];
+  const left = 54, right = pageWidth - 54, top = pageHeight - 48, bottom = 48, body = 11, leading = 13.2;
+  let page = pdf.addPage([pageWidth, pageHeight]), y = top;
   const ensure = (height: number): void => {
     if (y - height < bottom && y < top) {
       // Never shrink or discard authored content to meet an arbitrary page count.
-      page = pdf.addPage([595.28, 841.89]);
+      page = pdf.addPage([pageWidth, pageHeight]);
       y = top;
     }
   };
@@ -134,12 +166,12 @@ async function layoutCareerCvPdf({ heading, baseline, headerOverride }: CareerCv
   };
   if (presentation.header.name) {
     const name = run(presentation.header.name, width, 20, true);
-    drawFlow(name, "center");
+    drawFlow(name, modern ? "left" : "center");
     y -= 4;
   }
   for (const text of presentation.header.contactLines) {
     const contact = run(text, width);
-    drawFlow(contact, "center");
+    drawFlow(contact, modern ? "left" : "center");
   }
   if (presentation.header.name || presentation.header.contactLines.length) y -= 12;
 
@@ -189,24 +221,38 @@ async function layoutCareerCvPdf({ heading, baseline, headerOverride }: CareerCv
     const dateWidth = 112;
     const companyWidth = (width - dateWidth - gap * 2) * 0.48;
     const roleWidth = width - dateWidth - gap * 2 - companyWidth;
-    const company = run(block.company, companyWidth, body, true);
-    const role = run(block.role, roleWidth, body, true, true);
-    const dates = run(block.dates ?? "", dateWidth);
+    let company = run(block.company, companyWidth, body, true);
+    let role = run(block.role, roleWidth, body, true, true);
+    let dates = run(block.dates ?? "", dateWidth);
     const location = run(block.location ?? "", width);
-    const headerRows = Math.max(company.rows.length, role.rows.length, dates.rows.length);
+    // Preserve the classic single-line heading. Wrapped fields must flow in
+    // semantic order rather than interleaving company, role and date fragments.
+    const stacked = modern || Math.max(company.rows.length, role.rows.length, dates.rows.length) > 1;
+    if (stacked) {
+      company = run(block.company, width, body, true);
+      role = run(block.role, width, body, true, true);
+      dates = run(block.dates ?? "", width);
+    }
+    const headerRows = stacked ? company.rows.length + role.rows.length + dates.rows.length
+      : Math.max(company.rows.length, role.rows.length, dates.rows.length);
     const headerHeight = headerRows * leading + location.height + 5;
     const items = block.items.map(prepareItem);
     const firstContentHeight = Math.min(items[0]?.text.height ?? 0, leading * 2);
-    // Keep ordinary role headings with their opening achievement. Pathological
-    // headings can span pages, but their final row still stays with content.
-    ensure(Math.min(sectionHeight() + headerHeight + firstContentHeight, top - bottom));
+    // Keep an ordinary role together when it fits on one page. Longer career
+    // entries still flow without truncation, keeping the heading with content.
+    const groupHeight = sectionHeight() + headerHeight + 7 +
+      items.reduce((height, item) => height + Math.max(item.text.height, leading) + (item.kind === "bullet" ? 3 : 5), 0);
+    ensure(groupHeight <= top - bottom ? groupHeight : Math.min(sectionHeight() + headerHeight + firstContentHeight, top - bottom));
     drawSections(Math.min(headerHeight + firstContentHeight, leading * 3));
-    for (let index = 0; index < headerRows; index++) {
-      ensure(leading + (index === headerRows - 1
-        ? Math.min(location.height + 5 + firstContentHeight, top - bottom - leading) : 0));
-      drawRow(company, index, left, companyWidth);
-      drawRow(role, index, left + companyWidth + gap, roleWidth);
-      drawRow(dates, index, right - dateWidth, dateWidth, "right");
+    if (stacked) {
+      drawFlow(company, "left", leading);
+      drawFlow(role, "left", leading);
+      drawFlow(dates, "left", Math.min(location.height + 5 + firstContentHeight, top - bottom - leading));
+    } else {
+      ensure(leading + Math.min(location.height + 5 + firstContentHeight, top - bottom - leading));
+      drawRow(company, 0, left, companyWidth);
+      drawRow(role, 0, left + companyWidth + gap, roleWidth);
+      drawRow(dates, 0, right - dateWidth, dateWidth, "right");
       y -= leading;
     }
     drawFlow(location, "left", 5 + firstContentHeight);
@@ -219,6 +265,97 @@ async function layoutCareerCvPdf({ heading, baseline, headerOverride }: CareerCv
     drawSections(0);
   }
   return pdf;
+}
+
+export interface CareerPdfTextValidation {
+  passed: boolean;
+  expectedTokens: number;
+  recoveredTokens: number;
+  /** Missing occurrences, in expected order; repeated words retain multiplicity. */
+  missingTokens: string[];
+  /** Exact normalized sequence equality, including duplicate occurrences. */
+  orderPreserved: boolean;
+  pages: number;
+}
+
+function pdfTextTokens(text: string): Array<{ text: string; lineBreakBefore: boolean }> {
+  const normalized = text.normalize("NFKC")
+    .replace(/\r\n?|\f/g, "\n")
+    .replace(/\u00ad/g, "")
+    .replace(/[•●▪◦‣]/g, " ")
+    .replace(/^[ \t]*[-*][ \t]+/gm, "")
+    .replace(/[‘’]/g, "'")
+    .replace(/[“”]/g, '"');
+  const tokens: Array<{ text: string; lineBreakBefore: boolean }> = [];
+  let previousEnd = 0;
+  for (const match of normalized.matchAll(/[\p{L}\p{M}\p{N}_]+|[^\s]/gu)) {
+    tokens.push({ text: match[0], lineBreakBefore: normalized.slice(previousEnd, match.index).includes("\n") });
+    previousEnd = match.index! + match[0].length;
+  }
+  return tokens;
+}
+
+/**
+ * Reparse the emitted bytes, not the layout model. This is a text-fidelity
+ * check only: it makes no visual-review or universal ATS-compatibility claim.
+ */
+export async function validateCareerPdfText(
+  { bytes, expectedText, pageNumberFooter = false }: { bytes: Uint8Array; expectedText: string; pageNumberFooter?: boolean },
+): Promise<CareerPdfTextValidation> {
+  const expected = pdfTextTokens(expectedText).map(token => token.text);
+  let parser: PDFParse | undefined;
+  let recovered: string[] = [];
+  let pages = 0;
+  try {
+    // PDF.js transfers its input buffer; leave the caller's export intact.
+    parser = new PDFParse({ data: Uint8Array.from(bytes), isEvalSupported: false,
+      useWorkerFetch: false, stopAtErrors: true, verbosity: 0 });
+    const result = await parser.getText({ pageJoiner: "", cellSeparator: " ", parseHyperlinks: false });
+    pages = result.total;
+    const extracted = pdfTextTokens(result.pages.map((page, index) => {
+      if (!pageNumberFooter) return page.text;
+      // Cover letters have a renderer-owned page counter; require its exact
+      // page/total values at the page foot, never strip arbitrary footer text.
+      const footer = new RegExp(`(?:^|\\n)\\s*${index + 1}\\s*/\\s*${result.total}\\s*$`);
+      if (!footer.test(page.text)) throw new Error("The expected page counter is missing.");
+      return page.text.replace(footer, "");
+    }).join("\n"));
+    for (let index = 0; index < extracted.length; index++) {
+      let token = extracted[index].text;
+      const target = expected[recovered.length];
+      let joined = token, matchedEnd = index;
+      // The renderer can split an overlong word across lines/pages without
+      // inserting a hyphen. Rejoin only newline-separated word fragments that
+      // form an exact expected token; never discard a fragment or punctuation.
+      if (target !== token && target?.startsWith(token) && /^[\p{L}\p{M}\p{N}_]+$/u.test(token)) {
+        for (let next = index + 1; next < extracted.length && extracted[next].lineBreakBefore; next++) {
+          if (!/^[\p{L}\p{M}\p{N}_]+$/u.test(extracted[next].text)) break;
+          joined += extracted[next].text;
+          if (!target.startsWith(joined)) break;
+          if (joined === target) { token = joined; matchedEnd = next; break; }
+        }
+      }
+      recovered.push(token);
+      index = matchedEnd;
+    }
+  } catch {
+    // Corrupt/unreadable bytes fail closed with every expected token missing.
+    recovered = [];
+    pages = 0;
+  } finally {
+    if (parser) await parser.destroy().catch(() => {});
+  }
+  const available = new Map<string, number>();
+  for (const token of recovered) available.set(token, (available.get(token) ?? 0) + 1);
+  const missingTokens: string[] = [];
+  for (const token of expected) {
+    const count = available.get(token) ?? 0;
+    if (count) available.set(token, count - 1);
+    else missingTokens.push(token);
+  }
+  const orderPreserved = expected.length === recovered.length && expected.every((token, index) => token === recovered[index]);
+  return { passed: pages > 0 && expected.length > 0 && orderPreserved,
+    expectedTokens: expected.length, recoveredTokens: recovered.length, missingTokens, orderPreserved, pages };
 }
 
 export async function renderCareerPdf(

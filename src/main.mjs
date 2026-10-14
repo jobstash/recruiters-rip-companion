@@ -68,7 +68,7 @@ function emit(event = 'status', payload = status()) {
 }
 function showSettings() {
   if (window && !window.isDestroyed()) { window.show(); window.focus(); window.webContents.send('state-changed'); return windowLoaded; }
-  window = new BrowserWindow({ width: 780, height: 860, minWidth: 420, minHeight: 560, title: 'Recruiters.rip Companion', backgroundColor: '#f5f5f5',
+  window = new BrowserWindow({ width: 1180, height: 820, minWidth: 420, minHeight: 560, title: 'Recruiters.rip Companion', backgroundColor: '#000000',
     webPreferences: { preload: path.join(root, 'src', 'preload.cjs'), partition: 'recruiters-settings', nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true, devTools: !app.isPackaged, spellcheck: false } });
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   window.webContents.on('will-navigate', event => event.preventDefault());

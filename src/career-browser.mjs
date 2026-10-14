@@ -9,11 +9,18 @@ const own = (value, key) => record(value) && Object.hasOwn(value, key);
 const text = (value, fallback = 'Not saved') => typeof value === 'string' && value.length ? value : fallback;
 const scalar = value => typeof value === 'string' ? value : typeof value === 'number' || typeof value === 'boolean' ? String(value) : 'Not saved';
 const section = (heading, value) => ({ heading, text: text(value) });
-const metadata = entries => entries.filter(([, value]) => value !== null && value !== undefined && value !== '').map(([label, value]) => `${label}: ${scalar(value)}`).join('\n');
+// Field sections let the reader present labelled values instead of "Label: value" prose.
+const fields = (heading, rows, empty) => {
+  const values = rows.filter(([, value]) => value !== null && value !== undefined && value !== '').map(([label, value]) => ({ label, value: scalar(value) }));
+  return values.length ? { heading, fields: values } : { heading, text: empty };
+};
+const amount = value => Number.isFinite(value) ? value.toLocaleString('en-GB') : null;
 const readable = value => typeof value === 'string' && value ? value === 'cv' ? 'CV' : value.replaceAll('_', ' ').replace(/^./, letter => letter.toUpperCase()) : undefined;
-const factTitle = fact => [readable(fact.kind) || 'Career fact', text(fact.employer, ''), text(fact.role, '')].filter(Boolean).join(' — ');
+// Facts are identified by what they say; kind, employer, role and non-current status are context.
+const factContext = fact => [readable(fact.kind), text(fact.employer, ''), text(fact.role, ''), fact.status === 'active' ? '' : readable(fact.status)].filter(Boolean).join(' · ');
 const entries = value => record(value) ? Object.entries(value).filter(([id, item]) => !forbidden.has(id) && record(item)) : [];
 const lookup = (value, id) => !forbidden.has(id) && own(value, id) && record(value[id]) ? value[id] : null;
+const displayDate = value => Number.isFinite(Date.parse(value)) ? new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium', timeZone: 'UTC' }).format(new Date(value)) : undefined;
 
 function validate(args, fields) {
   if (!record(args) || ![Object.prototype, null].includes(Object.getPrototypeOf(args)) ||
@@ -24,22 +31,22 @@ function validate(args, fields) {
 
 function sourceDetail(source) {
   return { title: text(source.name, 'Untitled source'), sections: [
-    section('Source details', metadata([
+    fields('Source', [
       ['Status', source.archived ? 'Archived' : 'Current'], ['Purpose', readable(source.purpose)],
-      ['Created', source.createdAt],
-    ])),
+      ['Added', displayDate(source.createdAt)],
+    ], 'No source details saved.'),
     section('Extracted source text', text(source.text, 'No extracted text is saved for this source.')),
   ] };
 }
 
 function factDetail(fact) {
-  return { title: factTitle(fact), sections: [
-    section('Career detail', text(fact.statement, 'No statement is saved.')),
-    section('Role and dates', metadata([
+  return { title: text(fact.statement, 'Untitled career fact'), sections: [
+    fields('Details', [
+      ['Type', readable(fact.kind)],
       ['Status', fact.status === 'active' ? undefined : readable(fact.status)],
       ['Employer', fact.employer], ['Role', fact.role],
       ['Start date', fact.startDate], ['End date', fact.endDate],
-    ]) || 'No role dates saved.'),
+    ], 'No role or dates saved.'),
   ] };
 }
 
@@ -55,11 +62,11 @@ function cvText(draft) {
 function draftSections(kind, draft, historical = false) {
   const label = `${historical ? 'Earlier ' : ''}${kind === 'cv' ? 'CV' : 'Cover letter'}`;
   if (!record(draft)) return [section(label, `No ${kind === 'cv' ? 'CV' : 'cover letter'} draft is saved.`)];
-  const heading = historical && draft.createdAt ? `${label} — ${draft.createdAt}` : label;
+  const date = displayDate(draft.createdAt);
+  const heading = historical && date ? `${label} — ${date}` : label;
   const wording = kind === 'cv' ? cvText(draft) :
     (Array.isArray(draft.sections) ? draft.sections.map(item => typeof item?.text === 'string' ? item.text : '').join('\n\n') : '');
-  return [...(!historical && draft.createdAt ? [section(`${heading} saved`, draft.createdAt)] : []),
-    section(heading, text(wording, 'No cover letter wording is saved in this draft.'))];
+  return [section(heading, text(wording, 'No cover letter wording is saved in this draft.'))];
 }
 function applicationTitle(app) {
   return [text(app.job?.title, ''), text(app.job?.company, '')].filter(Boolean).join(' — ') || 'Untitled application';
@@ -67,11 +74,10 @@ function applicationTitle(app) {
 function applicationDetail(app, career) {
   const source = typeof app.sourceId === 'string' ? lookup(career.sources, app.sourceId) : null;
   return { title: applicationTitle(app), sections: [
-    section('Application details', metadata([
-      ['Job', app.job?.title], ['Company', app.job?.company],
-      ['Created', app.createdAt], ['Updated', app.updatedAt], ['Source document', source?.name],
+    fields('Application', [
+      ['Created', displayDate(app.createdAt)], ['Updated', displayDate(app.updatedAt)], ['Source document', source?.name],
       ['Before applying', app.evidenceRevision !== career.evidenceRevision ? 'Your profile has changed since this draft. Update it for the job before sending.' : undefined],
-    ])),
+    ], 'No application details saved.'),
     ...draftSections('cv', app.cv), ...draftSections('cover_letter', app.coverLetter),
     ...(Array.isArray(app.cvHistory) ? app.cvHistory.flatMap(draft => draftSections('cv', draft, true)) : []),
     ...(Array.isArray(app.coverLetterHistory) ? app.coverLetterHistory.flatMap(draft => draftSections('cover_letter', draft, true)) : []),
@@ -93,19 +99,20 @@ function rankingItem(row) {
   };
   const label = value => own(labels, value) ? labels[value] : readable(value);
   const salary = row.salary;
-  const hasSalary = salary && [salary.minimum, salary.maximum, salary.stated].some(Number.isFinite);
+  const range = salary && (amount(salary.stated) ?? [amount(salary.minimum), amount(salary.maximum)].filter(Boolean).join('–'));
+  const pay = range ? [salary.currency, range, salary.period && `per ${salary.period}`].filter(Boolean).join(' ') : null;
   return { id: row.id, title, summary: `${score} · ${label(row.decision) || 'No saved decision'}`, sections: [
-    section('Job fit', metadata([
-      ['Score', score], ['Decision', label(row.decision) || 'No saved decision'], ['Before applying', row.reviewStatus === 'needs_review' ? 'Reassess against your current profile.' : undefined], ['Location match', label(row.matchStatus)],
-    ])),
+    fields('Job fit', [
+      ['Score', score], ['Decision', label(row.decision) || 'No saved decision'], ['Location match', label(row.matchStatus)],
+      ['Before applying', row.reviewStatus === 'needs_review' ? 'Reassess against your current profile.' : undefined],
+    ], 'No assessment saved.'),
     section('Reason', text(row.reason, 'No reason is saved.')),
-    section('Location', metadata([['City', row.city], ['Location', row.location], ['Work mode', row.workMode], ['Relocation', label(row.relocation)]]) || 'Location not stated'),
-    section('Pay', hasSalary ? metadata([
-      ['Minimum', salary.minimum], ['Maximum', salary.maximum], ['Stated amount', salary.stated],
-      ['Currency', salary.currency || 'Not stated'], ['Period', salary.period || 'Not stated'],
-      ['Compared with your minimum', row.salaryEligibility?.status === 'not_required' ? undefined : label(row.salaryEligibility?.status)],
-    ]) : 'Salary not stated'),
-    section('Job details', metadata([['Published', row.publishedAt || 'Date not stated'], ['Apply URL', row.applyUrl]])),
+    fields('Role', [
+      ['City', row.city], ['Location', row.location], ['Work mode', row.workMode], ['Relocation', label(row.relocation)],
+      ['Salary', pay || 'Not stated'],
+      ['Against your minimum', row.salaryEligibility?.status === 'not_required' ? undefined : label(row.salaryEligibility?.status)],
+      ['Published', displayDate(row.publishedAt) || 'Not stated'], ['Apply URL', row.applyUrl],
+    ], 'No role details saved.'),
   ] };
 }
 
@@ -128,8 +135,8 @@ export function createCareerBrowser({ store }) {
       const career = readCareer(store);
       const records = entries(career[kind]);
       const items = records.slice(offset, offset + limit).map(([id, item]) => {
-        if (kind === 'sources') return { id, title: text(item.name, 'Untitled source'), summary: [item.archived ? 'Archived' : 'Current', readable(item.purpose)].filter(Boolean).join(' · ') };
-        if (kind === 'facts') return { id, title: factTitle(item), summary: readable(item.status) || 'Status unknown' };
+        if (kind === 'sources') return { id, title: text(item.name, 'Untitled source'), summary: [readable(item.purpose), item.archived ? 'Archived' : ''].filter(Boolean).join(' · ') };
+        if (kind === 'facts') return { id, title: text(item.statement, 'Untitled career fact'), summary: factContext(item) };
         return { id, title: applicationTitle(item), summary: `${item.cv ? 'CV draft saved' : 'No CV draft'} · ${item.coverLetter ? 'Cover letter saved' : 'No cover letter draft'}` };
       });
       return { items, total: records.length, nextOffset: offset + items.length < records.length ? offset + items.length : null };

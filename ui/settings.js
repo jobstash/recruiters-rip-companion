@@ -1,8 +1,16 @@
 'use strict';
 const $ = id => document.getElementById(id);
-let state, busy = false, noticeKind = '', careerViewVersion, stateRequest = 0;
+let state, busy = false, noticeKind = '', careerViewVersion, stateRequest = 0, view = null;
 const notice = (text, kind = '') => { $('notice').textContent = text; noticeKind = kind; };
 async function invoke(op, input = {}) { const response = await window.companion.invoke(op, input); if (!response.ok) throw new Error(response.error.message); return response.result; }
+function showView(next) {
+  view = next;
+  for (const button of document.querySelectorAll('[data-view]')) {
+    if (button.dataset.view === next) button.setAttribute('aria-current', 'page'); else button.removeAttribute('aria-current');
+  }
+  $('view-career').hidden = next !== 'career'; $('view-setup').hidden = next !== 'setup';
+}
+for (const button of document.querySelectorAll('[data-view]')) button.addEventListener('click', () => showView(button.dataset.view));
 async function refresh() {
   const request = ++stateRequest;
   try {
@@ -10,7 +18,7 @@ async function refresh() {
     if (request !== stateRequest) return;
     state = current;
     const locked = state.execution.state === 'locked';
-    $('storage').hidden = !locked; $('settings').hidden = locked;
+    $('storage').hidden = !locked; $('settings').hidden = locked; $('views').hidden = locked;
     $('storage-message').textContent = state.failure || 'Unlock operating system key storage to open your saved career data.';
     if (state.approval && !locked) {
       $('approval-title').textContent = state.approval.title; $('approval-detail').textContent = state.approval.detail;
@@ -18,17 +26,20 @@ async function refresh() {
       if (!$('approval-dialog').open) $('approval-dialog').showModal();
     } else if ($('approval-dialog').open) $('approval-dialog').close();
     if (locked) {
-      $('mcp-command').value = ''; $('mcp-config').textContent = '';
+      $('mcp-command').textContent = ''; $('mcp-config').textContent = '';
       window.careerBrowser?.clear(); careerViewVersion = undefined;
       return;
     }
     $('connect-account').textContent = state.paired ? 'Open account' : 'Connect account';
+    $('connect-account').classList.toggle('primary', !state.paired);
+    // Unpaired devices start where the next step is; paired devices start with their career data.
+    if (!view) showView(state.paired ? 'career' : 'setup');
     if (state.paired && noticeKind === 'connect-account') notice('');
     if (window.careerBrowser && careerViewVersion !== state.careerViewVersion) {
       careerViewVersion = state.careerViewVersion;
       void window.careerBrowser.refresh();
     }
-    $('mcp-command').value = state.setup.command; $('mcp-config').textContent = state.setup.claudeConfig;
+    $('mcp-command').textContent = state.setup.command; $('mcp-config').textContent = state.setup.claudeConfig;
     if (state.failure) notice(state.failure);
   } catch {
     if (request !== stateRequest) return;
@@ -39,7 +50,7 @@ async function refresh() {
 async function action(op, success) {
   if (busy) return;
   busy = true;
-  const controls = [...document.querySelectorAll('button')].filter(button => !button.closest('#career-browser') && !['approval-cancel', 'approval-allow'].includes(button.id));
+  const controls = [...document.querySelectorAll('button')].filter(button => !button.closest('#career-browser, #views') && !['approval-cancel', 'approval-allow'].includes(button.id));
   const disabled = controls.map(control => control.disabled); controls.forEach(control => { control.disabled = true; });
   try { const result = await invoke(op); notice(typeof success === 'function' ? success(result) : success, op); }
   catch (error) { notice(error.message); }

@@ -40,5 +40,5 @@ test('rankings sort before pagination and keep skip judgments visible rather tha
   const second = await browser.list({ kind: 'rankings', limit: 2, offset: first.nextOffset });
   assert.deepEqual(second.items.map(item => item.id), ['low']);
   assert.equal(second.nextOffset, null);
-  assert.ok(second.items[0].sections.some(section => section.text.includes('Saved reasoning for low')));
+  assert.ok(second.items[0].sections.some(section => section.text?.includes('Saved reasoning for low')));
 });

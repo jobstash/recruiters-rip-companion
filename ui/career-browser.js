@@ -5,7 +5,7 @@
     sources: { title: 'Sources', empty: 'No saved sources. Imported source documents will appear here.' },
     facts: { title: 'Facts', empty: 'No saved career facts.' },
     rankings: { title: 'Rankings', empty: 'No saved rankings. Saved role assessments and their reasons will appear here.' },
-    applications: { title: 'Application drafts', empty: 'No saved application drafts. Saved CV and cover letter wording will appear here.' },
+    applications: { title: 'Applications', empty: 'No saved applications. Saved CV and cover letter wording will appear here.' },
   };
   const categoryButtons = [...document.querySelectorAll('[data-career-kind]')];
   const records = element('career-records');
@@ -19,6 +19,10 @@
   const readerStatus = element('career-reader-status');
   const readerRetry = element('career-reader-retry');
   const content = element('career-reader-content');
+  const root = element('career-browser');
+  const deleteRankings = element('delete-rankings');
+  // Wide windows show the list and reader side by side, so the first record opens automatically.
+  const sideBySide = window.matchMedia('(min-width: 760px)');
   let enabled = false;
   let kind = 'sources';
   let generation = 0;
@@ -43,6 +47,7 @@
     selectedButton = null;
     reader.hidden = true;
     readerTitle.textContent = '';
+    root.classList.remove('is-reading');
     readerStatus.textContent = '';
     content.replaceChildren();
     readerRetry.hidden = true;
@@ -56,16 +61,30 @@
     const sections = Array.isArray(detail?.sections) ? detail.sections : [];
     content.replaceChildren();
     for (const section of sections) {
-      if (typeof section?.text !== 'string') continue;
+      const hasFields = Array.isArray(section?.fields) && section.fields.length;
+      if (!hasFields && typeof section?.text !== 'string') continue;
       const block = document.createElement('section');
       if (typeof section.heading === 'string' && section.heading) {
-        const heading = document.createElement('h4');
+        const heading = document.createElement('h3');
         heading.textContent = section.heading;
         block.append(heading);
       }
-      const text = document.createElement('p');
-      text.textContent = section.text || 'No saved text in this section.';
-      block.append(text);
+      if (hasFields) {
+        const list = document.createElement('dl');
+        for (const field of section.fields) {
+          if (typeof field?.label !== 'string' || typeof field?.value !== 'string') continue;
+          const term = document.createElement('dt');
+          term.textContent = field.label;
+          const value = document.createElement('dd');
+          value.textContent = field.value;
+          list.append(term, value);
+        }
+        block.append(list);
+      } else {
+        const text = document.createElement('p');
+        text.textContent = section.text || 'No saved text in this section.';
+        block.append(text);
+      }
       content.append(block);
     }
     readerStatus.textContent = content.childElementCount ? '' : 'No saved content is available for this record.';
@@ -78,6 +97,7 @@
     selectedButton = button;
     button.setAttribute('aria-current', 'true');
     reader.hidden = false;
+    root.classList.add('is-reading');
     readerTitle.textContent = item.title;
     if (focus) readerTitle.focus();
     const currentGeneration = generation;
@@ -100,6 +120,9 @@
     }
   }
 
+  function showCategoryActions() {
+    deleteRankings.hidden = !enabled || kind !== 'rankings';
+  }
   async function loadPage(focusList = false) {
     if (!enabled) return;
     const currentGeneration = ++generation;
@@ -116,6 +139,7 @@
     const category = categories[kind];
     element('career-list-title').textContent = category.title;
     listStatus.textContent = `Loading ${category.title.toLowerCase()}…`;
+    let firstRecord = null;
     try {
       const result = await request('career-list', { kind, offset, limit: 25 });
       if (!enabled || currentGeneration !== generation) return;
@@ -136,19 +160,20 @@
           button.append(summary);
         }
         button.addEventListener('click', () => { void openRecord(item, button); });
+        firstRecord ??= { item, button };
         row.append(button);
         records.append(row);
       }
       nextOffset = Number.isInteger(result.nextOffset) && result.nextOffset > offset ? result.nextOffset : null;
       records.hidden = result.items.length === 0;
       listStatus.textContent = result.items.length
-        ? `Showing ${offset + 1}–${offset + result.items.length} of ${result.total}. Select a record to read it.`
+        ? `${offset + 1}–${offset + result.items.length} of ${result.total}`
         : offset ? 'No records remain on this page. Return to the previous page.' : category.empty;
       previous.disabled = priorOffsets.length === 0;
       next.disabled = nextOffset === null;
       pagination.hidden = previous.disabled && next.disabled;
       if (focusList) {
-        const target = records.querySelector('button') || element('career-list-title');
+        const target = records.querySelector('button') || listStatus;
         target.setAttribute('tabindex', target.tagName === 'BUTTON' ? '0' : '-1');
         target.focus();
       }
@@ -166,6 +191,9 @@
         records.removeAttribute('aria-busy');
       }
     }
+    if (firstRecord && enabled && currentGeneration === generation && sideBySide.matches && !focusList) {
+      void openRecord(firstRecord.item, firstRecord.button, false);
+    }
   }
 
   categoryButtons.forEach(button => button.addEventListener('click', () => {
@@ -174,6 +202,7 @@
     categoryButtons.forEach(candidate => candidate.setAttribute('aria-pressed', String(candidate === button)));
     offset = 0;
     priorOffsets = [];
+    showCategoryActions();
     void loadPage();
   }));
   previous.addEventListener('click', () => {
@@ -202,6 +231,7 @@
       categoryButtons.forEach(button => { button.disabled = false; });
       offset = 0;
       priorOffsets = [];
+      showCategoryActions();
       return loadPage();
     },
     clear() {
@@ -221,6 +251,7 @@
       pagination.hidden = true;
       previous.disabled = true;
       next.disabled = true;
+      showCategoryActions();
     },
   };
 })();

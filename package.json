@@ -1,6 +1,6 @@
 {
   "name": "recruiters-companion",
-  "version": "3.5.0",
+  "version": "3.5.1",
   "private": true,
   "description": "Local career tools for Codex and Claude",
   "main": "src/main.mjs",
@@ -16,7 +16,7 @@
     "package:adhoc": "pnpm build:runtime && electron-builder --mac zip dmg --arm64 --publish never -c.mac.identity=- -c.mac.notarize=false -c.directories.output=dist/adhoc -c.extraMetadata.localProduct=false",
     "package:release": "pnpm build:runtime && node src/package-release.mjs",
     "package:mcp": "node build/package-mcp.mjs",
-    "check": "node --check src/main.mjs && node --check src/vault.mjs && node --check src/client.mjs && node --check src/native-host.cjs && node --check src/mcp/server.mjs && node --check src/mcp/broker.mjs && node --check src/mcp/state.mjs && node --check src/mcp/profile-tools.mjs && node --check src/mcp/application-tools.mjs && node --check src/mcp/files.mjs && node --check src/career-browser.mjs && node --check ui/settings.js && node --check ui/career-browser.js && node --check src/preload.cjs && node --check src/package-release.mjs && node --check build/after-pack.cjs && node --check build/clean-dist.cjs",
+    "check": "node --check src/main.mjs && node --check src/vault.mjs && node --check src/client.mjs && node --check src/native-host.cjs && node --check src/mcp/server.mjs && node --check src/mcp/broker.mjs && node --check src/mcp/state.mjs && node --check src/mcp/facts.mjs && node --check src/mcp/interview.mjs && node --check src/mcp/profile-tools.mjs && node --check src/mcp/application-tools.mjs && node --check src/mcp/files.mjs && node --check src/career-browser.mjs && node --check ui/settings.js && node --check ui/career-browser.js && node --check src/preload.cjs && node --check src/package-release.mjs && node --check build/after-pack.cjs && node --check build/clean-dist.cjs",
     "test": "pnpm build:runtime && node --test test/*.test.mjs"
   },
   "dependencies": {

@@ -86,8 +86,17 @@ function candidateContext(career) {
   const cv = Object.values(career.sources ?? {}).filter(source => source.purpose === 'cv' && !source.archived && source.text?.trim())
     .map(source => compact(source.text, Infinity)).join('\n\n');
   const facts = Object.values(career.facts ?? {}).sort(compareFacts)
-    .map(({ kind, subject, answer, detail, employer }) => ({ kind, subject: compact(subject), answer: compact(answer),
-      ...(detail ? { detail: compact(detail, Infinity) } : {}), ...(employer ? { employer } : {}) }));
+    .map(({ id, kind, subject, answer, detail, employer, question, context, applicationId, followUps }) => ({
+      ...(id ? { id } : {}), kind, subject: compact(subject), answer: compact(answer),
+      ...(detail ? { detail: compact(detail, Infinity) } : {}), ...(employer ? { employer: compact(employer) } : {}),
+      ...(question ? { question: compact(question) } : {}), ...(context ? { context: compact(context) } : {}),
+      ...(applicationId ? { applicationId } : {}),
+      ...(followUps ? { followUps: followUps.map(exchange => ({
+        question: compact(exchange.question), answer: compact(exchange.answer, Infinity),
+        ...(exchange.context ? { context: compact(exchange.context) } : {}),
+        ...(exchange.applicationId ? { applicationId: exchange.applicationId } : {}),
+      })) } : {}),
+    }));
   if (!(professional.headline?.trim() || professional.roleCapabilities?.length) || (!cv && !facts.length))
     fail('PROFILE_INCOMPLETE', 'Save a professional headline or roleCapabilities, and import a CV with career_source_import or save career facts with career_facts_save, before matching.');
   return { ...professional, ...(cv ? { cv } : {}), facts, preferences };

@@ -116,6 +116,31 @@ test('candidate brief preserves negative and limited-depth answers and excludes 
   assert.equal(candidate.cv.includes('OLD CAREER CLAIM'), false);
 });
 
+test('candidate brief retains reusable interview context while omitting contact data', async () => {
+  const f = fixture();
+  const explanation = 'Optimized reporting queries. '.repeat(40);
+  const original = {
+    id: 'reporting-fact', question: 'Did you build reports for private@example.test?',
+    context: 'Reporting role described at https://private.test/job', applicationId: 'original-application',
+    employer: 'Acme private@example.test', detail: explanation,
+    followUps: [{ question: 'Which report at https://private.test/report?', answer: `${explanation}Contact private@example.test`,
+      context: 'Requirement at https://private.test/later contact private@example.test', applicationId: 'later-application' }],
+  };
+  await f.store.update(state => { Object.assign(state.career.facts.recent, original); });
+  const { candidate } = await f.call('career_match_jobs');
+  const saved = candidate.facts.find(row => row.id === original.id);
+  assert.equal(saved.question, 'Did you build reports for [contact omitted]?');
+  assert.equal(saved.context, 'Reporting role described at [link omitted]');
+  assert.equal(saved.employer, 'Acme [contact omitted]');
+  assert.equal(saved.detail, explanation.trim());
+  assert.equal(saved.applicationId, 'original-application');
+  assert.deepEqual(saved.followUps, [{ question: 'Which report at [link omitted]', answer: `${explanation}Contact [contact omitted]`,
+    context: 'Requirement at [link omitted] contact [contact omitted]', applicationId: 'later-application' }]);
+  assert.equal(candidate.facts.find(row => row.subject === 'Internal tooling').question, undefined);
+  const stored = f.store.get().career.facts.recent;
+  for (const key of Object.keys(original)) assert.deepEqual(stored[key], original[key]);
+});
+
 test('eight concurrent score batches merge atomically and saved matches are readable before completion', async () => {
   const f = fixture({ jobs: Array.from({ length: 81 }, (_, index) => job(String(index))) });
   await f.call('career_match_jobs');

@@ -4,9 +4,16 @@ import { randomUUID } from 'node:crypto';
 import Ajv from 'ajv';
 import { createProfileTools } from '../src/mcp/profile-tools.mjs';
 import { createCareerState } from '../src/mcp/state.mjs';
+import { isFact, needsDetail } from '../src/mcp/facts.mjs';
+import { isInterview } from '../src/mcp/interview.mjs';
+import { createScopedAccess } from '../src/mcp/scope.mjs';
+
+const applicationId = randomUUID();
+const applicationJob = { title: 'Wallet Engineer', company: 'Acme', description: 'Ship a wallet integration.', url: 'https://example.com/jobs/wallet' };
 
 function fixture(dependencies = {}, initial = {}) {
   let state = { career: createCareerState(), pairing: null, ...structuredClone(initial) };
+  state.career.applications[applicationId] ??= { id: applicationId, job: { ...applicationJob }, exports: [], cv: null, coverLetter: null };
   let queue = Promise.resolve();
   const store = {
     get: () => structuredClone(state),
@@ -25,6 +32,7 @@ function fixture(dependencies = {}, initial = {}) {
   ajv.addFormat('uuid', /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
   const tools = new Map(createProfileTools({ store, ...dependencies }).map(tool => [tool.name, { ...tool, validate: ajv.compile(tool.inputSchema) }]));
   const call = async (name, args = {}) => {
+    if (name === 'career_interview_ask') args = { applicationId, ...args };
     const tool = tools.get(name);
     if (!tool.validate(args)) throw Object.assign(new Error(ajv.errorsText(tool.validate.errors)), { code: 'INVALID_INPUT' });
     return tool.invoke(args);
@@ -153,8 +161,8 @@ test('no-CV onboarding reaches local readiness without pairing or provider crede
   assert.equal(status.questions[0].field, 'startingPoint');
   await f.edit('onboarding_start', { mode: 'interview' });
   status = await f.call('onboarding_status');
-  assert.equal(status.questions.find(item => item.field === 'background').tool, 'career_facts_save');
-  await f.edit('career_facts_save', { facts: [teamSize()] });
+  assert.equal(status.questions.find(item => item.field === 'background').tool, 'career_profile_update');
+  await f.edit('career_profile_update', { patch: { headline: 'Engineering manager', roleCapabilities: ['Managed engineering delivery'] } });
   await f.edit('career_preferences_update', { patch: { roles: ['Engineer'] } });
   status = await f.call('onboarding_status');
   assert.equal(status.locallyReady, true);
@@ -162,7 +170,7 @@ test('no-CV onboarding reaches local readiness without pairing or provider crede
   assert.deepEqual(status.pairing, { paired: false, account: null });
   assert.equal(status.catalogRequiresPairing, true);
   assert.equal(status.sourceCount, 0);
-  assert.equal(status.factCount, 1);
+  assert.equal(status.factCount, 0);
   assert.deepEqual(status.missing, []);
 });
 
@@ -343,7 +351,7 @@ test('short chat answers save optional examples and invalid replies save nothing
   assert.equal(result.saved[1].answer, 'No');
 });
 
-test('form interviews save explicit selections only; declining and transport failures save nothing', async () => {
+test('form interviews save explicit selections and retain pending questions on decline or transport failure', async () => {
   let response = { action: 'accept', content: { q1: 'Led it', q1_detail: 'Managed a delivery team.' } }, asked;
   const f = fixture({ interaction: { canElicit: () => true, elicit: async request => { asked = request; if (response instanceof Error) throw response; return response; } } });
   const input = { questions: [{ subject: 'Management', prompt: 'Management experience?', kind: 'capability', allowDetail: true }] };
@@ -354,8 +362,293 @@ test('form interviews save explicit selections only; declining and transport fai
   const before = f.store.get();
   response = { action: 'decline' };
   assert.equal((await f.call('career_interview_ask', { questions: [{ ...input.questions[0], subject: 'Another subject' }] })).declined, true);
-  assert.deepEqual(f.store.get(), before);
+  assert.deepEqual(f.store.get().career.facts, before.career.facts);
+  assert.equal(Object.values(f.store.get().career.interviews).length, 1);
   response = new Error('Connection lost');
   await assert.rejects(f.call('career_interview_ask', { questions: [{ ...input.questions[0], subject: 'Third subject' }] }), /Connection lost/);
+  assert.deepEqual(f.store.get().career.facts, before.career.facts);
+  assert.equal(Object.values(f.store.get().career.interviews).length, 2);
+});
+
+const capabilityQuestion = { subject: 'Wallet integration', prompt: 'What is your wallet integration experience?', kind: 'capability',
+  context: 'The role needs someone to ship a wallet connection.' };
+
+test('shallow positive answers retain context, deepen after reload, and reuse the completed answer', async () => {
+  const f = fixture();
+  const asked = await f.call('career_interview_ask', { questions: [capabilityQuestion] });
+  const partial = await f.call('career_interview_answer', { interviewId: asked.interviewId, reply: '1b' });
+  assert.equal(partial.saved[0].question, capabilityQuestion.prompt);
+  assert.equal(partial.saved[0].context, capabilityQuestion.context);
+  assert.equal(needsDetail(partial.saved[0]), true);
+  assert.deepEqual(partial.unanswered, [1]);
+  assert.equal(partial.followUps[0].stage, 'detail');
+  assert.equal(isInterview(f.store.get().career.interviews[asked.interviewId]), true);
+  const reopened = fixture({}, f.store.get());
+  const answer = 'I built the wallet connection for Checkout and shipped it to production.';
+  const complete = await reopened.call('career_interview_answer', { interviewId: asked.interviewId, reply: answer });
+  const saved = complete.saved[0];
+  assert.equal(saved.detail, answer);
+  assert.deepEqual(saved.followUps, [{ question: partial.followUps[0].prompt, answer, context: capabilityQuestion.context, applicationId }]);
+  assert.equal(saved.applicationId, applicationId);
+  assert.equal(saved.question, capabilityQuestion.prompt);
+  assert.equal(needsDetail(saved), false);
+  assert.equal(isFact(saved), true);
+  assert.deepEqual(complete.unanswered, []);
+  assert.equal((await reopened.call('career_interview_ask', { questions: [capabilityQuestion] })).mode, 'none');
+  const { facts: [direct] } = await reopened.edit('career_facts_save', { facts: [{ id: saved.id, kind: saved.kind,
+    subject: saved.subject, answer: saved.answer, detail: saved.detail }] });
+  assert.equal(direct.question, saved.question);
+  assert.equal(direct.context, saved.context);
+  assert.equal(direct.applicationId, applicationId);
+  assert.deepEqual(direct.followUps, saved.followUps);
+  assert.equal((await reopened.call('career_facts_list', { query: 'role needs' })).items[0].id, saved.id);
+});
+
+test('explicit related fact reuse and deepening never rewrite historical questions or subjects', async () => {
+  const f = fixture();
+  const { facts: [old] } = await f.edit('career_facts_save', { facts: [fact('capability', 'Payments', 'Led it',
+    { detail: 'Managed the checkout team.', question: 'What was your payments role?', context: 'Payments delivery' })] });
+  const question = { ...capabilityQuestion, factId: old.id };
+  const known = await f.call('career_interview_ask', { questions: [question] });
+  assert.equal(known.mode, 'none');
+  assert.equal(known.alreadyKnown[0].id, old.id);
+  const followUp = 'Which wallet shipped, and what did you personally change?';
+  const asked = await f.call('career_interview_ask', { questions: [{ ...question, followUp }] });
+  assert.equal(asked.followUps[0].prompt, followUp);
+  const { saved: [updated] } = await f.call('career_interview_answer', { interviewId: asked.interviewId,
+    reply: 'I implemented WalletConnect in Checkout and released the integration.' });
+  assert.equal(updated.id, old.id);
+  assert.equal(updated.subject, old.subject);
+  assert.equal(updated.question, old.question);
+  assert.equal(updated.context, old.context);
+  assert.equal(updated.followUps[0].question, followUp);
+  assert.equal(updated.followUps[0].context, capabilityQuestion.context);
+  assert.equal(updated.followUps[0].applicationId, applicationId);
+  assert.equal((await f.call('career_facts_list')).total, 1);
+  const historical = await f.edit('career_facts_save', { facts: [fact('capability', 'Legacy', 'Hands-on')] });
+  const detail = await f.call('career_interview_ask', { questions: [{ ...capabilityQuestion, factId: historical.facts[0].id }] });
+  const result = await f.call('career_interview_answer', { interviewId: detail.interviewId, reply: 'I built a checkout service at Acme.' });
+  assert.equal(Object.hasOwn(result.saved[0], 'question'), false);
+  assert.equal(Object.hasOwn(result.saved[0], 'context'), false);
+});
+
+test('mixed partial rounds retain original numbers and invalid explanations never disappear silently', async () => {
+  const f = fixture();
+  const asked = await f.call('career_interview_ask', { questions: [capabilityQuestion,
+    { subject: 'Italian', prompt: 'Italian level?', kind: 'language' }] });
+  let before = f.store.get();
+  await assert.rejects(f.call('career_interview_answer', { interviewId: asked.interviewId,
+    reply: '1b: According to the CV, built wallets; 2a' }), { code: 'UNCLEAR_FACT' });
   assert.deepEqual(f.store.get(), before);
+  const first = await f.call('career_interview_answer', { interviewId: asked.interviewId, reply: '1b' });
+  assert.deepEqual(first.unanswered, [1, 2]);
+  before = f.store.get();
+  await assert.rejects(f.call('career_interview_answer', { interviewId: asked.interviewId, reply: '1a; 2a' }), { code: 'INVALID_INPUT' });
+  assert.deepEqual(f.store.get(), before);
+  const next = await f.call('career_interview_answer', { interviewId: asked.interviewId, reply: '2a' });
+  assert.deepEqual(next.unanswered, [1]);
+  const skipped = await f.call('career_interview_answer', { interviewId: asked.interviewId, reply: 'skip' });
+  assert.deepEqual(skipped.skipped, [1]);
+  assert.deepEqual(skipped.saved, []);
+  assert.equal(needsDetail((await f.call('career_facts_list', { query: 'Wallet' })).items[0]), true);
+  const again = await f.call('career_interview_ask', { questions: [capabilityQuestion] });
+  const cancelled = await f.call('career_interview_answer', { interviewId: again.interviewId, reply: 'cancel' });
+  assert.equal(cancelled.cancelled, true);
+  assert.deepEqual(cancelled.saved, []);
+});
+
+test('stale or deleted facts reject detail replies and concurrent choices do not overwrite', async () => {
+  for (const remove of [false, true]) {
+    const f = fixture();
+    const asked = await f.call('career_interview_ask', { questions: [capabilityQuestion] });
+    const partial = await f.call('career_interview_answer', { interviewId: asked.interviewId, reply: '1a' });
+    const saved = partial.saved[0];
+    if (remove) await f.edit('career_facts_delete', { factIds: [saved.id] });
+    else await f.edit('career_facts_save', { facts: [{ ...fact(saved.kind, saved.subject, 'None'), id: saved.id }] });
+    const before = f.store.get();
+    await assert.rejects(f.call('career_interview_answer', { interviewId: asked.interviewId,
+      reply: 'I built the wallet adapter and shipped it.' }), { code: remove ? 'NOT_FOUND' : 'FACT_CHANGED' });
+    assert.deepEqual(f.store.get(), before);
+  }
+  const f = fixture();
+  const asked = await f.call('career_interview_ask', { questions: [capabilityQuestion] });
+  await f.edit('career_facts_save', { facts: [fact('capability', capabilityQuestion.subject, 'None')] });
+  await assert.rejects(f.call('career_interview_answer', { interviewId: asked.interviewId, reply: '1a' }), { code: 'FACT_CHANGED' });
+});
+
+test('native forms ask at most one detail round and cancellation retains the partial answer', async () => {
+  for (const decline of [false, true]) {
+    const requests = [];
+    const f = fixture({ interaction: { canElicit: () => true, elicit: async request => {
+      requests.push(request);
+      if (requests.length === 1) return { action: 'accept', content: { q1: 'Hands-on' } };
+      return decline ? { action: 'cancel' } : { action: 'accept', content: { q1: 'I built and shipped the checkout wallet adapter.' } };
+    } } });
+    const result = await f.call('career_interview_ask', { questions: [capabilityQuestion] });
+    assert.equal(requests.length, 2);
+    assert.equal(requests[1].requestedSchema.properties.q1.enum, undefined);
+    assert.equal(result.saved.length, 1);
+    assert.equal(needsDetail(result.saved[0]), decline);
+    assert.deepEqual(result.unanswered, decline ? [1] : []);
+    if (decline) {
+      assert.equal(result.declined, true);
+      assert.equal(result.followUps.length, 1);
+      assert.equal(result.saved[0].followUps, undefined);
+    } else assert.equal(result.saved[0].followUps.length, 1);
+  }
+});
+
+test('scoped pending language interviews reload without narrative followups; unscoped legacy state is rejected', async () => {
+  const f = fixture();
+  const id = randomUUID();
+  await f.store.update(state => { (state.career.interviews ??= {})[id] = { id, applicationId, job: applicationJob, createdAt: new Date().toISOString(), questions: [
+    { number: 3, subject: 'French', prompt: 'French level?', kind: 'language',
+      options: ['Native', 'Fluent', 'Professional', 'Conversational', 'Basic'] },
+  ] }; });
+  const reopened = fixture({}, f.store.get());
+  assert.equal(isInterview(reopened.store.get().career.interviews[id]), true);
+  const legacy = reopened.store.get().career.interviews[id];
+  delete legacy.applicationId;
+  assert.equal(isInterview(legacy), false);
+  const result = await reopened.call('career_interview_answer', { interviewId: id, reply: '3b' });
+  assert.equal(result.saved[0].answer, 'Fluent');
+  assert.deepEqual(result.unanswered, []);
+});
+
+test('elicitation cannot commit after local lock or identity epoch changes', async () => {
+  for (const code of ['LOCAL_LOCKED', 'IDENTITY_CHANGED']) {
+    const f = fixture({}, { deviceId: 'device-a' });
+    let locked = false, generation = 1;
+    const scoped = createScopedAccess(f.store, { epoch: () => generation,
+      assertAvailable: () => { if (locked) throw Object.assign(new Error('Locked'), { code: 'LOCAL_LOCKED' }); } });
+    const tools = createProfileTools({ store: scoped.store, interaction: { canElicit: () => true,
+      elicit: async () => {
+        if (code === 'LOCAL_LOCKED') locked = true;
+        else generation++;
+        return { action: 'accept', content: { q1: 'Hands-on', q1_detail: 'I shipped the wallet adapter.' } };
+      } } });
+    await assert.rejects(tools.find(tool => tool.name === 'career_interview_ask').invoke({ applicationId, questions: [capabilityQuestion] }), { code });
+    assert.deepEqual(f.store.get().career.facts, {});
+  }
+});
+
+test('multiple detail replies are numbered, atomic, and retain earlier exchanges when deepened', async () => {
+  const f = fixture();
+  const asked = await f.call('career_interview_ask', { questions: [capabilityQuestion,
+    { subject: 'Operations', prompt: 'Operations experience?', kind: 'capability' }] });
+  const partial = await f.call('career_interview_answer', { interviewId: asked.interviewId, reply: '1a 2b' });
+  assert.equal(partial.followUps.length, 2);
+  const before = f.store.get();
+  await assert.rejects(f.call('career_interview_answer', { interviewId: asked.interviewId,
+    reply: '1: I shipped the wallet adapter.; 2: According to the CV, led operations.' }), { code: 'UNCLEAR_FACT' });
+  assert.deepEqual(f.store.get(), before);
+  const complete = await f.call('career_interview_answer', { interviewId: asked.interviewId,
+    reply: '1: I shipped the wallet adapter.; 2: I configured alerts for Checkout and reduced outages.' });
+  assert.deepEqual(complete.unanswered, []);
+  const original = complete.saved[0];
+  const deeper = await f.call('career_interview_ask', { questions: [{ ...capabilityQuestion,
+    factId: original.id, followUp: 'What did you change in the adapter?' }] });
+  const result = await f.call('career_interview_answer', { interviewId: deeper.interviewId, reply: 'I implemented the account reconnect logic.' });
+  assert.equal(result.saved[0].followUps.length, 2);
+  assert.deepEqual(result.saved[0].followUps[0], original.followUps[0]);
+});
+
+test('needsDetail is structural and contextual fields accept actual questions with bounded lengths', async () => {
+  for (const detail of [undefined, '', '  ', ' hands-ON ', ' wallets '])
+    assert.equal(needsDetail(fact('capability', 'Wallets', 'Hands-on', { detail })), true);
+  assert.equal(needsDetail(fact('capability', 'Wallets', 'Hands-on', { detail: 'Used it' })), false);
+  assert.equal(needsDetail(fact('capability', 'Wallets', 'None')), false);
+  assert.equal(needsDetail(fact('yes_no', 'Travel', 'Yes')), false);
+  const f = fixture();
+  const saved = await f.edit('career_facts_save', { facts: [fact('capability', 'Wallets', 'Hands-on',
+    { question: 'Which wallet?', context: 'Can you ship this integration?', detail: 'A'.repeat(1500) })] });
+  assert.equal(saved.facts[0].detail.length, 1500);
+  for (const extra of [{ question: 'a'.repeat(301) }, { context: 'a'.repeat(601) }, { detail: 'a'.repeat(1501) }])
+    await assert.rejects(f.edit('career_facts_save', { facts: [fact('capability', 'Other', 'Hands-on', extra)] }), { code: 'INVALID_INPUT' });
+});
+
+test('fact reset clears every fact and interview while preserving source, profile, account and drafts', async () => {
+  const f = fixture({}, { pairing: { account: { id: 'account-a' } }, deviceId: 'device-a' });
+  await importText(f);
+  await f.edit('career_profile_update', { patch: { headline: 'Engineer', roleCapabilities: ['Wallet integrations'] } });
+  await f.edit('career_preferences_update', { patch: { locations: ['London'] } });
+  await f.store.update(state => {
+    state.career.applications[applicationId].cv = { version: 2, content: 'Saved tailored CV' };
+    state.career.applications[applicationId].coverLetter = { version: 1, content: 'Saved cover letter' };
+    state.career.matching = { saved: ['job-a'] };
+  });
+  await f.edit('career_facts_save', { facts: [teamSize()] });
+  const asked = await f.call('career_interview_ask', { questions: [capabilityQuestion] });
+  await f.call('career_interview_answer', { interviewId: asked.interviewId, reply: '1a' });
+  const before = f.store.get();
+  const request = f.mutation();
+  const result = await f.call('career_facts_reset', request);
+  assert.equal(result.deletedFacts, 2);
+  assert.equal(result.deletedInterviews, 1);
+  const after = f.store.get();
+  assert.deepEqual(after.career.facts, {});
+  assert.deepEqual(after.career.interviews, {});
+  assert.equal(after.career.evidenceRevision, before.career.evidenceRevision + 1);
+  assert.equal(after.career.revision, before.career.revision + 1);
+  for (const field of ['sources', 'profile', 'applications', 'matching'])
+    assert.deepEqual(after.career[field], before.career[field]);
+  assert.deepEqual(after.pairing, before.pairing);
+  assert.equal(after.deviceId, before.deviceId);
+  await assert.rejects(f.call('career_interview_answer', { interviewId: asked.interviewId, reply: 'I shipped the adapter.' }), { code: 'NOT_FOUND' });
+  assert.deepEqual(f.store.get(), after);
+  assert.deepEqual(await f.call('career_facts_reset', request), result);
+  await assert.rejects(f.call('career_facts_reset', { ...request, requestId: randomUUID() }), { code: 'REVISION_CONFLICT' });
+});
+
+test('interview requires a known complete saved application before storing state or opening a form', async () => {
+  let elicited = 0;
+  const f = fixture({ interaction: { canElicit: () => true, elicit: async () => { elicited++; return null; } } });
+  const before = f.store.get();
+  await assert.rejects(f.call('career_interview_ask', { applicationId: undefined, questions: [capabilityQuestion] }), { code: 'INVALID_INPUT' });
+  await assert.rejects(f.call('career_interview_ask', { applicationId: randomUUID(), questions: [capabilityQuestion] }), { code: 'NOT_FOUND' });
+  assert.equal(elicited, 0);
+  assert.deepEqual(f.store.get(), before);
+  await f.store.update(state => { delete state.career.applications[applicationId].job.description; });
+  const incomplete = f.store.get();
+  await assert.rejects(f.call('career_interview_ask', { questions: [capabilityQuestion] }), { code: 'INVALID_INPUT' });
+  assert.equal(elicited, 0);
+  assert.deepEqual(f.store.get(), incomplete);
+});
+
+test('a different application deepens a fact without replacing its original application or requirement context', async () => {
+  const f = fixture();
+  const asked = await f.call('career_interview_ask', { questions: [capabilityQuestion] });
+  assert.equal(asked.applicationId, applicationId);
+  assert.deepEqual(asked.job, { title: applicationJob.title, company: applicationJob.company, url: applicationJob.url });
+  const { saved: [original] } = await f.call('career_interview_answer', { interviewId: asked.interviewId,
+    reply: '1b: I built and shipped the checkout wallet connection.' });
+  const otherApplicationId = randomUUID();
+  await f.store.update(state => { state.career.applications[otherApplicationId] = {
+    id: otherApplicationId, job: { title: 'Protocol Engineer', company: 'Other', description: 'Implement wallet signing.' },
+  }; });
+  const requirement = 'This listing needs signing implementation.';
+  const next = await f.call('career_interview_ask', { applicationId: otherApplicationId,
+    questions: [{ ...capabilityQuestion, factId: original.id, context: requirement, followUp: 'What signing changes did you personally ship?' }] });
+  assert.equal(next.applicationId, otherApplicationId);
+  const result = await f.call('career_interview_answer', { interviewId: next.interviewId, reply: 'I implemented the signing request handler.' });
+  const saved = result.saved[0];
+  assert.equal(saved.applicationId, applicationId);
+  assert.equal(saved.question, original.question);
+  assert.equal(saved.context, original.context);
+  assert.equal(saved.followUps[0].applicationId, otherApplicationId);
+  assert.equal(saved.followUps[0].context, requirement);
+  assert.equal(isFact(saved), true);
+  assert.equal((await f.call('career_facts_list', { query: requirement })).items[0].id, original.id);
+});
+
+test('single detail explanations starting with numbers are preserved verbatim, not parsed as choices', async () => {
+  for (const reply of ['3 engineers worked on Checkout; I implemented the wallet adapter.', '2 clients shipped the integration after I fixed reconnect logic.']) {
+    const f = fixture();
+    const asked = await f.call('career_interview_ask', { questions: [capabilityQuestion] });
+    await f.call('career_interview_answer', { interviewId: asked.interviewId, reply: '1b' });
+    await assert.rejects(f.call('career_interview_answer', { interviewId: asked.interviewId, reply: '1a' }), { code: 'INVALID_INPUT' });
+    const result = await f.call('career_interview_answer', { interviewId: asked.interviewId, reply });
+    assert.equal(result.saved[0].detail, reply);
+    assert.equal(result.saved[0].followUps[0].answer, reply);
+  }
 });

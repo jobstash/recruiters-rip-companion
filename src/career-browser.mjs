@@ -38,10 +38,18 @@ function sourceDetail(source) {
   ] };
 }
 
-const factKinds = { capability: 'Capability', language: 'Language', yes_no: 'Yes/no', choice: 'Choice', note: 'Note' };
-function factDetail(fact) {
+function factDetail(fact, career) {
+  const applicationLabel = id => {
+    const app = lookup(career.applications, id);
+    return app ? applicationTitle(app) : undefined;
+  };
   return { title: text(fact.subject, 'Untitled fact'), sections: [
-    fields('Details', [['Answer', fact.answer], ['Example', fact.detail], ['Role', fact.employer], ['Kind', own(factKinds, fact.kind) ? factKinds[fact.kind] : undefined]], 'No details saved.'),
+    section('Explanation', fact.detail?.trim() ? fact.detail : fact.answer),
+    fields('Details', [['Level', fact.answer], ['Question', fact.question], ['Context', fact.context],
+      ['Application', applicationLabel(fact.applicationId)], ['Employer', fact.employer]], 'No details saved.'),
+    ...(Array.isArray(fact.followUps) ? fact.followUps.map(exchange =>
+      fields('Follow-up', [['Question', exchange.question], ['Answer', exchange.answer], ['Context', exchange.context],
+        ['Application', applicationLabel(exchange.applicationId)]], 'No exchange saved.')) : []),
   ] };
 }
 
@@ -112,7 +120,7 @@ function rankingItem(row) {
 export function createCareerBrowser({ store }) {
   const matches = createMatchingTools({ store }).find(tool => tool.name === 'career_matches');
   const detail = (kind, item, career) => kind === 'sources' ? sourceDetail(item) :
-    kind === 'facts' ? factDetail(item) : applicationDetail(item, career);
+    kind === 'facts' ? factDetail(item, career) : applicationDetail(item, career);
   return {
     async list(args = {}) {
       validate(args, ['kind', 'offset', 'limit']);
@@ -128,8 +136,7 @@ export function createCareerBrowser({ store }) {
       const records = entries(career[kind]);
       const items = records.slice(offset, offset + limit).map(([id, item]) => {
         if (kind === 'sources') return { id, title: text(item.name, 'Untitled source'), summary: [readable(item.purpose), item.archived ? 'Archived' : ''].filter(Boolean).join(' · ') };
-        // A fact reads as its question subject and the candidate's answer.
-        if (kind === 'facts') return { id, title: text(item.subject, 'Untitled fact'), summary: [text(item.answer, ''), text(item.employer, '')].filter(Boolean).join(' · ') };
+        if (kind === 'facts') return { id, title: text(item.subject, 'Untitled fact'), summary: item.detail?.trim() ? item.detail : text(item.answer, '') };
         return { id, title: applicationTitle(item), summary: `${item.cv ? 'CV draft saved' : 'No CV draft'} · ${item.coverLetter ? 'Cover letter saved' : 'No cover letter draft'}` };
       });
       return { items, total: records.length, nextOffset: offset + items.length < records.length ? offset + items.length : null };

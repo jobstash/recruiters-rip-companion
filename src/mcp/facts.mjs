@@ -7,7 +7,7 @@ export const ANSWER_OPTIONS = Object.freeze({
   language: Object.freeze(['Native', 'Fluent', 'Professional', 'Conversational', 'Basic']),
   yes_no: Object.freeze(['Yes', 'No']),
 });
-const FIELDS = new Set(['id', 'kind', 'subject', 'answer', 'detail', 'employer', 'createdAt', 'updatedAt']);
+const FIELDS = new Set(['id', 'kind', 'subject', 'answer', 'detail', 'employer', 'question', 'context', 'applicationId', 'followUps', 'createdAt', 'updatedAt']);
 
 const UNCLEAR = [
   /\?/,
@@ -29,14 +29,22 @@ export function assertCleanStatement(text, field = 'statement') {
 }
 
 const text = (maxLength, minLength = 1) => ({ type: 'string', minLength, maxLength, ...(minLength ? { pattern: '\\S' } : {}) });
+const isUuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 export const factInputSchema = Object.freeze({
   type: 'object', additionalProperties: false, required: ['kind', 'subject', 'answer'],
-  properties: { id: { type: 'string', format: 'uuid' }, kind: { enum: FACT_KINDS }, subject: text(120), answer: text(160), detail: text(400, 0), employer: text(120, 0) },
+  properties: { id: { type: 'string', format: 'uuid' }, kind: { enum: FACT_KINDS }, subject: text(120), answer: text(160), detail: text(1500, 0), employer: text(120, 0), question: text(300, 0), context: text(600, 0), applicationId: { type: 'string', format: 'uuid' } },
 });
 
 /** Upsert key: one fact per subject (case-insensitive, trimmed). */
 export const factKey = fact => fact.subject.trim().toLocaleLowerCase();
 export const compareFacts = (a, b) => a.subject.localeCompare(b.subject, undefined, { sensitivity: 'base' });
+
+/** Structural incompleteness only; the host evaluates the specificity of an explanation. */
+export function needsDetail(fact) {
+  if (fact.kind !== 'capability' || !ANSWER_OPTIONS.capability.slice(0, 3).includes(fact.answer)) return false;
+  const detail = fact.detail?.trim().toLocaleLowerCase();
+  return !detail || [fact.answer, fact.subject].some(value => value.trim().toLocaleLowerCase() === detail);
+}
 
 /** Returns the canonical answer for enumerated kinds, or null when the answer is not one of the fixed options. */
 export function canonicalAnswer(kind, answer) {
@@ -46,20 +54,31 @@ export function canonicalAnswer(kind, answer) {
 }
 
 /** Validates a fact input and returns its stored fields (without id or timestamps). */
-export function normalizeFact({ kind, subject, answer, detail, employer }) {
+export function normalizeFact({ kind, subject, answer, detail, employer, question, context, applicationId }) {
+  if (applicationId !== undefined && !isUuid(applicationId)) fail('INVALID_INPUT', 'applicationId must be a saved application UUID.');
+  for (const [field, value, max] of [['detail', detail, 1500], ['question', question, 300], ['context', context, 600]]) {
+    if (value !== undefined && (typeof value !== 'string' || value.length > max)) fail('INVALID_INPUT', `${field} must be text of at most ${max} characters.`);
+  }
   const canonical = canonicalAnswer(kind, answer);
   if (!canonical) fail('INVALID_INPUT', `A ${kind} answer must be one of: ${ANSWER_OPTIONS[kind].join(', ')}.`);
   const fact = { kind, subject: subject.trim(), answer: canonical,
-    ...(detail?.trim() ? { detail: detail.trim() } : {}), ...(employer?.trim() ? { employer: employer.trim() } : {}) };
+    ...(detail?.trim() ? { detail: detail.trim() } : {}), ...(employer?.trim() ? { employer: employer.trim() } : {}),
+    ...(question !== undefined ? { question: question.trim() } : {}), ...(context !== undefined ? { context: context.trim() } : {}),
+    ...(applicationId !== undefined ? { applicationId } : {}) };
   for (const field of ['subject', 'answer', 'detail', 'employer']) if (fact[field]) assertCleanStatement(fact[field], field);
   return fact;
 }
 
-/** True for a stored fact with exactly the v4 shape. */
+/** Accepts historical facts without inventing missing interview context. */
 export function isFact(fact) {
   return Boolean(fact) && typeof fact === 'object' && FACT_KINDS.includes(fact.kind) &&
     typeof fact.subject === 'string' && Boolean(fact.subject.trim()) && typeof fact.answer === 'string' && Boolean(fact.answer.trim()) &&
     (!ANSWER_OPTIONS[fact.kind] || ANSWER_OPTIONS[fact.kind].includes(fact.answer)) &&
-    ['detail', 'employer'].every(field => fact[field] === undefined || typeof fact[field] === 'string') &&
+    ['detail', 'employer', 'question', 'context'].every(field => fact[field] === undefined || typeof fact[field] === 'string') &&
+    (fact.applicationId === undefined || isUuid(fact.applicationId)) &&
+    (fact.followUps === undefined || (Array.isArray(fact.followUps) && fact.followUps.every(exchange =>
+      exchange && typeof exchange.question === 'string' && typeof exchange.answer === 'string' &&
+      (exchange.context === undefined || typeof exchange.context === 'string') &&
+      (exchange.applicationId === undefined || isUuid(exchange.applicationId))))) &&
     Object.keys(fact).every(key => FIELDS.has(key));
 }

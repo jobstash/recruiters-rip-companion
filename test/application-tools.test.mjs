@@ -276,3 +276,22 @@ test('tool schemas accept a structured CV and reject malformed documents and rem
   const letterSchema = ajv.compile(f.tools.get('career_application_letter_save').inputSchema);
   assert.equal(letterSchema({ requestId: randomUUID(), revision: 0, applicationId: randomUUID(), paragraphs: ['Only one paragraph.'] }), false);
 });
+
+test('CV numbers can use actual follow-up answers but not numbers suggested in questions or context', async t => {
+  const f = await fixture(t);
+  await f.store.update(state => {
+    const fact = Object.values(state.career.facts).find(item => item.subject === 'Managing engineering teams');
+    fact.question = 'Did you manage 99 engineers?';
+    fact.context = 'The vacancy describes a 77-person organisation.';
+    fact.followUps = [{ question: 'How many engineers did you personally manage?', answer: 'Managed 18 engineers.' }];
+  });
+  const { applicationId } = await f.create();
+  const cv = tailoredCv();
+  cv.experience[0].bullets[3] = 'Managed 18 engineers.';
+  await f.saveCv(applicationId, cv);
+  assert.equal(f.state().applications[applicationId].cv.document.experience[0].bullets[3], 'Managed 18 engineers.');
+  for (const count of [99, 77]) {
+    cv.experience[0].bullets[3] = `Managed ${count} engineers.`;
+    await assert.rejects(f.saveCv(applicationId, cv), { code: 'UNSUPPORTED_NUMBER' });
+  }
+});

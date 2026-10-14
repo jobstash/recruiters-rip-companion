@@ -43,11 +43,15 @@ test('rankings sort before pagination and keep skip judgments visible rather tha
   assert.ok(second.items[0].sections.some(section => section.text?.includes('Saved reasoning for low')));
 });
 
-test('facts read as subject and answer; applications show the rendered CV and cover letter', async () => {
+test('facts lead with explanations and preserve actual interview context; applications show saved drafts', async () => {
   const { state, browser } = fixture();
   Object.assign(state.career.profile, { name: 'Jane Candidate', email: 'jane@example.test', location: 'London' });
-  state.career.facts.ab = { id: 'ab', kind: 'capability', subject: 'A/B testing', answer: 'Led it', detail: 'Checkout experiments', employer: 'Acme' };
-  state.career.facts.k8s = { id: 'k8s', kind: 'yes_no', subject: 'Kubernetes in production', answer: 'No' };
+  state.career.facts.ab = { id: 'ab', kind: 'capability', subject: 'A/B testing', answer: 'Led it', detail: 'Led checkout experiments at Acme, reducing abandoned purchases.', employer: 'Acme',
+    question: 'Have you led checkout experiments?', context: 'This role owns conversion improvements.', applicationId: 'app',
+    followUps: [{ question: 'What did you personally change?', answer: 'Designed the experiment and coordinated the rollout.',
+      context: 'This listing needs experiment design.', applicationId: 'later-app' }] };
+  state.career.facts.k8s = { id: 'k8s', kind: 'yes_no', subject: 'Kubernetes in production', answer: 'No', applicationId: 'missing-app' };
+  state.career.applications['later-app'] = { id: 'later-app', job: { title: 'Experiment Lead', company: 'Other Employer' } };
   const document = { headline: 'Platform Engineer', summary: 'Builds data services.',
     experience: [{ employer: 'Acme', role: 'Engineer', startDate: '2019', endDate: 'Present', bullets: ['Built payment pipelines.'] }] };
   state.career.applications.app = { id: 'app', job: { title: 'Senior Engineer', company: 'Example Employer', description: 'Ad', url: 'https://example.test/job' },
@@ -58,12 +62,22 @@ test('facts read as subject and answer; applications show the rendered CV and co
 
   const facts = await browser.list({ kind: 'facts' });
   assert.deepEqual(facts.items.map(({ title, summary }) => ({ title, summary })),
-    [{ title: 'A/B testing', summary: 'Led it · Acme' }, { title: 'Kubernetes in production', summary: 'No' }]);
+    [{ title: 'A/B testing', summary: state.career.facts.ab.detail }, { title: 'Kubernetes in production', summary: 'No' }]);
   const ab = await browser.read({ kind: 'facts', id: 'ab' });
   assert.equal(ab.title, 'A/B testing');
-  assert.deepEqual(ab.sections[0].fields, [{ label: 'Answer', value: 'Led it' }, { label: 'Example', value: 'Checkout experiments' },
-    { label: 'Role', value: 'Acme' }, { label: 'Kind', value: 'Capability' }]);
-  assert.deepEqual((await browser.read({ kind: 'facts', id: 'k8s' })).sections[0].fields, [{ label: 'Answer', value: 'No' }, { label: 'Kind', value: 'Yes/no' }]);
+  assert.equal(ab.sections[0].text, state.career.facts.ab.detail);
+  assert.deepEqual(ab.sections[1].fields, [{ label: 'Level', value: 'Led it' },
+    { label: 'Question', value: state.career.facts.ab.question }, { label: 'Context', value: state.career.facts.ab.context },
+    { label: 'Application', value: 'Senior Engineer — Example Employer' }, { label: 'Employer', value: 'Acme' }]);
+  assert.deepEqual(ab.sections[2].fields, [{ label: 'Question', value: state.career.facts.ab.followUps[0].question },
+    { label: 'Answer', value: state.career.facts.ab.followUps[0].answer },
+    { label: 'Context', value: state.career.facts.ab.followUps[0].context },
+    { label: 'Application', value: 'Experiment Lead — Other Employer' }]);
+  const historical = await browser.read({ kind: 'facts', id: 'k8s' });
+  assert.equal(historical.sections[0].text, 'No');
+  assert.deepEqual(historical.sections[1].fields, [{ label: 'Level', value: 'No' }]);
+  assert.equal(historical.sections.length, 2);
+  assert.equal(ab.sections.flatMap(section => section.fields ?? []).some(field => field.label === 'Kind' || field.label === 'Role'), false);
 
   const detail = await browser.read({ kind: 'applications', id: 'app' });
   assert.equal(detail.title, 'Senior Engineer — Example Employer');

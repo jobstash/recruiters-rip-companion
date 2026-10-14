@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { createCareerState, fail, hash, mutateCareer, mutationSchema, readCareer, replayCareer } from './state.mjs';
 import { matchingProfileVersion } from './assessment-policy.mjs';
-import { FACT_KINDS, compareFacts, factInputSchema, factKey, normalizeFact } from './facts.mjs';
+import { FACT_KINDS, compareFacts, factInputSchema, factKey, needsDetail, normalizeFact } from './facts.mjs';
 import { chatText, formAnswers, formRequest, parseReply, prepareQuestions, questionSchema } from './interview.mjs';
 
 const MAX_TEXT = 100_000;
@@ -74,7 +74,9 @@ function upsertFacts(career, entries) {
     const existing = byKey.get(factKey(fields));
     if (id && existing && existing !== id) fail('INVALID_INPUT', `A fact about "${fields.subject}" already exists. Update that fact or delete it first.`);
     const target = id ?? existing;
-    const fact = { id: target ?? randomUUID(), ...fields, createdAt: target ? career.facts[target].createdAt : timestamp, updatedAt: timestamp };
+    const previous = target ? career.facts[target] : null;
+    const retained = previous ? Object.fromEntries(['question', 'context', 'applicationId', 'followUps'].filter(key => previous[key] !== undefined).map(key => [key, previous[key]])) : {};
+    const fact = { id: target ?? randomUUID(), ...retained, ...fields, createdAt: previous?.createdAt ?? timestamp, updatedAt: timestamp };
     if (target) byKey.delete(factKey(career.facts[target]));
     byKey.set(factKey(fact), fact.id);
     career.facts[fact.id] = fact;
@@ -89,20 +91,52 @@ function saveFacts(career, inputs) {
     return { id: input.id, fields: normalizeFact(input) };
   }));
 }
-/** Saves explicit interview answers as facts; an unclear optional example is left out rather than failing the answers. */
-function saveAnswers(career, questions, answers) {
-  const detailsOmitted = [];
-  const entries = answers.map(({ number, answer, detail }) => {
-    const { subject, kind, employer } = questions.find(question => question.number === number);
-    try { return { fields: normalizeFact({ kind, subject, answer, detail, employer }) }; } catch (error) {
-      if (error.code !== 'UNCLEAR_FACT' || !detail) throw error;
-      detailsOmitted.push(number);
-      return { fields: normalizeFact({ kind, subject, answer, employer }) };
+function detailQuestion(question, fact) {
+  return { ...question, stage: 'detail', factId: fact.id, factSnapshot: hash(fact),
+    prompt: question.followUp ?? `For ${question.subject}, which project, what did you personally do, and what changed?` };
+}
+
+/** Apply a validated round atomically; a positive level alone is a saved partial answer. */
+function saveAnswers(career, interview, answers) {
+  const saved = [], skipped = [], remaining = [];
+  const byNumber = new Map(answers.map(answer => [answer.number, answer]));
+  for (const question of interview.questions) {
+    const response = byNumber.get(question.number);
+    if (!response) { remaining.push(question); continue; }
+    if (response.skip) { skipped.push(question.number); continue; }
+    if (question.stage === 'detail') {
+      const existing = career.facts[question.factId];
+      if (!existing) fail('NOT_FOUND', 'This fact was removed. Ask again using the current facts.');
+      if (hash(existing) !== question.factSnapshot) fail('FACT_CHANGED', 'This fact changed after the question was asked. Read current facts and ask again.');
+      if (!response.answer.trim()) fail('INVALID_INPUT', 'Provide an explanation or skip this question.');
+      const fields = normalizeFact({ ...existing, detail: response.answer });
+      const [updated] = upsertFacts(career, [{ id: existing.id, fields: { ...fields,
+        followUps: [...(existing.followUps ?? []), { question: question.prompt, answer: response.answer,
+          ...(question.context !== undefined ? { context: question.context } : {}),
+          ...(interview.applicationId ? { applicationId: interview.applicationId } : {}) }] } }]);
+      saved.push(updated);
+    } else {
+      if (Object.values(career.facts).some(fact => factKey(fact) === factKey(question)))
+        fail('FACT_CHANGED', 'An answer to this question was saved elsewhere. Read current facts and ask again.');
+      const fields = normalizeFact({ kind: question.kind, subject: question.subject, answer: response.answer,
+        detail: response.detail, employer: question.employer, question: question.prompt, context: question.context,
+        applicationId: interview.applicationId });
+      const [created] = upsertFacts(career, [{ fields }]);
+      saved.push(created);
+      if (needsDetail(created)) remaining.push(detailQuestion(question, created));
     }
-  });
-  const saved = upsertFacts(career, entries);
+  }
+  interview.questions = remaining;
+  if (!remaining.length) delete career.interviews[interview.id];
   if (saved.length) { career.revision++; career.evidenceRevision++; }
-  return { saved, ...(detailsOmitted.length ? { detailsOmitted } : {}) };
+  return { saved, skipped, ...pendingResult(interview) };
+}
+
+function pendingResult(interview) {
+  return { unanswered: interview.questions.map(question => question.number),
+    ...(interview.applicationId ? { applicationId: interview.applicationId, job: interview.job } : {}),
+    ...(interview.questions.length ? { interviewId: interview.id, text: chatText(interview.title, interview.questions),
+      followUps: interview.questions.filter(question => question.stage === 'detail') } : {}) };
 }
 function patchProfile(career, patch) {
   for (const [field, value] of Object.entries(patch)) career.profile[field] = structuredClone(value);
@@ -116,25 +150,25 @@ function patchPreferences(career, patch) {
 function onboarding(career, pairing) {
   const cvs = currentSources(career).filter(source => source.purpose === 'cv');
   const factCount = Object.keys(career.facts).length;
-  const mode = career.profile.onboarding?.mode ?? (cvs.length ? 'cv' : factCount ? 'interview' : null);
-  const hasBackground = cvs.length > 0 || factCount > 0;
+  const hasBackground = cvs.length > 0 || factCount > 0 || filled(career.profile.headline) || filled(career.profile.roleCapabilities);
+  const mode = career.profile.onboarding?.mode ?? (cvs.length ? 'cv' : hasBackground ? 'interview' : null);
   const hasRole = filled(career.profile.headline) || filled(career.profile.roleCapabilities) || filled(career.profile.preferences?.roles);
   const actions = [], questions = [], missing = [];
   const action = (field, tool, args, instruction) => { const item = { field, tool, args, instruction }; actions.push(item); missing.push(item); };
   const question = (field, tool, text) => { const item = { field, tool, question: text }; questions.push(item); missing.push(item); };
-  if (!mode) question('startingPoint', 'onboarding_start', 'Use an existing local CV if available; otherwise describe your experience here.');
+  if (!mode) question('startingPoint', 'onboarding_start', 'Use an existing local CV if available; otherwise describe your background for the profile. Match jobs before collecting application-specific facts.');
   if (mode === 'cv' && !hasBackground) action('background', 'career_source_import', { method: 'file', purpose: 'cv' }, 'Import the existing CV using the native file picker. Its contents stay on this computer.');
-  if (mode === 'interview' && !hasBackground) question('background', 'career_facts_save', 'Describe your current or most recent role and what you are known for; save each point as a short fact.');
+  if (mode === 'interview' && !hasBackground) question('background', 'career_profile_update', 'Describe your current role and demonstrated capabilities for the profile; do not collect enrichment facts before matching jobs.');
   if (mode && hasBackground && !hasRole) {
     for (const source of cvs) action('profile', 'career_source_read', { sourceId: source.id }, 'Read the whole CV (follow nextOffset) before saving the profile.');
-    action('profile', 'onboarding_commit', { mode }, 'Save headline, roleCapabilities, seniority and skills. Facts are not CV restatements: save only what the CV does not show (e.g. language levels). Keep demonstrated capabilities separate from future preferences; do not infer salary, relocation, travel or availability.');
+    action('profile', 'onboarding_commit', { mode }, 'Save headline, roleCapabilities, seniority and skills from the CV or stated background. Do not collect enrichment facts during onboarding. Keep demonstrated capabilities separate from future preferences; do not infer salary, relocation, travel or availability.');
   }
   const locallyReady = hasBackground && hasRole;
   return {
     revision: career.revision, mode, locallyReady, providerRequired: false,
     pairing: { paired: Boolean(pairing), account: pairing?.account ? { id: pairing.account.id, label: pairing.account.label } : null },
     catalogRequiresPairing: !pairing, sourceCount: currentSources(career).length, factCount, missing, actions, questions,
-    nextSteps: locallyReady ? ['Search the job catalogue once paired. Optional preferences, company details and benefits do not block search.'] : [...actions.map(item => item.instruction), ...questions.map(item => item.question)],
+    nextSteps: locallyReady ? ['Match jobs using the CV/profile and any existing facts once paired. Collect new facts only while reviewing an individual matched listing for submission; reuse them in subsequent matching. Optional preferences do not block search.'] : [...actions.map(item => item.instruction), ...questions.map(item => item.question)],
   };
 }
 
@@ -159,10 +193,10 @@ export function createProfileTools({ store, selectSourceFile, extractFile, inter
   tool('onboarding_status', 'Read local onboarding readiness and pairing, without provider credentials or model setup.', object({}), true, async () => onboarding(readCareer(store), store.get().pairing));
   tool('onboarding_start', 'Choose CV or no-CV conversational onboarding. Existing sources and facts are kept.', mutation({ mode: { enum: ['cv', 'interview'] } }, ['mode']), false, async args => edit('onboarding_start', args, career => {
     career.profile.onboarding = { mode: args.mode };
-    return { mode: args.mode, nextSteps: args.mode === 'cv' ? ['Import a CV with career_source_import, read it, then save the profile and any enrichment facts with onboarding_commit.'] : ['Ask about recent roles one at a time and save what you learn as enrichment facts with career_facts_save (employer, scope, domains, languages with level); do not invent a CV.'] };
+    return { mode: args.mode, nextSteps: args.mode === 'cv' ? ['Import a CV with career_source_import, read it, then save the profile with onboarding_commit. Match jobs before collecting application-specific facts.'] : ['Save the stated background in profile headline, roleCapabilities, seniority and skills. Match jobs first; collect facts only when reviewing a specific listing for submission. Do not invent a CV.'] };
   }));
 
-  tool('onboarding_commit', 'Save a pasted CV source, enrichment facts, profile fields and explicit preference answers together in one step.', {
+  tool('onboarding_commit', 'Save a pasted CV source, profile fields and explicit preference answers together. Do not solicit enrichment facts during onboarding: match jobs first, then collect facts for individual applications. Existing fact updates remain supported.', {
     ...mutation({
       mode: { enum: ['cv', 'interview'] },
       source: object({ name: string(255), text: string(MAX_TEXT), purpose: sourcePurpose }, ['name', 'text', 'purpose']),
@@ -177,7 +211,7 @@ export function createProfileTools({ store, selectSourceFile, extractFile, inter
     career.evidenceRevision++;
     return {
       source: source ? sourceSummary(source) : null, facts, profile: profileView(career.profile), preferences: career.profile.preferences, saved,
-      nextSteps: ['Check onboarding_status for anything still missing.'],
+      nextSteps: ['Check onboarding_status, then match jobs from the CV/profile and existing facts. Collect new facts only while reviewing a specific listing for submission.'],
     };
   }));
 
@@ -238,7 +272,8 @@ export function createProfileTools({ store, selectSourceFile, extractFile, inter
     const career = readCareer(store);
     const query = args.query?.toLocaleLowerCase();
     const facts = Object.values(career.facts).filter(fact => (!args.kinds || args.kinds.includes(fact.kind)) &&
-      (!query || [fact.subject, fact.answer, fact.detail ?? '', fact.employer ?? ''].join(' ').toLocaleLowerCase().includes(query))).sort(compareFacts);
+      (!query || [fact.subject, fact.answer, fact.detail ?? '', fact.employer ?? '', fact.question ?? '', fact.context ?? '',
+        ...(fact.followUps ?? []).flatMap(exchange => [exchange.question, exchange.answer, exchange.context ?? ''])].join(' ').toLocaleLowerCase().includes(query))).sort(compareFacts);
     return { revision: career.revision, ...page(facts, args) };
   });
   tool('career_facts_save', 'Save facts the candidate stated in conversation that the CV does not show. capability answers: Led it, Hands-on, Some exposure, None; language: Native, Fluent, Professional, Conversational, Basic; yes_no: Yes, No; choice and note: short text. A fact with the same subject as a saved one replaces it; include id to replace a specific fact. Do not restate CV bullets.', mutation({ facts: factBatch }, ['facts']), false, async args => edit('career_facts_save', args, career => {
@@ -252,40 +287,83 @@ export function createProfileTools({ store, selectSourceFile, extractFile, inter
     career.evidenceRevision++;
     return { deleted: args.factIds.length };
   }));
+  tool('career_facts_reset', 'Delete all enrichment facts and pending interviews only. Keep CV sources, profile, preferences, account, matching records and application drafts unchanged. Never repopulate facts from the CV.', mutation({}), false, async args => edit('career_facts_reset', args, career => {
+    const deletedFacts = Object.keys(career.facts).length;
+    const deletedInterviews = Object.keys(career.interviews ?? {}).length;
+    career.facts = {};
+    career.interviews = {};
+    career.evidenceRevision++;
+    return { deletedFacts, deletedInterviews };
+  }));
 
   const saveToCareer = change => {
     let result;
     return store.update(async state => { result = await change(state.career ??= createCareerState()); }).then(() => result);
   };
-  tool('career_interview_ask', 'Ask the candidate a brief gap interview (1–5 tap-to-answer questions) about what a job needs that neither the CV nor a saved fact shows. Subjects with a saved fact are skipped. With form support the answers are collected and saved immediately; otherwise show the returned text verbatim and pass the candidate\'s reply to career_interview_answer.', object({ title: string(200), questions: { type: 'array', items: questionSchema, minItems: 1, maxItems: 5 } }, ['questions']), false, async args => {
+  tool('career_interview_ask', 'Ask 1–5 brief gap questions while reviewing a saved application listing for submission after matching. Requires applicationId. Reuse answers by subject or explicit factId; shallow positives need a concise explanation. Use followUp to deepen a saved answer. Present pending text.', object({ applicationId: uuid, title: string(200), questions: { type: 'array', items: questionSchema, minItems: 1, maxItems: 5 } }, ['applicationId', 'questions']), false, async args => {
     const prepared = prepareQuestions(args.questions);
-    const known = new Map(Object.values(readCareer(store).facts).map(fact => [factKey(fact), fact]));
-    const alreadyKnown = prepared.filter(question => known.has(factKey(question))).map(question => known.get(factKey(question)));
-    const questions = prepared.filter(question => !known.has(factKey(question))).map((question, index) => ({ number: index + 1, ...question }));
-    if (!questions.length) return { mode: 'none', alreadyKnown };
+    const alreadyKnown = [];
+    const interview = await saveToCareer(career => {
+      if (!Object.hasOwn(career.applications, args.applicationId)) fail('NOT_FOUND', 'Application not found. Create an application for the listing being reviewed before asking gap questions.');
+      const application = career.applications[args.applicationId];
+      if (!application?.job || !['title', 'company', 'description'].every(field => typeof application.job[field] === 'string' && application.job[field].trim()))
+        fail('INVALID_INPUT', 'The saved application needs a job title, company and description before asking gap questions.');
+      const job = { title: application.job.title, company: application.job.company,
+        ...(application.job.url ? { url: application.job.url } : {}) };
+      const known = new Map(Object.values(career.facts).map(fact => [factKey(fact), fact]));
+      const questions = [];
+      const targets = new Set();
+      prepared.forEach((question, index) => {
+        const existing = question.factId ? career.facts[question.factId] : known.get(factKey(question));
+        if (question.factId && !existing) fail('NOT_FOUND', 'Related fact not found. Read current facts before asking.');
+        if (existing) {
+          if (targets.has(existing.id)) fail('INVALID_INPUT', 'Ask about each saved fact only once per interview.');
+          targets.add(existing.id);
+          if (needsDetail(existing) || question.followUp) questions.push(detailQuestion({ number: index + 1, ...question }, existing));
+          else alreadyKnown.push(existing);
+        } else questions.push({ number: index + 1, ...question });
+      });
+      if (!questions.length) return null;
+      const pending = { id: randomUUID(), applicationId: args.applicationId, job,
+        ...(args.title ? { title: args.title } : {}), questions, createdAt: now() };
+      (career.interviews ??= {})[pending.id] = pending;
+      return pending;
+    });
+    if (!interview) return { mode: 'none', alreadyKnown };
+    const applyForm = async (result, questions) => saveToCareer(career => {
+      const pending = career.interviews?.[interview.id];
+      if (!pending) fail('NOT_FOUND', 'This interview is no longer open.');
+      if (hash(pending.questions) !== hash(questions)) fail('FACT_CHANGED', 'The interview changed while the form was open. Use the current pending questions.');
+      if (result.action !== 'accept') return { saved: [], declined: true, ...pendingResult(pending) };
+      return saveAnswers(career, pending, formAnswers(result.content, questions));
+    });
     if (interaction?.canElicit()) {
-      const result = await interaction.elicit(formRequest(args.title, questions));
+      const startedWithDetail = interview.questions.some(question => question.stage === 'detail');
+      const result = await interaction.elicit(formRequest(args.title, interview.questions));
+      readCareer(store); // Recheck scoped lock/identity even when elicitation falls back to chat.
       if (result) {
-        if (result.action !== 'accept') return { mode: 'form', saved: [], declined: true, alreadyKnown };
-        const answers = formAnswers(result.content, questions);
-        const saved = await saveToCareer(career => saveAnswers(career, questions, answers));
-        const answered = new Set(answers.map(answer => answer.number));
-        return { mode: 'form', ...saved, unanswered: questions.filter(question => !answered.has(question.number)).map(question => question.number), alreadyKnown };
+        let output = await applyForm(result, interview.questions);
+        // One extra form at most, only for newly requested explanations.
+        if (!output.declined && output.followUps?.length && !startedWithDetail) {
+          const pending = readCareer(store).interviews[interview.id];
+          const next = await interaction.elicit(formRequest(args.title, output.followUps));
+          readCareer(store);
+          if (next) {
+            const subsequent = await applyForm(next, pending.questions);
+            const saved = new Map([...output.saved, ...subsequent.saved].map(fact => [fact.id, fact]));
+            output = { ...subsequent, saved: [...saved.values()] };
+          }
+        }
+        return { mode: 'form', ...output, alreadyKnown };
       }
     }
-    const interview = { id: randomUUID(), ...(args.title ? { title: args.title } : {}), questions, createdAt: now() };
-    await saveToCareer(career => { (career.interviews ??= {})[interview.id] = interview; });
-    return { mode: 'chat', interviewId: interview.id, text: chatText(args.title, questions), alreadyKnown };
+    return { mode: 'chat', ...pendingResult(interview), alreadyKnown };
   });
-  tool('career_interview_answer', 'Save the candidate\'s literal reply to a chat gap interview, e.g. "1a 2c: adidas.com experiments". Question numbers stay as originally shown; unanswered questions stay open.', object({ interviewId: uuid, reply: string(1000) }, ['interviewId', 'reply']), false, async args => saveToCareer(career => {
+  tool('career_interview_answer', 'Save a literal interview reply. Use numbered choices, number: explanation for details, or plain text for one detail question. Positive shallow answers remain pending; present returned text. skip or cancel ends open questions without inventing detail.', object({ interviewId: uuid, reply: string(8000) }, ['interviewId', 'reply']), false, async args => saveToCareer(career => {
     const interview = career.interviews?.[args.interviewId];
     if (!interview) fail('NOT_FOUND', 'This interview is not open. Ask again with career_interview_ask.');
     const answers = parseReply(args.reply, interview.questions);
-    const saved = saveAnswers(career, interview.questions, answers);
-    const answered = new Set(answers.map(answer => answer.number));
-    interview.questions = interview.questions.filter(question => !answered.has(question.number));
-    if (!interview.questions.length) delete career.interviews[interview.id];
-    return { ...saved, unanswered: interview.questions.map(question => question.number) };
+    return { ...saveAnswers(career, interview, answers), ...(/^\s*cancel\s*$/i.test(args.reply) ? { cancelled: true } : {}) };
   }));
 
   return tools;

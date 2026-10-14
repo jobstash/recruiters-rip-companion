@@ -22,8 +22,6 @@ async function refresh() {
       window.careerBrowser?.clear(); careerViewVersion = undefined;
       return;
     }
-    $('account').textContent = state.paired ? `${state.account.label} · ${state.origin}` : '';
-    $('account').hidden = !state.paired;
     $('connect-account').textContent = state.paired ? 'Open account' : 'Connect account';
     if (state.paired && noticeKind === 'connect-account') notice('');
     if (window.careerBrowser && careerViewVersion !== state.careerViewVersion) {

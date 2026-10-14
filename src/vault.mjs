@@ -38,7 +38,7 @@ export function createVault(safeStorage, directory) {
         if (loaded.version !== 2 || !loaded.deviceId || !loaded.privateKey || !loaded.publicKey) throw new Error('Invalid local storage.');
       } catch (error) {
         if (error.code !== 'ENOENT') throw new Error('Local encrypted storage could not be opened. Saved data has not been replaced.');
-        loaded = { version: 2, ...identity(), label: 'My computer', pairing: null, userPaused: false, career: createCareerState(), identityArchives: {} };
+        loaded = { version: 2, ...identity(), label: 'My computer', pairing: null, career: createCareerState(), identityArchives: {} };
         await persist(loaded);
       }
       if (loaded.career?.version !== 1 || !Number.isSafeInteger(loaded.career.revision) || !loaded.career.sources || !loaded.career.facts || !loaded.career.applications || !loaded.career.receipts) throw new Error('The local career format is unavailable. Saved data has not been replaced.');
@@ -59,7 +59,7 @@ export function createVault(safeStorage, directory) {
         next.identityArchives ??= {};
         next.identityArchives[previousDeviceId] = { executable: false, archivedAt: new Date().toISOString(), deviceId: previousDeviceId,
           publicKey: next.publicKey, label: next.label, pairing: next.pairing, career: next.career, retiredExecution: next.retiredExecution };
-        Object.assign(next, identity()); next.pairing = null; next.userPaused = false; next.career = createCareerState(); delete next.retiredExecution;
+        Object.assign(next, identity()); next.pairing = null; next.career = createCareerState(); delete next.retiredExecution;
         result = { previousDeviceId, deviceId: next.deviceId, archived: true, remoteDeviceRevoked: false };
       });
       return result;

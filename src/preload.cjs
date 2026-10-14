@@ -1,6 +1,6 @@
 'use strict';
 const { contextBridge, ipcRenderer } = require('electron');
-const allowed = new Set(['state', 'unlock', 'pause', 'resume', 'unpair', 'install-native', 'connect-account', 'copy-command', 'copy-config', 'install-chatgpt', 'install-claude', 'open-exports', 'backup', 'approval']);
+const allowed = new Set(['state', 'unlock', 'connect-account', 'copy-command', 'copy-config', 'install-chatgpt', 'install-claude', 'career-list', 'career-read', 'delete-rankings', 'open-exports', 'backup', 'approval']);
 contextBridge.exposeInMainWorld('companion', Object.freeze({
   invoke(op, input = {}) {
     if (!allowed.has(op)) return Promise.reject(new Error('Unavailable local settings action.'));

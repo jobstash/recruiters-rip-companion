@@ -4,9 +4,11 @@ import { copyFile, mkdir, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { packageMcp } from './package-mcp.mjs';
+import cleanDist from './clean-dist.cjs';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const generated = path.join(root, 'src', 'generated');
+await cleanDist();
 await mkdir(path.join(generated, 'assets'), { recursive: true });
 await build({
   entryPoints: [path.join(root, 'build', 'document-engine.cts')], outfile: path.join(generated, 'document-engine.cjs'),

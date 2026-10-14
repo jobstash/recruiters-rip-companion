@@ -23,7 +23,7 @@ const publicKey = state => createPublicKey({ key: Buffer.from(state.publicKey, '
 
 test('identity reset isolates old private career data while keeping encrypted recoverable archives', async t => {
   const { vault, reopen, directory } = await fixture(t);
-  await vault.update(state => { state.pairing = { origin: 'https://recruiters.rip', account: { id: 'old-owner', label: 'Old account' } }; state.career.profile.name = 'Private candidate sentinel'; state.career.sources.one = { text: 'Original source sentinel' }; state.userPaused = true; });
+  await vault.update(state => { state.pairing = { origin: 'https://recruiters.rip', account: { id: 'old-owner', label: 'Old account' } }; state.career.profile.name = 'Private candidate sentinel'; state.career.sources.one = { text: 'Original source sentinel' }; });
   const old = vault.get(), result = await vault.resetIdentity();
   const reopened = reopen(); await reopened.open(); const current = reopened.get();
   assert.notEqual(current.deviceId, old.deviceId); assert.equal(result.remoteDeviceRevoked, false);

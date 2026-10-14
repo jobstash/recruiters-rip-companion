@@ -1,6 +1,6 @@
 # Recruiters.rip Companion
 
-The local career-data app for Recruiters.rip. This is a POC: prioritize the current working flow, not old-version compatibility or preserving obsolete generated data. Version 3.4.4 adds a ranking-only reset, seven-day job selection and simpler companion controls.
+The local career-data app for Recruiters.rip. This is a POC: prioritize the current working flow, not old-version compatibility or preserving obsolete generated data. Version 3.4.5 makes saved sources, facts, rankings and application documents readable in the companion and removes redundant settings telemetry and controls.
 
 ## Account and installation
 
@@ -29,7 +29,11 @@ Say **“Reassess roles.”** The host automatically starts a fresh ranking pass
 
 The companion's **Delete rankings** button and `career_rankings_delete` clear only rankings and cached jobs. They preserve profile, preferences, source CVs, career facts, application drafts and account data. A reset invalidates in-flight old writers so deleted results cannot reappear. `career_match_jobs.profileVersion` is an opaque context token binding profile changes and ranking resets; bounded saved-job reassessments can read it as `career_profile_read.matchingProfileVersion`.
 
-The header contains only the application title. Account and chat-app connection states stay beside their own controls. **Chat-app access → Block updates / Allow updates** controls local data writes; it does not pause or resume host-app reasoning, replies or browser actions. Heading and section subtitles have been removed; necessary errors, data and control labels remain.
+The settings screen shows account identity and concrete controls for chat-app setup, exports and ranking deletion. It does not show transport-connection counts, generic readiness badges, passive record/archive counters or last-request timestamps. Open MCP sockets do not identify usable apps. The **Data and deletion**, **Chat-app access** and **Connection recovery** accordions are removed, along with their block/allow-updates and repair/reset controls. OS-lock protection and explicit account-pairing approval remain enforced. Action feedback and actionable errors remain.
+
+**Local career data** opens Sources, Facts, Rankings and Application drafts. Select a saved record to read its extracted source text, factual statement and evidence, assessment reason/terms, or saved CV and cover letter. Lists are paginated locally; rankings retain the existing full-result order. Browsing never fetches job data, calls a model or modifies records. Locked storage clears the reader. Empty categories show what is absent rather than passive zero counters.
+
+For a paired account, **Open account** opens the website without starting pairing again. The browser sign-in instruction is shown only for an unpaired connection attempt and clears when pairing completes. Contextless “Try asking” copy is removed.
 
 ## CV customization
 
@@ -65,6 +69,8 @@ pnpm test
 
 The package version is the source of truth for Electron, the MCP server, and generated plugin manifests. `build/runtime.mjs` bundles owned document source and emits `src/generated/document-engine.cjs`, font/rubric assets, the local MCP launcher, `recruiters-rip.mcpb`, a developer-only `recruiters-rip-local.mcpb`, and the `recruiters-rip-plugin` directory. `pnpm package:mcp` emits the portable extension/plugin packages without Electron packaging. Generated output and `dist/` are ignored by Git.
 
+Every runtime build and standalone MCP packaging command deletes the entire repository `dist/` before generating artifacts. Electron Builder also cleans it once before packaging, including direct CLI invocations and signed releases. Old versions and alternate build folders are not retained; do not run independent builds concurrently. Since `start` and `test` build runtime assets, they clear `dist/` too. Install the companion in Applications rather than running the installed MCP from disposable build output.
+
 `src/documents/package.json` declares a CommonJS source boundary because the document build transpiles TypeScript to CommonJS before bundling. Keep that boundary separate from the Electron application's root ES-module package.
 
 ## Distribution
@@ -77,7 +83,7 @@ This creates signed, notarized macOS ARM64 ZIP and DMG artifacts under `dist/rel
 
 If signing credentials are unavailable, explicitly use `pnpm package:adhoc`. It builds production-origin ZIP and DMG artifacts under `dist/adhoc/` with ad-hoc signing and **no notarization**; Gatekeeper may block them. Do not describe these as notarized releases or silently disable OS protections.
 
-Artifact basenames are `recruiters-rip-companion-3.4.4-mac-arm64.zip` and `.dmg`. The website operator mounts the actual ZIP on its private host volume and sets `COMPANION_INSTALLER_PATH`; `/api/companion/download` serves that file. A private GitHub repository is not a public installer URL.
+Artifact basenames are `recruiters-rip-companion-3.4.5-mac-arm64.zip` and `.dmg`. The website operator mounts the actual ZIP on its private host volume and sets `COMPANION_INSTALLER_PATH`; `/api/companion/download` serves that file. A private GitHub repository is not a public installer URL.
 
 ## Document source and asset notices
 

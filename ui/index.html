@@ -7,6 +7,7 @@
 <title>Recruiters.rip Companion</title>
 <link rel="stylesheet" href="settings.css">
 <script src="settings.js" defer></script>
+<script src="career-browser.js" defer></script>
 </head>
 <body>
 <dialog id="approval-dialog" aria-labelledby="approval-title" aria-describedby="approval-detail"><h2 id="approval-title"></h2><pre id="approval-detail" tabindex="0"></pre><div class="actions dialog-actions"><button id="approval-cancel" type="button" autofocus>Cancel</button><button id="approval-allow" class="primary" type="button">Allow this action</button></div></dialog>
@@ -20,43 +21,52 @@
 <section id="storage" class="card" hidden><h2>Local storage is locked</h2><p id="storage-message"></p><button id="unlock" class="primary" type="button">Open local storage</button></section>
 <div id="settings">
 <section class="card">
-<div class="card-head"><h2>Account</h2><span id="account-state" class="pill"></span></div>
+<h2>Account</h2>
 <div class="split"><p id="account">Reading account…</p><button id="connect-account" type="button">Connect account</button></div>
 </section>
 <section class="card">
-<div class="card-head"><h2>Chat apps</h2><p id="mcp-status" class="pill" role="status" aria-live="polite"></p></div>
+<h2>Chat apps</h2>
 <div class="apps">
 <div class="app-row">
-<span class="app-mark app-mark-codex" aria-hidden="true"></span>
 <div class="app-body"><h3>ChatGPT desktop · Codex</h3></div>
 <button id="install-chatgpt" class="primary app-action" type="button">Install ChatGPT plugin</button>
 <details class="app-details"><summary>Manual MCP setup</summary><p>In a compatible local MCP host, register this command as <strong>recruiters-rip</strong>. It does not connect ordinary ChatGPT chats.</p><label>Local MCP command<input id="mcp-command" readonly spellcheck="false"></label><button id="copy-command" type="button">Copy command</button></details>
 </div>
 <div class="app-row">
-<span class="app-mark app-mark-claude" aria-hidden="true"></span>
 <div class="app-body"><h3>Claude Desktop</h3></div>
 <button id="install-claude" class="primary app-action" type="button">Install Claude extension</button>
 <details class="app-details"><summary>Manual configuration</summary><p>Add this entry to Claude Desktop’s MCP configuration. Keep your other servers in place.</p><pre id="mcp-config"></pre><button id="copy-config" type="button">Copy configuration</button></details>
 </div>
 </div>
-<figure class="prompt"><figcaption>Try asking</figcaption><blockquote>“Reassess roles.”</blockquote></figure>
 </section>
 <section class="card">
 <h2>Local career data</h2>
-<p id="career-counts" class="counts"></p>
-<p id="activity" class="meta"></p>
-<div class="actions"><button id="delete-rankings" type="button">Delete rankings</button><button id="open-exports" type="button">Open export folder</button><button id="backup" type="button">Export career backup</button></div>
-<details><summary>Data and deletion</summary><p>Delete rankings clears saved rankings and the cached job list. Your profile, preferences, source CVs, career facts and application drafts stay. Exported files are not deleted.</p><p>Local career data is encrypted. Exported PDFs, lists and backups are ordinary files. Content read by your chat app is shared with its model provider.</p></details>
+<div id="career-browser">
+<div class="actions career-categories" role="group" aria-label="Saved career records">
+<button type="button" data-career-kind="sources" aria-pressed="true" disabled>Sources</button>
+<button type="button" data-career-kind="facts" aria-pressed="false" disabled>Facts</button>
+<button type="button" data-career-kind="rankings" aria-pressed="false" disabled>Rankings</button>
+<button type="button" data-career-kind="applications" aria-pressed="false" disabled>Application drafts</button>
+</div>
+<section aria-labelledby="career-list-title">
+<h3 id="career-list-title">Sources</h3>
+<p id="career-list-status" role="status">Open local storage to read saved records.</p>
+<button id="career-list-retry" type="button" hidden>Retry loading records</button>
+<ul id="career-records" class="career-records" aria-labelledby="career-list-title" hidden></ul>
+<nav id="career-pagination" class="actions" aria-label="Record pages" hidden>
+<button id="career-previous" type="button" disabled>Previous</button>
+<button id="career-next" type="button" disabled>Next</button>
+</nav>
 </section>
-<details class="card recovery"><summary>Chat-app access</summary>
-<div class="split"><span>Local updates</span><span id="updates-state" class="pill"></span><button id="toggle-updates" type="button">Block updates</button></div>
-<p>Blocking updates prevents chat apps from changing local data. Saved records remain readable. This does not stop Codex or Claude replies, reasoning, or browser actions.</p>
-</details>
-<details class="card recovery"><summary>Connection recovery</summary>
-<p>Repair if your chat app can no longer reach Recruiters.rip. Reset only to switch accounts or replace a revoked device: your current local data is archived, never shown to the next account. Revoke the old device in your account settings separately.</p>
-<p id="archive-status" class="meta"></p>
-<div class="actions"><button id="install" type="button">Repair local connections</button><button id="unpair" type="button">Reset device identity</button></div>
-</details>
+<section id="career-reader" class="career-reader" aria-labelledby="career-reader-title" hidden>
+<div class="split"><h3 id="career-reader-title" tabindex="-1"></h3><button id="career-close" type="button">Close record</button></div>
+<p id="career-reader-status" role="status"></p>
+<button id="career-reader-retry" type="button" hidden>Retry opening record</button>
+<div id="career-reader-content" class="career-reader-content" tabindex="0" aria-label="Record content"></div>
+</section>
+</div>
+<div class="actions"><button id="delete-rankings" type="button">Delete rankings</button><button id="open-exports" type="button">Open export folder</button><button id="backup" type="button">Export career backup</button></div>
+</section>
 </div>
 </main>
 </body>

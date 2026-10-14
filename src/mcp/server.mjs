@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { CareerError } from './state.mjs';
 import { version } from '../version.mjs';
 import { COMPETENCY_POLICY, SALARY_POLICY } from './assessment-policy.mjs';
-const publicErrors = new Set(['INVALID_INPUT', 'NOT_FOUND', 'REVISION_CONFLICT', 'REQUEST_CONFLICT', 'STORAGE_LIMIT', 'RESULT_LIMIT', 'LOCAL_LOCKED', 'LOCAL_PAUSED', 'IDENTITY_CHANGED', 'PAIRING_REQUIRED', 'DEVICE_OFFLINE', 'DEVICE_UNAUTHORIZED', 'DEVICE_REQUEST_FAILED', 'UNAVAILABLE', 'INVALID_EVIDENCE', 'INVALID_JOB', 'BINDING_CONFLICT', 'SOURCE_STALE', 'CAREER_CONTINUITY', 'MISSING_EVIDENCE', 'MISSING_DRAFT', 'LAYOUT_LIMIT', 'EXPORT_CORRUPT', 'CANCELLED']);
+const publicErrors = new Set(['INVALID_INPUT', 'NOT_FOUND', 'REVISION_CONFLICT', 'REQUEST_CONFLICT', 'STORAGE_LIMIT', 'RESULT_LIMIT', 'LOCAL_LOCKED', 'IDENTITY_CHANGED', 'PAIRING_REQUIRED', 'DEVICE_OFFLINE', 'DEVICE_UNAUTHORIZED', 'DEVICE_REQUEST_FAILED', 'UNAVAILABLE', 'INVALID_EVIDENCE', 'INVALID_JOB', 'BINDING_CONFLICT', 'SOURCE_STALE', 'CAREER_CONTINUITY', 'MISSING_EVIDENCE', 'MISSING_DRAFT', 'LAYOUT_LIMIT', 'EXPORT_CORRUPT', 'CANCELLED']);
 
 export const instructions = [
   'Recruiters.rip uses the candidate’s official subscription app for reasoning. Never request inference credentials, call model APIs, or substitute web job search. If its tools are unavailable, say so and stop.',

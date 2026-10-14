@@ -15,11 +15,11 @@ import { createMatchingTools } from '../src/mcp/matching-tools.mjs';
 import { ASSESSMENT_VERSION } from '../src/mcp/assessment-policy.mjs';
 
 function fixture() {
-  let state = { deviceId: randomUUID(), career: createCareerState(), pairing: { account: { id: 'first-owner' } } }, queue = Promise.resolve(), epoch = 0, paused = false;
+  let state = { deviceId: randomUUID(), career: createCareerState(), pairing: { account: { id: 'first-owner' } } }, queue = Promise.resolve(), epoch = 0, locked = false;
   const store = { get: () => structuredClone(state), update(change) { const work = queue.then(async () => { const next = structuredClone(state); await change(next); state = next; }); queue = work.catch(() => {}); return work; } };
-  const available = mutation => { if (mutation && paused) fail('LOCAL_PAUSED', 'Local changes are paused.'); };
+  const available = () => { if (locked) fail('LOCAL_LOCKED', 'Local storage is locked.'); };
   const scoped = createScopedAccess(store, { assertAvailable: available, epoch: () => epoch });
-  return { store, scoped, pause() { paused = true; }, reset() { epoch++; state = { deviceId: randomUUID(), career: createCareerState(), pairing: { account: { id: 'second-owner' } } }; }, lockAndUnlock() { epoch++; } };
+  return { store, scoped, lock() { locked = true; }, reset() { epoch++; state = { deviceId: randomUUID(), career: createCareerState(), pairing: { account: { id: 'second-owner' } } }; }, lockAndUnlock() { epoch++; } };
 }
 
 test('a delayed local file import cannot enter a reset identity with the same revision', async () => {
@@ -35,13 +35,13 @@ test('a delayed local file import cannot enter a reset identity with the same re
   assert.deepEqual(f.store.get().career.sources, {}); assert.equal(f.store.get().career.revision, 0);
 });
 
-test('pause rejects an in-progress mutation before its encrypted transaction can publish', async () => {
+test('locking rejects an in-progress mutation before its encrypted transaction can publish', async () => {
   const f = fixture(); let release, began;
   const started = new Promise(resolve => { began = resolve; }); const resume = new Promise(resolve => { release = resolve; });
   const pending = f.scoped.store.update(async state => { state.career.profile.name = 'Not committed'; began(); await resume; });
-  await started; f.pause(); release();
-  await assert.rejects(pending, { code: 'LOCAL_PAUSED' }); assert.equal(f.store.get().career.profile.name, null);
-  assert.equal(f.scoped.store.get().career.profile.name, null, 'paused reads remain available');
+  await started; f.lock(); release();
+  await assert.rejects(pending, { code: 'LOCAL_LOCKED' }); assert.equal(f.store.get().career.profile.name, null);
+  assert.throws(() => f.scoped.store.get(), { code: 'LOCAL_LOCKED' });
 });
 
 test('a previous socket stays invalid after lock and unlock even if the identity is unchanged', () => {

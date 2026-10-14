@@ -5,7 +5,7 @@ import { writeFile, chmod, unlink } from 'node:fs/promises';
 import { privateDirectory } from '../vault.mjs';
 
 const MAX_FRAME = 16 * 1024 * 1024;
-export async function startMcpBroker({ directory, createServer, onConnections = () => {} }) {
+export async function startMcpBroker({ directory, createServer }) {
   await privateDirectory(directory);
   const socketPath = path.join(directory, 'mcp.sock');
   try { await unlink(socketPath); } catch (error) { if (error.code !== 'ENOENT') throw error; }
@@ -15,7 +15,7 @@ export async function startMcpBroker({ directory, createServer, onConnections = 
     let input = Buffer.alloc(0), authenticated = false, transport, server;
     const timer = setTimeout(() => socket.destroy(), 5000);
     const close = () => {
-      clearTimeout(timer); clients.delete(socket); onConnections(clients.size);
+      clearTimeout(timer); clients.delete(socket);
       transport?.onclose?.(); void server?.close();
     };
     socket.once('close', close);
@@ -46,7 +46,7 @@ export async function startMcpBroker({ directory, createServer, onConnections = 
               async close() { socket.destroy(); },
             };
             server = createServer(); await server.connect(transport);
-            clients.add(socket); onConnections(clients.size); return;
+            clients.add(socket); return;
           }
           transport.onmessage?.(message);
         }).catch(() => socket.destroy());

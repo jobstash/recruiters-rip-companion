@@ -1,6 +1,6 @@
 # Recruiters.rip Companion
 
-The local career-data app for Recruiters.rip. This is a POC: prioritize the current working flow, not old-version compatibility or preserving obsolete generated data. Version 3.4.3 fixes salary-floor eligibility and responsibility-level competency inference.
+The local career-data app for Recruiters.rip. This is a POC: prioritize the current working flow, not old-version compatibility or preserving obsolete generated data. Version 3.4.4 adds a ranking-only reset, seven-day job selection and simpler companion controls.
 
 ## Account and installation
 
@@ -25,7 +25,11 @@ A positive saved `salaryMinimum` is a hard floor. Comparable stated pay below it
 
 Assess the whole career and actual scope, not exact task keywords. Sustained end-to-end product ownership with discovery workshops, customer work and delivery supports ordinary discovery, interviewing, usability-validation and experimentation capabilities. Those routine facets do not need individual confirmations or reduce fit merely because their precise words were absent. Specific historical studies, metrics, credentials and genuine specialist expertise must not be invented.
 
-Assessment policy 1 is a clean cutover: earlier judgments are `needs_review`, not current recommendations. They are not migrated or automatically rescored. In a fresh Codex conversation with the updated plugin, explicitly request a full rerank using `career_match_jobs({refresh:true})`, read complete originals, and save newly reasoned judgments with its `profileVersion`. Career facts and scores are not rewritten by installing the update.
+Say **“Reassess roles.”** The host automatically starts a fresh ranking pass: it clears old rankings and cached jobs, selects only the rolling past seven days using catalogue `publishedAt`, reads complete originals and saves newly reasoned judgments. No flags or special prompt are needed. Status/resume requests do not clear work. An empty or obsolete recommendation cache must not be mistaken for a completed search with no suitable jobs.
+
+The companion's **Delete rankings** button and `career_rankings_delete` clear only rankings and cached jobs. They preserve profile, preferences, source CVs, career facts, application drafts and account data. A reset invalidates in-flight old writers so deleted results cannot reappear. `career_match_jobs.profileVersion` is an opaque context token binding profile changes and ranking resets; bounded saved-job reassessments can read it as `career_profile_read.matchingProfileVersion`.
+
+The header contains only the application title. Account and chat-app connection states stay beside their own controls. **Chat-app access → Block updates / Allow updates** controls local data writes; it does not pause or resume host-app reasoning, replies or browser actions. Heading and section subtitles have been removed; necessary errors, data and control labels remain.
 
 ## CV customization
 
@@ -73,7 +77,7 @@ This creates signed, notarized macOS ARM64 ZIP and DMG artifacts under `dist/rel
 
 If signing credentials are unavailable, explicitly use `pnpm package:adhoc`. It builds production-origin ZIP and DMG artifacts under `dist/adhoc/` with ad-hoc signing and **no notarization**; Gatekeeper may block them. Do not describe these as notarized releases or silently disable OS protections.
 
-Artifact basenames are `recruiters-rip-companion-3.4.3-mac-arm64.zip` and `.dmg`. The website operator mounts the actual ZIP on its private host volume and sets `COMPANION_INSTALLER_PATH`; `/api/companion/download` serves that file. A private GitHub repository is not a public installer URL.
+Artifact basenames are `recruiters-rip-companion-3.4.4-mac-arm64.zip` and `.dmg`. The website operator mounts the actual ZIP on its private host volume and sets `COMPANION_INSTALLER_PATH`; `/api/companion/download` serves that file. A private GitHub repository is not a public installer URL.
 
 ## Document source and asset notices
 

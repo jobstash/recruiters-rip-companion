@@ -1,4 +1,16 @@
-export const ASSESSMENT_VERSION = 1;
+export const ASSESSMENT_VERSION = 2;
+export const PUBLICATION_DAYS = 7;
+const PUBLICATION_WINDOW_MS = PUBLICATION_DAYS * 24 * 60 * 60 * 1000;
+export const matchingProfileVersion = career => `${career.evidenceRevision ?? 0}:${career.rankingVersion ?? 0}`;
+
+export function recentPublication(publishedAt, now = Date.now()) {
+  const time = Date.parse(publishedAt);
+  return Number.isFinite(time) && time >= now - PUBLICATION_WINDOW_MS && time <= now;
+}
+
+export function publicationWindow(now = Date.now()) {
+  return { days: PUBLICATION_DAYS, since: new Date(now - PUBLICATION_WINDOW_MS).toISOString(), until: new Date(now).toISOString() };
+}
 
 export const COMPETENCY_POLICY = 'Assess capability at the responsibility level using the whole career: actual ownership, decisions, delivered products, workshops, customer work, analytics and seniority together. Infer ordinary constituent duties from demonstrated sustained scope; do not require a separate literal CV bullet for every routine subtask. End-to-end product ownership with discovery/design workshops, customer engagement and delivery supports routine product discovery, user interviews, usability validation, prioritisation and experimentation capability. Absence of those exact phrases is not a material gap, a reason to lower fit, or a candidate question. This is capability inference, not permission to invent a specific past study, A/B programme, vendor, metric, credential, management layer or implementation specialty. Reserve clarify for a genuinely decisive unknown that the broader record does not reasonably resolve. In CVs express supported responsibility/capability directly, cite the underlying scope privately, and do not manufacture historical examples.';
 

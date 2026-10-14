@@ -15,7 +15,7 @@ import { createApplicationTools } from './mcp/application-tools.mjs';
 import { startMcpBroker } from './mcp/broker.mjs';
 import { createDocumentFiles, readSelectedSource } from './mcp/files.mjs';
 import { createScopedAccess } from './mcp/scope.mjs';
-import { createMatchingTools } from './mcp/matching-tools.mjs';
+import { createMatchingTools, deleteRankings } from './mcp/matching-tools.mjs';
 import { installChatGptPlugin } from './host-setup.mjs';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -36,7 +36,7 @@ const sockets = new Set();
 const store = { get() { assertAvailable(false); return vault.get(); }, update(change) { assertAvailable(false); return vault.update(async state => { assertAvailable(false); await change(state); assertAvailable(false); }); } };
 function assertAvailable(mutation) {
   if (locked || !vault.available() || screenLocked || sleeping) fail('LOCAL_LOCKED', 'Open Recruiters.rip Companion and unlock local storage. Your saved work is unchanged.');
-  if (mutation && (pauseRequested || vault.get().userPaused)) fail('LOCAL_PAUSED', 'Local changes are paused. Choose Resume work in Recruiters.rip Companion.');
+  if (mutation && (pauseRequested || vault.get().userPaused)) fail('LOCAL_PAUSED', 'Chat-app updates are blocked. Choose Allow updates under Chat-app access in Recruiters.rip Companion.');
 }
 function safeFailure(error) {
   const allowed = new Set(['DEVICE_OFFLINE', 'DEVICE_UNAUTHORIZED', 'DEVICE_REQUEST_FAILED', 'LOCAL_LOCKED', 'LOCAL_PAUSED', 'INVALID_INPUT', 'PAIRING_REQUIRED', 'CANCELLED', 'HOST_UNAVAILABLE', 'HOST_INSTALL_FAILED']);
@@ -59,7 +59,8 @@ function localState() {
   const state = vault.get();
   return { ...publicState, account: state.pairing?.account ?? null, origin: state.pairing?.origin ?? null, browserConnection, failure,
     mcpConnections, lastTool, setup: setup(), career: { revision: state.career.revision, sources: Object.keys(state.career.sources).length,
-      facts: Object.values(state.career.facts).filter(fact => fact.status === 'active').length, applications: Object.keys(state.career.applications).length },
+      facts: Object.values(state.career.facts).filter(fact => fact.status === 'active').length, applications: Object.keys(state.career.applications).length,
+      rankings: Object.keys(state.career.matching?.scores ?? {}).length },
     archivedIdentities: Object.keys(state.identityArchives ?? {}).length,
     approval: pendingApproval ? { id: pendingApproval.id, title: pendingApproval.title, detail: pendingApproval.detail } : null };
 }
@@ -70,7 +71,7 @@ function emit(event = 'status', payload = status()) {
 }
 function showSettings() {
   if (window && !window.isDestroyed()) { window.show(); window.focus(); window.webContents.send('state-changed'); return windowLoaded; }
-  window = new BrowserWindow({ width: 780, height: 860, minWidth: 420, minHeight: 560, title: 'Recruiters.rip Companion', backgroundColor: '#fafafa',
+  window = new BrowserWindow({ width: 780, height: 860, minWidth: 420, minHeight: 560, title: 'Recruiters.rip Companion', backgroundColor: '#f5f5f5',
     webPreferences: { preload: path.join(root, 'src', 'preload.cjs'), partition: 'recruiters-settings', nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true, devTools: !app.isPackaged, spellcheck: false } });
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   window.webContents.on('will-navigate', event => event.preventDefault());
@@ -242,6 +243,7 @@ ipcMain.handle('local-settings', async (event, op, input = {}) => {
     if (op === 'approval') { if (!pendingApproval || pendingApproval.id !== input.id || typeof input.allow !== 'boolean') fail('INVALID_INPUT', 'This approval expired.'); pendingApproval.finish(input.allow); }
     else if (op === 'pause') await setPaused(true);
     else if (op === 'resume') await setPaused(false);
+    else if (op === 'delete-rankings') result = await deleteRankings(store);
     else if (op === 'connect-account') await connectAccount();
     else if (op === 'copy-command') clipboard.writeText(setup().command);
     else if (op === 'copy-config') clipboard.writeText(setup().claudeConfig);
@@ -267,7 +269,7 @@ else {
   app.on('before-quit', () => { exiting = true; clearInterval(heartbeatTimer); pendingApproval?.finish(false); mcpBridge?.close(); nativeBridge?.close(); for (const socket of sockets) socket.destroy(); });
   void app.whenReady().then(async () => {
     documents = createRequire(import.meta.url)('./generated/document-engine.cjs');
-    Menu.setApplicationMenu(Menu.buildFromTemplate([{ label: 'Recruiters.rip Companion', submenu: [{ label: 'Settings', click: showSettings }, { label: 'Pause local changes', click: () => void setPaused(true).catch(error => { failure = safeFailure(error).message; showSettings(); emit(); }) }, { type: 'separator' }, { role: 'quit' }] }, { role: 'editMenu' }]));
+    Menu.setApplicationMenu(Menu.buildFromTemplate([{ label: 'Recruiters.rip Companion', submenu: [{ label: 'Settings', click: showSettings }, { type: 'separator' }, { role: 'quit' }] }, { role: 'editMenu' }]));
     // Render the recovery controls before OS key storage can request approval.
     // The settings page uses an in-memory browser session, never Chromium's
     // persistent cookie key, and contains no provider authentication.

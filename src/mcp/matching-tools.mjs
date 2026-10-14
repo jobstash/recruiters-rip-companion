@@ -1,5 +1,5 @@
 import { createCareerState, fail, readCareer } from './state.mjs';
-import { ASSESSMENT_VERSION, COMPETENCY_POLICY, SALARY_POLICY, salaryEligibility } from './assessment-policy.mjs';
+import { ASSESSMENT_VERSION, COMPETENCY_POLICY, SALARY_POLICY, salaryEligibility, recentPublication, publicationWindow, matchingProfileVersion } from './assessment-policy.mjs';
 
 const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
 const object = (properties, required = []) => ({ type: 'object', properties, required, additionalProperties: false });
@@ -21,6 +21,25 @@ const preferenceFields = ['roles', 'locations', 'workModes', 'employmentTypes', 
   'directReports', 'travel', 'availability', 'emphasis', 'technologies', 'domains', 'notes'];
 const compareText = (a, b) => a < b ? -1 : a > b ? 1 : 0;
 const matching = career => career.matching ?? { jobs: {}, scores: {} };
+const rankingVersion = career => career.rankingVersion ?? 0;
+const currentProfileVersion = matchingProfileVersion;
+
+export async function deleteRankings(store) {
+  let result;
+  await store.update(state => {
+    const career = state.career ??= createCareerState(), saved = matching(career);
+    result = { deletedRankings: Object.keys(saved.scores).length, deletedJobs: Object.keys(saved.jobs).length };
+    career.rankingVersion = rankingVersion(career) + 1;
+    career.matching = { jobs: {}, scores: {} };
+  });
+  return result;
+}
+
+function assertCurrentWindow(jobs, ids) {
+  const now = Date.now();
+  if (ids.some(id => !recentPublication(jobs[id]?.publishedAt, now)))
+    fail('OUTSIDE_PUBLICATION_WINDOW', 'Only jobs published in the past seven days can be selected. Refresh the catalogue and continue with its current IDs.');
+}
 
 function displayTerms(job) {
   const text = value => typeof value === 'string' && value.trim() ? value : null;
@@ -88,7 +107,7 @@ function candidateContext(career) {
   return { ...professional, facts: summaries, preferences };
 }
 function currentAssessment(row, profileVersion) {
-  return row?.profileVersion === profileVersion && Number.isSafeInteger(row.profileVersion) &&
+  return row?.profileVersion === profileVersion && typeof row.profileVersion === 'string' &&
     row.assessmentVersion === ASSESSMENT_VERSION && decisions.includes(row.decision) &&
     (row.score === null ? row.decision === 'clarify' :
       Number.isInteger(row.score) && row.score >= 0 && row.score <= 100 && (row.score !== 0 || row.decision === 'skip'));
@@ -160,20 +179,29 @@ function rankingCSV(rows) {
 export function createMatchingTools({ store, platform, exportDocument }) {
   return [
     {
+      name: 'career_rankings_delete',
+      description: 'Delete local saved job rankings and the cached job list only. Keep profile, preferences, source CVs, career facts, application drafts and account data. Does not run a model or fetch jobs.',
+      inputSchema: object({}), readOnly: false,
+      async invoke(args = {}) { assertObject(args, []); return deleteRankings(store); },
+    },
+    {
       name: 'career_match_jobs',
-      description: 'Read complete professional context and preference notes, profileVersion, assessmentVersion, current assessmentPolicy and catalogue IDs. Infer ordinary duties from demonstrated sustained ownership, not verbatim CV keywords. A positive salaryMinimum is a hard floor; missing salary alone is not exclusion. Default IDs include unseen and outdated assessments; refresh includes every saved ID for requested reranking. Save model-authored full-ad judgments with profileVersion; the server records the current policy version. No model runs here.',
+      description: 'Get candidate context and only jobs published in the past seven days. For an ordinary request to reassess, rerank or start over, automatically use refresh:true: delete old job rankings/cache and assess the fresh weekly catalogue, without asking the user for flags or instructions. Status and resume requests must not reset. profileVersion is an opaque ranking-context token returned here, not career_profile_read.evidenceRevision. Use it for score saves. Infer routine competencies from actual scope and enforce the saved salary floor. No model runs here.',
       inputSchema: object({ refresh: { type: 'boolean' } }), readOnly: false,
       async invoke(args = {}) {
         assertObject(args, ['refresh']);
         if (args.refresh !== undefined && typeof args.refresh !== 'boolean') fail('INVALID_INPUT', 'refresh must be a boolean.');
         candidateContext(readCareer(store));
+        if (args.refresh) await deleteRankings(store);
+        const fetchVersion = rankingVersion(readCareer(store));
         const catalogue = await platform('matching_catalogue', {});
         if (!Array.isArray(catalogue?.jobs) || catalogue.total !== catalogue.jobs.length ||
             new Set(catalogue.jobs.map(job => job?.id)).size !== catalogue.jobs.length || catalogue.jobs.some(job =>
               !job || typeof job.id !== 'string' || !job.id.startsWith('node:') || typeof job.title !== 'string' ||
               typeof job.company !== 'string' || !Number.isFinite(Date.parse(job.publishedAt))))
-          fail('INVALID_CATALOGUE', 'The platform returned an incomplete job catalogue. Retry career_match_jobs; saved scores are unchanged.');
-        const jobs = catalogue.jobs.map(job => {
+          fail('INVALID_CATALOGUE', 'The platform returned an incomplete catalogue. No new rankings were saved; request the catalogue again.');
+        const window = publicationWindow();
+        const jobs = catalogue.jobs.filter(job => recentPublication(job.publishedAt, Date.parse(window.until))).map(job => {
           const { id, title, company, publishedAt, applyUrl } = job;
           return { id, title, company, publishedAt, ...(typeof applyUrl === 'string' ? { applyUrl } : {}), ...displayTerms(job) };
         });
@@ -181,22 +209,18 @@ export function createMatchingTools({ store, platform, exportDocument }) {
         await store.update(state => {
           const career = state.career ??= createCareerState();
           const candidate = candidateContext(career);
-          const saved = career.matching ??= { jobs: {}, scores: {} };
+          if (rankingVersion(career) !== fetchVersion)
+            fail('RANKINGS_CHANGED', 'Rankings were deleted while the catalogue was loading. Request the current catalogue; discarded results were not restored.');
+          const previous = career.matching;
           const currentJobs = Object.fromEntries(jobs.map(job => [job.id, job]));
-          const profileVersion = career.evidenceRevision ?? 0;
-          const discoveryJobs = { ...currentJobs };
-          for (const [id, assessment] of Object.entries(saved.scores))
-            if (!own(discoveryJobs, id) && (args.refresh || !currentAssessment(assessment, profileVersion)))
-              discoveryJobs[id] = saved.jobs[id] ?? null;
-          const coverage = counts(discoveryJobs, Object.fromEntries(
-            Object.entries(saved.scores).filter(([id]) => own(discoveryJobs, id))), profileVersion);
-          for (const [id, job] of Object.entries(saved.jobs))
-            if (own(saved.scores, id) && !own(currentJobs, id)) currentJobs[id] = job;
-          saved.jobs = currentJobs;
-          result = { candidate, profileVersion, assessmentVersion: ASSESSMENT_VERSION,
+          const scores = Object.fromEntries(Object.entries(previous?.scores ?? {}).filter(([id]) => own(currentJobs, id)));
+          const saved = career.matching = { jobs: currentJobs, scores };
+          const profileVersion = matchingProfileVersion(career);
+          result = { candidate, profileVersion, evidenceRevision: career.evidenceRevision ?? 0,
+            assessmentVersion: ASSESSMENT_VERSION, publicationWindow: window,
             assessmentPolicy: { competencies: COMPETENCY_POLICY, salary: SALARY_POLICY },
-            jobIds: Object.keys(discoveryJobs).filter(id => args.refresh || !currentAssessment(saved.scores[id], profileVersion)),
-            total: Object.keys(discoveryJobs).length, ...coverage, batchSize: 10, workers: 8 };
+            jobIds: Object.keys(currentJobs).filter(id => !currentAssessment(saved.scores[id], profileVersion)),
+            total: jobs.length, ...counts(saved.jobs, saved.scores, profileVersion), batchSize: 10, workers: 8 };
         });
         return result;
       },
@@ -208,8 +232,9 @@ export function createMatchingTools({ store, platform, exportDocument }) {
       async invoke(args = {}) {
         assertObject(args, ['ids'], ['ids']);
         assertIds(args.ids);
-        const saved = matching(readCareer(store));
-        assertKnown({ ...saved.jobs, ...saved.scores }, args.ids);
+        const before = readCareer(store), fetchVersion = rankingVersion(before), saved = matching(before);
+        assertKnown(saved.jobs, args.ids);
+        assertCurrentWindow(saved.jobs, args.ids);
         const result = await platform('matching_jobs', { ids: args.ids });
         if (!Array.isArray(result?.jobs) || !Array.isArray(result.remainingIds) || !Array.isArray(result.unavailableIds))
           fail('INVALID_BATCH', 'The platform did not report job availability. Retry career_match_batch; saved scores are unchanged.');
@@ -217,6 +242,8 @@ export function createMatchingTools({ store, platform, exportDocument }) {
         if (covered.length !== args.ids.length || new Set(covered).size !== covered.length || covered.some(id => !args.ids.includes(id)))
           fail('INVALID_BATCH', 'The platform response did not account for every requested job. Retry career_match_batch.');
         if (result.jobs.length) await store.update(state => {
+          if (rankingVersion(state.career) !== fetchVersion)
+            fail('RANKINGS_CHANGED', 'Rankings were deleted while job details were loading. Discarded jobs were not restored.');
           const saved = matching(state.career ?? {});
           for (const job of result.jobs) {
             const metadata = saved.jobs[job.id] ??= { id: job.id, title: null, company: null, publishedAt: null, applyUrl: null };
@@ -234,13 +261,13 @@ export function createMatchingTools({ store, platform, exportDocument }) {
       name: 'career_match_save',
       description: 'Save up to ten model-authored full-ad judgments with profileVersion from career_match_jobs. The current assessmentVersion is recorded automatically; old judgments need genuine reranking, not retagging. Infer ordinary duties from demonstrated scope; do not manufacture granular clarification gates. Keep material specialist gaps honest. Known comparable stated pay below salaryMinimum requires skip and score 0; missing pay alone is not rejection. No score threshold, forced grade, formula, quota or title baseline. Changed preferences reject stale batches with PROFILE_CHANGED.',
       inputSchema: object({
-        profileVersion: { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER },
+        profileVersion: { type: 'string', pattern: '^[0-9]+:[0-9]+$', maxLength: 80 },
         scores: { type: 'array', items: scoreSchema, minItems: 1, maxItems: 10 },
       }, ['profileVersion', 'scores']), readOnly: false,
       async invoke(args = {}) {
         assertObject(args, ['profileVersion', 'scores'], ['profileVersion', 'scores']);
-        if (!Number.isSafeInteger(args.profileVersion) || args.profileVersion < 0)
-          fail('INVALID_INPUT', 'Provide profileVersion from career_match_jobs or evidenceRevision from career_profile_read.');
+        if (typeof args.profileVersion !== 'string' || !/^[0-9]+:[0-9]+$/.test(args.profileVersion))
+          fail('INVALID_INPUT', 'Use profileVersion from the current career_match_jobs context.');
         if (!Array.isArray(args.scores)) fail('INVALID_INPUT', 'Provide one to ten score rows.');
         for (const row of args.scores) {
           assertObject(row, ['id', 'score', 'reason', 'relocation', 'decision'], ['id', 'score', 'reason', 'relocation', 'decision']);
@@ -253,10 +280,11 @@ export function createMatchingTools({ store, platform, exportDocument }) {
         assertIds(args.scores.map(row => row.id));
         await store.update(state => {
           const career = state.career ??= createCareerState();
-          if (args.profileVersion !== (career.evidenceRevision ?? 0))
-            fail('PROFILE_CHANGED', 'Candidate evidence or preferences changed. Read career_profile_read and current facts, or career_match_jobs, reassess these jobs and save with the current profileVersion. Existing assessments are unchanged.');
+          if (args.profileVersion !== currentProfileVersion(career))
+            fail('PROFILE_CHANGED', 'Candidate data or the ranking context changed. Call career_match_jobs and reassess affected jobs using its current profileVersion; do not reuse a token from before deleting rankings.');
           const saved = matching(career);
           assertKnown({ ...saved.jobs, ...saved.scores }, args.scores.map(row => row.id));
+          assertCurrentWindow(saved.jobs, args.scores.map(row => row.id));
           for (const row of args.scores) {
             const pay = salaryEligibility(career.profile?.preferences, saved.jobs[row.id]?.salary);
             if (row.score !== null && pay.status === 'below_minimum' && (row.decision !== 'skip' || row.score !== 0))
@@ -278,7 +306,7 @@ export function createMatchingTools({ store, platform, exportDocument }) {
         if (!Number.isInteger(limit) || limit < 1 || limit > 100 || !Number.isSafeInteger(offset) || offset < 0)
           fail('INVALID_INPUT', 'Use limit 1–100 and a nonnegative integer offset.');
         const career = readCareer(store), saved = matching(career);
-        const profileVersion = career.evidenceRevision ?? 0;
+        const profileVersion = currentProfileVersion(career);
         const rows = rankedRows(saved, career.profile?.preferences, profileVersion);
         const matches = rows.slice(offset, offset + limit);
         return { view: 'assessment_archive', matches, total: rows.length, assessmentVersion: ASSESSMENT_VERSION,
@@ -295,10 +323,11 @@ export function createMatchingTools({ store, platform, exportDocument }) {
         const { limit = 25, offset = 0 } = args;
         if (!Number.isInteger(limit) || limit < 1 || limit > 100 || !Number.isSafeInteger(offset) || offset < 0)
           fail('INVALID_INPUT', 'Use limit 1–100 and a nonnegative integer offset.');
-        const career = readCareer(store), saved = matching(career), profileVersion = career.evidenceRevision ?? 0;
+        const career = readCareer(store), saved = matching(career), profileVersion = currentProfileVersion(career);
         const rows = rankedRows(saved, career.profile?.preferences, profileVersion)
           .filter(row => row.reviewStatus === 'current' && row.decision === 'recommend' &&
-            row.salaryEligibility.status !== 'below_minimum' && ['eligible', 'requires_relocation'].includes(row.matchStatus));
+            recentPublication(row.publishedAt) && row.salaryEligibility.status !== 'below_minimum' &&
+            ['eligible', 'requires_relocation'].includes(row.matchStatus));
         const recommendations = rows.slice(offset, offset + limit);
         return { recommendations, total: rows.length, assessmentVersion: ASSESSMENT_VERSION,
           nextOffset: offset + recommendations.length < rows.length ? offset + recommendations.length : null,
@@ -313,7 +342,7 @@ export function createMatchingTools({ store, platform, exportDocument }) {
         assertObject(args, []);
         if (typeof exportDocument !== 'function') fail('EXPORT_UNAVAILABLE', 'Local document export is unavailable. Read all career_matches pages instead.');
         const career = readCareer(store), saved = matching(career);
-        const profileVersion = career.evidenceRevision ?? 0;
+        const profileVersion = currentProfileVersion(career);
         const rows = rankedRows(saved, career.profile?.preferences, profileVersion);
         const coverage = counts(saved.jobs, saved.scores, profileVersion);
         const exported = await exportDocument({ bytes: rankingCSV(rows), mediaType: 'text/csv' });

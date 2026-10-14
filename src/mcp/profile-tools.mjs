@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { fail, hash, mutateCareer, mutationSchema, readCareer, replayCareer } from './state.mjs';
+import { matchingProfileVersion } from './assessment-policy.mjs';
 
 const MAX_TEXT = 100_000;
 const MAX_FILE = 5 * 1024 * 1024;
@@ -250,7 +251,7 @@ export function createProfileTools({ store, selectSourceFile, extractFile }) {
     const history = args.includeHistory ? page((career.profileHistory ?? []).filter(change => fields.includes(change.field) || change.field.startsWith('preferences.')), args) : undefined;
     const fieldSources = Object.fromEntries(Object.entries(career.profile.fieldSources).filter(([field]) => fields.includes(field) || field.startsWith('preferences.')));
     const staleFields = Object.entries(fieldSources).filter(([, source]) => source.kind === 'fact' && !currentFact(career, career.facts[source.factId])).map(([field]) => field);
-    return { revision: career.revision, evidenceRevision: career.evidenceRevision, persistence: persistence(career), profile: Object.fromEntries(fields.map(field => [field, career.profile[field] ?? null])), preferences: career.profile.preferences, fieldSources, staleFields, ...(history ? { history } : {}), nextSteps: ['Use career_profile_update for explicit corrections or grounded missing-field enrichment; null clears a scalar and [] clears lists. Capability defaults are not explicit future preferences. Do not use staleFields as current evidence until corrected.'] };
+    return { revision: career.revision, evidenceRevision: career.evidenceRevision, matchingProfileVersion: matchingProfileVersion(career), persistence: persistence(career), profile: Object.fromEntries(fields.map(field => [field, career.profile[field] ?? null])), preferences: career.profile.preferences, fieldSources, staleFields, ...(history ? { history } : {}), nextSteps: ['Use career_profile_update for explicit corrections or grounded missing-field enrichment; null clears a scalar and [] clears lists. Capability defaults are not explicit future preferences. Do not use staleFields as current evidence until corrected.'] };
   });
 
   tool('career_profile_update', 'Save explicit profile overrides/clears, or fill missing fields from a saved fact. Evidence enrichment never overwrites an explicit override or clear.', { ...mutation({ patch: { ...object(profileFields), minProperties: 1 }, mode: { enum: ['explicit', 'evidence'] }, factId: uuid }), required: ['requestId', 'revision', 'patch', 'mode'] }, false, async args => edit('career_profile_update', args, career => {

@@ -1,4 +1,5 @@
 import { createRequire } from 'node:module';
+import { cvHeading } from './mcp/application-tools.mjs';
 import { createMatchingTools } from './mcp/matching-tools.mjs';
 import { fail, readCareer } from './mcp/state.mjs';
 
@@ -16,8 +17,6 @@ const fields = (heading, rows, empty) => {
 };
 const amount = value => Number.isFinite(value) ? value.toLocaleString('en-GB') : null;
 const readable = value => typeof value === 'string' && value ? value === 'cv' ? 'CV' : value.replaceAll('_', ' ').replace(/^./, letter => letter.toUpperCase()) : undefined;
-// Facts are identified by what they say; kind, employer, role and non-current status are context.
-const factContext = fact => [readable(fact.kind), text(fact.employer, ''), text(fact.role, ''), fact.status === 'active' ? '' : readable(fact.status)].filter(Boolean).join(' · ');
 const entries = value => record(value) ? Object.entries(value).filter(([id, item]) => !forbidden.has(id) && record(item)) : [];
 const lookup = (value, id) => !forbidden.has(id) && own(value, id) && record(value[id]) ? value[id] : null;
 const displayDate = value => Number.isFinite(Date.parse(value)) ? new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium', timeZone: 'UTC' }).format(new Date(value)) : undefined;
@@ -39,48 +38,41 @@ function sourceDetail(source) {
   ] };
 }
 
+const factKinds = { capability: 'Capability', language: 'Language', yes_no: 'Yes/no', choice: 'Choice', note: 'Note' };
 function factDetail(fact) {
-  return { title: text(fact.statement, 'Untitled career fact'), sections: [
-    fields('Details', [
-      ['Type', readable(fact.kind)],
-      ['Status', fact.status === 'active' ? undefined : readable(fact.status)],
-      ['Employer', fact.employer], ['Role', fact.role],
-      ['Start date', fact.startDate], ['End date', fact.endDate],
-    ], 'No role or dates saved.'),
+  return { title: text(fact.subject, 'Untitled fact'), sections: [
+    fields('Details', [['Answer', fact.answer], ['Example', fact.detail], ['Role', fact.employer], ['Kind', own(factKinds, fact.kind) ? factKinds[fact.kind] : undefined]], 'No details saved.'),
   ] };
 }
 
 let renderCv;
-function cvText(draft) {
-  if (!record(draft.baseline) || !Array.isArray(draft.baseline.entries) || !draft.baseline.entries.length) {
-    return 'No CV wording is saved in this draft.';
-  }
-  // Use the same header overrides and reading order as exported CVs.
-  renderCv ??= createRequire(import.meta.url)('./generated/document-engine.cjs').renderCareerCvText;
-  return text(renderCv(draft), 'No CV wording is saved in this draft.');
-}
-function draftSections(kind, draft, historical = false) {
+function draftSections(kind, draft, career, historical = false) {
   const label = `${historical ? 'Earlier ' : ''}${kind === 'cv' ? 'CV' : 'Cover letter'}`;
   if (!record(draft)) return [section(label, `No ${kind === 'cv' ? 'CV' : 'cover letter'} draft is saved.`)];
   const date = displayDate(draft.createdAt);
   const heading = historical && date ? `${label} — ${date}` : label;
-  const wording = kind === 'cv' ? cvText(draft) :
-    (Array.isArray(draft.sections) ? draft.sections.map(item => typeof item?.text === 'string' ? item.text : '').join('\n\n') : '');
-  return [section(heading, text(wording, 'No cover letter wording is saved in this draft.'))];
+  let wording = '';
+  if (kind === 'cv' && record(draft.document)) {
+    // Use the same profile header and reading order as exported CVs.
+    renderCv ??= createRequire(import.meta.url)('./generated/document-engine.cjs').renderCareerCvText;
+    wording = renderCv({ document: draft.document, heading: cvHeading(career.profile ?? {}) });
+  } else if (kind === 'cover_letter' && Array.isArray(draft.paragraphs)) {
+    wording = draft.paragraphs.filter(item => typeof item === 'string').join('\n\n');
+  }
+  return [section(heading, text(wording, `No ${kind === 'cv' ? 'CV' : 'cover letter'} wording is saved in this draft.`))];
 }
 function applicationTitle(app) {
   return [text(app.job?.title, ''), text(app.job?.company, '')].filter(Boolean).join(' — ') || 'Untitled application';
 }
 function applicationDetail(app, career) {
-  const source = typeof app.sourceId === 'string' ? lookup(career.sources, app.sourceId) : null;
   return { title: applicationTitle(app), sections: [
     fields('Application', [
-      ['Created', displayDate(app.createdAt)], ['Updated', displayDate(app.updatedAt)], ['Source document', source?.name],
-      ['Before applying', app.evidenceRevision !== career.evidenceRevision ? 'Your profile has changed since this draft. Update it for the job before sending.' : undefined],
+      ['Company', app.job?.company], ['Location', app.job?.location], ['Job link', app.job?.url],
+      ['Created', displayDate(app.createdAt)], ['Updated', displayDate(app.updatedAt)],
     ], 'No application details saved.'),
-    ...draftSections('cv', app.cv), ...draftSections('cover_letter', app.coverLetter),
-    ...(Array.isArray(app.cvHistory) ? app.cvHistory.flatMap(draft => draftSections('cv', draft, true)) : []),
-    ...(Array.isArray(app.coverLetterHistory) ? app.coverLetterHistory.flatMap(draft => draftSections('cover_letter', draft, true)) : []),
+    ...draftSections('cv', app.cv, career), ...draftSections('cover_letter', app.coverLetter, career),
+    ...(Array.isArray(app.cvHistory) ? app.cvHistory.flatMap(draft => draftSections('cv', draft, career, true)) : []),
+    ...(Array.isArray(app.coverLetterHistory) ? app.coverLetterHistory.flatMap(draft => draftSections('cover_letter', draft, career, true)) : []),
   ] };
 }
 function rankingItem(row) {
@@ -120,7 +112,7 @@ function rankingItem(row) {
 export function createCareerBrowser({ store }) {
   const matches = createMatchingTools({ store }).find(tool => tool.name === 'career_matches');
   const detail = (kind, item, career) => kind === 'sources' ? sourceDetail(item) :
-    kind === 'facts' ? factDetail(item, career) : applicationDetail(item, career);
+    kind === 'facts' ? factDetail(item) : applicationDetail(item, career);
   return {
     async list(args = {}) {
       validate(args, ['kind', 'offset', 'limit']);
@@ -136,7 +128,8 @@ export function createCareerBrowser({ store }) {
       const records = entries(career[kind]);
       const items = records.slice(offset, offset + limit).map(([id, item]) => {
         if (kind === 'sources') return { id, title: text(item.name, 'Untitled source'), summary: [readable(item.purpose), item.archived ? 'Archived' : ''].filter(Boolean).join(' · ') };
-        if (kind === 'facts') return { id, title: text(item.statement, 'Untitled career fact'), summary: factContext(item) };
+        // A fact reads as its question subject and the candidate's answer.
+        if (kind === 'facts') return { id, title: text(item.subject, 'Untitled fact'), summary: [text(item.answer, ''), text(item.employer, '')].filter(Boolean).join(' · ') };
         return { id, title: applicationTitle(item), summary: `${item.cv ? 'CV draft saved' : 'No CV draft'} · ${item.coverLetter ? 'Cover letter saved' : 'No cover letter draft'}` };
       });
       return { items, total: records.length, nextOffset: offset + items.length < records.length ? offset + items.length : null };

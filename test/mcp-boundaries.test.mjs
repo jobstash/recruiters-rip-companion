@@ -59,7 +59,7 @@ test('MCP denies arbitrary fields and hides filesystem paths in tool and resourc
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport); await client.connect(clientTransport);
   t.after(async () => { await client.close(); await server.close(); });
-  const rejected = await client.callTool({ name: 'career_profile_update', arguments: { requestId: randomUUID(), revision: 0, mode: 'explicit', patch: { name: 'Candidate' }, apiKey: 'must-not-be-accepted' } });
+  const rejected = await client.callTool({ name: 'career_profile_update', arguments: { requestId: randomUUID(), revision: 0, patch: { name: 'Candidate' }, apiKey: 'must-not-be-accepted' } });
   assert.equal(rejected.isError, true); assert.equal(JSON.parse(rejected.content[0].text).error.code, 'INVALID_INPUT'); assert.equal(f.store.get().career.revision, 0);
   const missing = await client.callTool({ name: 'career_source_import', arguments: { requestId: randomUUID(), revision: 0, method: 'file' } });
   assert.equal(missing.isError, true); assert.equal(JSON.parse(missing.content[0].text).error.code, 'LOCAL_OPERATION_FAILED'); assert.equal(JSON.stringify(missing).includes(directory), false);

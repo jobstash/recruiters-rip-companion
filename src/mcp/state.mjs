@@ -10,7 +10,7 @@ export class CareerError extends Error {
 export function fail(code, message) { throw new CareerError(code, message); }
 export function createCareerState() {
   return { version: 1, revision: 0, evidenceRevision: 0,
-    profile: { name: null, headline: null, email: null, phone: null, location: null, links: [], preferences: {}, fieldSources: {} },
+    profile: { name: null, headline: null, email: null, phone: null, location: null, links: [], roleCapabilities: [], seniority: null, skills: [], preferences: {} },
     sources: {}, facts: {}, applications: {}, receipts: {} };
 }
 export function readCareer(store) { return store.get().career ?? createCareerState(); }

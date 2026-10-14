@@ -3,8 +3,7 @@ import { PDFDocument, PDFFont, rgb, StandardFonts } from "pdf-lib";
 import * as fontkit from "@pdf-lib/fontkit";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { CvDraftBaseline } from "./cv-source-baseline";
-import { buildCvPresentation, type CvHeaderOverride } from "./cv-document-layout";
+import { buildStructuredCvPresentation, type CvDocument, type CvHeading } from "./cv-document-layout";
 
 // Match the codec's Node worker initialization before loading PDFParse.
 const { getPath }: { getPath(): string } = require("pdf-parse/worker");
@@ -12,12 +11,12 @@ import { PDFParse } from "pdf-parse";
 PDFParse.setWorker(getPath());
 
 // PDF extraction commonly uses BLACK CIRCLE for a list marker. Render the
-// equivalent typographic bullet; the owned source and baseline remain exact.
+// equivalent typographic bullet; the saved document text remains exact.
 const cleanPdfText = (text: string): string => text
   .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, "")
   .replace(/\u25cf/g, "\u2022");
 
-export const CAREER_CV_LAYOUT_VERSION = "careercup-serif-v4";
+export const CAREER_CV_LAYOUT_VERSION = "careercup-serif-v5";
 interface TextRun {
   rows: string[];
   font: PDFFont;
@@ -30,9 +29,8 @@ export interface CareerCvPresentation {
   paper: "A4" | "LETTER";
 }
 export interface CareerCvInput {
-  heading: { name?: string; contact?: string; location?: string };
-  baseline: CvDraftBaseline;
-  headerOverride?: CvHeaderOverride;
+  document: CvDocument;
+  heading: CvHeading;
   presentation?: CareerCvPresentation;
 }
 export interface CareerCvLayout {
@@ -62,16 +60,14 @@ export async function renderCareerCvPdf(input: CareerCvInput): Promise<Buffer> {
   return Buffer.from(await pdf.save());
 }
 
-/** Text and PDF share the same source/header interpretation and reading order. */
-export function renderCareerCvText({ heading, baseline, headerOverride }: CareerCvInput): string {
-  const presentation = buildCvPresentation(baseline, heading, headerOverride);
-  const lines = [presentation.header.name ?? "", ...presentation.header.contactLines].filter(Boolean);
-  for (const block of presentation.blocks) {
+/** Text and PDF share the same presentation and reading order. */
+export function renderCareerCvText({ document, heading }: CareerCvInput): string {
+  const { header, blocks } = buildStructuredCvPresentation(document, heading);
+  const lines = [header.name ?? "", header.headline ?? "", ...header.contactLines].filter(Boolean);
+  for (const block of blocks) {
     lines.push("");
     if (block.kind === "experience") {
-      lines.push(block.company, block.role);
-      if (block.dates) lines.push(block.dates);
-      if (block.location) lines.push(block.location);
+      lines.push(...[block.company, block.role, block.dates, block.location].filter((value): value is string => !!value));
       for (const item of block.items) lines.push(`${item.kind === "bullet" ? "• " : ""}${item.text}`);
     } else lines.push(block.kind === "section" ? block.title : `${block.kind === "bullet" ? "• " : ""}${block.text}`);
   }
@@ -80,18 +76,18 @@ export function renderCareerCvText({ heading, baseline, headerOverride }: Career
 
 /** Both templates flow authored content at 11pt without a page cap. */
 async function layoutCareerCvPdf(input: CareerCvInput): Promise<PDFDocument> {
-  const { heading, baseline, headerOverride } = input;
+  const { heading, document } = input;
   const { template, paper } = input.presentation ?? { template: "classic", paper: "A4" };
   const modern = template === "modern";
   const pdf = await PDFDocument.create();
-  pdf.setTitle((headerOverride ? headerOverride.name : heading.name) || "Career CV");
+  pdf.setTitle(heading.name?.trim() || "Career CV");
   pdf.setProducer("JobStash");
   const regular = await pdf.embedFont(modern ? StandardFonts.Helvetica : StandardFonts.TimesRoman);
   const bold = await pdf.embedFont(modern ? StandardFonts.HelveticaBold : StandardFonts.TimesRomanBold);
   const boldItalic = await pdf.embedFont(modern ? StandardFonts.HelveticaBoldOblique : StandardFonts.TimesRomanBoldItalic);
   const latin = new Set(regular.getCharacterSet());
-  const presentation = buildCvPresentation(baseline, heading, headerOverride);
-  const strings = [presentation.header.name ?? "", ...presentation.header.contactLines];
+  const presentation = buildStructuredCvPresentation(document, heading);
+  const strings = [presentation.header.name ?? "", presentation.header.headline ?? "", ...presentation.header.contactLines];
   for (const block of presentation.blocks) {
     if (block.kind === "experience") {
       strings.push(block.company, block.role, block.location ?? "", block.dates ?? "");
@@ -169,11 +165,15 @@ async function layoutCareerCvPdf(input: CareerCvInput): Promise<PDFDocument> {
     drawFlow(name, modern ? "left" : "center");
     y -= 4;
   }
+  if (presentation.header.headline) {
+    drawFlow(run(presentation.header.headline, width, 12, true, true), modern ? "left" : "center");
+    y -= 2;
+  }
   for (const text of presentation.header.contactLines) {
     const contact = run(text, width);
     drawFlow(contact, modern ? "left" : "center");
   }
-  if (presentation.header.name || presentation.header.contactLines.length) y -= 12;
+  if (presentation.header.name || presentation.header.headline || presentation.header.contactLines.length) y -= 12;
 
   const pendingSections: TextRun[] = [];
   const sectionHeight = () => pendingSections.reduce((height, section) => height + section.height + 10, 0);
@@ -407,7 +407,7 @@ export async function renderCareerPdf(
       }
       if (current) lines.push(current);
     }
-    // Keep each ordinary evidence paragraph together. Longer passages may span
+    // Keep each ordinary letter paragraph together. Longer passages may span
     // pages, but leave room for at least two lines before starting one.
     const height = lines.length * size * 1.55;
     if (

@@ -23,7 +23,7 @@ await build({
     }));
   } }],
 });
-for (const name of ['NotoSans-Regular.ttf', 'OFL.txt', 'job-screening-prompt.txt'])
+for (const name of ['NotoSans-Regular.ttf', 'OFL.txt'])
   await copyFile(path.join(root, 'src', 'documents', 'assets', name), path.join(generated, 'assets', name));
 await copyFile(path.join(root, 'src', 'mcp', 'local-runner.cjs'), path.join(generated, 'mcp-host.cjs'));
 await packageMcp();

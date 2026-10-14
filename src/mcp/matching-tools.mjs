@@ -1,5 +1,6 @@
 import { createCareerState, fail, readCareer } from './state.mjs';
 import { ASSESSMENT_VERSION, COMPETENCY_POLICY, SALARY_POLICY, salaryEligibility, recentPublication, publicationWindow, matchingProfileVersion } from './assessment-policy.mjs';
+import { compareFacts } from './facts.mjs';
 
 const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
 const object = (properties, required = []) => ({ type: 'object', properties, required, additionalProperties: false });
@@ -76,35 +77,20 @@ function compact(value, maximum = 600) {
   return value;
 }
 function candidateContext(career) {
-  const profile = career.profile ?? {}, sources = career.sources ?? {}, facts = career.facts ?? {};
-  const current = fact => fact?.status === 'active' && (fact.source?.kind !== 'document' ||
-    Boolean(sources[fact.source.sourceId] && !sources[fact.source.sourceId].archived));
-  const fieldCurrent = field => {
-    const source = profile.fieldSources?.[field];
-    return source?.kind !== 'fact' || current(facts[source.factId]);
-  };
+  const profile = career.profile ?? {};
   const professional = {};
-  for (const field of profileFields) if (fieldCurrent(field) && profile[field] != null) professional[field] = compact(profile[field]);
+  for (const field of profileFields) if (profile[field] != null && !(Array.isArray(profile[field]) && !profile[field].length)) professional[field] = compact(profile[field]);
   const preferences = {};
-  for (const field of preferenceFields) if (own(profile.preferences ?? {}, field) && fieldCurrent(`preferences.${field}`))
+  for (const field of preferenceFields) if (own(profile.preferences ?? {}, field))
     preferences[field] = compact(profile.preferences[field], field === 'notes' ? Infinity : 600);
-  const seen = new Set();
-  const summaries = Object.values(facts).filter(fact => current(fact) &&
-    ['experience', 'education', 'achievement', 'skill'].includes(fact.kind) && typeof fact.statement === 'string' && fact.statement.trim())
-    .sort((a, b) => compareText(a.startDate || '9999', b.startDate || '9999') || compareText(a.endDate || '9999', b.endDate || '9999'))
-    .flatMap(fact => {
-      const statement = compact(fact.statement, Infinity);
-      const key = JSON.stringify([statement, fact.employer, fact.role, fact.startDate, fact.endDate]);
-      if (seen.has(key)) return [];
-      seen.add(key);
-      const summary = { kind: fact.kind, statement };
-      for (const field of ['employer', 'role', 'startDate', 'endDate']) if (fact[field]) summary[field] = compact(fact[field], 300);
-      return [summary];
-    });
-  const hasRole = Boolean(professional.headline?.trim() || professional.roleCapabilities?.length);
-  if (!hasRole || !summaries.some(fact => ['experience', 'education', 'achievement'].includes(fact.kind)))
-    fail('PROFILE_INCOMPLETE', 'Save a professional headline or roleCapabilities and current experience, education or achievement facts before matching. Use career_profile_update and career_facts_add, or onboarding_commit after reading your saved CV.');
-  return { ...professional, facts: summaries, preferences };
+  const cv = Object.values(career.sources ?? {}).filter(source => source.purpose === 'cv' && !source.archived && source.text?.trim())
+    .map(source => compact(source.text, Infinity)).join('\n\n');
+  const facts = Object.values(career.facts ?? {}).sort(compareFacts)
+    .map(({ kind, subject, answer, detail, employer }) => ({ kind, subject: compact(subject), answer: compact(answer),
+      ...(detail ? { detail: compact(detail, Infinity) } : {}), ...(employer ? { employer } : {}) }));
+  if (!(professional.headline?.trim() || professional.roleCapabilities?.length) || (!cv && !facts.length))
+    fail('PROFILE_INCOMPLETE', 'Save a professional headline or roleCapabilities, and import a CV with career_source_import or save career facts with career_facts_save, before matching.');
+  return { ...professional, ...(cv ? { cv } : {}), facts, preferences };
 }
 function currentAssessment(row, profileVersion) {
   return row?.profileVersion === profileVersion && typeof row.profileVersion === 'string' &&

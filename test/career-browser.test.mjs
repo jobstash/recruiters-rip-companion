@@ -10,7 +10,7 @@ function fixture() {
   return { state, browser: createCareerBrowser({ store }) };
 }
 
-test('career reads preserve complete evidence without exposing binary sources, credentials or prototype properties', async () => {
+test('career reads return complete source text without exposing binary sources, credentials or prototype properties', async () => {
   const { state, browser } = fixture();
   const text = 'Complete source text. '.repeat(1500) + 'Final evidence sentence.';
   state.career.sources.saved = { id: 'saved', name: 'Original CV', purpose: 'cv', text, originalBase64: 'BINARY_SOURCE_SENTINEL' };
@@ -41,4 +41,34 @@ test('rankings sort before pagination and keep skip judgments visible rather tha
   assert.deepEqual(second.items.map(item => item.id), ['low']);
   assert.equal(second.nextOffset, null);
   assert.ok(second.items[0].sections.some(section => section.text?.includes('Saved reasoning for low')));
+});
+
+test('facts read as subject and answer; applications show the rendered CV and cover letter', async () => {
+  const { state, browser } = fixture();
+  Object.assign(state.career.profile, { name: 'Jane Candidate', email: 'jane@example.test', location: 'London' });
+  state.career.facts.ab = { id: 'ab', kind: 'capability', subject: 'A/B testing', answer: 'Led it', detail: 'Checkout experiments', employer: 'Acme' };
+  state.career.facts.k8s = { id: 'k8s', kind: 'yes_no', subject: 'Kubernetes in production', answer: 'No' };
+  const document = { headline: 'Platform Engineer', summary: 'Builds data services.',
+    experience: [{ employer: 'Acme', role: 'Engineer', startDate: '2019', endDate: 'Present', bullets: ['Built payment pipelines.'] }] };
+  state.career.applications.app = { id: 'app', job: { title: 'Senior Engineer', company: 'Example Employer', description: 'Ad', url: 'https://example.test/job' },
+    cv: { version: 2, document, presentation: { template: 'classic', paper: 'A4' }, createdAt: '2026-10-14T10:00:00Z' },
+    cvHistory: [{ version: 1, document: { ...document, headline: 'Engineer' }, presentation: { template: 'classic', paper: 'A4' }, createdAt: '2026-10-13T10:00:00Z' }],
+    coverLetter: { version: 1, paragraphs: ['Dear team,', 'I build payment pipelines.'], createdAt: '2026-10-14T10:00:00Z' }, coverLetterHistory: [], exports: [],
+    createdAt: '2026-10-13T10:00:00Z', updatedAt: '2026-10-14T10:00:00Z' };
+
+  const facts = await browser.list({ kind: 'facts' });
+  assert.deepEqual(facts.items.map(({ title, summary }) => ({ title, summary })),
+    [{ title: 'A/B testing', summary: 'Led it · Acme' }, { title: 'Kubernetes in production', summary: 'No' }]);
+  const ab = await browser.read({ kind: 'facts', id: 'ab' });
+  assert.equal(ab.title, 'A/B testing');
+  assert.deepEqual(ab.sections[0].fields, [{ label: 'Answer', value: 'Led it' }, { label: 'Example', value: 'Checkout experiments' },
+    { label: 'Role', value: 'Acme' }, { label: 'Kind', value: 'Capability' }]);
+  assert.deepEqual((await browser.read({ kind: 'facts', id: 'k8s' })).sections[0].fields, [{ label: 'Answer', value: 'No' }, { label: 'Kind', value: 'Yes/no' }]);
+
+  const detail = await browser.read({ kind: 'applications', id: 'app' });
+  assert.equal(detail.title, 'Senior Engineer — Example Employer');
+  const sections = Object.fromEntries(detail.sections.slice(1).map(section => [section.heading.split(' — ')[0], section.text]));
+  assert.equal(sections.CV, 'Jane Candidate\nPlatform Engineer\njane@example.test · London\n\nSummary\n\nBuilds data services.\n\nExperience\n\nAcme\nEngineer\n2019 – Present\n• Built payment pipelines.\n');
+  assert.match(sections['Earlier CV'], /^Jane Candidate\nEngineer\n/);
+  assert.equal(sections['Cover letter'], 'Dear team,\n\nI build payment pipelines.');
 });

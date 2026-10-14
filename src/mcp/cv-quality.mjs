@@ -1,4 +1,3 @@
-const bulletStart = /^\s*(?:[-*•‣▪–—]|\d+[.)])\s+/u;
 const email = /[^\s@<>|]+@[^\s@<>|]+\.[\p{L}]{2,}/u;
 // Deliberately literal opening-word check, not a grammatical or semantic assessment.
 const actionVerbs = new Set('achieved advised analyzed automated built coached collaborated coordinated created delivered designed developed directed drove established expanded implemented improved increased launched led maintained managed mentored migrated negotiated optimized organized owned planned presented produced reduced resolved shipped streamlined supported trained transformed wrote'.split(' '));
@@ -8,95 +7,83 @@ const placeholders = [
 ];
 const wordCount = text => text.match(/\S+/gu)?.length ?? 0;
 
-function blocks(entry) {
-  const result = [];
-  let lines = [], bullet = false;
-  const flush = () => {
-    if (lines.length) {
-      const quote = lines.join('').trim();
-      result.push({ entryId: entry.id, quote, bullet, text: bullet ? quote.replace(bulletStart, '') : quote });
-    }
-    lines = [];
-  };
-  // Retain original line endings so every diagnostic quote is an exact substring.
-  for (const match of entry.text.matchAll(/[^\r\n\f]+(?:\r\n|[\r\n\f])?|[\r\n\f]/gu)) {
-    const line = match[0];
-    if (!line.trim()) { flush(); bullet = false; continue; }
-    if (bulletStart.test(line)) { flush(); bullet = true; }
-    lines.push(line);
-  }
-  flush();
-  return result;
+/**
+ * Every authored text field of a structured CvDocument, in reading order.
+ * `bullet` marks list items; `date` marks structured date fields.
+ * @returns {Array<{field: string, text: string, bullet?: boolean, date?: boolean}>}
+ */
+export function cvDocumentTexts(document) {
+  const texts = [{ field: 'headline', text: document.headline }, { field: 'summary', text: document.summary }];
+  const add = (field, text, extra = {}) => { if (typeof text === 'string') texts.push({ field, text, ...extra }); };
+  (document.highlights ?? []).forEach((text, index) => add(`highlights[${index}]`, text, { bullet: true }));
+  document.experience.forEach((entry, index) => {
+    const at = `experience[${index}]`;
+    for (const key of ['employer', 'role', 'location']) add(`${at}.${key}`, entry[key]);
+    for (const key of ['startDate', 'endDate']) add(`${at}.${key}`, entry[key], { date: true });
+    entry.bullets.forEach((text, bullet) => add(`${at}.bullets[${bullet}]`, text, { bullet: true }));
+  });
+  (document.education ?? []).forEach((entry, index) => {
+    for (const key of ['institution', 'qualification', 'details']) add(`education[${index}].${key}`, entry[key]);
+    for (const key of ['startDate', 'endDate']) add(`education[${index}].${key}`, entry[key], { date: true });
+  });
+  (document.skills ?? []).forEach((group, index) => {
+    add(`skills[${index}].label`, group.label);
+    group.items.forEach((text, item) => add(`skills[${index}].items[${item}]`, text));
+  });
+  (document.languages ?? []).forEach((entry, index) => {
+    add(`languages[${index}].language`, entry.language);
+    add(`languages[${index}].proficiency`, entry.proficiency);
+  });
+  (document.certifications ?? []).forEach((text, index) => add(`certifications[${index}]`, text, { bullet: true }));
+  (document.additional ?? []).forEach((section, index) => {
+    add(`additional[${index}].title`, section.title);
+    section.items.forEach((text, item) => add(`additional[${index}].items[${item}]`, text, { bullet: true }));
+  });
+  return texts;
 }
 
 /**
- * Inspect current entry.text, never immutable entry.original. Missing contact
- * information is a check only: absence cannot have an exact source quote.
- * These mechanical editing hints do not assess ATS compatibility, job fit,
- * factual truth, or whether a CV has all necessary sections.
- * @param {{baseline: {entries: Array<{id: string, text: string}>}, heading?: {name?: string, contact?: string, location?: string}, renderedText?: string}} input
- * @returns {{checks: Array<{id: string, status: 'pass'|'warning', message: string, entryIds: string[]}>, issues: Array<{code: string, entryId: string, quote: string, message: string}>, disclaimer: string}}
+ * Non-blocking editing notes for a structured CV: contact, length, repetition
+ * and placeholders. These are mechanical hints for the host to fix silently,
+ * not an ATS score, fit assessment or verification of claims.
+ * @param {{document: object, heading?: {name?: string, contact?: string, location?: string}}} input
+ * @returns {Array<{code: string, field: string, message: string}>}
  */
-export function inspectCvQuality({ baseline, heading = {}, renderedText }) {
-  const checks = [], issues = [];
-  const allBlocks = baseline.entries.flatMap(blocks);
-  const bullets = allBlocks.filter(block => block.bullet);
-  const addIssue = (code, block, message) => issues.push({ code, entryId: block.entryId, quote: block.quote, message });
-  const addCheck = (id, passMessage, warningMessage) => {
-    const found = issues.filter(issue => issue.code === id);
-    checks.push({ id, status: found.length ? 'warning' : 'pass', message: found.length ? warningMessage : passMessage,
-      entryIds: [...new Set(found.map(issue => issue.entryId))] });
-  };
-  // Rendered text is authoritative when header overrides suppress old contacts.
-  const contactEntries = baseline.entries.filter(entry => {
-    const found = entry.text.match(email);
-    return found && (renderedText === undefined || renderedText.includes(found[0]));
-  });
-  const hasEmail = renderedText === undefined
-    ? email.test(heading.contact ?? '') || contactEntries.length > 0
-    : email.test(renderedText);
-  checks.push({ id: 'contact_email', status: hasEmail ? 'pass' : 'warning',
-    message: hasEmail ? 'An email address is present in the heading or draft body; deliverability is not checked.' : 'No email address was found in the heading or draft body. Add a contact email if you want employers to reply by email.',
-    entryIds: contactEntries.map(entry => entry.id) });
+export function inspectCvQuality({ document, heading = {} }) {
+  const issues = [];
+  const texts = cvDocumentTexts(document);
+  const bullets = texts.filter(item => item.bullet);
+  if (!email.test(heading.contact ?? '')) issues.push({ code: 'missing_email', field: 'header',
+    message: 'The profile has no email address, so the CV header has none. Save one with career_profile_update if the candidate shared it.' });
+  if (!heading.name?.trim()) issues.push({ code: 'missing_name', field: 'header',
+    message: 'The profile has no name, so the CV header has none. Save it with career_profile_update.' });
 
-  for (const block of bullets) {
-    const count = wordCount(block.text);
-    if (count > 45) addIssue('long_bullet', block, `This bullet has ${count} words (more than 45). Consider splitting or shortening it without losing supported facts.`);
+  const summaryWords = wordCount(document.summary);
+  if (summaryWords > 100) issues.push({ code: 'long_summary', field: 'summary', message: `The summary has ${summaryWords} words; keep it to 2–4 sentences.` });
+  for (const item of bullets) {
+    const count = wordCount(item.text);
+    if (count > 45) issues.push({ code: 'long_bullet', field: item.field, message: `This bullet has ${count} words (more than 45); split or tighten it.` });
   }
-  addCheck('long_bullet', 'No marked bullet exceeds 45 words.', 'Review the marked bullets longer than 45 words.');
+  const totalWords = texts.reduce((sum, item) => sum + wordCount(item.text), 0);
+  if (totalWords > 1100) issues.push({ code: 'long_document', field: 'document', message: `The CV has ${totalWords} words; condense older or less relevant roles.` });
 
   const repeated = new Map(), openings = new Map();
-  for (const block of bullets) {
-    const matches = repeated.get(block.text) ?? [];
-    matches.push(block);
-    repeated.set(block.text, matches);
-    const opening = block.text.match(/^[\p{L}]+/u)?.[0].toLowerCase();
-    if (actionVerbs.has(opening)) {
-      const matches = openings.get(opening) ?? [];
-      matches.push(block);
-      openings.set(opening, matches);
-    }
+  for (const item of bullets) {
+    const key = item.text.trim().toLocaleLowerCase('en');
+    repeated.set(key, [...(repeated.get(key) ?? []), item]);
+    const opening = item.text.match(/^\s*([\p{L}]+)/u)?.[1].toLowerCase();
+    if (actionVerbs.has(opening)) openings.set(opening, [...(openings.get(opening) ?? []), item]);
   }
   for (const matches of repeated.values()) if (matches.length > 1) {
-    for (const block of matches) addIssue('repeated_bullet', block, `This exact bullet wording appears ${matches.length} times. Check whether each occurrence describes distinct work before editing.`);
+    for (const item of matches) issues.push({ code: 'repeated_bullet', field: item.field, message: `This bullet wording appears ${matches.length} times; make each one distinct.` });
   }
-  addCheck('repeated_bullet', 'No exact repeated bullet wording was found.', 'Review repeated bullet wording; preserve distinct career history.');
   for (const [opening, matches] of openings) if (matches.length >= 3) {
-    for (const block of matches) addIssue('repeated_action_verb', block, `${matches.length} bullets begin with “${opening}”. Consider a more specific opening where it remains faithful to the work.`);
+    for (const item of matches) issues.push({ code: 'repeated_action_verb', field: item.field, message: `${matches.length} bullets begin with “${opening}”; vary the opening verb.` });
   }
-  addCheck('repeated_action_verb', 'No recognized opening action verb is repeated across three or more bullets.', 'Review action verbs repeated at the start of three or more bullets.');
-
-  for (const entry of baseline.entries) for (const pattern of placeholders) for (const match of entry.text.matchAll(pattern)) {
-    addIssue('placeholder_text', { entryId: entry.id, quote: match[0] }, 'Possible unfinished placeholder. Replace it with supported wording or remove the placeholder after reviewing its context.');
+  for (const item of texts) for (const pattern of placeholders) for (const match of item.text.matchAll(pattern)) {
+    issues.push({ code: 'placeholder_text', field: item.field, message: `Unfinished placeholder “${match[0]}”; replace it with real content or remove it.` });
   }
-  addCheck('placeholder_text', 'No TODO, TBD, or recognized bracket placeholder was found.', 'Review possible unfinished placeholders.');
-  for (const block of allBlocks) {
-    const count = wordCount(block.text);
-    if (!block.bullet && count > 100) addIssue('dense_paragraph', block, `This paragraph has ${count} words (more than 100). Consider shorter paragraphs or evidence-grounded bullets for readability.`);
-  }
-  addCheck('dense_paragraph', 'No paragraph exceeds 100 words.', 'Review paragraphs longer than 100 words.');
-  return { checks, issues,
-    disclaimer: 'Mechanical checks of the current draft only, not an ATS score, semantic fit assessment, or verification of claims. Warnings are editing prompts; a pass does not establish completeness or correctness.' };
+  return issues;
 }
 
 const currency = '(?:USD|EUR|GBP|CAD|AUD|NZD|JPY|CNY|INR|CHF|SEK|NOK|DKK|PLN|BRL|ZAR|SGD|HKD|[$€£¥₹₩₽])';
@@ -140,13 +127,13 @@ function numericTokens(text) {
 
 /**
  * Return unique normalized numeric expressions absent from supportingTexts.
- * Supply only original candidate wording and referenced candidate facts/quotes,
- * never a job advertisement. Matching a token is NOT proof that a claim is true
+ * Supply only saved career facts and profile values, never a job
+ * advertisement. Matching a token is NOT proof that a claim is true
  * or that the surrounding statement has support. This conservative mechanical
  * guard does not infer unit conversions, locale, spelled-out numbers, semantic
  * equivalence, or associations between a number and a particular achievement.
  * Currency/percent/magnitude/unit qualifiers remain significant; ambiguous
- * formats can require the host to retain the evidence's exact numeric wording.
+ * formats can require the host to retain the fact's exact numeric wording.
  * @param {string} text
  * @param {string[]} supportingTexts
  * @returns {string[]}

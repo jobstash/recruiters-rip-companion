@@ -15,16 +15,15 @@ const statedTerms = {
   city: 'Dublin', location: 'Dublin, Ireland', workMode: 'hybrid',
 };
 const termsOf = ({ salary, city, location, workMode }) => ({ salary, city, location, workMode });
-const fact = (statement, startDate, kind = 'experience') => ({ status: 'active', kind, statement, startDate,
-  source: { kind: 'conversation', quote: 'PRIVATE SOURCE QUOTE' } });
+const fact = (subject, answer, kind = 'note') => ({ kind, subject, answer });
 function fixture({ jobs = [job('a'), job('b'), job('c')], batch, emptyProfile = false, exportDocument } = {}) {
   const career = createCareerState();
   if (!emptyProfile) {
     Object.assign(career.profile, { headline: 'Software engineer', skills: ['JavaScript'], location: 'Dublin',
       name: 'PRIVATE NAME', email: 'private@example.test', phone: '+353 123 456 789', links: ['https://private.test'],
       preferences: { willingToRelocate: false, salaryMinimum: 0, locations: ['Dublin'], notes: 'Prefer hands-on work' } });
-    career.facts = { recent: fact('Built reporting services', '2023'), early: fact('Developed internal tools', '2019') };
-    career.sources = { cv: { text: 'PRIVATE FULL CV', originalBase64: 'PRIVATE PDF', archived: false } };
+    career.facts = { recent: fact('Reporting services', 'Hands-on', 'capability'), early: fact('Internal tooling', 'Led it', 'capability') };
+    career.sources = { cv: { purpose: 'cv', text: 'Software engineer at Acme, 2019–2023. Built reporting services.', originalBase64: 'PRIVATE PDF', archived: false } };
   }
   let state = { career }, queue = Promise.resolve(), catalogue = jobs, platformError;
   const calls = [];
@@ -57,18 +56,18 @@ function fixture({ jobs = [job('a'), job('b'), job('c')], batch, emptyProfile = 
   return { store, calls, tools, call, setCatalogue: jobs => { catalogue = jobs; }, setPlatformError: error => { platformError = error; } };
 }
 
-test('candidate brief contains chronological professional facts and current preferences without contact or duplicated source content', async () => {
+test('candidate brief combines the CV with additional answers without exporting source bytes or profile contacts', async () => {
   const f = fixture();
   const result = await f.call('career_match_jobs');
   assert.deepEqual(result.jobIds, ['node:a', 'node:b', 'node:c']);
   assert.equal(result.jobs, undefined);
-  assert.deepEqual(result.candidate.facts.map(fact => fact.startDate), ['2019', '2023']);
+  assert.deepEqual(result.candidate.facts.map(fact => fact.subject), ['Internal tooling', 'Reporting services']);
+  assert.equal(result.candidate.cv, 'Software engineer at Acme, 2019–2023. Built reporting services.');
   assert.equal(result.candidate.preferences.willingToRelocate, false);
   assert.equal(result.candidate.preferences.salaryMinimum, 0);
   assert.equal(result.candidate.location, 'Dublin');
-  for (const secret of ['PRIVATE NAME', 'private@example.test', '+353 123 456 789', 'https://private.test', 'PRIVATE FULL CV', 'PRIVATE PDF', 'PRIVATE SOURCE QUOTE'])
+  for (const secret of ['PRIVATE NAME', 'private@example.test', '+353 123 456 789', 'https://private.test', 'PRIVATE FULL CV', 'PRIVATE PDF'])
     assert.equal(JSON.stringify(result).includes(secret), false);
-  assert.ok(result.candidate.facts.every(row => row.source === undefined));
   assert.deepEqual({ total: result.total, scored: result.scored, pending: result.pending, batchSize: result.batchSize, workers: result.workers },
     { total: 3, scored: 0, pending: 3, batchSize: 10, workers: 8 });
   assert.deepEqual(f.calls, [{ operation: 'matching_catalogue', args: {} }]);
@@ -89,28 +88,32 @@ test('candidate brief preserves decisive late preferences through the valid note
   assert.equal(f.store.get().career.profile.preferences.notes, notes);
 });
 
-test('insufficient or archived profile evidence gives actionable errors before fetching jobs', async () => {
+test('insufficient profile data gives actionable errors before fetching jobs', async () => {
   const f = fixture({ emptyProfile: true });
-  await assert.rejects(f.call('career_match_jobs'), error => error.code === 'PROFILE_INCOMPLETE' && /career_facts_add/.test(error.message));
+  await assert.rejects(f.call('career_match_jobs'), error => error.code === 'PROFILE_INCOMPLETE' && /career_facts_save/.test(error.message));
   assert.deepEqual(f.calls, []);
-  const archived = fixture();
-  await archived.store.update(state => {
-    state.career.sources.cv.archived = true;
-    for (const fact of Object.values(state.career.facts)) fact.source = { kind: 'document', sourceId: 'cv' };
-  });
-  await assert.rejects(archived.call('career_match_jobs'), { code: 'PROFILE_INCOMPLETE' });
-  assert.deepEqual(archived.calls, []);
+  const skillsOnly = fixture();
+  await skillsOnly.store.update(state => { state.career.facts = {}; state.career.sources = {}; });
+  await assert.rejects(skillsOnly.call('career_match_jobs'), { code: 'PROFILE_INCOMPLETE' });
+  const roleless = fixture();
+  await roleless.store.update(state => { state.career.profile.headline = null; });
+  await assert.rejects(roleless.call('career_match_jobs'), { code: 'PROFILE_INCOMPLETE' });
+  assert.deepEqual([...skillsOnly.calls, ...roleless.calls], []);
 });
 
-test('stale field facts and inactive facts are omitted without introducing a workflow gate', async () => {
+test('candidate brief preserves negative and limited-depth answers and excludes archived CVs', async () => {
   const f = fixture();
   await f.store.update(state => {
-    state.career.facts.old = { ...fact('OUTDATED', '2010'), status: 'superseded' };
-    state.career.profile.seniority = 'OUTDATED';
-    state.career.profile.fieldSources.seniority = { kind: 'fact', factId: 'old' };
+    state.career.facts.language = { kind: 'language', subject: 'Italian', answer: 'Native' };
+    state.career.facts.go = { kind: 'capability', subject: 'Go', answer: 'None' };
+    state.career.facts.recent.detail = 'Worked on query optimization.';
+    state.career.sources.archived = { purpose: 'cv', archived: true, text: 'OLD CAREER CLAIM' };
   });
-  const result = await f.call('career_match_jobs');
-  assert.equal(JSON.stringify(result).includes('OUTDATED'), false);
+  const { candidate } = await f.call('career_match_jobs');
+  assert.deepEqual(candidate.facts.find(row => row.kind === 'language'), { kind: 'language', subject: 'Italian', answer: 'Native' });
+  assert.equal(candidate.facts.find(row => row.subject === 'Go').answer, 'None');
+  assert.equal(candidate.facts.find(row => row.subject === 'Reporting services').detail, 'Worked on query optimization.');
+  assert.equal(candidate.cv.includes('OLD CAREER CLAIM'), false);
 });
 
 test('eight concurrent score batches merge atomically and saved matches are readable before completion', async () => {
@@ -800,12 +803,12 @@ test('compensation comparison uses stated units, never invented exchange rates o
   assert.equal(salaryEligibility(minimum, { minimum: 120000, maximum: 85000, currency: 'EUR', period: 'year' }).status, 'not_comparable');
 });
 
-test('career context retains the full scope of long professional facts', async () => {
+test('career context retains the end of the full saved CV', async () => {
   const f = fixture();
-  const statement = 'Owned the product and delivery. '.repeat(40) + 'Led customer discovery and coached the product team.';
-  await f.store.update(state => { state.career.facts.recent.statement = statement; });
+  const cv = 'Owned the product and delivery. '.repeat(2000) + 'Led customer discovery and coached the product team.';
+  await f.store.update(state => { state.career.sources.cv.text = cv; });
   const context = await f.call('career_match_jobs');
-  assert.equal(context.candidate.facts.find(row => row.startDate === '2023').statement, statement);
+  assert.equal(context.candidate.cv, cv);
 });
 
 test('the weekly window includes its exact boundary and excludes older, future and invalid dates', () => {

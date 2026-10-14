@@ -9,6 +9,8 @@ import { createVault, privateDirectory } from './vault.mjs';
 import { createDeviceClient } from './client.mjs';
 import { installNative, EXTENSION_ID } from './install-native.mjs';
 import { createCareerState, fail } from './mcp/state.mjs';
+import { isFact } from './mcp/facts.mjs';
+import { isInterview } from './mcp/interview.mjs';
 import { createMcpServer, createPlatformTools } from './mcp/server.mjs';
 import { createProfileTools } from './mcp/profile-tools.mjs';
 import { createApplicationTools } from './mcp/application-tools.mjs';
@@ -100,6 +102,20 @@ async function initialize() {
       delete state.career.evaluationRuns;
       for (const [id, receipt] of Object.entries(state.career.receipts))
         if (receipt.operation.startsWith('career_evaluation_')) delete state.career.receipts[id];
+      const career = state.career;
+      delete career.profile.fieldSources;
+      delete career.profileHistory;
+      for (const [id, source] of Object.entries(career.sources))
+        if (source.provenance?.kind === 'attributed_facts') delete career.sources[id];
+      const legacyCv = draft => draft && !draft.document, legacyLetter = draft => draft && !draft.paragraphs;
+      for (const [id, app] of Object.entries(career.applications))
+        if ('baseline' in app || [app.cv, ...(app.cvHistory ?? [])].some(legacyCv) || [app.coverLetter, ...(app.coverLetterHistory ?? [])].some(legacyLetter))
+          delete career.applications[id];
+      const legacyFacts = Object.entries(career.facts).filter(([, fact]) => !isFact(fact));
+      for (const [id] of legacyFacts) delete career.facts[id];
+      if (legacyFacts.length) career.evidenceRevision++;
+      for (const [id, interview] of Object.entries(career.interviews ?? {}))
+        if (!isInterview(interview)) delete career.interviews[id];
     });
     await rm(path.join(directory, 'career-files', vault.get().deviceId, 'evaluations'), { recursive: true, force: true });
     if (screenLocked || sleeping) fail('LOCAL_LOCKED', 'Unlock this computer before opening saved career data.');
@@ -159,18 +175,29 @@ function createSessionServer() {
   const scopedPlatform = async (operation, args) => {
     scoped.assertAvailable(false); const result = await platform(operation, args); scoped.assertAvailable(false); return result;
   };
+  let server;
+  const interaction = {
+    canElicit: () => Boolean(server?.getClientCapabilities()?.elicitation?.form),
+    async elicit(params) {
+      scoped.assertAvailable(false);
+      const result = await server.elicitInput(params);
+      scoped.assertAvailable(false);
+      return result;
+    },
+  };
   const tools = [
     ...createPlatformTools({ store: scoped.store, platform: scopedPlatform, connectAccount, openSettings: showSettings }),
-    ...createProfileTools({ store: scoped.store, selectSourceFile: async () => {
+    ...createProfileTools({ store: scoped.store, interaction, selectSourceFile: async () => {
       scoped.assertAvailable(true); const result = await selectSourceFile(); scoped.assertAvailable(true); return result;
     }, extractFile: documents.extractFile }),
     ...createApplicationTools({ store: scoped.store, platform: scopedPlatform, documents, exportDocument: localFiles.exportDocument }),
     ...createMatchingTools({ store: scoped.store, platform: scopedPlatform, exportDocument: localFiles.exportDocument }),
   ];
-  return createMcpServer({ tools, assertAvailable: scoped.assertAvailable, readResource: localFiles.readResource, listResources: localFiles.listResources,
+  server = createMcpServer({ tools, assertAvailable: scoped.assertAvailable, readResource: localFiles.readResource, listResources: localFiles.listResources,
     notifyActivity: name => {
       if (tools.some(tool => tool.name === name && !tool.readOnly)) { careerViewRevision++; emit(); }
     } });
+  return server;
 }
 async function installConnections() {
   await privateDirectory(directory);

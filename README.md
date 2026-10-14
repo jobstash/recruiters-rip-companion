@@ -1,6 +1,6 @@
 # Recruiters.rip Companion
 
-Find suitable jobs and turn your saved career into tailored CVs, cover letters and applications. Version 3.5.1 preserves contextual interview answers for reuse and generates CVs as structured, tailored documents rendered straight to PDF.
+Find suitable jobs and turn your saved career into tailored CVs, cover letters and applications. Version 3.5.2 delivers a user-independent career-intent gate to every matching worker and actionable preference-mutation validation errors.
 
 ## Account and installation
 
@@ -23,7 +23,13 @@ Current installed identity: app ID `rip.recruiters.companion`, displayed app **R
 
 A positive saved `salaryMinimum` is a hard floor. Comparable stated pay below it cannot enter recommendations, regardless of the model score or an older note describing salary as flexible. The server rejects a nonzero/recommend/clarify save for that known mismatch. Ranges that reach the floor remain possible; missing salary does not exclude a role. Currency or hourly/day-rate uncertainty is not silently converted into a budget claim.
 
-Assess the whole career and actual scope, not exact task keywords. Sustained end-to-end product ownership with discovery workshops, customer work and delivery supports ordinary discovery, interviewing, usability-validation and experimentation capabilities. Those routine facets do not need individual confirmations or reduce fit merely because their precise words were absent. Specific historical studies, metrics, credentials and genuine specialist expertise must not be invented.
+Assessment policy 3 separates career intent from capability. The shared policy assumes no profession, management ambition, seniority goal or preferred career path. The user's saved goals, constraints and accepted alternatives define the intended next move, including deliberate lateral moves, career changes or reduced responsibility. Capability overlap cannot override an explicit intent conflict, and overlapping duties do not silently expand an accepted alternative. The same generic `careerDirection` policy is returned with every matching assignment alongside competency and salary policies; workers must apply it before scoring. Personal restrictions belong in the user's preferences, not shared prompts.
+
+Assess capability from demonstrated responsibilities across the whole career rather than exact CV phrases. Infer routine constituent duties where justified, but do not invent specific historical activities, metrics, credentials or specialist expertise. A policy revision marks previous judgments for reassessment; it does not automatically rescore them.
+
+Mandatory user conditions apply to all role interests and accepted alternatives; a broad interest does not waive a narrower requirement. Interpret the user's distinction between a role's predominant work and incidental responsibilities without imposing that distinction on other users.
+
+Preference changes use `career_preferences_update({requestId, revision, patch})`. `requestId` must be a UUID returned by `request_id`, and `revision` must be the current integer from `career_profile_read`. A descriptive request label is invalid. Rejected calls leave preferences untouched and identify the invalid or missing schema field without echoing supplied values. Always confirm persisted preferences through readback.
 
 Say **“Reassess roles.”** The host automatically starts a fresh ranking pass: it clears old rankings and cached jobs, selects only the rolling past seven days using catalogue `publishedAt`, reads complete originals and saves newly reasoned judgments. No flags or special prompt are needed. Status/resume requests do not clear work. An empty or obsolete recommendation cache must not be mistaken for a completed search with no suitable jobs.
 
@@ -94,7 +100,7 @@ This creates signed, notarized macOS ARM64 ZIP and DMG artifacts under `dist/rel
 
 If signing credentials are unavailable, explicitly use `pnpm package:adhoc`. It builds production-origin ZIP and DMG artifacts under `dist/adhoc/` with ad-hoc signing and **no notarization**; Gatekeeper may block them. Do not describe these as notarized releases or silently disable OS protections.
 
-Artifact basenames are `recruiters-rip-companion-3.5.1-mac-arm64.zip` and `.dmg`. The website operator mounts the actual ZIP on its private host volume and sets `COMPANION_INSTALLER_PATH`; `/api/companion/download` serves that file. A private GitHub repository is not a public installer URL.
+Artifact basenames are `recruiters-rip-companion-3.5.2-mac-arm64.zip` and `.dmg`. The website operator mounts the actual ZIP on its private host volume and sets `COMPANION_INSTALLER_PATH`; `/api/companion/download` serves that file. A private GitHub repository is not a public installer URL.
 
 ## Document source and asset notices
 

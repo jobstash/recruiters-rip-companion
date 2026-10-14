@@ -229,7 +229,7 @@ export function createProfileTools({ store, selectSourceFile, extractFile, inter
     return { profile: profileView(career.profile), saved };
   }));
 
-  tool('career_preferences_update', 'Save explicit future preferences the candidate stated, never CV-inferred ones. Omitted values stay unchanged; false, zero, empty lists (unrestricted), any and null clears are saved as given. Travel must come from an answer, never passports.', mutation({ patch: preferencePatch }, ['patch']), false, async args => edit('career_preferences_update', args, career => {
+  tool('career_preferences_update', 'Save explicit future preferences using {requestId,revision,patch}. Obtain a UUID from request_id and the current integer revision from career_profile_read; requestId is not a descriptive label. Put supported preference fields inside patch; use notes for intent that has no dedicated field. Omitted values stay unchanged. Save actual candidate intent, not CV-inferred preferences. Read career_profile_read afterward to confirm persistence; never report a rejected mutation as saved.', mutation({ patch: preferencePatch }, ['patch']), false, async args => edit('career_preferences_update', args, career => {
     const saved = patchPreferences(career, args.patch);
     career.evidenceRevision++;
     return { preferences: career.profile.preferences, saved };

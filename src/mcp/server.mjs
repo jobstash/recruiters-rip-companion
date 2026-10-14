@@ -5,7 +5,7 @@ import addFormats from 'ajv-formats';
 import { randomUUID } from 'node:crypto';
 import { CareerError } from './state.mjs';
 import { version } from '../version.mjs';
-import { COMPETENCY_POLICY, SALARY_POLICY } from './assessment-policy.mjs';
+import { CAREER_DIRECTION_POLICY, COMPETENCY_POLICY, SALARY_POLICY } from './assessment-policy.mjs';
 const publicErrors = new Set(['INVALID_INPUT', 'NOT_FOUND', 'FACT_CHANGED', 'REVISION_CONFLICT', 'REQUEST_CONFLICT', 'STORAGE_LIMIT', 'RESULT_LIMIT', 'LOCAL_LOCKED', 'IDENTITY_CHANGED', 'PAIRING_REQUIRED', 'DEVICE_OFFLINE', 'DEVICE_UNAUTHORIZED', 'DEVICE_REQUEST_FAILED', 'UNAVAILABLE', 'INVALID_JOB', 'UNCLEAR_FACT', 'CV_TONE', 'UNKNOWN_EMPLOYER', 'UNSUPPORTED_NUMBER', 'MISSING_DRAFT', 'LAYOUT_OVERFLOW', 'EXPORT_CORRUPT', 'CANCELLED']);
 
 export const instructions = [
@@ -17,7 +17,7 @@ export const instructions = [
   'For requested matching work, call career_match_jobs for candidate context, profileVersion and jobIds, including unseen and review-needed saved jobs. Pass complete preferences and notes, the active target, evidence and all assessment rules to up to eight native subscription workers with disjoint assignments. Restrict workers to Recruiters.rip tools where supported; use sequential batches if unavailable. Fetch up to ten complete originals with career_match_batch; reduce batch size rather than truncate ads or preferences. Each job requires its own model assessment of the full advert, company context, locationEvidence and metadata. Follow remainingIds and finish assigned coverage, including weak jobs. Scripts may transport calls, queues and already-authored results, but must not generate decisions, scores, reasons, exclusions or relocation using keywords, regexes, title categories, starting scores, bonuses, penalties or formulas. Do not implement score(job). Timing targets never excuse scripted or abbreviated assessment.',
   'Assessment protocol: establish the ACTIVE career target, compare actual advertised responsibilities and essential qualifications with demonstrated candidate evidence, decide suitability, then score that same evidence; classify location separately. Save id, decision (recommend|clarify|skip), score, reason and relocation. recommend means an evidenced suitable next application for this target with no material unresolved non-location obstacle. clarify means a decisive essential qualification, responsibility scope or preference conflict is unresolved; absence of evidence is not demonstrated inability. skip means a demonstrated qualification/target mismatch, unconsented meaningful step-down or confirmed hard non-location exclusion. Known mismatch takes precedence over unrelated unknowns. A high score, keyword overlap or compatible location never converts clarify/skip into recommend. An unavailable original gets score null, decision clarify and an honest reason. State the decisive support, mismatch or specific missing evidence in one job-specific reason of at most 400 characters.',
   'Use the full integer 0–100 scale for evidence-supported overall professional/career fit to the active target, not capability in isolation or interview probability. 0 means genuine no fit or a confirmed hard non-location exclusion; 100 is legitimate when the evidence fully supports the target, responsibilities and requirements with no material fit deficit. All intermediate integers are valid. No calibration bands, numerical recommendation gates, quotas, forced distributions, fixed caps or title-based starting scores. Do not inflate weak fits to populate the upper range or manufacture deficits to avoid 100; generic uncertainty about future interviews is not a deficit. Decision, score and reason must be coherent: essential experience not evidenced limits supported fit and requires clarification, not assumed expertise. Skill-list familiarity, supervision of implementation and personally demonstrated required depth are different evidence. General leadership cannot erase missing essential specialty. Missing salary alone is not rejection; a mere preference is not an automatic zero.',
-  'Career target: default to comparable-or-higher demonstrated sustained scope, autonomy, decision authority, people/org/product ownership and impact, not highest-ever title, years, pay or employer brand. Explicit current direction takes precedence over older generic openness within scope; preserve named exceptions and do not invent chronology for undated statements. A CHOSEN narrower/transition search replaces the usual target within its scope, without a prior-track or accepted-step-down penalty or preference for unrelated senior roles. Being also open to an exception only expands consideration; it does not replace the active target or globally rewrite preferences. Otherwise a meaningful step-down requires explicit opt-in for this search; technology novelty, travel, salary, few matches and broad hands-on openness are not consent. Management/CTO direction materially shapes fit when active, not a small bonus to keyword overlap. An allowed senior/high-impact IC exception requires concrete comparable-or-greater authority/impact; IC is not inherently junior, nor is technical authority people management. Do not invent promotion qualifications. Direct reports and managing managers each need role and candidate evidence. Vague lead/own/build/mentor/founding/staff or CTO-of-account wording proves neither management scope nor promised promotion. Missing decisive scope is clarify, not leadership credit or proof of absence.',
+  CAREER_DIRECTION_POLICY,
   COMPETENCY_POLICY,
   'Apply current explicit exclusions before recommending another job or asking CV questions. Determine exclusions semantically from actual employer/project business, never incidental or negated keywords. Gaming, gambling and NFTs are distinct: ordinary gaming violates an explicit gaming exclusion, not an NFT/gambling-only exclusion. Confirmed hard non-location exclusions require decision skip and score 0 with the triggering candidate constraint and job/company evidence in the reason. Soft domain preferences still shape the active target and suitability; do not turn them into universal company bans or automatic zero scores.',
   SALARY_POLICY,
@@ -39,6 +39,21 @@ export const instructions = [
   'Native app permissions, subscription limits and voice support belong to that app. Do not claim unsupported concurrency or a measured completion time without evidence. Keep the companion open for local data access.',
 ].join('\n\n');
 
+function schemaErrorMessage(name, validationErrors) {
+  const issue = validationErrors?.[0];
+  if (!issue) return `${name}: use the advertised input schema.`;
+  const field = issue.keyword === 'required' ? issue.params.missingProperty : issue.instancePath;
+  if (field === 'requestId' || field === '/requestId')
+    return `${name}: requestId is required and must be a UUID. Call request_id and use its requestId, not a descriptive label. Also supply the current integer revision from career_profile_read.`;
+  if (field === 'revision' || field === '/revision')
+    return `${name}: revision is required and must be a nonnegative integer from career_profile_read. It is not matchingProfileVersion. Keep requestId as a UUID from request_id.`;
+  // AJV paths/messages describe schema fields; never include submitted values.
+  const location = issue.instancePath || 'input';
+  if (issue.keyword === 'required') return `${name}: ${location} requires ${issue.params.missingProperty}. Use the advertised input schema.`;
+  if (issue.keyword === 'enum') return `${name}: ${location} must be one of ${issue.params.allowedValues.join(', ')}.`;
+  return `${name}: ${location} ${issue.message}. Use the advertised input schema.`;
+}
+
 export function createMcpServer({ tools, assertAvailable, readResource, listResources, notifyActivity = () => {} }) {
   const ajv = new Ajv({ strict: false, allErrors: false });
   addFormats(ajv);
@@ -52,7 +67,8 @@ export function createMcpServer({ tools, assertAvailable, readResource, listReso
     const tool = registry.get(request.params.name);
     if (!tool) return error('UNKNOWN_TOOL', 'This career tool is unavailable. Read the current tool list.');
     const input = request.params.arguments ?? {};
-    if (Buffer.byteLength(JSON.stringify(input)) > 8 * 1024 * 1024 || !tool.validate(input)) return error('INVALID_INPUT', 'Use the fields shown in this tool’s input schema.');
+    if (Buffer.byteLength(JSON.stringify(input)) > 8 * 1024 * 1024) return error('INVALID_INPUT', 'The request exceeds the local input size limit.');
+    if (!tool.validate(input)) return error('INVALID_INPUT', schemaErrorMessage(tool.name, tool.validate.errors));
     if (inFlight >= 32) return error('LOCAL_BUSY', 'Wait for the current local tools to finish before starting more work.');
     inFlight++;
     try {

@@ -2,7 +2,10 @@ import { createHash } from 'node:crypto';
 import { canonicalJSON } from '../client.mjs';
 
 export { canonicalJSON };
-export const mutationSchema = Object.freeze({ requestId: { type: 'string', format: 'uuid' }, revision: { type: 'integer', minimum: 0 } });
+export const mutationSchema = Object.freeze({
+  requestId: { type: 'string', format: 'uuid', description: 'UUID returned by request_id, not a descriptive label. Reuse only for an exact retry of the same mutation.' },
+  revision: { type: 'integer', minimum: 0, description: 'Current revision from career_profile_read or the latest successful mutation; not matchingProfileVersion or a fact/evidence counter.' },
+});
 export const hash = value => createHash('sha256').update(canonicalJSON(value)).digest('hex');
 export class CareerError extends Error {
   constructor(code, message) { super(message); this.code = code; }
@@ -16,7 +19,7 @@ export function createCareerState() {
 export function readCareer(store) { return store.get().career ?? createCareerState(); }
 function preflight(career, { requestId, revision }, operation, input) {
   if (typeof requestId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requestId) || !Number.isSafeInteger(revision) || revision < 0)
-    fail('INVALID_INPUT', 'Use a fresh request ID and the revision returned by the latest read.');
+    fail('INVALID_INPUT', 'Provide requestId as a UUID from request_id and revision as the integer returned by career_profile_read. Do not use a descriptive request label.');
   const inputHash = hash({ operation, input });
   const receipt = career.receipts[requestId];
   if (receipt) {

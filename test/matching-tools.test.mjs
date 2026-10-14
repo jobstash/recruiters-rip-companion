@@ -802,7 +802,7 @@ test('a changed stated salary is filtered before paging without rewriting the sa
 test('old-rule judgments require reranking even when candidate facts did not change', async () => {
   const f = fixture({ jobs: [job('a')] });
   await f.call('career_match_jobs');
-  await f.store.update(state => { state.career.matching.scores['node:a'] = { ...score('a', 95, 'not_required'), profileVersion: '0:0' }; });
+  await f.store.update(state => { state.career.matching.scores['node:a'] = { ...score('a', 95, 'not_required'), profileVersion: '0:0', assessmentVersion: ASSESSMENT_VERSION - 1 }; });
   const before = f.store.get();
   const old = await f.call('career_recommendations');
   assert.equal(old.total, 0);

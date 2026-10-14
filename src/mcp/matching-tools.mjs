@@ -1,5 +1,5 @@
 import { createCareerState, fail, readCareer } from './state.mjs';
-import { ASSESSMENT_VERSION, COMPETENCY_POLICY, SALARY_POLICY, salaryEligibility, recentPublication, publicationWindow, matchingProfileVersion } from './assessment-policy.mjs';
+import { ASSESSMENT_VERSION, CAREER_DIRECTION_POLICY, COMPETENCY_POLICY, SALARY_POLICY, salaryEligibility, recentPublication, publicationWindow, matchingProfileVersion } from './assessment-policy.mjs';
 import { compareFacts } from './facts.mjs';
 
 const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
@@ -181,7 +181,7 @@ export function createMatchingTools({ store, platform, exportDocument }) {
     },
     {
       name: 'career_match_jobs',
-      description: 'Get candidate context and only jobs published in the past seven days. For an ordinary request to reassess, rerank or start over, automatically use refresh:true: delete old job rankings/cache and assess the fresh weekly catalogue, without asking the user for flags or instructions. Status and resume requests must not reset. profileVersion is an opaque ranking-context token returned here, not career_profile_read.evidenceRevision. Use it for score saves. Infer routine competencies from actual scope and enforce the saved salary floor. No model runs here.',
+      description: 'Get candidate context and only jobs published in the past seven days. Apply assessmentPolicy.careerDirection first: establish this user’s intended move and accepted alternatives, then distinguish role alignment from capability. Never assume a default profession, seniority or career path. Pass the entire assessmentPolicy and complete preferences to every worker. For a reassess/rerank/start-over request use refresh:true once to delete old rankings/cache. Status/resume must not reset. Use the returned opaque profileVersion for score saves. No model runs here.',
       inputSchema: object({ refresh: { type: 'boolean' } }), readOnly: false,
       async invoke(args = {}) {
         assertObject(args, ['refresh']);
@@ -213,7 +213,7 @@ export function createMatchingTools({ store, platform, exportDocument }) {
           const profileVersion = matchingProfileVersion(career);
           result = { candidate, profileVersion, evidenceRevision: career.evidenceRevision ?? 0,
             assessmentVersion: ASSESSMENT_VERSION, publicationWindow: window,
-            assessmentPolicy: { competencies: COMPETENCY_POLICY, salary: SALARY_POLICY },
+            assessmentPolicy: { careerDirection: CAREER_DIRECTION_POLICY, competencies: COMPETENCY_POLICY, salary: SALARY_POLICY },
             jobIds: Object.keys(currentJobs).filter(id => !currentAssessment(saved.scores[id], profileVersion)),
             total: jobs.length, ...counts(saved.jobs, saved.scores, profileVersion), batchSize: 10, workers: 8 };
         });
@@ -222,7 +222,7 @@ export function createMatchingTools({ store, platform, exportDocument }) {
     },
     {
       name: 'career_match_batch',
-      description: 'Fetch up to ten complete original ads and company facts, updating local display terms only. Apply the current assessmentPolicy from career_match_jobs: assess actual responsibility and transferable routine competencies, not missing keyword-level facets. Reserve clarify for material unresolved specialties, credentials, legal eligibility or decisive scope. Enforce the saved salary floor against comparable stated pay. Preserve the active target, exceptions, exclusions, independent location classification and full-ad reasoning. Follow remainingIds and unavailableIds; scripts transport data, never generate judgments.',
+      description: 'Fetch up to ten complete original ads and company facts. Apply assessmentPolicy.careerDirection before evaluating skills: compare the actual remit with this user’s chosen direction and accepted alternatives, without inventing exceptions from overlapping tasks or attractive job features. Known intent conflicts are skip, not recommendations with disclaimers. Deliberate career changes and lower-scope searches must be evaluated on their chosen terms. Then apply competency and salary policies, full-ad reasoning and independent location classification. Follow remainingIds and unavailableIds. Scripts transport data, never generate judgments.',
       inputSchema: object({ ids: { type: 'array', items: idSchema, minItems: 1, maxItems: 10, uniqueItems: true } }, ['ids']), readOnly: false,
       async invoke(args = {}) {
         assertObject(args, ['ids'], ['ids']);
@@ -254,7 +254,7 @@ export function createMatchingTools({ store, platform, exportDocument }) {
     },
     {
       name: 'career_match_save',
-      description: 'Save up to ten model-authored full-ad judgments with profileVersion from career_match_jobs. The current assessmentVersion is recorded automatically; old judgments need genuine reranking, not retagging. Infer ordinary duties from demonstrated scope; do not manufacture granular clarification gates. Keep material specialist gaps honest. Known comparable stated pay below salaryMinimum requires skip and score 0; missing pay alone is not rejection. No score threshold, forced grade, formula, quota or title baseline. Changed preferences reject stale batches with PROFILE_CHANGED.',
+      description: 'Save up to ten model-authored full-ad judgments with current profileVersion. A recommend decision must first pass the user-specific career-intent gate: identify the advertised remit that serves their chosen move or a specifically accepted alternative. Score overall fit, not merely ability to perform the work. Competency inference cannot override an explicit intent conflict. Comparable stated pay below salaryMinimum requires skip and score 0. Missing pay alone is not rejection. No forced grade, formula or quota. Old policies/preferences/reset tokens require genuine reassessment, not retagging.',
       inputSchema: object({
         profileVersion: { type: 'string', pattern: '^[0-9]+:[0-9]+$', maxLength: 80 },
         scores: { type: 'array', items: scoreSchema, minItems: 1, maxItems: 10 },

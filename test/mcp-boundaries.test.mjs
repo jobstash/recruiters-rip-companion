@@ -9,7 +9,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createCareerState, fail } from '../src/mcp/state.mjs';
 import { createScopedAccess } from '../src/mcp/scope.mjs';
 import { createProfileTools } from '../src/mcp/profile-tools.mjs';
-import { createMcpServer } from '../src/mcp/server.mjs';
+import { createMcpServer, createPlatformTools } from '../src/mcp/server.mjs';
 import { createDocumentFiles, readSelectedSource } from '../src/mcp/files.mjs';
 import { createMatchingTools } from '../src/mcp/matching-tools.mjs';
 import { ASSESSMENT_VERSION } from '../src/mcp/assessment-policy.mjs';
@@ -237,4 +237,41 @@ test('plain-text CV resources retain Unicode and enforce private-file integrity'
   assert.ok((await files.listResources()).some(resource => resource.uri === exported.uri && resource.mimeType === 'text/plain'));
   await writeFile(exported.path, 'Tampered CV');
   await assert.rejects(files.readResource(exported.uri), { code: 'EXPORT_CORRUPT' });
+});
+
+test('preference mutations reject invalid identifiers without writes and recover with an issued UUID', async t => {
+  const f = fixture();
+  const server = createMcpServer({
+    tools: [...createProfileTools({ store: f.scoped.store }), ...createPlatformTools({ store: f.scoped.store })],
+    assertAvailable: f.scoped.assertAvailable,
+    readResource: () => assert.fail('No resource requested'), listResources: () => [],
+  });
+  const client = new Client({ name: 'preference-contract-consumer', version: '1.0.0' });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverTransport); await client.connect(clientTransport);
+  t.after(async () => { await client.close(); await server.close(); });
+  const call = (name, args = {}) => client.callTool({ name, arguments: args });
+  const body = response => JSON.parse(response.content[0].text);
+  const before = f.store.get();
+  const invalid = await call('career_preferences_update', {
+    requestId: 'private-descriptive-request-label', revision: 0, patch: { directReports: 'required' },
+  });
+  assert.equal(invalid.isError, true);
+  assert.equal(body(invalid).error.code, 'INVALID_INPUT');
+  assert.ok(body(invalid).error.message.includes('request_id'));
+  assert.equal(body(invalid).error.message.includes('private-descriptive-request-label'), false);
+  assert.deepEqual(f.store.get(), before);
+  const missing = await call('career_preferences_update', { patch: { directReports: 'required' } });
+  assert.equal(missing.isError, true);
+  assert.deepEqual(f.store.get(), before);
+
+  const issued = body(await call('request_id'));
+  const current = body(await call('career_profile_read'));
+  const patch = { directReports: 'required', responsibilityModes: ['managerial'], notes: 'Prefer a team-owned delivery remit; specialist operations may be secondary, not the primary work.' };
+  const saved = await call('career_preferences_update', { requestId: issued.requestId, revision: current.revision, patch });
+  assert.notEqual(saved.isError, true);
+  const readback = body(await call('career_profile_read'));
+  assert.deepEqual(readback.preferences, patch);
+  assert.notEqual(readback.matchingProfileVersion, current.matchingProfileVersion);
+  assert.deepEqual(readback.profile, current.profile);
 });

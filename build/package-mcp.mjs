@@ -19,12 +19,12 @@ export async function packageMcp() {
   await mkdir(path.join(plugin, '.codex-plugin'), { recursive: true });
   await writeFile(path.join(plugin, '.codex-plugin', 'plugin.json'), JSON.stringify({
     name: 'recruiters-rip', version,
-    description: 'Recruiters.rip: complete saved rankings and grounded CareerCup CVs.',
+    description: 'Find suitable jobs and prepare tailored CVs, cover letters and applications.',
     author: { name: 'JobStash' },
     skills: './skills/', mcpServers: './.mcp.json',
     interface: {
-      displayName: 'Recruiters.rip', shortDescription: 'Read all evaluated jobs and prepare factual, reviewed CVs.',
-      longDescription: 'Export the complete saved ranking, assess original job ads with your subscription app, and prepare evidence-grounded CareerCup CVs. Facts and drafts stay in the local companion.',
+      displayName: 'Recruiters.rip', shortDescription: 'Find good jobs and prepare tailored applications.',
+      longDescription: 'Match jobs to your career and preferences, create persuasive tailored CVs and cover letters, and complete authorized applications in your subscription app. Career data stays in the local companion.',
       developerName: 'JobStash', category: 'Productivity', capabilities: ['Read', 'Write'],
       defaultPrompt: ['Use Recruiters.rip. Show my current recommendations with salary, city/location, work mode and JobStash publication date. Keep the complete assessment archive and CSV available separately; do not present unreviewed or unsuitable archive rows as recommendations. Do not start new scoring unless I ask.'],
     },

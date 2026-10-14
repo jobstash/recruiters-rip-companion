@@ -32,20 +32,14 @@ function sourceDetail(source) {
   ] };
 }
 
-function factDetail(fact, career) {
-  const evidence = record(fact.source) ? fact.source : {};
-  const source = typeof evidence.sourceId === 'string' ? lookup(career.sources, evidence.sourceId) : null;
+function factDetail(fact) {
   return { title: factTitle(fact), sections: [
-    section('Saved statement', text(fact.statement, 'No statement is saved.')),
-    section('Fact details', metadata([
-      ['Status', readable(fact.status) || 'Unknown'], ['Kind', readable(fact.kind)], ['Employer', fact.employer], ['Role', fact.role],
-      ['Start date', fact.startDate], ['End date', fact.endDate], ['Created', fact.createdAt],
-    ])),
-    section('Evidence quote', text(evidence.quote, 'No evidence quote is saved.')),
-    section('Evidence source', metadata([
-      ['Source', source?.name],
-      ['Attribution', evidence.kind === 'document' ? source ? source.archived ? 'Archived document' : 'Saved document' : 'Source document not found' : evidence.kind === 'conversation' ? 'Candidate-reported conversation' : 'Unknown'],
-    ])),
+    section('Career detail', text(fact.statement, 'No statement is saved.')),
+    section('Role and dates', metadata([
+      ['Status', fact.status === 'active' ? undefined : readable(fact.status)],
+      ['Employer', fact.employer], ['Role', fact.role],
+      ['Start date', fact.startDate], ['End date', fact.endDate],
+    ]) || 'No role dates saved.'),
   ] };
 }
 
@@ -76,7 +70,7 @@ function applicationDetail(app, career) {
     section('Application details', metadata([
       ['Job', app.job?.title], ['Company', app.job?.company],
       ['Created', app.createdAt], ['Updated', app.updatedAt], ['Source document', source?.name],
-      ['Evidence', app.evidenceRevision !== career.evidenceRevision ? 'Evidence has changed; saved wording may be stale.' : undefined],
+      ['Before applying', app.evidenceRevision !== career.evidenceRevision ? 'Your profile has changed since this draft. Update it for the job before sending.' : undefined],
     ])),
     ...draftSections('cv', app.cv), ...draftSections('cover_letter', app.coverLetter),
     ...(Array.isArray(app.cvHistory) ? app.cvHistory.flatMap(draft => draftSections('cv', draft, true)) : []),
@@ -100,9 +94,9 @@ function rankingItem(row) {
   const label = value => own(labels, value) ? labels[value] : readable(value);
   const salary = row.salary;
   const hasSalary = salary && [salary.minimum, salary.maximum, salary.stated].some(Number.isFinite);
-  return { id: row.id, title, summary: `${score} · ${label(row.decision) || 'No saved decision'} · ${label(row.reviewStatus) || 'Assessment status unknown'}`, sections: [
-    section('Saved assessment', metadata([
-      ['Score', score], ['Decision', label(row.decision) || 'No saved decision'], ['Review status', label(row.reviewStatus)], ['Location match', label(row.matchStatus)],
+  return { id: row.id, title, summary: `${score} · ${label(row.decision) || 'No saved decision'}`, sections: [
+    section('Job fit', metadata([
+      ['Score', score], ['Decision', label(row.decision) || 'No saved decision'], ['Before applying', row.reviewStatus === 'needs_review' ? 'Reassess against your current profile.' : undefined], ['Location match', label(row.matchStatus)],
     ])),
     section('Reason', text(row.reason, 'No reason is saved.')),
     section('Location', metadata([['City', row.city], ['Location', row.location], ['Work mode', row.workMode], ['Relocation', label(row.relocation)]]) || 'Location not stated'),

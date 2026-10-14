@@ -3,7 +3,7 @@
   const element = id => document.getElementById(id);
   const categories = {
     sources: { title: 'Sources', empty: 'No saved sources. Imported source documents will appear here.' },
-    facts: { title: 'Facts', empty: 'No saved facts. Saved career statements and their evidence will appear here.' },
+    facts: { title: 'Facts', empty: 'No saved career facts.' },
     rankings: { title: 'Rankings', empty: 'No saved rankings. Saved role assessments and their reasons will appear here.' },
     applications: { title: 'Application drafts', empty: 'No saved application drafts. Saved CV and cover letter wording will appear here.' },
   };

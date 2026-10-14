@@ -1,5 +1,11 @@
 # Companion ownership
 
+## Product stage: POC
+
+Recruiters.rip is a proof of concept. Prioritize a working end-to-end product and fast iteration over preserving previous work. Breaking API/schema changes, replacing failed implementations, and discarding POC data are acceptable. Do not spend time on legacy-version compatibility, migration machinery, archives, or preserving obsolete experiments unless the user explicitly requests it. Keep resets scoped to this POC; credentials, authentication/security boundaries, unrelated products, and truthful result reporting remain protected.
+
+## Current ownership
+
 - Own the Electron companion, encrypted local career vault, local MCP transport/tools, conversation skill, document codec/baseline/layout/PDF source, and installer packaging in this repository.
 - Website account authentication, checkout, download hosting, pairing UI and signed-device proxy belong to `recruiters-rip-frontend`. Middleware authorizes devices and current paid job-feed access. Do not import sibling repositories or add database/server inference dependencies.
 - Preserve app ID `rip.recruiters.companion`, product name `Recruiters.rip Companion`, storage/keychain name `Recruiters Companion`, protocol `recruiters-companion`, and production `device` directory. Never inspect, mutate, reset or migrate a user's actual vault as a test.

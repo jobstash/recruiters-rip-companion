@@ -1,4 +1,5 @@
 import { createCareerState, fail, readCareer } from './state.mjs';
+import { ASSESSMENT_VERSION, COMPETENCY_POLICY, SALARY_POLICY, salaryEligibility } from './assessment-policy.mjs';
 
 const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
 const object = (properties, required = []) => ({ type: 'object', properties, required, additionalProperties: false });
@@ -73,7 +74,7 @@ function candidateContext(career) {
     ['experience', 'education', 'achievement', 'skill'].includes(fact.kind) && typeof fact.statement === 'string' && fact.statement.trim())
     .sort((a, b) => compareText(a.startDate || '9999', b.startDate || '9999') || compareText(a.endDate || '9999', b.endDate || '9999'))
     .flatMap(fact => {
-      const statement = compact(fact.statement);
+      const statement = compact(fact.statement, Infinity);
       const key = JSON.stringify([statement, fact.employer, fact.role, fact.startDate, fact.endDate]);
       if (seen.has(key)) return [];
       seen.add(key);
@@ -88,7 +89,7 @@ function candidateContext(career) {
 }
 function currentAssessment(row, profileVersion) {
   return row?.profileVersion === profileVersion && Number.isSafeInteger(row.profileVersion) &&
-    decisions.includes(row.decision) &&
+    row.assessmentVersion === ASSESSMENT_VERSION && decisions.includes(row.decision) &&
     (row.score === null ? row.decision === 'clarify' :
       Number.isInteger(row.score) && row.score >= 0 && row.score <= 100 && (row.score !== 0 || row.decision === 'skip'));
 }
@@ -120,14 +121,16 @@ const matchPriority = {
   incompatible_location: 2, zero_fit: 3, unavailable: 4,
 };
 
-function rankedRows(saved, willingToRelocate, profileVersion) {
+function rankedRows(saved, preferences, profileVersion) {
+  const willingToRelocate = preferences?.willingToRelocate;
   const rows = Object.entries(saved.scores).map(([id, assessment]) => {
     const job = saved.jobs[id] ?? {};
-    const { profileVersion: _version, ...visibleAssessment } = assessment;
+    const { profileVersion: _version, assessmentVersion: _policy, ...visibleAssessment } = assessment;
     return { title: null, company: null, publishedAt: null, applyUrl: null,
       ...job, ...visibleAssessment, id, decision: decisions.includes(assessment.decision) ? assessment.decision : null,
       reviewStatus: currentAssessment(assessment, profileVersion) ? 'current' : 'needs_review',
-      ...displayTerms(job), matchStatus: matchStatus(assessment, willingToRelocate) };
+      ...displayTerms(job), salaryEligibility: salaryEligibility(preferences, job.salary),
+      matchStatus: matchStatus(assessment, willingToRelocate) };
   });
   const date = value => Number.isFinite(Date.parse(value)) ? Date.parse(value) : -Infinity;
   rows.sort((a, b) => matchPriority[a.matchStatus] - matchPriority[b.matchStatus] ||
@@ -158,7 +161,7 @@ export function createMatchingTools({ store, platform, exportDocument }) {
   return [
     {
       name: 'career_match_jobs',
-      description: 'Read current professional context, complete preference notes, profileVersion and recent catalogue IDs. By default return unseen jobs plus saved assessments needing review, including those outside the discovery window; refresh includes every saved ID for deliberate reassessment. Pass profileVersion once per save batch. Use up to eight native subscription workers and batches of ten, each with the ACTIVE target, complete notes, demonstrated scope, scoped exceptions, hard exclusions and server assessment rules. Suitability comes before score: decide recommend, clarify or skip using full ads and evidence, never keyword familiarity alone. Comparable-or-higher sustained responsibility is the default; an explicit narrower/transition search replaces it only within its chosen scope, while also-open-to exceptions only expand scope. Inspect the first batch and independently review leading full ads before application/CV selection. Reconcile analogous assessments using evidence, not formulas or title similarity. Location never reduces fit. Use bounded corrections rather than automatic full-catalogue rescoring; saved rankings do not require this network call. No model runs here.',
+      description: 'Read complete professional context and preference notes, profileVersion, assessmentVersion, current assessmentPolicy and catalogue IDs. Infer ordinary duties from demonstrated sustained ownership, not verbatim CV keywords. A positive salaryMinimum is a hard floor; missing salary alone is not exclusion. Default IDs include unseen and outdated assessments; refresh includes every saved ID for requested reranking. Save model-authored full-ad judgments with profileVersion; the server records the current policy version. No model runs here.',
       inputSchema: object({ refresh: { type: 'boolean' } }), readOnly: false,
       async invoke(args = {}) {
         assertObject(args, ['refresh']);
@@ -190,7 +193,8 @@ export function createMatchingTools({ store, platform, exportDocument }) {
           for (const [id, job] of Object.entries(saved.jobs))
             if (own(saved.scores, id) && !own(currentJobs, id)) currentJobs[id] = job;
           saved.jobs = currentJobs;
-          result = { candidate, profileVersion,
+          result = { candidate, profileVersion, assessmentVersion: ASSESSMENT_VERSION,
+            assessmentPolicy: { competencies: COMPETENCY_POLICY, salary: SALARY_POLICY },
             jobIds: Object.keys(discoveryJobs).filter(id => args.refresh || !currentAssessment(saved.scores[id], profileVersion)),
             total: Object.keys(discoveryJobs).length, ...coverage, batchSize: 10, workers: 8 };
         });
@@ -199,7 +203,7 @@ export function createMatchingTools({ store, platform, exportDocument }) {
     },
     {
       name: 'career_match_batch',
-      description: 'Fetch up to ten complete original ads and company facts; update only local display terms. Assess each full ad and closing restrictions against the ACTIVE search target and demonstrated scope, autonomy, decisions, ownership and impact. Explicit choice of a narrower/transition search replaces the usual management/comparable-up target within scope; assess that choice without a prior-track penalty. Also-open-to exceptions expand scope, not replace it; neither globally rewrites preferences. Otherwise comparable-or-higher responsibility is the default and narrow step-downs need explicit search opt-in, not technology novelty, travel, salary or scarce matches. High-impact IC exceptions to an active management path need comparable-or-greater authority/impact, not a management label. Vague lead/own/build/mentor/founding/staff/CTO-of-account wording does not establish reports, managing managers, hiring authority or promised promotion. Missing scope is unknown, earns no positive leadership credit and may require specific employer clarification outside CV questions. Assess essential employer capabilities independently; do not invent promotion qualifications. Conditional remote-country eligibility stays unclear despite broad headings. Determine hard industry exclusions semantically from actual business and explicit constraints, not keywords: ordinary gaming differs from gambling/NFTs; incidental or negated mentions do not disqualify. Confirmed hard non-location exclusions require score 0 with grounded reason; save but do not recommend. Scripts may move data, never assess it. Follow remainingIds; unavailableIds identifies missing/offline jobs.',
+      description: 'Fetch up to ten complete original ads and company facts, updating local display terms only. Apply the current assessmentPolicy from career_match_jobs: assess actual responsibility and transferable routine competencies, not missing keyword-level facets. Reserve clarify for material unresolved specialties, credentials, legal eligibility or decisive scope. Enforce the saved salary floor against comparable stated pay. Preserve the active target, exceptions, exclusions, independent location classification and full-ad reasoning. Follow remainingIds and unavailableIds; scripts transport data, never generate judgments.',
       inputSchema: object({ ids: { type: 'array', items: idSchema, minItems: 1, maxItems: 10, uniqueItems: true } }, ['ids']), readOnly: false,
       async invoke(args = {}) {
         assertObject(args, ['ids'], ['ids']);
@@ -228,7 +232,7 @@ export function createMatchingTools({ store, platform, exportDocument }) {
     },
     {
       name: 'career_match_save',
-      description: 'Save up to ten model-authored full-ad assessments with one profileVersion from career_match_jobs, or the same numeric evidenceRevision from local career_profile_read. Evidence/preference changes reject the entire outdated batch with PROFILE_CHANGED; reread context and reassess only affected jobs. Each row requires decision recommend|clarify|skip: recommend means evidenced suitability for the ACTIVE career target, essential qualifications and non-location exclusions with no material unresolved obstacle; decisive unknown essentials/scope mean clarify; demonstrated mismatch or exclusion means skip. Location remains separate and never lowers score or changes this decision. Use an evidence-supported integer 0–100 overall fit, not keyword capability or title formulas. Required experience/depth is not skill-list familiarity; leadership cannot erase missing essential specialty. Every integer is valid; fully evidenced fit can be 100 without inventing deficits or future-interview uncertainty. Zero means genuine no-fit/hard non-location exclusion and requires skip; null is only for unavailable originals and requires clarify. No thresholds, bonuses, fixed caps or forced distributions turn a job into a recommendation. Scores and decisions must be coherent. Explicit narrower/transition targets replace prior direction within their scope; also-open-to exceptions merely expand scope. Otherwise maintain comparable-or-higher responsibility; senior IC exceptions need substantive authority. Vague leadership is unknown. Save all assessments; validation and persistence do not audit reasoning.',
+      description: 'Save up to ten model-authored full-ad judgments with profileVersion from career_match_jobs. The current assessmentVersion is recorded automatically; old judgments need genuine reranking, not retagging. Infer ordinary duties from demonstrated scope; do not manufacture granular clarification gates. Keep material specialist gaps honest. Known comparable stated pay below salaryMinimum requires skip and score 0; missing pay alone is not rejection. No score threshold, forced grade, formula, quota or title baseline. Changed preferences reject stale batches with PROFILE_CHANGED.',
       inputSchema: object({
         profileVersion: { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER },
         scores: { type: 'array', items: scoreSchema, minItems: 1, maxItems: 10 },
@@ -253,8 +257,13 @@ export function createMatchingTools({ store, platform, exportDocument }) {
             fail('PROFILE_CHANGED', 'Candidate evidence or preferences changed. Read career_profile_read and current facts, or career_match_jobs, reassess these jobs and save with the current profileVersion. Existing assessments are unchanged.');
           const saved = matching(career);
           assertKnown({ ...saved.jobs, ...saved.scores }, args.scores.map(row => row.id));
+          for (const row of args.scores) {
+            const pay = salaryEligibility(career.profile?.preferences, saved.jobs[row.id]?.salary);
+            if (row.score !== null && pay.status === 'below_minimum' && (row.decision !== 'skip' || row.score !== 0))
+              fail('SALARY_BELOW_MINIMUM', `${row.id}: stated pay ceiling ${pay.upperBound} ${pay.currency}/${pay.period} is below the minimum ${pay.minimum}. Record skip with score 0, not a recommendation or clarification.`);
+          }
           const scoredAt = new Date().toISOString();
-          for (const row of args.scores) saved.scores[row.id] = { ...row, profileVersion: args.profileVersion, scoredAt };
+          for (const row of args.scores) saved.scores[row.id] = { ...row, profileVersion: args.profileVersion, assessmentVersion: ASSESSMENT_VERSION, scoredAt };
         });
         return { saved: args.scores.length };
       },
@@ -270,16 +279,16 @@ export function createMatchingTools({ store, platform, exportDocument }) {
           fail('INVALID_INPUT', 'Use limit 1–100 and a nonnegative integer offset.');
         const career = readCareer(store), saved = matching(career);
         const profileVersion = career.evidenceRevision ?? 0;
-        const rows = rankedRows(saved, career.profile?.preferences?.willingToRelocate, profileVersion);
+        const rows = rankedRows(saved, career.profile?.preferences, profileVersion);
         const matches = rows.slice(offset, offset + limit);
-        return { view: 'assessment_archive', matches, total: rows.length,
+        return { view: 'assessment_archive', matches, total: rows.length, assessmentVersion: ASSESSMENT_VERSION,
           nextOffset: offset + matches.length < rows.length ? offset + matches.length : null,
           ...counts(saved.jobs, saved.scores, profileVersion) };
       },
     },
     {
       name: 'career_recommendations',
-      description: 'Read only current model-authored recommend decisions with compatible location or explicit relocation consent. No network, inference or payment. Ordered by unchanged score/date descending then ID. Never pads with clarify, skip, stale, legacy, zero or unavailable assessments; an empty list is valid. Counts distinguish saved coverage from assessments needing review. Use career_matches and career_matches_export for the complete assessment archive. Before next-application or CV selection, review the complete original ad and current evidence; a saved decision does not prove assessment quality.',
+      description: 'Read recommendations assessed under the current profile and policy, with compatible location and no comparable stated pay below salaryMinimum. Unknown salary alone does not exclude; do not claim non-comparable pay meets the floor. Old judgments are needs_review until the host reranks them. No inference, network or payment. Use career_matches for the full archive. When needsReview is nonzero, an empty current list does not mean the candidate has no suitable jobs.',
       inputSchema: object({ limit: { type: 'integer', minimum: 1, maximum: 100 }, offset: { type: 'integer', minimum: 0 } }), readOnly: true,
       async invoke(args = {}) {
         assertObject(args, ['limit', 'offset']);
@@ -287,11 +296,11 @@ export function createMatchingTools({ store, platform, exportDocument }) {
         if (!Number.isInteger(limit) || limit < 1 || limit > 100 || !Number.isSafeInteger(offset) || offset < 0)
           fail('INVALID_INPUT', 'Use limit 1–100 and a nonnegative integer offset.');
         const career = readCareer(store), saved = matching(career), profileVersion = career.evidenceRevision ?? 0;
-        const rows = rankedRows(saved, career.profile?.preferences?.willingToRelocate, profileVersion)
+        const rows = rankedRows(saved, career.profile?.preferences, profileVersion)
           .filter(row => row.reviewStatus === 'current' && row.decision === 'recommend' &&
-            ['eligible', 'requires_relocation'].includes(row.matchStatus));
+            row.salaryEligibility.status !== 'below_minimum' && ['eligible', 'requires_relocation'].includes(row.matchStatus));
         const recommendations = rows.slice(offset, offset + limit);
-        return { recommendations, total: rows.length,
+        return { recommendations, total: rows.length, assessmentVersion: ASSESSMENT_VERSION,
           nextOffset: offset + recommendations.length < rows.length ? offset + recommendations.length : null,
           ...counts(saved.jobs, saved.scores, profileVersion) };
       },
@@ -305,7 +314,7 @@ export function createMatchingTools({ store, platform, exportDocument }) {
         if (typeof exportDocument !== 'function') fail('EXPORT_UNAVAILABLE', 'Local document export is unavailable. Read all career_matches pages instead.');
         const career = readCareer(store), saved = matching(career);
         const profileVersion = career.evidenceRevision ?? 0;
-        const rows = rankedRows(saved, career.profile?.preferences?.willingToRelocate, profileVersion);
+        const rows = rankedRows(saved, career.profile?.preferences, profileVersion);
         const coverage = counts(saved.jobs, saved.scores, profileVersion);
         const exported = await exportDocument({ bytes: rankingCSV(rows), mediaType: 'text/csv' });
         return { view: 'assessment_archive', total: rows.length, ...coverage, export: { ...exported, mediaType: 'text/csv' } };

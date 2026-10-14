@@ -888,3 +888,36 @@ test('PDF export refuses actual lost text before publishing while keeping the dr
   assert.deepEqual(f.store.get(), before);
   assert.deepEqual(f.exported, []);
 });
+
+test('broad product ownership can support a routine competency CV without candidate task confirmations', async t => {
+  const f = await fixture(t);
+  f.job.title = 'Product Manager';
+  f.job.description = 'Run user interviews, usability validation and product experiments.';
+  f.job.contentHash = digest(f.job.description);
+  const scope = 'Owned product strategy, discovery workshops, customer feedback, analytics and launch delivery.';
+  const added = await f.profileCall('facts_add', f.mutation({ facts: [{
+    kind: 'experience', employer: 'Acme', role: 'Engineer', startDate: '2018', endDate: '2024',
+    statement: scope, source: { kind: 'conversation', quote: scope },
+  }] }));
+  const app = await f.create();
+  const ctx = await f.call('application_context', { applicationId: app.applicationId });
+  const entry = ctx.application.baseline.entries.find(row => row.text.includes('Acme'));
+  const capability = 'Owned end-to-end product discovery, prioritisation and validation.';
+  const scopeRef = { kind: 'fact', factId: added.facts[0].id };
+  await f.saveCv(app, { changes: [{ entryId: entry.id,
+    text: entry.text.replace('Built reliable data services.', capability), evidence: [scopeRef] }],
+    evidence: [f.candidateRef, scopeRef] });
+  for (const kind of ['screening', 'adversarial']) await f.review(app, kind, {
+    score: 90, summary: 'Routine product competencies follow from actual end-to-end ownership.',
+    requirements: [{ jobQuote: f.job.description, priority: 'required', coverage: 'supported',
+      cvQuote: capability, evidence: [scopeRef], action: 'none',
+      note: 'Capability is supported by product ownership, discovery workshops, customer feedback and delivery; no particular historical study or metric is asserted.' }],
+  });
+  const current = (await f.call('application_read', { applicationId: app.applicationId })).application;
+  assert.equal(current.reviewReadiness.ready, true);
+  assert.deepEqual(current.questions, []);
+  assert.deepEqual(current.reviewReadiness.unresolvableGaps, []);
+  const exported = await f.call('application_export', f.mutation({ ...f.binding(app), kind: 'cv' }));
+  assert.equal(exported.export.textValidation.passed, true);
+  assert.equal(f.store.get().career.facts[scopeRef.factId].statement, scope);
+});

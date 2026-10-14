@@ -1,6 +1,6 @@
 # Recruiters.rip Companion
 
-The local career-data app for Recruiters.rip. Version 3.4.2 persists candidate-authorial application writing and target-content trust boundaries while retaining saved career-location corrections and the existing vault format.
+The local career-data app for Recruiters.rip. This is a POC: prioritize the current working flow, not old-version compatibility or preserving obsolete generated data. Version 3.4.3 fixes salary-floor eligibility and responsibility-level competency inference.
 
 ## Account and installation
 
@@ -17,7 +17,15 @@ This repository owns the Electron app, encrypted local vault, MCP server and lau
 
 CVs, profile facts, assessments and drafts stay in the local encrypted vault. Fresh job data requires current paid membership; saved local data remains available without payment. Exported PDFs, CSVs and backups are ordinary files: choose a private destination. Do not commit vaults, exports, credentials, certificates, or user data.
 
-Installed identity is intentionally unchanged: app ID `rip.recruiters.companion`, displayed app **Recruiters.rip Companion**, Electron storage/keychain name **Recruiters Companion**, protocol `recruiters-companion://`, and production vault `~/Library/Application Support/Recruiters Companion/device` on macOS. Never reset or relocate that vault during an upgrade.
+Current installed identity: app ID `rip.recruiters.companion`, displayed app **Recruiters.rip Companion**, Electron storage/keychain name **Recruiters Companion**, protocol `recruiters-companion://`, and macOS vault `~/Library/Application Support/Recruiters Companion/device`. This is not a legacy-compatibility guarantee: obsolete POC state can be discarded when a breaking change requires it. Keep tests isolated from the real vault and never weaken key-storage protections.
+
+## Recommendation policy
+
+A positive saved `salaryMinimum` is a hard floor. Comparable stated pay below it cannot enter recommendations, regardless of the model score or an older note describing salary as flexible. The server rejects a nonzero/recommend/clarify save for that known mismatch. Ranges that reach the floor remain possible; missing salary does not exclude a role. Currency or hourly/day-rate uncertainty is not silently converted into a budget claim.
+
+Assess the whole career and actual scope, not exact task keywords. Sustained end-to-end product ownership with discovery workshops, customer work and delivery supports ordinary discovery, interviewing, usability-validation and experimentation capabilities. Those routine facets do not need individual confirmations or reduce fit merely because their precise words were absent. Specific historical studies, metrics, credentials and genuine specialist expertise must not be invented.
+
+Assessment policy 1 is a clean cutover: earlier judgments are `needs_review`, not current recommendations. They are not migrated or automatically rescored. In a fresh Codex conversation with the updated plugin, explicitly request a full rerank using `career_match_jobs({refresh:true})`, read complete originals, and save newly reasoned judgments with its `profileVersion`. Career facts and scores are not rewritten by installing the update.
 
 ## CV customization
 
@@ -65,10 +73,10 @@ This creates signed, notarized macOS ARM64 ZIP and DMG artifacts under `dist/rel
 
 If signing credentials are unavailable, explicitly use `pnpm package:adhoc`. It builds production-origin ZIP and DMG artifacts under `dist/adhoc/` with ad-hoc signing and **no notarization**; Gatekeeper may block them. Do not describe these as notarized releases or silently disable OS protections.
 
-Artifact basenames are `recruiters-rip-companion-3.4.2-mac-arm64.zip` and `.dmg`. The website operator mounts the actual ZIP on its private host volume and sets `COMPANION_INSTALLER_PATH`; `/api/companion/download` serves that file. A private GitHub repository is not a public installer URL.
+Artifact basenames are `recruiters-rip-companion-3.4.3-mac-arm64.zip` and `.dmg`. The website operator mounts the actual ZIP on its private host volume and sets `COMPANION_INSTALLER_PATH`; `/api/companion/download` serves that file. A private GitHub repository is not a public installer URL.
 
 ## Document source and asset notices
 
 The owned document closure in `src/documents/` consists of `candidate-document-codec.ts`, `candidate-document-provenance.ts`, `cv-source-baseline.ts`, `cv-document-layout.ts`, and `career-pdf.ts`. The codec owns the canonical preference-field list; no SQL/helper/service module is imported. Its legacy schema semantics remain on the explicit `ajv-legacy` alias (Ajv 6.12.6), separate from MCP's Ajv 8. TypeScript is an explicit build dependency.
 
-`src/documents/assets/NotoSans-Regular.ttf` is Copyright 2018 The Noto Project Authors, distributed under the SIL Open Font License 1.1 in the adjacent `OFL.txt`; both are included in the app. `job-screening-prompt.txt` preserves the existing screening rubric. The app icon and source were migrated from the JobStash prototype; no separate third-party icon license was supplied. CareerCup is a layout reference linked by the conversation skill, not a bundled CareerCup document or asset. Dependency licenses remain with their npm packages.
+`src/documents/assets/NotoSans-Regular.ttf` is Copyright 2018 The Noto Project Authors, distributed under the SIL Open Font License 1.1 in the adjacent `OFL.txt`; both are included in the app. `job-screening-prompt.txt` contains the screening rubric; 3.4.3 clarifies routine competency inference without changing its dimensions or weights. The app icon and source were migrated from the JobStash prototype; no separate third-party icon license was supplied. CareerCup is a layout reference linked by the conversation skill, not a bundled CareerCup document or asset. Dependency licenses remain with their npm packages.

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import Ajv from 'ajv';
 import { createMatchingTools } from '../src/mcp/matching-tools.mjs';
 import { createCareerState } from '../src/mcp/state.mjs';
+import { ASSESSMENT_VERSION, salaryEligibility } from '../src/mcp/assessment-policy.mjs';
 
 const publishedAt = new Date(Date.now() - 86400000).toISOString();
 const job = (id, date = publishedAt) => ({ id: `node:${id}`, title: `Engineer ${id}`, company: 'Company', publishedAt: date });
@@ -65,9 +66,9 @@ test('candidate brief contains chronological professional facts and current pref
   assert.equal(result.candidate.preferences.willingToRelocate, false);
   assert.equal(result.candidate.preferences.salaryMinimum, 0);
   assert.equal(result.candidate.location, 'Dublin');
-  assert.equal(JSON.stringify(result).includes('PRIVATE'), false);
-  assert.equal(JSON.stringify(result).includes('private'), false);
-  assert.equal(JSON.stringify(result.candidate).includes('quote'), false);
+  for (const secret of ['PRIVATE NAME', 'private@example.test', '+353 123 456 789', 'https://private.test', 'PRIVATE FULL CV', 'PRIVATE PDF', 'PRIVATE SOURCE QUOTE'])
+    assert.equal(JSON.stringify(result).includes(secret), false);
+  assert.ok(result.candidate.facts.every(row => row.source === undefined));
   assert.deepEqual({ total: result.total, scored: result.scored, pending: result.pending, batchSize: result.batchSize, workers: result.workers },
     { total: 3, scored: 0, pending: 3, batchSize: 10, workers: 8 });
   assert.deepEqual(f.calls, [{ operation: 'matching_catalogue', args: {} }]);
@@ -167,14 +168,14 @@ test('missing original ads stay explicit and empty catalogues return honest zero
   await f.call('career_match_save', { profileVersion: 0, scores: [score('a', null)] });
   const unavailable = await f.call('career_matches');
   assert.deepEqual({ ...unavailable, matches: unavailable.matches.map(row => [row.id, row.score]) },
-    { view: 'assessment_archive', matches: [['node:a', null]], total: 1, nextOffset: null,
+    { view: 'assessment_archive', matches: [['node:a', null]], total: 1, assessmentVersion: ASSESSMENT_VERSION, nextOffset: null,
       scored: 0, pending: 0, unavailable: 1, reviewed: 1, needsReview: 0 });
   const empty = fixture({ jobs: [] });
   const catalogue = await empty.call('career_match_jobs');
   assert.deepEqual(catalogue.jobIds, []);
   assert.equal(catalogue.total, 0);
   assert.equal(catalogue.pending, 0);
-  assert.deepEqual(await empty.call('career_matches'), { view: 'assessment_archive', matches: [], total: 0,
+  assert.deepEqual(await empty.call('career_matches'), { view: 'assessment_archive', matches: [], total: 0, assessmentVersion: ASSESSMENT_VERSION,
     nextOffset: null, scored: 0, pending: 0, unavailable: 0, reviewed: 0, needsReview: 0 });
 });
 
@@ -206,8 +207,8 @@ test('eligibility precedes fit without filtering records or changing saved asses
     assert.equal(result.nextOffset, null);
     assert.deepEqual(f.store.get().career.matching, saved);
     for (const row of result.matches)
-      for (const [field, value] of Object.entries(saved.scores[row.id]))
-        if (field !== 'profileVersion') assert.deepEqual(row[field], value);
+      for (const field of ['score', 'decision', 'reason', 'relocation', 'scoredAt'])
+        assert.deepEqual(row[field], saved.scores[row.id][field]);
     return result.matches.map(row => [row.id, row.score, row.matchStatus]);
   };
   const noRelocation = [
@@ -345,7 +346,6 @@ test('catalogue display terms survive score saves, refresh, feed replacement and
   const discovery = await f.call('career_match_jobs');
   assert.deepEqual(discovery.jobIds, ['node:a', 'node:b', 'node:c']);
   assert.equal(discovery.jobs, undefined);
-  assert.equal(JSON.stringify(discovery).includes('"salary"'), false);
   await f.call('career_match_save', { profileVersion: 0, scores: [score('a', 90), score('b', 80), score('c', 70)] });
   const partialTerms = { ...missingTerms,
     salary: { minimum: null, maximum: null, stated: 0, currency: null, period: null }, location: 'Ireland' };
@@ -422,20 +422,6 @@ test('score submissions cannot replace catalogue display terms', async () => {
   assert.deepEqual(termsOf((await f.call('career_matches')).matches[0]), statedTerms);
 });
 
-test('older local rows expose null terms without fetching or migrating the vault', async () => {
-  const f = fixture();
-  await f.store.update(state => {
-    state.career.matching = { jobs: { 'node:a': job('a') },
-      scores: { 'node:a': { ...score('a'), scoredAt: publishedAt } } };
-  });
-  f.setPlatformError(new Error('Offline'));
-  const before = f.store.get();
-  const saved = await f.call('career_matches');
-  assert.deepEqual(saved.matches, [{ ...job('a'), applyUrl: null, ...score('a'), scoredAt: publishedAt, ...missingTerms,
-    matchStatus: 'needs_location_confirmation', reviewStatus: 'needs_review' }]);
-  assert.deepEqual(f.store.get(), before);
-  assert.deepEqual(f.calls, []);
-});
 
 function parseCSV(text) {
   const records = [];
@@ -779,7 +765,7 @@ test('recommendation order is score then known publication date then ID and unst
         score('unknown', 80, 'not_required'), score('older', 80, 'not_required'),
         score('new-b', 80, 'not_required'), score('new-a', 80, 'not_required'),
         score('highest', 100, 'not_required'), score('move', 100, 'required'),
-      ].map(row => [row.id, { ...row, profileVersion: 0 }])),
+      ].map(row => [row.id, { ...row, profileVersion: 0, assessmentVersion: ASSESSMENT_VERSION }])),
     };
   });
   const expected = ['node:highest', 'node:new-a', 'node:new-b', 'node:older', 'node:unknown'];
@@ -787,4 +773,86 @@ test('recommendation order is score then known publication date then ID and unst
   await f.store.update(state => { state.career.profile.preferences.willingToRelocate = null; });
   assert.deepEqual((await f.call('career_recommendations')).recommendations.map(row => row.id), expected);
   assert.deepEqual(f.calls, []);
+});
+
+test('stated compensation below the saved floor cannot be recommended or saved as a clarification', async () => {
+  const f = fixture({ jobs: [
+    { ...job('low'), salary: { minimum: 85000, maximum: 85000, currency: 'EUR', period: 'year' } },
+    { ...job('range'), salary: { minimum: 85000, maximum: 120000, currency: 'EUR', period: 'year' } },
+    job('unstated'),
+  ] });
+  await f.store.update(state => Object.assign(state.career.profile.preferences, {
+    salaryMinimum: 100000, salaryCurrency: 'EUR', salaryPeriod: 'year', notes: 'Salary is not critical.',
+  }));
+  await f.call('career_match_jobs');
+  const before = f.store.get();
+  for (const decision of ['recommend', 'clarify']) {
+    await assert.rejects(f.call('career_match_save', { profileVersion: 0,
+      scores: [score('range', 90, 'not_required'), score('low', 90, 'not_required', decision)] }),
+    { code: 'SALARY_BELOW_MINIMUM' });
+    assert.deepEqual(f.store.get(), before);
+  }
+  await f.call('career_match_save', { profileVersion: 0,
+    scores: [score('low', 0, 'not_required'), score('range', 90, 'not_required'), score('unstated', 80, 'not_required')] });
+  const ready = await f.call('career_recommendations');
+  assert.deepEqual(ready.recommendations.map(row => row.id), ['node:range', 'node:unstated']);
+  assert.equal(ready.recommendations[0].salaryEligibility.status, 'range_can_meet_minimum');
+  assert.equal(ready.recommendations[1].salaryEligibility.status, 'not_stated');
+});
+
+test('a changed stated salary is filtered before paging without rewriting the saved model score', async () => {
+  const f = fixture({ jobs: [
+    { ...job('a'), salary: { minimum: 110000, maximum: 120000, currency: 'EUR', period: 'year' } },
+    { ...job('b'), salary: { minimum: 100000, maximum: 100000, currency: 'EUR', period: 'year' } },
+  ] });
+  await f.store.update(state => Object.assign(state.career.profile.preferences,
+    { salaryMinimum: 100000, salaryCurrency: 'EUR', salaryPeriod: 'year' }));
+  await f.call('career_match_jobs');
+  await f.call('career_match_save', { profileVersion: 0, scores: [score('a', 99, 'not_required'), score('b', 80, 'not_required')] });
+  await f.store.update(state => { state.career.matching.jobs['node:a'].salary.maximum = 90000; state.career.matching.jobs['node:a'].salary.minimum = 85000; });
+  const before = f.store.get();
+  const page = await f.call('career_recommendations', { limit: 1 });
+  assert.equal(page.total, 1);
+  assert.equal(page.nextOffset, null);
+  assert.equal(page.recommendations[0].id, 'node:b');
+  assert.equal((await f.call('career_matches')).matches.find(row => row.id === 'node:a').salaryEligibility.status, 'below_minimum');
+  assert.equal(f.store.get().career.matching.scores['node:a'].score, 99);
+  assert.deepEqual(f.store.get(), before);
+});
+
+test('old-rule judgments require reranking even when candidate facts did not change', async () => {
+  const f = fixture({ jobs: [job('a')] });
+  await f.call('career_match_jobs');
+  await f.store.update(state => { state.career.matching.scores['node:a'] = { ...score('a', 95, 'not_required'), profileVersion: 0 }; });
+  const before = f.store.get();
+  const old = await f.call('career_recommendations');
+  assert.equal(old.total, 0);
+  assert.equal(old.needsReview, 1);
+  assert.equal((await f.call('career_matches')).matches[0].reviewStatus, 'needs_review');
+  assert.deepEqual(f.store.get(), before);
+  const current = await f.call('career_match_jobs');
+  assert.deepEqual(current.jobIds, ['node:a']);
+  await f.call('career_match_save', { profileVersion: current.profileVersion, scores: [score('a', 95, 'not_required')] });
+  assert.equal(f.store.get().career.matching.scores['node:a'].assessmentVersion, ASSESSMENT_VERSION);
+  assert.equal((await f.call('career_recommendations')).total, 1);
+});
+
+test('compensation comparison uses stated units, never invented exchange rates or annual working hours', () => {
+  const minimum = { salaryMinimum: 100000, salaryCurrency: 'EUR', salaryPeriod: 'year' };
+  assert.equal(salaryEligibility(minimum, { maximum: 95000, currency: 'EUR', period: 'year' }).status, 'below_minimum');
+  assert.equal(salaryEligibility(minimum, { stated: 100000, currency: 'EUR', period: 'year' }).status, 'range_can_meet_minimum');
+  assert.equal(salaryEligibility(minimum, { minimum: 8000, maximum: 8000, currency: 'EUR', period: 'month' }).status, 'below_minimum');
+  assert.equal(salaryEligibility(minimum, { minimum: 8500, maximum: 8500, currency: 'EUR', period: 'month' }).status, 'range_can_meet_minimum');
+  assert.equal(salaryEligibility(minimum, { minimum: 85000, currency: 'EUR', period: 'year' }).status, 'unbounded_range');
+  assert.equal(salaryEligibility(minimum, { stated: 150000, currency: 'USD', period: 'year' }).status, 'not_comparable');
+  assert.equal(salaryEligibility(minimum, { stated: 100, currency: 'EUR', period: 'hour' }).status, 'not_comparable');
+  assert.equal(salaryEligibility(minimum, { minimum: 120000, maximum: 85000, currency: 'EUR', period: 'year' }).status, 'not_comparable');
+});
+
+test('career context retains the full scope of long professional facts', async () => {
+  const f = fixture();
+  const statement = 'Owned the product and delivery. '.repeat(40) + 'Led customer discovery and coached the product team.';
+  await f.store.update(state => { state.career.facts.recent.statement = statement; });
+  const context = await f.call('career_match_jobs');
+  assert.equal(context.candidate.facts.find(row => row.startDate === '2023').statement, statement);
 });

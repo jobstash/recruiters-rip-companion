@@ -14,8 +14,10 @@ Prioritize concrete actions, ownership, decision-making authority, scope and out
 - Owning a decision or budget from supporting or administering it.
 - Direct experience from adjacent, transferable experience.
 A skills-list mention supports familiarity, not necessarily production expertise. CV claims are documented claims, not independently verified facts.
+Infer ordinary constituent competencies from the combined demonstrated responsibility, actual ownership, delivered outcomes and career breadth. End-to-end product ownership with discovery/design workshops, customer engagement and delivery supports routine product discovery, user interviews, usability validation, prioritisation and experimentation capability; do not demand a separate verbatim CV bullet for every facet or lower fit because that exact phrase is absent. Use seniority in context, not a title alone. Distinguish capability inference from claims of a specific historical study, experiment programme, vendor, metric, credential or management layer, which must not be invented.
 3. Handle missing information explicitly.
 “Not documented” does not mean “cannot do it.”
+Unknown is reserved for a material requirement that the broader record cannot reasonably resolve. Do not turn an implied routine duty into a validation question, a qualification blocker or an unresolvable gap. For CV wording, express supported broad responsibilities and competencies directly and keep the underlying inference private.
 Distinguish confirmed compatibility, confirmed mismatch and unknown information.
 When a metric cannot meaningfully be assessed, assign 0 as an unknown placeholder, mark its status as "unknown" and exclude it from the overall calculation. This 0 is not a finding of average fit.
 Only company-size and company-phase dimensions may be genuinely not_applicable, with an explanation and explicit role citation establishing why the environment is irrelevant. Missing company context is unknown. The five core dimensions always apply; missing evidence is unknown, never inapplicable.

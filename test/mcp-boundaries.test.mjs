@@ -12,6 +12,7 @@ import { createProfileTools } from '../src/mcp/profile-tools.mjs';
 import { createMcpServer } from '../src/mcp/server.mjs';
 import { createDocumentFiles, readSelectedSource } from '../src/mcp/files.mjs';
 import { createMatchingTools } from '../src/mcp/matching-tools.mjs';
+import { ASSESSMENT_VERSION } from '../src/mcp/assessment-policy.mjs';
 
 function fixture() {
   let state = { deviceId: randomUUID(), career: createCareerState(), pairing: { account: { id: 'first-owner' } } }, queue = Promise.resolve(), epoch = 0, paused = false;
@@ -94,8 +95,8 @@ test('complete CSV export uses native MCP resources alongside existing PDF expor
   await f.store.update(state => {
     state.career.profile.preferences.willingToRelocate = false;
     state.career.matching = { jobs: {}, scores: {
-      'node:ny': { id: 'node:ny', score: 88, relocation: 'required', decision: 'recommend', profileVersion: 0, reason: 'New York office required' },
-      'node:compatible': { id: 'node:compatible', score: 79, relocation: 'not_required', decision: 'skip', profileVersion: 0, reason: 'Compatible location but unsuitable scope' },
+      'node:ny': { id: 'node:ny', score: 88, relocation: 'required', decision: 'recommend', profileVersion: 0, assessmentVersion: ASSESSMENT_VERSION, reason: 'New York office required' },
+      'node:compatible': { id: 'node:compatible', score: 79, relocation: 'not_required', decision: 'skip', profileVersion: 0, assessmentVersion: ASSESSMENT_VERSION, reason: 'Compatible location but unsuitable scope' },
       'node:unclear': { id: 'node:unclear', score: 95, relocation: 'unclear', reason: 'Needs location confirmation' },
       'node:older': { id: 'node:older', score: 0, relocation: 'required', reason: 'Excluded,\nnot recommended' },
       'node:missing': { id: 'node:missing', score: null, relocation: 'unclear', reason: 'Ad unavailable' },

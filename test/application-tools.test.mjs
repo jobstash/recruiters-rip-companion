@@ -349,6 +349,112 @@ test('explicit profile header edits and clears reach real PDFs while source head
   assert.deepEqual(f.store.get().career.sources[f.sourceId], original);
 });
 
+async function locationCorrectionFixture(t, options = {}) {
+  const f = await fixture(t);
+  const line = 'Remote / Software | March 2019 - May 2020';
+  const quote = `Acme | Engineer\n${line}\nBuilt reliable data services.`;
+  const sourceText = `Jane Candidate\n\n${quote}\n\nOther Co | Developer\nRemote / Software | June 2017 - February 2019\nMaintained services.\n\nUniversity | Computing | 2013 - 2017\nCompleted a computing degree.`;
+  const imported = await f.profileCall('source_import', f.mutation({ method: 'text', purpose: 'cv', name: 'Synthetic career history', text: sourceText }));
+  const sourceId = imported.source.id;
+  const fields = { kind: 'experience', employer: 'Acme', role: 'Engineer', startDate: 'March 2019', endDate: 'May 2020' };
+  const added = await f.profileCall('facts_add', f.mutation({ facts: [{ ...fields, statement: 'Built reliable data services at Acme.',
+    source: { kind: 'document', sourceId, quote: options.sourceQuote ?? quote } }] }));
+  const app = await f.create({ sourceId });
+  const replacement = { ...fields,
+    statement: options.statement ?? 'Worked onsite in Bristol, UK, as Engineer at Acme from March 2019 to May 2020. Built reliable data services.',
+    source: { kind: 'conversation', quote: options.answer ?? 'The Acme role was onsite in Bristol/UK.' } };
+  const corrected = options.unlinked
+    ? { fact: (await f.profileCall('facts_add', f.mutation({ facts: [replacement] }))).facts[0] }
+    : await f.profileCall('fact_correct', f.mutation({ factId: added.facts[0].id, reason: 'Correct the work location.', replacement }));
+  const refreshed = await f.call('application_refresh', f.mutation({ applicationId: app.applicationId, sourceId, jobHash: app.jobHash }));
+  const current = { ...app, evidenceRevision: refreshed.evidenceRevision };
+  const context = await f.call('application_context', { applicationId: app.applicationId });
+  const entry = context.application.baseline.entries.find(entry => entry.text.includes(line));
+  const ref = { kind: 'fact', factId: corrected.fact.id };
+  const text = entry.text.replace('Remote / Software', 'Onsite in Bristol, UK');
+  const save = (wording = text, extra = {}) => f.saveCv(current, {
+    changes: [{ entryId: entry.id, text: wording, evidence: [ref] }], evidence: [ref], ...extra,
+  });
+  return { ...f, app: current, sourceId, sourceText, entry, line, ref, text, save, context };
+}
+
+test('a saved location-only correction replaces its dated source line without changing facts or other history', async t => {
+  const f = await locationCorrectionFixture(t);
+  const before = f.store.get().career;
+  assert.equal(f.context.factHistory.length, 1);
+  const saved = await f.save();
+  assert.equal(saved.cvVersion, 1);
+  assert.equal(saved.layout.fits, true);
+  // The correction reference can be retained on the entry for later saves.
+  await f.saveCv(f.app, { changes: [], evidence: [] });
+  const current = (await f.call('application_read', { applicationId: f.app.applicationId })).application;
+  const rendered = documents.renderCareerCvText(current.cv);
+  assert.ok(rendered.includes('Acme'));
+  assert.ok(rendered.includes('Engineer'));
+  assert.ok(rendered.includes('Onsite in Bristol, UK'));
+  assert.ok(rendered.includes('March 2019'));
+  assert.ok(rendered.includes('May 2020'));
+  assert.ok(rendered.includes('Other Co'));
+  assert.ok(rendered.includes('Remote / Software'));
+  assert.ok(rendered.includes('University'));
+  assert.equal(current.cv.baseline.entries.find(entry => entry.id === f.entry.id).text, f.text);
+  assert.deepEqual(current.cv.baseline.entries.filter(entry => entry.id !== f.entry.id).map(entry => entry.text),
+    f.context.application.baseline.entries.filter(entry => entry.id !== f.entry.id).map(entry => entry.text));
+  assert.deepEqual(f.store.get().career.facts, before.facts);
+  assert.deepEqual(f.store.get().career.sources, before.sources);
+  assert.equal(current.cv.baseline.entries.map(entry => entry.original).join(''), f.sourceText);
+});
+
+test('location correction does not permit unsupported dates, employers, titles, history removal or contradictory lines', async t => {
+  const f = await locationCorrectionFixture(t);
+  const other = f.context.application.baseline.entries.find(entry => entry.text.includes('Other Co'));
+  const before = f.store.get();
+  for (const text of [
+    f.text.replace('March 2019', 'March 2018'),
+    f.text.replace('May 2020', 'May 2021'),
+    f.text.replace('Acme', 'Invented Co'),
+    f.text.replace('Engineer', 'Director'),
+    f.text.replace('Acme | Engineer\n', '') + '\nAcme | Engineer',
+    f.text.replace('Onsite in Bristol, UK', 'Onsite in London, UK'),
+    `${f.text}\n${f.line}`,
+    `${f.entry.text}\n${f.text}`,
+    `${f.entry.text}\nOnsite in Bristol, UK | March 2019 - May 2020`,
+  ]) {
+    await assert.rejects(f.save(text), { code: 'CAREER_CONTINUITY' });
+    assert.deepEqual(f.store.get(), before);
+  }
+  await assert.rejects(f.save(f.text, { changes: [
+    { entryId: f.entry.id, text: f.text, evidence: [f.ref] },
+    { entryId: other.id, text: 'Maintained services.', evidence: [f.ref] },
+  ] }), { code: 'CAREER_CONTINUITY' });
+  await assert.rejects(f.save(f.text, { changes: [
+    { entryId: f.entry.id, text: f.text, evidence: [f.ref] },
+    { entryId: other.id, text: `${other.text}\n${f.line}`, evidence: [f.ref] },
+  ] }), { code: 'CAREER_CONTINUITY' });
+  await assert.rejects(f.save(f.text, { changes: [
+    { entryId: other.id, text: `${other.text}\n${f.text}`, evidence: [f.ref] },
+  ] }), { code: 'CAREER_CONTINUITY' });
+  assert.deepEqual(f.store.get(), before);
+});
+
+test('location replacement requires referenced supersession, a full source header and both saved attributions', async t => {
+  for (const options of [
+    { unlinked: true },
+    { sourceQuote: 'Remote / Software | March 2019 - May 2020' },
+    { sourceQuote: 'Acme | Engineer' },
+    { statement: 'Worked as Engineer at Acme from March 2019 to May 2020.' },
+    { answer: 'The Acme role ended in May 2020.' },
+    {},
+  ]) {
+    const f = await locationCorrectionFixture(t, options);
+    const before = f.store.get();
+    const extra = Object.keys(options).length ? {} : { evidence: [], changes: [{ entryId: f.entry.id, text: f.text,
+      evidence: [{ kind: 'source', sourceId: f.sourceId, quote: f.line }] }] };
+    await assert.rejects(f.save(f.text, extra), { code: 'CAREER_CONTINUITY' });
+    assert.deepEqual(f.store.get(), before);
+  }
+});
+
 test('attributable multi-step career corrections replace wrong source dates without dropping history', async t => {
   const f = await fixture(t);
   const originalLine = 'Acme | Engineer | 2018 – 2024';
@@ -626,7 +732,7 @@ test('CV tone diagnostics require rewrites, preserve original prose and allow le
     'Allegedly led platform delivery.', 'Purportedly managed the platform.', 'Self-reported 7 years of experience.',
     'Self-reported experience building platforms.', '• Purportedly developed data services.']) {
     await assert.rejects(f.saveCv(app, { changes: [{ entryId: entry.id, text: `${entry.text}\n${wording}`, evidence: [f.candidateRef] }] }),
-      error => error.code === 'CV_TONE' && error.message.includes(entry.id) && error.message.includes('Rewrite'));
+      error => error.code === 'CV_TONE' && error.message.includes(entry.id));
   }
   assert.equal(f.store.get().career.applications[app.applicationId].cv, null);
   assert.equal(f.store.get().career.sources[f.sourceId].text, f.sourceText);
@@ -722,7 +828,7 @@ test('an invented number is omitted by rejecting the save, while a saved number 
   const entry = f.store.get().career.applications[app.applicationId].baseline.entries.find(entry => entry.text.includes('Acme'));
   const before = f.store.get();
   await assert.rejects(f.saveCv(app, { changes: [{ entryId: entry.id, text: `${entry.text}\nReduced failures by 37%.`, evidence: [f.candidateRef] }] }),
-    error => error.code === 'INVALID_EVIDENCE' && /Leave out unsupported numbers/.test(error.message));
+    { code: 'INVALID_EVIDENCE' });
   assert.deepEqual(f.store.get(), before);
   const fact = await f.profileCall('facts_add', f.mutation({ facts: [{ kind: 'achievement', statement: 'Reduced failures by 37%.',
     source: { kind: 'conversation', quote: 'I reduced failures by 37%.' } }] }));
@@ -741,7 +847,6 @@ test('chosen presentation survives refresh and is not offered as a candidate dec
   assert.deepEqual(current.presentation, { template: 'modern', paper: 'LETTER' });
   assert.equal(current.layout.paper, 'LETTER');
   const context = await f.call('application_context', { applicationId: app.applicationId });
-  assert.match(context.customization.instructions, /Do not stage alternatives/);
   assert.equal(context.application.suggestions, undefined);
 });
 

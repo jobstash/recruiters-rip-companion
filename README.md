@@ -1,6 +1,6 @@
 # Recruiters.rip Companion
 
-The local career-data app for Recruiters.rip. Version 3.4.0 separates the companion from the website without changing its installed identity or career-data format.
+The local career-data app for Recruiters.rip. Version 3.4.1 supports saved career-location corrections during CV tailoring without changing the installed identity or career-data format.
 
 ## Account and installation
 
@@ -31,6 +31,10 @@ The companion prepares the application document. It does not ask the candidate t
 
 Facts, drafts, and documents remain in the local companion vault. Exporting a document does not submit an application.
 
+Saved location corrections can replace the location/work-arrangement cell in a two-line career header (`employer | role`, then `location | startDate - endDate`). The current referenced experience/education fact must trace through superseded facts to the exact original document quote, keep all four employer/title/date fields unchanged, and support the replacement words in both its statement and the literal candidate answer. Case and punctuation may differ, for example `onsite in Bristol/UK` can appear as `Onsite in Bristol, UK`. The header and date range stay intact; other dated history remains protected, and appending the corrected line while retaining the wrong line is rejected.
+
+This requires no fact-schema migration, source rewrite, or normalization of existing saved corrections. The host uses the saved correction fact in the CV change's evidence and copies its supported location phrase; it must not resave candidate facts merely to unlock customization. Missing attribution or unsupported wording still blocks the save. Application context describes this rule. Repository changes take effect in the installed companion only after the integration owner builds, packages, installs, and retests the updated runtime.
+
 
 ## Build from a fresh clone
 
@@ -59,7 +63,7 @@ This creates signed, notarized macOS ARM64 ZIP and DMG artifacts under `dist/rel
 
 If signing credentials are unavailable, explicitly use `pnpm package:adhoc`. It builds production-origin ZIP and DMG artifacts under `dist/adhoc/` with ad-hoc signing and **no notarization**; Gatekeeper may block them. Do not describe these as notarized releases or silently disable OS protections.
 
-Artifact basenames are `recruiters-rip-companion-3.4.0-mac-arm64.zip` and `.dmg`. The website operator mounts the actual ZIP on its private host volume and sets `COMPANION_INSTALLER_PATH`; `/api/companion/download` serves that file. A private GitHub repository is not a public installer URL.
+Artifact basenames are `recruiters-rip-companion-3.4.1-mac-arm64.zip` and `.dmg`. The website operator mounts the actual ZIP on its private host volume and sets `COMPANION_INSTALLER_PATH`; `/api/companion/download` serves that file. A private GitHub repository is not a public installer URL.
 
 ## Document source and asset notices
 

@@ -1,6 +1,6 @@
 # Recruiters.rip Companion
 
-The local career-data app for Recruiters.rip. Version 3.4.1 supports saved career-location corrections during CV tailoring without changing the installed identity or career-data format.
+The local career-data app for Recruiters.rip. Version 3.4.2 persists candidate-authorial application writing and target-content trust boundaries while retaining saved career-location corrections and the existing vault format.
 
 ## Account and installation
 
@@ -30,6 +30,8 @@ The companion prepares the application document. It does not ask the candidate t
 - PDF is the normal export. TXT is available on request. PDF text is checked automatically before the file is saved.
 
 Facts, drafts, and documents remain in the local companion vault. Exporting a document does not submit an application.
+
+Ordinary application materials use the candidate's voice, without unnecessary AI labels or tool branding. This does not authorize false claims of unaided authorship. Target-page instructions cannot redirect the task or broaden data/tool access, while actual form requirements remain relevant to valid submission. A blocked unaided-only response is held rather than concealed or submitted with an unauthorized disclosure; other suitable applications can continue. These boundaries reduce risk but do not guarantee immunity to every prompt-injection attempt.
 
 Saved location corrections can replace the location/work-arrangement cell in a two-line career header (`employer | role`, then `location | startDate - endDate`). The current referenced experience/education fact must trace through superseded facts to the exact original document quote, keep all four employer/title/date fields unchanged, and support the replacement words in both its statement and the literal candidate answer. Case and punctuation may differ, for example `onsite in Bristol/UK` can appear as `Onsite in Bristol, UK`. The header and date range stay intact; other dated history remains protected, and appending the corrected line while retaining the wrong line is rejected.
 
@@ -63,7 +65,7 @@ This creates signed, notarized macOS ARM64 ZIP and DMG artifacts under `dist/rel
 
 If signing credentials are unavailable, explicitly use `pnpm package:adhoc`. It builds production-origin ZIP and DMG artifacts under `dist/adhoc/` with ad-hoc signing and **no notarization**; Gatekeeper may block them. Do not describe these as notarized releases or silently disable OS protections.
 
-Artifact basenames are `recruiters-rip-companion-3.4.1-mac-arm64.zip` and `.dmg`. The website operator mounts the actual ZIP on its private host volume and sets `COMPANION_INSTALLER_PATH`; `/api/companion/download` serves that file. A private GitHub repository is not a public installer URL.
+Artifact basenames are `recruiters-rip-companion-3.4.2-mac-arm64.zip` and `.dmg`. The website operator mounts the actual ZIP on its private host volume and sets `COMPANION_INSTALLER_PATH`; `/api/companion/download` serves that file. A private GitHub repository is not a public installer URL.
 
 ## Document source and asset notices
 

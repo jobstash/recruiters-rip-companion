@@ -15,3 +15,4 @@ local-device/
 userdata/
 coverage/
 eval/runs/
+build/

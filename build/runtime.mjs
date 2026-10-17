@@ -1,6 +1,7 @@
 import { build } from 'esbuild';
 import ts from 'typescript';
-import { copyFile, mkdir, readFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { packageMcp } from './package-mcp.mjs';
@@ -26,5 +27,10 @@ await build({
 for (const name of ['NotoSans-Regular.ttf', 'OFL.txt'])
   await copyFile(path.join(root, 'src', 'documents', 'assets', name), path.join(generated, 'assets', name));
 await copyFile(path.join(root, 'src', 'mcp', 'local-runner.cjs'), path.join(generated, 'mcp-host.cjs'));
+// Skill text is model-facing matching policy; its digest feeds the assessment policy fingerprint.
+const skill = path.join(root, 'skills', 'recruiters-rip');
+const skillDigest = createHash('sha256').update(await readFile(path.join(skill, 'SKILL.md'), 'utf8') + '\0' +
+  await readFile(path.join(skill, 'agents', 'openai.yaml'), 'utf8')).digest('hex');
+await writeFile(path.join(generated, 'skill-digest.mjs'), `export const SKILL_DIGEST = '${skillDigest}';\n`);
 await packageMcp();
-console.log('Built local MCP bridge, desktop extension packages and shared document engine. No provider runtime is bundled.');
+console.log('Built local MCP bridge, desktop extension packages and document engine with optional companion-managed pre-scanning.');

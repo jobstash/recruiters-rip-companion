@@ -1,27 +1,22 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createCipheriv, createDecipheriv, createPublicKey, randomBytes, sign, verify } from 'node:crypto';
-import { mkdtemp, rm, readFile } from 'node:fs/promises';
+import { createPublicKey, sign, verify } from 'node:crypto';
+import { mkdtemp, rm, readFile, chmod, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createVault } from '../src/vault.mjs';
-import { mutateCareer, replayCareer, readCareer } from '../src/mcp/state.mjs';
+import { CAREER_SCHEMA, createCareerState, mutateCareer, replayCareer, readCareer, upgradeCareer } from '../src/mcp/state.mjs';
+import { createPrescanCredentials } from '../src/prescan/credentials.mjs';
 
 async function fixture(t) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'recruiters-career-vault-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
-  const key = randomBytes(32); let rejectWrite = false;
-  const encryption = {
-    isEncryptionAvailable: () => true, getSelectedStorageBackend: () => 'test-encrypted-store',
-    encryptString(value) { if (rejectWrite) throw new Error('Encrypted storage unavailable'); const nonce = randomBytes(12); const cipher = createCipheriv('aes-256-gcm', key, nonce); const encrypted = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()]); return Buffer.concat([nonce, cipher.getAuthTag(), encrypted]); },
-    decryptString(value) { const decipher = createDecipheriv('aes-256-gcm', key, value.subarray(0, 12)); decipher.setAuthTag(value.subarray(12, 28)); return Buffer.concat([decipher.update(value.subarray(28)), decipher.final()]).toString('utf8'); },
-  };
-  const vault = createVault(encryption, directory); await vault.open();
-  return { vault, directory, reopen: () => createVault(encryption, directory), rejectWrites: value => { rejectWrite = value; } };
+  const vault = createVault(directory); await vault.open();
+  return { vault, directory, reopen: () => createVault(directory) };
 }
 const publicKey = state => createPublicKey({ key: Buffer.from(state.publicKey, 'base64url'), format: 'der', type: 'spki' });
 
-test('identity reset isolates old private career data while keeping encrypted recoverable archives', async t => {
+test('identity reset isolates old private career data while keeping recoverable archives', async t => {
   const { vault, reopen, directory } = await fixture(t);
   await vault.update(state => { state.pairing = { origin: 'https://recruiters.rip', account: { id: 'old-owner', label: 'Old account' } }; state.career.profile.name = 'Private candidate sentinel'; state.career.sources.one = { text: 'Original source sentinel' }; });
   const old = vault.get(), result = await vault.resetIdentity();
@@ -33,13 +28,57 @@ test('identity reset isolates old private career data while keeping encrypted re
   assert.equal(current.pairing, null); assert.equal(current.career.profile.name, null); assert.deepEqual(current.career.sources, {});
   assert.deepEqual(current.identityArchives[old.deviceId].career, old.career);
   assert.equal(current.identityArchives[old.deviceId].privateKey, undefined);
-  assert.equal((await readFile(path.join(directory, 'vault.bin'))).includes(Buffer.from('Private candidate sentinel')), false);
+  assert.equal((await stat(path.join(directory, 'vault.json'))).mode & 0o777, 0o600);
+  assert.equal((await stat(directory)).mode & 0o777, 0o700);
 });
 
+test('pre-scan keys persist only in root state and are never archived on reset', async t => {
+  const { vault, reopen, directory } = await fixture(t);
+  const credentials = createPrescanCredentials({ store: vault });
+  const apiKey = 'sk-test-vault-credential-sentinel-1234567890';
+  const beforeCareer = vault.get().career;
+  const saved = await credentials.save({ provider: 'openai', apiKey });
+  assert.equal(saved.configured, true);
+  assert.equal(saved.credentialVersion, 1);
+  assert.equal(JSON.stringify(saved).includes(apiKey), false);
+  assert.equal(JSON.stringify(saved).includes('sentinel'), false);
+  assert.deepEqual(vault.get().career, beforeCareer);
+  assert.equal(JSON.stringify(vault.get().career).includes(apiKey), false);
+  assert.equal(JSON.parse(await readFile(path.join(directory, 'vault.json'), 'utf8')).prescanCredentials.openai.apiKey, apiKey);
+  const reopened = reopen(); await reopened.open();
+  assert.deepEqual(createPrescanCredentials({ store: reopened }).read('openai'), { apiKey, credentialVersion: 1 });
+  const oldId = reopened.get().deviceId;
+  await reopened.resetIdentity();
+  assert.equal(reopened.get().prescanCredentials, undefined);
+  assert.equal(reopened.get().identityArchives[oldId].prescanCredentials, undefined);
+  assert.equal(JSON.stringify(reopened.get()).includes(apiKey), false);
+  const afterReset = reopen(); await afterReset.open();
+  assert.equal(createPrescanCredentials({ store: afterReset }).publicState().configured, false);
+  assert.throws(() => createPrescanCredentials({ store: afterReset }).read('openai'), { code: 'PRESCAN_KEY_REQUIRED' });
+});
 
-test('failed encrypted commit preserves previous career revision and identity after reopen', async t => {
-  const { vault, reopen, rejectWrites } = await fixture(t); const before = vault.get();
-  rejectWrites(true); await assert.rejects(vault.resetIdentity()); rejectWrites(false);
+test('a v1 career opens as v2 keeping only CV sources and profile', async t => {
+  const { vault, reopen } = await fixture(t);
+  const profile = { ...createCareerState().profile, name: 'Synthetic candidate', headline: 'Platform engineer', preferences: { salaryMinimum: 90000 } };
+  const sources = { one: { purpose: 'cv', name: 'CV', text: 'Synthetic CV text', archived: false } };
+  await vault.update(state => {
+    state.career = { version: 1, revision: 7, evidenceRevision: 3, rankingVersion: 5, profile, sources,
+      facts: { f: { id: 'f', kind: 'note', subject: 'Team size', answer: 'Eight' } }, interviews: { i: { id: 'i' } },
+      applications: { a: { id: 'a', job: { title: 'Engineer', company: 'Acme' } } }, matching: { scores: { 'node:1': { overall: 80 } } },
+      prescan: { runs: {} }, receipts: { r: { operation: 'career_facts_save' } } };
+  });
+  const legacy = reopen(); await legacy.open();
+  await legacy.update(state => { state.career = upgradeCareer(state.career); });
+  const reopened = reopen(); await reopened.open(); const { career } = reopened.get();
+  assert.equal(career.version, CAREER_SCHEMA);
+  assert.deepEqual(career, { ...createCareerState(), profile, sources, evidenceRevision: 4, rankingVersion: 6 });
+  assert.equal(upgradeCareer(career), career);
+});
+
+test('failed commit preserves previous career revision and identity after reopen', async t => {
+  const { vault, reopen, directory } = await fixture(t); const before = vault.get();
+  await chmod(directory, 0o500);
+  try { await assert.rejects(vault.resetIdentity()); } finally { await chmod(directory, 0o700); }
   assert.deepEqual(vault.get(), before); const reopened = reopen(); await reopened.open(); assert.deepEqual(reopened.get(), before);
 });
 

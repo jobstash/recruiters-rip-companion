@@ -67,12 +67,12 @@ function saveSource(career, input) {
 /** Upserts normalized facts: an id replaces that fact, otherwise a saved fact with the same subject is replaced. */
 function upsertFacts(career, entries) {
   const keys = entries.map(({ fields }) => factKey(fields));
-  if (new Set(keys).size !== keys.length) fail('INVALID_INPUT', 'Each subject may appear only once per save; combine the answers into one fact.');
+  if (new Set(keys).size !== keys.length) fail('INVALID_INPUT', 'Each subject and employer combination may appear only once per save; combine the answers into one fact.');
   const byKey = new Map(Object.values(career.facts).map(fact => [factKey(fact), fact.id]));
   const timestamp = now();
   return entries.map(({ id, fields }) => {
     const existing = byKey.get(factKey(fields));
-    if (id && existing && existing !== id) fail('INVALID_INPUT', `A fact about "${fields.subject}" already exists. Update that fact or delete it first.`);
+    if (id && existing && existing !== id) fail('INVALID_INPUT', `A fact about "${fields.subject}"${fields.employer ? ` at ${fields.employer}` : ''} already exists. Update that fact or delete it first.`);
     const target = id ?? existing;
     const previous = target ? career.facts[target] : null;
     const retained = previous ? Object.fromEntries(['question', 'context', 'applicationId', 'followUps'].filter(key => previous[key] !== undefined).map(key => [key, previous[key]])) : {};
@@ -276,7 +276,7 @@ export function createProfileTools({ store, selectSourceFile, extractFile, inter
         ...(fact.followUps ?? []).flatMap(exchange => [exchange.question, exchange.answer, exchange.context ?? ''])].join(' ').toLocaleLowerCase().includes(query))).sort(compareFacts);
     return { revision: career.revision, ...page(facts, args) };
   });
-  tool('career_facts_save', 'Save facts the candidate stated in conversation that the CV does not show. capability answers: Led it, Hands-on, Some exposure, None; language: Native, Fluent, Professional, Conversational, Basic; yes_no: Yes, No; choice and note: short text. A fact with the same subject as a saved one replaces it; include id to replace a specific fact. Do not restate CV bullets.', mutation({ facts: factBatch }, ['facts']), false, async args => edit('career_facts_save', args, career => {
+  tool('career_facts_save', 'Save facts the candidate stated in conversation that the CV does not show. capability answers: Led it, Hands-on, Some exposure, None; language: Native, Fluent, Professional, Conversational, Basic; yes_no: Yes, No; choice and note: short text. A fact with the same subject and employer as a saved one replaces it; include id to replace a specific fact. Do not restate CV bullets.', mutation({ facts: factBatch }, ['facts']), false, async args => edit('career_facts_save', args, career => {
     const facts = saveFacts(career, args.facts);
     career.evidenceRevision++;
     return { facts };

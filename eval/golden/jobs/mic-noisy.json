@@ -1,0 +1,18 @@
+{
+  "id": "node:eval-mic-noisy",
+  "title": "Senior Software Engineer (Full-Stack)",
+  "company": {
+    "name": "Meridian Civic",
+    "description": "Meridian Civic builds digital services for local governments."
+  },
+  "publishedAt": "__RECENT__",
+  "applyUrl": "https://jobs.example.test/eval/mic-noisy",
+  "salary": null,
+  "city": null,
+  "location": "Europe",
+  "workMode": "remote",
+  "locationEvidence": [
+    "Advertised role location: Remote within the EU"
+  ],
+  "ad": "About us: Meridian Civic was founded by former public servants who believed that residents deserve services as simple as the best consumer apps. Since then we have grown into a team spread across eleven countries, partnering with municipalities, transport authorities and libraries. Our values are curiosity, candour, care and craft, and we revisit them together every year at our offsite.\n\nOur story: we started in a shared office above a bakery, shipped our first permit-booking tool in eight weeks, and have since rebuilt it three times. We publish our engineering principles openly and run a quarterly hack week where anyone can propose a project.\n\nThe role: you will be a hands-on senior engineer in the permits squad. You will build React interfaces residents use to apply for permits, maintain the Node.js and PostgreSQL services behind them, and mentor engineers through code review. There are no direct reports.\n\nBenefits: thirty days of holiday plus local public holidays; a learning budget for books, courses and conferences; a home-office allowance; private health cover where available; enhanced parental leave; a volunteering day each quarter; a monthly wellbeing stipend; company-wide retreats; flexible working hours with core collaboration time.\n\nHow we work: written proposals before big changes, small autonomous squads, blameless incident reviews, and a strong preference for boring technology that residents can rely on. We keep meetings short and default to asynchronous updates.\n\nEssential: building React interfaces; maintaining Node.js and PostgreSQL services. Preferred: mentoring engineers through code review.\n\nEqual opportunity: we welcome applicants of every background and identity. We provide reasonable adjustments throughout the hiring process; tell us what would help.\n\nHiring process: an introductory call, a take-home exercise of no more than three hours or an equivalent paired session, a systems conversation, and a values conversation. We aim to make a decision within two weeks.\n\nFrequently asked questions: Do you sponsor relocation? This position is remote within the EU, so relocation is not needed. Is there travel? Up to two short team gatherings a year. Can I work part-time? Discuss it with us."
+}

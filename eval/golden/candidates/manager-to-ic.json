@@ -1,0 +1,84 @@
+{
+  "id": "manager-to-ic",
+  "profile": {
+    "headline": "Engineering manager returning to hands-on full-stack engineering",
+    "location": "Lisbon, Portugal",
+    "roleCapabilities": [
+      "Full-stack web development",
+      "Team leadership",
+      "Delivery planning"
+    ],
+    "seniority": "senior",
+    "skills": [
+      "TypeScript",
+      "React",
+      "Node.js",
+      "PostgreSQL",
+      "End-to-end testing"
+    ],
+    "preferences": {
+      "roles": [
+        "Senior full-stack engineer",
+        "Senior software engineer",
+        "Staff engineer"
+      ],
+      "locations": [
+        "Lisbon",
+        "Remote (EU)"
+      ],
+      "workModes": [
+        "remote",
+        "hybrid"
+      ],
+      "employmentTypes": [
+        "permanent",
+        "contract"
+      ],
+      "willingToRelocate": false,
+      "responsibilityModes": [
+        "hands_on"
+      ],
+      "directReports": "not_preferred",
+      "technologies": [
+        "TypeScript",
+        "React",
+        "Node.js"
+      ],
+      "domains": [
+        "education",
+        "climate",
+        "civic technology"
+      ],
+      "notes": "Deliberately returning to hands-on individual contributor work after managing a team of eight. Not looking for management, director or head-of roles. Remote within the EU or hybrid in Lisbon."
+    }
+  },
+  "cv": "Engineering Manager, Brightpath Learning, Lisbon, 2021–present\n- Managed a team of eight engineers delivering a TypeScript and React learning platform.\n- Set quarterly delivery plans with product and design leads.\n- Continued to review pull requests and pair on Node.js services weekly.\n\nSenior Full-Stack Engineer, Brightpath Learning, Lisbon, 2017–2021\n- Built React front ends and Node.js APIs for course authoring used by 300 schools.\n- Designed PostgreSQL data models for enrolments and grading.\n- Introduced end-to-end tests that cut release regressions by a third.\n\nSoftware Engineer, Harbourline Studio, Porto, 2014–2017\n- Developed client web applications in JavaScript and PHP.",
+  "facts": [
+    {
+      "id": "b0000000-0000-4000-8000-000000000001",
+      "kind": "yes_no",
+      "subject": "Authorised to work in the EU",
+      "answer": "Yes"
+    },
+    {
+      "id": "b0000000-0000-4000-8000-000000000002",
+      "kind": "language",
+      "subject": "English",
+      "answer": "Fluent"
+    },
+    {
+      "id": "b0000000-0000-4000-8000-000000000003",
+      "kind": "language",
+      "subject": "Portuguese",
+      "answer": "Native"
+    },
+    {
+      "id": "b0000000-0000-4000-8000-000000000004",
+      "kind": "capability",
+      "subject": "People management",
+      "answer": "Led it",
+      "detail": "Managed eight engineers, including hiring and performance reviews.",
+      "employer": "Brightpath Learning"
+    }
+  ]
+}

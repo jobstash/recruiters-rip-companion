@@ -1,0 +1,24 @@
+{
+  "id": "node:eval-dj-us-nosponsor",
+  "title": "Data Analyst",
+  "company": {
+    "name": "Brightmart",
+    "description": "Brightmart operates grocery stores across the US north-east."
+  },
+  "publishedAt": "__RECENT__",
+  "applyUrl": "https://jobs.example.test/eval/dj-us-nosponsor",
+  "salary": {
+    "minimum": 75000,
+    "maximum": 85000,
+    "stated": null,
+    "currency": "USD",
+    "period": "year"
+  },
+  "city": "New York",
+  "location": "New York, United States",
+  "workMode": "onsite",
+  "locationEvidence": [
+    "Advertised role location: New York, United States (onsite)"
+  ],
+  "ad": "Data Analyst (New York, onsite). USD 75,000–85,000 per year.\n\nAnalyse store sales with SQL and build dashboards for regional leaders.\n\nEssential: SQL analysis; dashboarding.\n\nWe are unable to sponsor visas. Candidates must already be authorised to work in the United States."
+}

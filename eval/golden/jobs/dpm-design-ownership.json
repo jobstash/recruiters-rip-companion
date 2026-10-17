@@ -1,0 +1,24 @@
+{
+  "id": "node:eval-dpm-design-ownership",
+  "title": "Senior Product Designer, Product Owner",
+  "company": {
+    "name": "Clinicly",
+    "description": "Clinicly makes a consumer app for booking health appointments."
+  },
+  "publishedAt": "__RECENT__",
+  "applyUrl": "https://jobs.example.test/eval/dpm-design-ownership",
+  "salary": {
+    "minimum": 72000,
+    "maximum": 82000,
+    "stated": null,
+    "currency": "GBP",
+    "period": "year"
+  },
+  "city": "London",
+  "location": "London, United Kingdom",
+  "workMode": "hybrid",
+  "locationEvidence": [
+    "Advertised role location: London, United Kingdom (hybrid)"
+  ],
+  "ad": "Senior Product Designer, Product Owner (London, hybrid). GBP 72,000–82,000 per year.\n\nYou will own both the design and the outcome metrics for appointment booking, set its roadmap with engineering, and evolve our design system.\n\nEssential: owning design and outcome metrics for a product area.\nPreferred: design systems; usability testing."
+}

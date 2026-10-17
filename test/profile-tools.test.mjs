@@ -4,8 +4,7 @@ import { randomUUID } from 'node:crypto';
 import Ajv from 'ajv';
 import { createProfileTools } from '../src/mcp/profile-tools.mjs';
 import { createCareerState } from '../src/mcp/state.mjs';
-import { isFact, needsDetail } from '../src/mcp/facts.mjs';
-import { isInterview } from '../src/mcp/interview.mjs';
+import { needsDetail } from '../src/mcp/facts.mjs';
 import { createScopedAccess } from '../src/mcp/scope.mjs';
 
 const applicationId = randomUUID();
@@ -46,7 +45,7 @@ const teamSize = (extra = {}) => fact('note', 'Team size', 'Managed up to 15 eng
 const importText = (f, text = 'Senior Engineer at Acme since 2019. Built the reporting platform.') =>
   f.edit('career_source_import', { method: 'text', purpose: 'cv', name: 'Original CV', text });
 
-test('saved answers are searchable, paginated and upserted by subject rather than duplicated', async () => {
+test('saved answers are searchable, paginated and upserted by subject and employer rather than duplicated', async () => {
   const f = fixture();
   const created = await f.edit('career_facts_save', { facts: [
     fact('capability', 'Go', 'Led it', { detail: 'Managed the team; not personal implementation.', employer: 'Acme' }),
@@ -58,7 +57,7 @@ test('saved answers are searchable, paginated and upserted by subject rather tha
   assert.equal(page.nextOffset, 2);
   const old = created.facts[0];
   const { facts: [updated] } = await f.edit('career_facts_save', { facts: [
-    fact('capability', ' go ', 'Hands-on', { detail: 'Built production services.' }),
+    fact('capability', ' go ', 'Hands-on', { detail: 'Built production services.', employer: ' acme ' }),
   ] });
   assert.equal(updated.id, old.id);
   assert.equal(updated.createdAt, old.createdAt);
@@ -84,6 +83,27 @@ test('duplicate subjects and conflicting renames reject the whole batch', async 
   assert.deepEqual(f.store.get(), before);
   await f.edit('career_facts_save', { facts: [fact('note', 'New subject', 'New answer', { id: second.id })] });
   assert.equal((await f.call('career_facts_list', { query: 'New subject' })).items[0].id, second.id);
+});
+
+test('facts are keyed by subject and employer', async () => {
+  const f = fixture();
+  const { facts: [acme, globex, general] } = await f.edit('career_facts_save', { facts: [
+    fact('capability', 'Kubernetes', 'Some exposure', { employer: 'Acme' }),
+    fact('capability', 'Kubernetes', 'Hands-on', { detail: 'Ran the production clusters.', employer: 'Globex' }),
+    fact('capability', 'Kubernetes', 'None'),
+  ] });
+  assert.equal(new Set([acme.id, globex.id, general.id]).size, 3);
+  assert.deepEqual((await f.call('career_facts_list')).items.map(item => item.employer ?? null), [null, 'Acme', 'Globex']);
+  const { facts: [replaced] } = await f.edit('career_facts_save', { facts: [fact('capability', 'kubernetes', 'Led it', { detail: 'Led the cluster migration.', employer: 'ACME' })] });
+  assert.equal(replaced.id, acme.id);
+  assert.equal(replaced.answer, 'Led it');
+  const { facts: [unscoped] } = await f.edit('career_facts_save', { facts: [fact('capability', 'Kubernetes', 'Some exposure')] });
+  assert.equal(unscoped.id, general.id);
+  assert.equal((await f.call('career_facts_list')).total, 3);
+  await assert.rejects(f.edit('career_facts_save', { facts: [fact('capability', 'Kubernetes', 'None', { employer: 'Globex' }), fact('capability', 'kubernetes', 'None', { employer: ' globex ' })] }),
+    { code: 'INVALID_INPUT', message: 'Each subject and employer combination may appear only once per save; combine the answers into one fact.' });
+  await assert.rejects(f.edit('career_facts_save', { facts: [fact('capability', 'Kubernetes', 'None', { id: general.id, employer: 'Globex' })] }),
+    { code: 'INVALID_INPUT', message: 'A fact about "Kubernetes" at Globex already exists. Update that fact or delete it first.' });
 });
 
 test('saving or deleting an unknown fact id fails without changes', async () => {
@@ -382,7 +402,7 @@ test('shallow positive answers retain context, deepen after reload, and reuse th
   assert.equal(needsDetail(partial.saved[0]), true);
   assert.deepEqual(partial.unanswered, [1]);
   assert.equal(partial.followUps[0].stage, 'detail');
-  assert.equal(isInterview(f.store.get().career.interviews[asked.interviewId]), true);
+  assert.ok(f.store.get().career.interviews[asked.interviewId]);
   const reopened = fixture({}, f.store.get());
   const answer = 'I built the wallet connection for Checkout and shipped it to production.';
   const complete = await reopened.call('career_interview_answer', { interviewId: asked.interviewId, reply: answer });
@@ -392,7 +412,6 @@ test('shallow positive answers retain context, deepen after reload, and reuse th
   assert.equal(saved.applicationId, applicationId);
   assert.equal(saved.question, capabilityQuestion.prompt);
   assert.equal(needsDetail(saved), false);
-  assert.equal(isFact(saved), true);
   assert.deepEqual(complete.unanswered, []);
   assert.equal((await reopened.call('career_interview_ask', { questions: [capabilityQuestion] })).mode, 'none');
   const { facts: [direct] } = await reopened.edit('career_facts_save', { facts: [{ id: saved.id, kind: saved.kind,
@@ -498,7 +517,7 @@ test('native forms ask at most one detail round and cancellation retains the par
   }
 });
 
-test('scoped pending language interviews reload without narrative followups; unscoped legacy state is rejected', async () => {
+test('scoped pending language interviews reload without narrative followups', async () => {
   const f = fixture();
   const id = randomUUID();
   await f.store.update(state => { (state.career.interviews ??= {})[id] = { id, applicationId, job: applicationJob, createdAt: new Date().toISOString(), questions: [
@@ -506,10 +525,7 @@ test('scoped pending language interviews reload without narrative followups; uns
       options: ['Native', 'Fluent', 'Professional', 'Conversational', 'Basic'] },
   ] }; });
   const reopened = fixture({}, f.store.get());
-  assert.equal(isInterview(reopened.store.get().career.interviews[id]), true);
-  const legacy = reopened.store.get().career.interviews[id];
-  delete legacy.applicationId;
-  assert.equal(isInterview(legacy), false);
+  assert.equal(reopened.store.get().career.interviews[id].applicationId, applicationId);
   const result = await reopened.call('career_interview_answer', { interviewId: id, reply: '3b' });
   assert.equal(result.saved[0].answer, 'Fluent');
   assert.deepEqual(result.unanswered, []);
@@ -637,7 +653,6 @@ test('a different application deepens a fact without replacing its original appl
   assert.equal(saved.context, original.context);
   assert.equal(saved.followUps[0].applicationId, otherApplicationId);
   assert.equal(saved.followUps[0].context, requirement);
-  assert.equal(isFact(saved), true);
   assert.equal((await f.call('career_facts_list', { query: requirement })).items[0].id, original.id);
 });
 

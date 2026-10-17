@@ -1,0 +1,24 @@
+{
+  "id": "node:eval-dpm-senior-pm-scope",
+  "title": "Group Product Manager",
+  "company": {
+    "name": "Voyagent",
+    "description": "Voyagent sells corporate travel software."
+  },
+  "publishedAt": "__RECENT__",
+  "applyUrl": "https://jobs.example.test/eval/dpm-senior-pm-scope",
+  "salary": {
+    "minimum": 110000,
+    "maximum": 130000,
+    "stated": null,
+    "currency": "GBP",
+    "period": "year"
+  },
+  "city": "London",
+  "location": "London, United Kingdom",
+  "workMode": "hybrid",
+  "locationEvidence": [
+    "Advertised role location: London, United Kingdom (hybrid)"
+  ],
+  "ad": "Group Product Manager (London, hybrid). GBP 110,000–130,000 per year.\n\nLead a group of four product managers and own portfolio strategy.\n\nEssential: at least eight years of product management experience; managing a team of product managers."
+}

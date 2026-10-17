@@ -1,0 +1,24 @@
+{
+  "id": "node:eval-backend-em",
+  "title": "Engineering Manager, Backend",
+  "company": {
+    "name": "Routefold",
+    "description": "Routefold provides freight visibility software for shippers."
+  },
+  "publishedAt": "__RECENT__",
+  "applyUrl": "https://jobs.example.test/eval/backend-em",
+  "salary": {
+    "minimum": 110000,
+    "maximum": 130000,
+    "stated": null,
+    "currency": "EUR",
+    "period": "year"
+  },
+  "city": "Berlin",
+  "location": "Berlin, Germany",
+  "workMode": "hybrid",
+  "locationEvidence": [
+    "Advertised role location: Berlin, Germany (hybrid)"
+  ],
+  "ad": "Engineering Manager, Backend (Berlin, hybrid). EUR 110,000–130,000 per year.\n\nYou will lead a team of seven backend engineers: hiring, one-to-ones, performance reviews, career development and delivery planning. You will spend most of your time on people leadership and cross-team coordination; hands-on coding is occasional.\n\nEssential: experience managing and growing a team of engineers; backend architecture background.\nPreferred: logistics domain."
+}

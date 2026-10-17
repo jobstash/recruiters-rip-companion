@@ -1,0 +1,24 @@
+{
+  "id": "node:eval-backend-lowpay",
+  "title": "Senior Backend Engineer",
+  "company": {
+    "name": "Shelfline",
+    "description": "Shelfline sells inventory software to independent retailers."
+  },
+  "publishedAt": "__RECENT__",
+  "applyUrl": "https://jobs.example.test/eval/backend-lowpay",
+  "salary": {
+    "minimum": 70000,
+    "maximum": 80000,
+    "stated": null,
+    "currency": "EUR",
+    "period": "year"
+  },
+  "city": "Berlin",
+  "location": "Berlin, Germany",
+  "workMode": "hybrid",
+  "locationEvidence": [
+    "Advertised role location: Berlin, Germany (hybrid)"
+  ],
+  "ad": "Senior Backend Engineer (Berlin, hybrid). Salary EUR 70,000–80,000 per year, no bonus.\n\nBuild and run the Go services behind our inventory sync, with data in PostgreSQL. You own features end to end and share on-call.\n\nEssential: building backend services in Go; PostgreSQL schema design.\nPreferred: retail or logistics experience.\n\nIndividual contributor role."
+}

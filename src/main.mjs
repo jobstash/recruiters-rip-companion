@@ -1,6 +1,7 @@
-import { app, BrowserWindow, ipcMain, safeStorage, powerMonitor, Menu, shell, clipboard, dialog } from 'electron';
+import { app, BrowserWindow, ipcMain, powerMonitor, Menu, shell, clipboard, dialog } from 'electron';
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
-import { readFile, writeFile, chmod, unlink, mkdir, rm } from 'node:fs/promises';
+import { readFile, writeFile, chmod, unlink, mkdir } from 'node:fs/promises';
+import { watch } from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import { createRequire } from 'node:module';
@@ -8,9 +9,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createVault, privateDirectory } from './vault.mjs';
 import { createDeviceClient } from './client.mjs';
 import { installNative, EXTENSION_ID } from './install-native.mjs';
-import { createCareerState, fail } from './mcp/state.mjs';
-import { isFact } from './mcp/facts.mjs';
-import { isInterview } from './mcp/interview.mjs';
+import { CareerError, fail, upgradeCareer } from './mcp/state.mjs';
 import { createMcpServer, createPlatformTools } from './mcp/server.mjs';
 import { createProfileTools } from './mcp/profile-tools.mjs';
 import { createApplicationTools } from './mcp/application-tools.mjs';
@@ -20,16 +19,21 @@ import { createScopedAccess } from './mcp/scope.mjs';
 import { createMatchingTools, deleteRankings } from './mcp/matching-tools.mjs';
 import { installChatGptPlugin } from './host-setup.mjs';
 import { createCareerBrowser } from './career-browser.mjs';
+import { createPrescanCredentials } from './prescan/credentials.mjs';
+import { createPrescanController } from './prescan/service.mjs';
+import { createPrescanTools } from './mcp/prescan-tools.mjs';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const packageMetadata = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
 const localOnly = packageMetadata.localProduct === true || (!app.isPackaged && process.argv.includes('--local-product'));
 const productOrigin = localOnly ? 'http://127.0.0.1:3001' : 'https://recruiters.rip';
 app.setName('Recruiters Companion');
-// Keep the OS storage/keychain identity stable across the visible brand rename.
+// Local data is plain private JSON; keep Chromium from creating an OS keychain item.
+app.commandLine.appendSwitch('use-mock-keychain');
+// Keep the storage directory name stable across the visible brand rename.
 const directory = path.join(app.getPath('userData'), localOnly ? 'local-device' : 'device');
 const uiURL = pathToFileURL(path.join(root, 'ui', 'index.html')).href;
-const vault = createVault(safeStorage, directory);
+const vault = createVault(directory);
 let window, client, nativeBridge, mcpBridge, documents, files, locked = true, failure = '';
 let pendingApproval, confirmation = Promise.resolve(), initializing, exiting = false, screenLocked = false, sleeping = false;
 let heartbeatTimer, heartbeatBusy = false, browserConnection = 'pending', queuedPairing;
@@ -37,15 +41,40 @@ let sessionEpoch = 0, careerViewRevision = 0;
 let windowLoaded;
 const sockets = new Set();
 const store = { get() { assertAvailable(false); return vault.get(); }, update(change) { assertAvailable(false); return vault.update(async state => { assertAvailable(false); await change(state); assertAvailable(false); }); } };
+let prescan, prescanViewState = '';
+const prescanCredentials = createPrescanCredentials({ store, onChange: () => prescan?.cancel() });
+prescan = createPrescanController({
+  store, credentials: prescanCredentials,
+  makeScope() {
+    const scoped = createScopedAccess(store, { assertAvailable, epoch: () => sessionEpoch });
+    return { store: scoped.store, assertAvailable: scoped.assertAvailable,
+      platform: async (operation, args) => {
+        scoped.assertAvailable(false);
+        const result = await platform(operation, args);
+        scoped.assertAvailable(false);
+        return result;
+      } };
+  },
+  authorize: ({ label, model, limit, inputUsdPerMillion }) => confirm('Run a paid job pre-scan?',
+    `${label} (${model}) receives your CV, preferences, saved answers and complete job ads, including personal details.\n\nScan up to ${limit} jobs. OpenAI bills this separately from ChatGPT/Codex. Base rate: $${inputUsdPerMillion}/million input tokens; regional and long-context premiums may apply. The job limit is not a spending cap.\n\nResults are preliminary; Codex or Claude must review the ads. Cancel stops new requests, but sent requests may still be billed.`),
+  onChange() {
+    if (!prescan || locked) return;
+    const current = prescan.status();
+    const viewState = `${current.runId ?? ''}:${current.status}`;
+    if (viewState !== prescanViewState) { prescanViewState = viewState; careerViewRevision++; }
+    emit();
+  },
+});
 function assertAvailable() {
-  if (locked || !vault.available() || screenLocked || sleeping) fail('LOCAL_LOCKED', 'Open Recruiters.rip Companion and unlock local storage. Your saved work is unchanged.');
+  if (locked || screenLocked || sleeping) fail('LOCAL_LOCKED', 'Open Recruiters.rip Companion and unlock local storage. Your saved work is unchanged.');
 }
 function safeFailure(error) {
   const allowed = new Set(['DEVICE_OFFLINE', 'DEVICE_UNAUTHORIZED', 'DEVICE_REQUEST_FAILED', 'LOCAL_LOCKED', 'IDENTITY_CHANGED', 'NOT_FOUND', 'INVALID_INPUT', 'PAIRING_REQUIRED', 'CANCELLED', 'HOST_UNAVAILABLE', 'HOST_INSTALL_FAILED']);
-  return { code: allowed.has(error?.code) ? error.code : 'LOCAL_OPERATION_FAILED', message: allowed.has(error?.code) ? error.message : 'This local action could not be completed. Saved career data is unchanged. Reopen the companion and try again.' };
+  const known = error instanceof CareerError || allowed.has(error?.code);
+  return { code: known ? error.code : 'LOCAL_OPERATION_FAILED', message: known ? error.message : 'This local action could not be completed. Saved career data is unchanged. Reopen the companion and try again.' };
 }
 function status() {
-  if (locked || !vault.available()) return { installed: true, mode: 'local_mcp', paired: false, connections: [], execution: { state: 'locked' } };
+  if (locked) return { installed: true, mode: 'local_mcp', paired: false, connections: [], execution: { state: 'locked' } };
   const state = vault.get();
   return { installed: true, mode: 'local_mcp', deviceId: state.deviceId, publicKey: state.publicKey, label: state.label,
     paired: Boolean(state.pairing), connections: [], execution: { state: state.pairing ? 'ready' : 'needs_connection' } };
@@ -61,6 +90,7 @@ function localState() {
   const state = vault.get();
   return { ...publicState, account: state.pairing?.account ?? null, origin: state.pairing?.origin ?? null, browserConnection, failure,
     setup: setup(), careerViewVersion: `${state.deviceId}:${sessionEpoch}:${careerViewRevision}`,
+    prescan: { credentials: prescanCredentials.publicState(), run: prescan.status() },
     approval: pendingApproval ? { id: pendingApproval.id, title: pendingApproval.title, detail: pendingApproval.detail } : null };
 }
 function emit(event = 'status', payload = status()) {
@@ -70,7 +100,7 @@ function emit(event = 'status', payload = status()) {
 }
 function showSettings() {
   if (window && !window.isDestroyed()) { window.show(); window.focus(); window.webContents.send('state-changed'); return windowLoaded; }
-  window = new BrowserWindow({ width: 1180, height: 820, minWidth: 420, minHeight: 560, title: 'Recruiters.rip Companion', backgroundColor: '#000000',
+  window = new BrowserWindow({ width: 1180, height: 820, minWidth: 420, minHeight: 560, title: 'Recruiters.rip Companion', backgroundColor: '#0a0b0e',
     webPreferences: { preload: path.join(root, 'src', 'preload.cjs'), partition: 'recruiters-settings', nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true, devTools: !app.isPackaged, spellcheck: false } });
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   window.webContents.on('will-navigate', event => event.preventDefault());
@@ -80,6 +110,15 @@ function showSettings() {
   window.webContents.session.webRequest.onBeforeRequest((details, callback) => callback({ cancel: !details.url.startsWith(pathToFileURL(root + path.sep).href) }));
   window.on('close', event => { if (!exiting) { event.preventDefault(); window.hide(); } });
   windowLoaded = window.loadURL(uiURL);
+  // `pnpm dev` only: reload the settings window when its static UI files change.
+  if (!app.isPackaged && process.env.RECRUITERS_COMPANION_DEV === '1') {
+    let pending;
+    const watcher = watch(path.join(root, 'ui'), { recursive: true }, () => {
+      clearTimeout(pending);
+      pending = setTimeout(() => { if (!window.isDestroyed()) window.webContents.reloadIgnoringCache(); }, 100);
+    });
+    window.on('closed', () => watcher.close());
+  }
   return windowLoaded;
 }
 function confirm(title, detail) {
@@ -97,27 +136,7 @@ async function initialize() {
   if (initializing) return initializing;
   initializing = (async () => {
     await vault.open();
-    await vault.update(state => {
-      state.career ??= createCareerState();
-      delete state.career.evaluationRuns;
-      for (const [id, receipt] of Object.entries(state.career.receipts))
-        if (receipt.operation.startsWith('career_evaluation_')) delete state.career.receipts[id];
-      const career = state.career;
-      delete career.profile.fieldSources;
-      delete career.profileHistory;
-      for (const [id, source] of Object.entries(career.sources))
-        if (source.provenance?.kind === 'attributed_facts') delete career.sources[id];
-      const legacyCv = draft => draft && !draft.document, legacyLetter = draft => draft && !draft.paragraphs;
-      for (const [id, app] of Object.entries(career.applications))
-        if ('baseline' in app || [app.cv, ...(app.cvHistory ?? [])].some(legacyCv) || [app.coverLetter, ...(app.coverLetterHistory ?? [])].some(legacyLetter))
-          delete career.applications[id];
-      const legacyFacts = Object.entries(career.facts).filter(([, fact]) => !isFact(fact));
-      for (const [id] of legacyFacts) delete career.facts[id];
-      if (legacyFacts.length) career.evidenceRevision++;
-      for (const [id, interview] of Object.entries(career.interviews ?? {}))
-        if (!isInterview(interview)) delete career.interviews[id];
-    });
-    await rm(path.join(directory, 'career-files', vault.get().deviceId, 'evaluations'), { recursive: true, force: true });
+    await vault.update(state => { state.career = upgradeCareer(state.career); });
     if (screenLocked || sleeping) fail('LOCAL_LOCKED', 'Unlock this computer before opening saved career data.');
     locked = false; failure = ''; client = createDeviceClient(store, localOnly);
     files = createDocumentFiles({ directory, store, assertAvailable });
@@ -192,10 +211,17 @@ function createSessionServer() {
     }, extractFile: documents.extractFile }),
     ...createApplicationTools({ store: scoped.store, platform: scopedPlatform, documents, exportDocument: localFiles.exportDocument }),
     ...createMatchingTools({ store: scoped.store, platform: scopedPlatform, exportDocument: localFiles.exportDocument }),
+    ...createPrescanTools({ controller: Object.fromEntries(['start', 'cancel', 'status', 'results'].map(method => [method, async args => {
+      scoped.assertAvailable(method === 'start' || method === 'cancel');
+      const result = await prescan[method](args);
+      scoped.assertAvailable(false);
+      return result;
+    }])) }),
   ];
   server = createMcpServer({ tools, assertAvailable: scoped.assertAvailable, readResource: localFiles.readResource, listResources: localFiles.listResources,
     notifyActivity: name => {
       if (tools.some(tool => tool.name === name && !tool.readOnly)) { careerViewRevision++; emit(); }
+      if (name === 'career_rankings_delete') void prescan.cancel();
     } });
   return server;
 }
@@ -258,12 +284,44 @@ ipcMain.handle('local-settings', async (event, op, input = {}) => {
       scoped.assertAvailable(false);
       return { ok: true, result };
     }
+    if (op.startsWith('prescan-')) {
+      assertAvailable(false);
+      let result;
+      if (op === 'prescan-key-save') result = await prescanCredentials.save(input);
+      else if (op === 'prescan-key-remove') result = await prescanCredentials.remove(input);
+      else if (op === 'prescan-start') result = await prescan.start(input);
+      else if (op === 'prescan-cancel') { exact(input, []); result = await prescan.cancel(); }
+      else fail('INVALID_INPUT', 'This pre-scan action is unavailable.');
+      emit(); return { ok: true, result };
+    }
     exact(input, op === 'approval' ? ['id', 'allow'] : []);
     if (op === 'unlock') { await initialize(); if (queuedPairing) { const payload = queuedPairing; queuedPairing = undefined; void pair(payload).catch(error => { failure = safeFailure(error).message; emit(); }); } emit(); return { ok: true, result: localState() }; }
     assertAvailable(false); let result = { completed: true };
     if (op === 'approval') { if (!pendingApproval || pendingApproval.id !== input.id || typeof input.allow !== 'boolean') fail('INVALID_INPUT', 'This approval expired.'); pendingApproval.finish(input.allow); }
-    else if (op === 'delete-rankings') { result = await deleteRankings(store); careerViewRevision++; }
+    else if (op === 'delete-rankings') { await prescan.cancel(); result = await deleteRankings(store); careerViewRevision++; }
     else if (op === 'connect-account') result = await connectAccount();
+    else if (op === 'import-cv') {
+      const scoped = createScopedAccess(store, { assertAvailable, epoch: () => sessionEpoch });
+      scoped.assertAvailable(true);
+      const tools = createProfileTools({
+        store: scoped.store,
+        selectSourceFile: async () => {
+          scoped.assertAvailable(true);
+          const selected = await selectSourceFile();
+          scoped.assertAvailable(true);
+          return selected;
+        },
+        extractFile: documents.extractFile,
+      });
+      result = await tools.find(tool => tool.name === 'career_source_import').invoke({
+        requestId: randomUUID(), revision: scoped.store.get().career?.revision ?? 0,
+        method: 'file', purpose: 'cv',
+      });
+      scoped.assertAvailable(false);
+      careerViewRevision++;
+      result = { cancelled: Boolean(result.cancelled) };
+    }
+    else if (op === 'copy-review-prompt') clipboard.writeText('Review my jobs using the saved pre-scan order. Do not reset rankings or pre-scan results. Read complete adverts before saving structured assessments, then rerank the top recommendations pairwise.');
     else if (op === 'copy-command') clipboard.writeText(setup().command);
     else if (op === 'copy-config') clipboard.writeText(setup().claudeConfig);
     else if (op === 'install-chatgpt') result = await installChatGptPlugin({ directory, root: app.isPackaged ? root.replace(/app\.asar$/, 'app.asar.unpacked') : root, localOnly, command: setup().command });
@@ -283,20 +341,20 @@ if (!app.requestSingleInstanceLock({ localOnly })) app.quit();
 else {
   app.on('second-instance', (_event, argv) => { const url = argv.find(value => value.startsWith('recruiters-companion:')); if (url) acceptPairingURL(url); else if (!argv.includes('--bridge') && !argv.includes('--mcp-background')) showSettings(); });
   app.on('activate', showSettings); app.on('window-all-closed', () => {});
-  app.on('before-quit', () => { exiting = true; clearInterval(heartbeatTimer); pendingApproval?.finish(false); mcpBridge?.close(); nativeBridge?.close(); for (const socket of sockets) socket.destroy(); });
+  app.on('before-quit', () => { exiting = true; void prescan.cancel(); clearInterval(heartbeatTimer); pendingApproval?.finish(false); mcpBridge?.close(); nativeBridge?.close(); for (const socket of sockets) socket.destroy(); });
   void app.whenReady().then(async () => {
     documents = createRequire(import.meta.url)('./generated/document-engine.cjs');
     Menu.setApplicationMenu(Menu.buildFromTemplate([{ label: 'Recruiters.rip Companion', submenu: [{ label: 'Settings', click: showSettings }, { type: 'separator' }, { role: 'quit' }] }, { role: 'editMenu' }]));
-    // Render the recovery controls before OS key storage can request approval.
+    // Render the recovery controls before local storage opens.
     // The settings page uses an in-memory browser session, never Chromium's
-    // persistent cookie key, and contains no provider authentication.
+    // persistent cookie key. API credentials are entered only through the local settings IPC.
     await showSettings();
     await installConnections(); await startNativeBridge();
     mcpBridge = await startMcpBroker({ directory, createServer: createSessionServer });
-    try { await initialize(); } catch { failure = 'Local encrypted storage is unavailable. Unlock your operating system key storage, then open local storage.'; }
+    try { await initialize(); } catch { failure = 'Local storage is unavailable. Check the companion data folder, then open local storage.'; }
     heartbeatTimer = setInterval(() => { if (locked || heartbeatBusy || !vault.get().pairing) return; heartbeatBusy = true; void client.request('POST', '/device/heartbeat', {}).catch(() => {}).finally(() => { heartbeatBusy = false; }); }, 30000);
-    const lock = () => { sessionEpoch++; locked = true; pendingApproval?.finish(false); mcpBridge.disconnect(); emit(); };
-    const unlock = () => { if (screenLocked || sleeping) return; void initialize().then(() => emit()).catch(() => { failure = 'Unlock operating system key storage to reopen your local career data.'; }); };
+    const lock = () => { void prescan.cancel(); sessionEpoch++; locked = true; pendingApproval?.finish(false); mcpBridge.disconnect(); emit(); };
+    const unlock = () => { if (screenLocked || sleeping) return; void initialize().then(() => emit()).catch(() => { failure = 'Local storage could not be reopened. Your saved data has not been replaced.'; }); };
     powerMonitor.on('lock-screen', () => { screenLocked = true; lock(); }); powerMonitor.on('suspend', () => { sleeping = true; lock(); });
     powerMonitor.on('unlock-screen', () => { screenLocked = false; unlock(); }); powerMonitor.on('resume', () => { sleeping = false; unlock(); });
     const link = process.argv.find(value => value.startsWith('recruiters-companion:')); if (link) acceptPairingURL(link);

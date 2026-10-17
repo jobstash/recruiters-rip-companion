@@ -1,0 +1,24 @@
+{
+  "id": "node:eval-dj-bi-toronto",
+  "title": "Business Intelligence Analyst",
+  "company": {
+    "name": "Maple Outfitters",
+    "description": "Maple Outfitters is an outdoor clothing retailer."
+  },
+  "publishedAt": "__RECENT__",
+  "applyUrl": "https://jobs.example.test/eval/dj-bi-toronto",
+  "salary": {
+    "minimum": 65000,
+    "maximum": 75000,
+    "stated": null,
+    "currency": "CAD",
+    "period": "year"
+  },
+  "city": "Toronto",
+  "location": "Toronto, Canada",
+  "workMode": "hybrid",
+  "locationEvidence": [
+    "Advertised role location: Toronto, Canada (hybrid)"
+  ],
+  "ad": "Business Intelligence Analyst (Toronto, hybrid). CAD 65,000–75,000 per year.\n\nBuild BI dashboards for store and e-commerce teams and automate recurring Excel reports.\n\nEssential: building BI dashboards; SQL.\nPreferred: Excel reporting automation."
+}

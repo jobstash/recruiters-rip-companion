@@ -12,7 +12,17 @@ import { createProfileTools } from '../src/mcp/profile-tools.mjs';
 import { createMcpServer, createPlatformTools } from '../src/mcp/server.mjs';
 import { createDocumentFiles, readSelectedSource } from '../src/mcp/files.mjs';
 import { createMatchingTools } from '../src/mcp/matching-tools.mjs';
-import { ASSESSMENT_VERSION } from '../src/mcp/assessment-policy.mjs';
+import { ASSESSMENT_POLICY_ID, deriveDecision } from '../src/mcp/matching-contract.mjs';
+
+const scoredAt = '2026-10-14T12:00:00.000Z';
+function storedAssessment(id, overall, changes = {}) {
+  const row = { id, status: 'assessed',
+    requirements: [{ requirement: 'Own production services', importance: 'essential', evidence: 'demonstrated', cvQuote: 'Built services.' }],
+    gates: { direction: 'pass', constraints: 'pass', eligibility: 'pass' },
+    dimensions: { direction: overall, capability: overall, scope: overall, preferences: overall },
+    relocation: 'not_required', reason: 'Saved full-advert review.', ...changes };
+  return { ...row, ...deriveDecision(row), profileVersion: '0:0', policyId: ASSESSMENT_POLICY_ID, scoredAt, host: { name: 'host', version: '1' } };
+}
 
 function fixture() {
   let state = { deviceId: randomUUID(), career: createCareerState(), pairing: { account: { id: 'first-owner' } } }, queue = Promise.resolve(), epoch = 0, locked = false;
@@ -95,11 +105,14 @@ test('complete CSV export uses native MCP resources alongside existing PDF expor
   await f.store.update(state => {
     state.career.profile.preferences.willingToRelocate = false;
     state.career.matching = { jobs: {}, scores: {
-      'node:ny': { id: 'node:ny', score: 88, relocation: 'required', decision: 'recommend', profileVersion: '0:0', assessmentVersion: ASSESSMENT_VERSION, reason: 'New York office required' },
-      'node:compatible': { id: 'node:compatible', score: 79, relocation: 'not_required', decision: 'skip', profileVersion: '0:0', assessmentVersion: ASSESSMENT_VERSION, reason: 'Compatible location but unsuitable scope' },
-      'node:unclear': { id: 'node:unclear', score: 95, relocation: 'unclear', reason: 'Needs location confirmation' },
-      'node:older': { id: 'node:older', score: 0, relocation: 'required', reason: 'Excluded,\nnot recommended' },
-      'node:missing': { id: 'node:missing', score: null, relocation: 'unclear', reason: 'Ad unavailable' },
+      'node:ny': storedAssessment('node:ny', 88, { relocation: 'required', reason: 'New York office required' }),
+      'node:compatible': storedAssessment('node:compatible', 79, { reason: 'Compatible location but unsuitable scope',
+        requirements: [{ requirement: 'Own production services', importance: 'essential', evidence: 'contradicted' }] }),
+      'node:unclear': { ...storedAssessment('node:unclear', 95, { relocation: 'unclear', reason: 'Needs location confirmation' }), policyId: 'earlier-policy' },
+      'node:older': { ...storedAssessment('node:older', 90, { relocation: 'required', reason: 'Excluded,\nnot recommended',
+        gates: { direction: 'fail', constraints: 'pass', eligibility: 'pass' } }), profileVersion: 'old' },
+      'node:missing': { id: 'node:missing', status: 'unavailable', reason: 'Ad unavailable', ...deriveDecision({ status: 'unavailable' }),
+        profileVersion: 'old', policyId: ASSESSMENT_POLICY_ID, scoredAt, host: null },
     } };
   });
   const files = createDocumentFiles({ directory, store: f.scoped.store, assertAvailable: f.scoped.assertAvailable });
@@ -120,10 +133,10 @@ test('complete CSV export uses native MCP resources alongside existing PDF expor
   assert.equal(page.total, 5); assert.equal(page.nextOffset, null);
   assert.equal(page.view, 'assessment_archive');
   assert.equal(page.reviewed, 2); assert.equal(page.needsReview, 3);
-  assert.ok(page.matches.every(row => !Object.hasOwn(row, 'profileVersion')));
-  assert.deepEqual(page.matches.map(row => [row.id, row.score, row.matchStatus]), [
-    ['node:compatible', 79, 'eligible'], ['node:unclear', 95, 'needs_location_confirmation'],
-    ['node:ny', 88, 'incompatible_location'], ['node:older', 0, 'zero_fit'], ['node:missing', null, 'unavailable'],
+  assert.ok(page.matches.every(row => ['profileVersion', 'policyId', 'host'].every(key => !Object.hasOwn(row, key))));
+  assert.deepEqual(page.matches.map(row => [row.id, row.overall, row.decision, row.matchStatus]), [
+    ['node:compatible', 79, 'skip', 'eligible'], ['node:unclear', 95, 'recommend', 'needs_location_confirmation'],
+    ['node:ny', 88, 'recommend', 'incompatible_location'], ['node:older', 90, 'skip', 'excluded'], ['node:missing', null, 'clarify', 'unavailable'],
   ]);
   const recommendationResponse = await client.callTool({ name: 'career_recommendations', arguments: {} });
   assert.notEqual(recommendationResponse.isError, true);
@@ -142,10 +155,15 @@ test('complete CSV export uses native MCP resources alongside existing PDF expor
   assert.equal(csv.mimeType, 'text/csv');
   assert.ok(csv.text.includes('"node:older"')); assert.ok(csv.text.includes('"node:missing"'));
   assert.ok(csv.text.includes('"Excluded,\nnot recommended"'));
-  assert.ok(csv.text.split('\r\n')[0].includes('"matchStatus"'));
-  assert.ok(csv.text.split('\r\n')[0].includes('"decision"'));
-  assert.ok(csv.text.split('\r\n')[0].includes('"reviewStatus"'));
-  assert.equal(csv.text.includes('"profileVersion"'), false);
+  const lines = csv.text.split('\r\n');
+  assert.equal(lines[0], ['id', 'title', 'company', 'overall', 'band', 'direction', 'capability', 'scope', 'preferences',
+    'directionGate', 'constraintsGate', 'eligibilityGate', 'publishedAt', 'salaryMinimum', 'salaryMaximum', 'salaryStated',
+    'salaryCurrency', 'salaryPeriod', 'city', 'location', 'workMode', 'relocation', 'matchStatus', 'decision', 'reviewStatus',
+    'pairwiseWins', 'reason', 'applyUrl'].map(column => `"${column}"`).join(','));
+  assert.equal(lines.find(line => line.startsWith('"node:ny"')), ['node:ny', '', '', '88', 'strong', '88', '88', '88', '88',
+    'pass', 'pass', 'pass', '', '', '', '', '', '', '', '', '', 'required', 'incompatible_location', 'recommend', 'current',
+    '', 'New York office required', ''].map(value => `"${value}"`).join(','));
+  assert.equal(csv.text.includes('profileVersion') || csv.text.includes('policyId') || csv.text.includes(ASSESSMENT_POLICY_ID), false);
   let previousRow = -1;
   for (const row of page.matches) {
     const rowStart = csv.text.indexOf(`"${row.id}"`);

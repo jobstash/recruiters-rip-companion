@@ -1,0 +1,18 @@
+{
+  "id": "node:eval-mic-director",
+  "title": "Director of Engineering",
+  "company": {
+    "name": "Stackwell",
+    "description": "Stackwell builds learning software for universities."
+  },
+  "publishedAt": "__RECENT__",
+  "applyUrl": "https://jobs.example.test/eval/mic-director",
+  "salary": null,
+  "city": "Lisbon",
+  "location": "Lisbon, Portugal",
+  "workMode": "hybrid",
+  "locationEvidence": [
+    "Advertised role location: Lisbon, Portugal (hybrid)"
+  ],
+  "ad": "Director of Engineering (Lisbon, hybrid).\n\nLead four engineering teams through their managers, own the engineering budget and hiring plan, and represent engineering on the leadership team. No hands-on coding expected.\n\nEssential: leading several engineering teams through managers; owning engineering budgets and hiring plans.\nPreferred: education technology."
+}

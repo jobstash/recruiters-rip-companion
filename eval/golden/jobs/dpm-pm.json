@@ -1,0 +1,24 @@
+{
+  "id": "node:eval-dpm-pm",
+  "title": "Product Manager, Booking",
+  "company": {
+    "name": "Wayfarer",
+    "description": "Wayfarer sells package holidays online."
+  },
+  "publishedAt": "__RECENT__",
+  "applyUrl": "https://jobs.example.test/eval/dpm-pm",
+  "salary": {
+    "minimum": 75000,
+    "maximum": 90000,
+    "stated": null,
+    "currency": "GBP",
+    "period": "year"
+  },
+  "city": "London",
+  "location": "London, United Kingdom",
+  "workMode": "hybrid",
+  "locationEvidence": [
+    "Advertised role location: London, United Kingdom (hybrid)"
+  ],
+  "ad": "Product Manager, Booking (London, hybrid). GBP 75,000–90,000 per year.\n\nOwn the booking product roadmap, run customer discovery with design and research, and define the metrics we use to judge success.\n\nEssential: owning a product roadmap; customer discovery.\nPreferred: defining and tracking product metrics."
+}

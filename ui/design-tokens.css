@@ -1,0 +1,92 @@
+/* recruiters.rip — current artifact tokens.json, 2026-10-15. See design.md. */
+:root, [data-theme="light"] {
+  --color-canvas: #f4f7fc;
+  --color-surface: #ffffff;
+  --color-facet: #dfe5ee;
+  --color-ink: #0e0f12;
+  --color-ink-2: #2a2e36;
+  --color-smoke: #656c78;
+  --color-dust: #a3aab5;
+  --color-void: #0a0b0e;
+  --color-light: #f4f7fc;
+  --color-disperse-red: oklch(0.76 0.15 15);
+  --color-disperse-amber: oklch(0.85 0.13 70);
+  --color-disperse-green: oklch(0.86 0.15 150);
+  --color-disperse-azure: oklch(0.80 0.12 250);
+  --color-disperse-violet: oklch(0.78 0.12 295);
+  --surface-canvas: var(--color-canvas);
+  --surface-card: var(--color-surface);
+  --surface-facet: var(--color-facet);
+  --shadow-focus-ring: 0 0 0 2px #f4f7fc, 0 0 0 4px #0e0f12;
+  --shadow-input-focus: 0 0 0 3px rgba(128, 195, 255, 0.35);
+  --shadow-light-glow: 0 0 12px rgba(244, 247, 252, 0.55);
+  --shadow-edge-glow: 0 0 14px rgba(128, 195, 255, 0.45);
+}
+[data-theme="dark"] {
+  --color-canvas: #0a0b0e;
+  --color-surface: #14161b;
+  --color-facet: #272b34;
+  --color-ink: #f4f7fc;
+  --color-ink-2: #e3e8f0;
+  --color-smoke: #9aa3b1;
+  --color-dust: #5c6370;
+  --color-void: #0a0b0e;
+  --color-light: #f4f7fc;
+  --color-disperse-red: oklch(0.76 0.15 15);
+  --color-disperse-amber: oklch(0.85 0.13 70);
+  --color-disperse-green: oklch(0.86 0.15 150);
+  --color-disperse-azure: oklch(0.80 0.12 250);
+  --color-disperse-violet: oklch(0.78 0.12 295);
+  --shadow-focus-ring: 0 0 0 2px #0a0b0e, 0 0 0 4px #f4f7fc;
+}
+:root {
+  --spacing-unit: 8px;
+  --spacing-8: 8px;
+  --spacing-16: 16px;
+  --spacing-24: 24px;
+  --spacing-32: 32px;
+  --spacing-40: 40px;
+  --spacing-64: 64px;
+  --spacing-80: 80px;
+  --spacing-120: 120px;
+  --radius-none: 0;
+  --radius-sm: 2px;
+  --radius-pills: 9999px;
+  --radius-buttons: 2px;
+  --radius-inputs: 0;
+  --radius-cards: 0;
+  --page-max-width: 1200px;
+  --section-gap: 80px;
+  --card-padding: 24px;
+  --element-gap: 16px;
+  --font-serif: "Instrument Serif", "Times New Roman", Times, serif;
+  --font-geist: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-geist-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --font-datatype: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --text-display: 400 112px/0.92 var(--font-serif);
+  --tracking-display: -0.025em;
+  --text-display-sm: 400 72px/0.95 var(--font-serif);
+  --tracking-display-sm: -0.02em;
+  --text-heading: 400 40px/1.05 var(--font-serif);
+  --tracking-heading: -0.01em;
+  --text-heading-sm: 400 28px/1.15 var(--font-serif);
+  --text-subheading: 400 20px/1.4 var(--font-geist);
+  --text-body: 400 16px/1.5 var(--font-geist);
+  --text-body-sm: 400 14px/1.5 var(--font-geist);
+  --text-label: 500 12px/1.33 var(--font-geist-mono);
+  --tracking-label: 0.08em;
+  --text-meta: 400 13px/1.6 var(--font-geist-mono);
+  --tracking-meta: 0.02em;
+  --text-code: 400 14px/1.6 var(--font-geist-mono);
+  --text-stat: 400 56px/1 var(--font-geist-mono);
+  --tracking-stat: -0.03em;
+  --rr-dispersion: linear-gradient(90deg in oklab, var(--color-disperse-red), var(--color-disperse-amber), var(--color-disperse-green), var(--color-disperse-azure), var(--color-disperse-violet));
+  --rr-dispersion-v: linear-gradient(180deg in oklab, var(--color-disperse-red), var(--color-disperse-amber), var(--color-disperse-green), var(--color-disperse-azure), var(--color-disperse-violet));
+}
+@font-face { font-family: "Instrument Serif"; src: url("fonts/InstrumentSerif-Regular.woff2") format("woff2"); font-weight: 400; font-style: normal; font-display: swap; }
+@font-face { font-family: "Geist"; src: url("fonts/Geist-Regular.woff2") format("woff2"); font-weight: 400; font-style: normal; font-display: swap; }
+@font-face { font-family: "Geist"; src: url("fonts/Geist-Medium.woff2") format("woff2"); font-weight: 500; font-style: normal; font-display: swap; }
+@font-face { font-family: "Geist"; src: url("fonts/Geist-SemiBold.woff2") format("woff2"); font-weight: 600; font-style: normal; font-display: swap; }
+@font-face { font-family: "Geist Mono"; src: url("fonts/GeistMono-Regular.woff2") format("woff2"); font-weight: 400; font-style: normal; font-display: swap; }
+@font-face { font-family: "Geist Mono"; src: url("fonts/GeistMono-Medium.woff2") format("woff2"); font-weight: 500; font-style: normal; font-display: swap; }
+@font-face { font-family: "Geist Mono"; src: url("fonts/GeistMono-SemiBold.woff2") format("woff2"); font-weight: 600; font-style: normal; font-display: swap; }

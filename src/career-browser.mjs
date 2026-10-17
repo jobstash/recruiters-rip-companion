@@ -1,9 +1,11 @@
 import { createRequire } from 'node:module';
 import { cvHeading } from './mcp/application-tools.mjs';
+import { renderableCv } from './mcp/cv-quality.mjs';
 import { createMatchingTools } from './mcp/matching-tools.mjs';
 import { fail, readCareer } from './mcp/state.mjs';
+import { comparePrescanRows, currentPrescanRow } from './prescan/state.mjs';
 
-const kinds = ['sources', 'facts', 'rankings', 'applications'];
+const kinds = ['sources', 'facts', 'jobs', 'applications'];
 const forbidden = new Set(['__proto__', 'prototype', 'constructor']);
 const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const own = (value, key) => record(value) && Object.hasOwn(value, key);
@@ -11,8 +13,10 @@ const text = (value, fallback = 'Not saved') => typeof value === 'string' && val
 const scalar = value => typeof value === 'string' ? value : typeof value === 'number' || typeof value === 'boolean' ? String(value) : 'Not saved';
 const section = (heading, value) => ({ heading, text: text(value) });
 // Field sections let the reader present labelled values instead of "Label: value" prose.
+// A third row element `numeric` marks scores that the reader sets in Geist Mono.
 const fields = (heading, rows, empty) => {
-  const values = rows.filter(([, value]) => value !== null && value !== undefined && value !== '').map(([label, value]) => ({ label, value: scalar(value) }));
+  const values = rows.filter(([, value]) => value !== null && value !== undefined && value !== '')
+    .map(([label, value, kind]) => ({ label, value: scalar(value), ...(kind === 'numeric' ? { numeric: true } : {}) }));
   return values.length ? { heading, fields: values } : { heading, text: empty };
 };
 const amount = value => Number.isFinite(value) ? value.toLocaleString('en-GB') : null;
@@ -30,11 +34,11 @@ function validate(args, fields) {
 
 function sourceDetail(source) {
   return { title: text(source.name, 'Untitled source'), sections: [
-    fields('Source', [
-      ['Status', source.archived ? 'Archived' : 'Current'], ['Purpose', readable(source.purpose)],
+    fields(source.purpose === 'cv' ? 'CV' : 'Source', [
+      ['Status', source.archived ? 'Archived' : 'Current'], ['Purpose', source.purpose === 'cv' ? undefined : readable(source.purpose)],
       ['Added', displayDate(source.createdAt)],
     ], 'No source details saved.'),
-    section('Extracted source text', text(source.text, 'No extracted text is saved for this source.')),
+    section('Text', text(source.text, 'No extracted text is saved for this source.')),
   ] };
 }
 
@@ -63,7 +67,7 @@ function draftSections(kind, draft, career, historical = false) {
   if (kind === 'cv' && record(draft.document)) {
     // Use the same profile header and reading order as exported CVs.
     renderCv ??= createRequire(import.meta.url)('./generated/document-engine.cjs').renderCareerCvText;
-    wording = renderCv({ document: draft.document, heading: cvHeading(career.profile ?? {}) });
+    wording = renderCv({ document: renderableCv(draft.document), heading: cvHeading(career.profile ?? {}) });
   } else if (kind === 'cover_letter' && Array.isArray(draft.paragraphs)) {
     wording = draft.paragraphs.filter(item => typeof item === 'string').join('\n\n');
   }
@@ -83,42 +87,136 @@ function applicationDetail(app, career) {
     ...(Array.isArray(app.coverLetterHistory) ? app.coverLetterHistory.flatMap(draft => draftSections('cover_letter', draft, career, true)) : []),
   ] };
 }
-function rankingItem(row) {
-  const title = [text(row.title, ''), text(row.company, '')].filter(Boolean).join(' — ') || 'Job details unavailable';
-  const score = row.score == null ? 'Unavailable' : scalar(row.score);
-  const labels = {
-    recommend: 'Recommended', clarify: 'Needs clarification', skip: 'Not recommended',
-    current: 'Current assessment', needs_review: 'Needs reassessment',
-    eligible: 'Location compatible', requires_relocation: 'Relocation required',
-    needs_location_confirmation: 'Location needs confirmation', incompatible_location: 'Location incompatible',
-    zero_fit: 'No fit', unavailable: 'Assessment unavailable',
-    required: 'Required', not_required: 'Not required', unclear: 'Unclear',
-    below_minimum: 'Below your minimum', range_can_meet_minimum: 'Range can meet your minimum',
-    meets_minimum: 'Meets your minimum', not_comparable: 'Cannot compare with your minimum',
-    unbounded_range: 'Upper salary bound not stated', not_stated: 'Salary not stated',
-  };
-  const label = value => own(labels, value) ? labels[value] : readable(value);
-  const salary = row.salary;
+const assessmentLabels = {
+  recommend: 'Recommended', clarify: 'Needs clarification', skip: 'Not recommended',
+  current: 'Reviewed', needs_review: 'Needs reassessment',
+  eligible: 'Location compatible', requires_relocation: 'Relocation required',
+  needs_location_confirmation: 'Location needs confirmation', incompatible_location: 'Location incompatible',
+  excluded: 'Excluded by a gate', unavailable: 'Assessment unavailable',
+  required: 'Required', not_required: 'Not required', unclear: 'Unclear',
+  below_minimum: 'Below your minimum', range_can_meet_minimum: 'Range can meet your minimum',
+  meets_minimum: 'Meets your minimum', not_comparable: 'Cannot compare with your minimum',
+  unbounded_range: 'Upper salary bound not stated', not_stated: 'Salary not stated',
+};
+const assessmentLabel = value => own(assessmentLabels, value) ? assessmentLabels[value] : readable(value);
+const prescanLabels = {
+  aligned: 'Potentially aligned', uncertain: 'Unresolved', conflict: 'Potential conflict',
+  unavailable: 'Original advert unavailable', oversize: 'Input exceeds the provider limit', refused: 'Provider declined assessment',
+};
+const prescanPriority = row => row.status === 'scored' && Number.isInteger(row.priority) && row.priority >= 0 && row.priority <= 100
+  ? `${row.priority}/100` : 'Not scored';
+const prescanVerdicts = row => [row.direction, row.constraints, row.eligibility];
+const prescanOutcome = row => prescanPriority(row) === 'Not scored' ? prescanLabels[row.status] || 'Unresolved'
+  : prescanVerdicts(row).includes('conflict') ? 'Potential conflict'
+    : prescanVerdicts(row).every(verdict => verdict === 'aligned') ? 'Potentially aligned' : 'Unresolved';
+const bandLabel = band => typeof band === 'string' && band ? band.replace(/^./, letter => letter.toUpperCase()) : undefined;
+const overallLabel = row => Number.isInteger(row.overall) ? `${row.overall}/100 (${bandLabel(row.band)})` : 'Unavailable';
+const gateLabels = { pass: 'Passes', flag: 'Needs confirmation', fail: 'Fails' };
+const outOf100 = value => Number.isInteger(value) ? `${value}/100` : undefined;
+const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
+
+function reviewedSections(row) {
+  const requirements = Array.isArray(row.requirements) ? row.requirements.filter(record) : [];
+  return [
+    fields('Reviewed fit', [
+      ['Status', assessmentLabel(row.reviewStatus)],
+      ['Overall fit', overallLabel(row), Number.isInteger(row.overall) ? 'numeric' : undefined],
+      ['Saved decision', assessmentLabel(row.decision) || 'No saved decision'],
+      ['Location match', assessmentLabel(row.matchStatus)],
+      ['Pairwise rank', Number.isFinite(row.pairwiseWins) ? `${plural(row.pairwiseWins, 'win')} of ${plural(row.pairwiseCompared, 'comparison')}` : undefined],
+    ], 'No assessment saved.'),
+    ...(record(row.dimensions) ? [fields('Fit breakdown', [
+      ['Direction', outOf100(row.dimensions.direction), 'numeric'], ['Capability', outOf100(row.dimensions.capability), 'numeric'],
+      ['Scope', outOf100(row.dimensions.scope), 'numeric'], ['Preferences', outOf100(row.dimensions.preferences), 'numeric'],
+    ], 'No breakdown saved.')] : []),
+    ...(record(row.gates) ? [fields('Gates', [
+      ['Career direction', gateLabels[row.gates.direction]], ['Mandatory conditions', gateLabels[row.gates.constraints]],
+      ['Eligibility', gateLabels[row.gates.eligibility]],
+    ], 'No gates saved.')] : []),
+    ...(requirements.length ? [fields('Requirements', requirements.map(item =>
+      [text(item.requirement, 'Unnamed requirement'), [readable(item.importance), readable(item.evidence)].filter(Boolean).join(' · ')]),
+    'No requirements saved.')] : []),
+    section('Review reason', text(row.reason, 'No reason is saved.')),
+  ];
+}
+
+function prescanSection(row) {
+  return fields('Pre-scan result', [
+    ['Status', row.current ? 'Preliminary' : 'Out of date'],
+    ['Priority', prescanPriority(row), row.status === 'scored' && Number.isInteger(row.priority) ? 'numeric' : undefined], ['Outcome', prescanOutcome(row)],
+    ['Career direction', prescanLabels[row.direction]], ['Mandatory conditions', prescanLabels[row.constraints]],
+    ['Eligibility', prescanLabels[row.eligibility]],
+    ['Preliminary breakdown', record(row.dimensions) && Number.isInteger(row.dimensions.direction)
+      ? `Direction ${row.dimensions.direction} · Capability ${row.dimensions.capability} · Scope ${row.dimensions.scope} · Preferences ${row.dimensions.preferences}` : undefined],
+    ['Model confidence', Number.isFinite(row.confidence) ? `${Math.round(row.confidence * 100)}% (not a hiring probability)` : undefined],
+    ['Provider', row.provider === 'openai' ? 'OpenAI Decisions' : row.provider], ['Model', row.model],
+  ], 'No pre-scan result saved.');
+}
+
+function jobItem({ id, reviewed, prescan }) {
+  // Both assessments describe one role; prefer catalogue metadata and retain saved pre-scan fallbacks.
+  const role = key => reviewed?.[key] ?? prescan?.[key];
+  const title = [text(role('title'), ''), text(role('company'), '')].filter(Boolean).join(' — ') || 'Job details unavailable';
+  const salary = role('salary');
   const range = salary && (amount(salary.stated) ?? [amount(salary.minimum), amount(salary.maximum)].filter(Boolean).join('–'));
   const pay = range ? [salary.currency, range, salary.period && `per ${salary.period}`].filter(Boolean).join(' ') : null;
-  return { id: row.id, title, summary: `${score} · ${label(row.decision) || 'No saved decision'}`, sections: [
-    fields('Job fit', [
-      ['Score', score], ['Decision', label(row.decision) || 'No saved decision'], ['Location match', label(row.matchStatus)],
-      ['Before applying', row.reviewStatus === 'needs_review' ? 'Reassess against your current profile.' : undefined],
-    ], 'No assessment saved.'),
-    section('Reason', text(row.reason, 'No reason is saved.')),
+  const preferReviewed = reviewed && (reviewed.reviewStatus === 'current' || !prescan?.current);
+  const summary = preferReviewed
+    ? `${assessmentLabel(reviewed.reviewStatus)} · ${Number.isInteger(reviewed.overall) ? `Overall ${reviewed.overall}/100 · ${bandLabel(reviewed.band)}` : 'Overall unavailable'} · ${assessmentLabel(reviewed.decision) || 'No saved decision'}`
+    : `${prescan.current ? 'Pre-scan' : 'Out of date pre-scan'} · Priority ${prescanPriority(prescan)} · ${prescanOutcome(prescan)}`;
+  const review = reviewed ? reviewedSections(reviewed) : [];
+  const preliminary = prescan ? [prescanSection(prescan)] : [];
+  return { id, title, summary, sections: [
+    ...(preferReviewed ? [...review, ...preliminary] : [...preliminary, ...review]),
     fields('Role', [
-      ['City', row.city], ['Location', row.location], ['Work mode', row.workMode], ['Relocation', label(row.relocation)],
-      ['Salary', pay || 'Not stated'],
-      ['Against your minimum', row.salaryEligibility?.status === 'not_required' ? undefined : label(row.salaryEligibility?.status)],
-      ['Published', displayDate(row.publishedAt) || 'Not stated'], ['Apply URL', row.applyUrl],
+      ['City', role('city')], ['Location', role('location')], ['Work mode', role('workMode')],
+      ['Relocation', assessmentLabel(reviewed?.relocation)], ['Salary', pay || 'Not stated'],
+      ['Against your minimum', reviewed?.salaryEligibility?.status === 'not_required' ? undefined : assessmentLabel(reviewed?.salaryEligibility?.status)],
+      ['Published', displayDate(role('publishedAt')) || 'Not stated'], ['Apply URL', role('applyUrl')],
     ], 'No role details saved.'),
   ] };
 }
 
+async function reviewedRows(career) {
+  const snapshot = { career };
+  const matches = createMatchingTools({ store: { get: () => snapshot } }).find(tool => tool.name === 'career_matches');
+  const rows = [];
+  let offset = 0;
+  do {
+    const page = await matches.invoke({ offset, limit: 100 });
+    rows.push(...page.matches);
+    offset = page.nextOffset;
+  } while (offset !== null);
+  return rows;
+}
+
+function prescanRow(career, id, row, now) {
+  const saved = { ...row, id };
+  return { ...saved, provider: career.prescan.provider, model: career.prescan.model,
+    current: currentPrescanRow(career, saved, now) };
+}
+
+async function jobRows(career) {
+  const now = Date.now();
+  const rows = new Map();
+  for (const [index, reviewed] of (await reviewedRows(career)).entries()) {
+    if (!forbidden.has(reviewed.id)) rows.set(reviewed.id, { id: reviewed.id, reviewed, index });
+  }
+  for (const [id, row] of entries(career.prescan?.rows)) {
+    const item = rows.get(id) ?? { id };
+    item.prescan = prescanRow(career, id, row, now);
+    rows.set(id, item);
+  }
+  // Current final reviews lead, then current preliminary results, then the saved archive.
+  // Never compare a pre-scan priority with a final score.
+  const group = row => row.reviewed?.reviewStatus === 'current' ? 0 : row.prescan?.current ? 1 : row.reviewed ? 2 : 3;
+  return [...rows.values()].sort((a, b) => group(a) - group(b) ||
+    (group(a) === 0 || group(a) === 2 ? a.index - b.index : comparePrescanRows(a.prescan, b.prescan)));
+}
+
 /** Read-only, allowlisted projections: never return the vault or binary source data. */
 export function createCareerBrowser({ store }) {
-  const matches = createMatchingTools({ store }).find(tool => tool.name === 'career_matches');
+  // Every operation reads the store once; canonical projections share that immutable snapshot.
   const detail = (kind, item, career) => kind === 'sources' ? sourceDetail(item) :
     kind === 'facts' ? factDetail(item, career) : applicationDetail(item, career);
   return {
@@ -128,14 +226,15 @@ export function createCareerBrowser({ store }) {
       if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isInteger(limit) || limit < 1 || limit > 100) {
         fail('INVALID_INPUT', 'Use limit 1–100 and a nonnegative safe integer offset.');
       }
-      if (kind === 'rankings') {
-        const page = await matches.invoke({ offset, limit });
-        return { items: page.matches.map(rankingItem), total: page.total, nextOffset: page.nextOffset };
-      }
       const career = readCareer(store);
+      if (kind === 'jobs') {
+        const rows = await jobRows(career);
+        const items = rows.slice(offset, offset + limit).map(jobItem);
+        return { items, total: rows.length, nextOffset: offset + items.length < rows.length ? offset + items.length : null };
+      }
       const records = entries(career[kind]);
       const items = records.slice(offset, offset + limit).map(([id, item]) => {
-        if (kind === 'sources') return { id, title: text(item.name, 'Untitled source'), summary: [readable(item.purpose), item.archived ? 'Archived' : ''].filter(Boolean).join(' · ') };
+        if (kind === 'sources') return { id, title: text(item.name, 'Untitled source'), summary: [item.purpose === 'cv' ? '' : readable(item.purpose), item.archived ? 'Archived' : ''].filter(Boolean).join(' · ') };
         if (kind === 'facts') return { id, title: text(item.subject, 'Untitled fact'), summary: item.detail?.trim() ? item.detail : text(item.answer, '') };
         return { id, title: applicationTitle(item), summary: `${item.cv ? 'CV draft saved' : 'No CV draft'} · ${item.coverLetter ? 'Cover letter saved' : 'No cover letter draft'}` };
       });
@@ -148,16 +247,15 @@ export function createCareerBrowser({ store }) {
         fail('INVALID_INPUT', 'Choose a saved record ID.');
       }
       const career = readCareer(store);
-      if (kind === 'rankings') {
+      if (kind === 'jobs') {
         const assessment = lookup(career.matching?.scores, id);
-        if (!assessment) fail('NOT_FOUND', 'This saved ranking was not found. Refresh the list.');
-        // A single-key snapshot keeps canonical assessment semantics without paging the archive.
-        const snapshot = { career: { ...career, matching: {
-          jobs: { [id]: lookup(career.matching?.jobs, id) ?? {} }, scores: { [id]: assessment },
-        } } };
-        const single = createMatchingTools({ store: { get: () => snapshot } }).find(tool => tool.name === 'career_matches');
-        const page = await single.invoke({ offset: 0, limit: 1 });
-        const { title, sections } = rankingItem(page.matches[0]);
+        const savedPrescan = lookup(career.prescan?.rows, id);
+        if (!assessment && !savedPrescan) fail('NOT_FOUND', 'This saved job was not found. Refresh the list.');
+        const now = Date.now();
+        // Project every final assessment so pairwise comparisons stay current, then pick this job.
+        const reviewed = assessment ? (await reviewedRows(career)).find(row => row.id === id) ?? null : null;
+        const prescan = savedPrescan ? prescanRow(career, id, savedPrescan, now) : null;
+        const { title, sections } = jobItem({ id, reviewed, prescan });
         return { title, sections };
       }
       const item = lookup(career[kind], id);

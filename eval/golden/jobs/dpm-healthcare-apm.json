@@ -1,0 +1,24 @@
+{
+  "id": "node:eval-dpm-healthcare-apm",
+  "title": "Associate Product Manager",
+  "company": {
+    "name": "Kindred Care",
+    "description": "Kindred Care builds software for home-care providers."
+  },
+  "publishedAt": "__RECENT__",
+  "applyUrl": "https://jobs.example.test/eval/dpm-healthcare-apm",
+  "salary": {
+    "minimum": 65000,
+    "maximum": 75000,
+    "stated": null,
+    "currency": "GBP",
+    "period": "year"
+  },
+  "city": "London",
+  "location": "London, United Kingdom",
+  "workMode": "hybrid",
+  "locationEvidence": [
+    "Advertised role location: London, United Kingdom (hybrid)"
+  ],
+  "ad": "Associate Product Manager (London, hybrid). GBP 65,000–75,000 per year.\n\nSupport discovery with patients and carers, write product requirements with engineering, and track adoption.\n\nEssential: discovery with patients and clinicians or carers; writing product requirements with engineering.\nPreferred: healthcare product experience."
+}

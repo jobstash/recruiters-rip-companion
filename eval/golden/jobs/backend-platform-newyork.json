@@ -1,0 +1,18 @@
+{
+  "id": "node:eval-backend-platform-newyork",
+  "title": "Senior Backend Engineer, Platform APIs",
+  "company": {
+    "name": "Tessellate",
+    "description": "Tessellate builds scheduling software for manufacturers."
+  },
+  "publishedAt": "__RECENT__",
+  "applyUrl": "https://jobs.example.test/eval/backend-platform-newyork",
+  "salary": null,
+  "city": "New York",
+  "location": "New York, United States",
+  "workMode": "hybrid",
+  "locationEvidence": [
+    "Advertised role location: New York, United States (hybrid)"
+  ],
+  "ad": "Senior Backend Engineer, Platform APIs\n\nLocation: New York, United States office (hybrid). Compensation is discussed at offer stage.\n\nTessellate builds a scheduling platform used by mid-sized manufacturers. You will design and evolve the public APIs that customers integrate with, and own the services behind them in production.\n\nWhat you will do: design versioned REST and event APIs; build and operate Go services on PostgreSQL; join the on-call rotation for the services you own; improve observability and runbooks.\n\nWhat you bring (essential): several years designing and operating backend services and public APIs; production operations experience.\n\nNice to have: PostgreSQL performance tuning; event streaming.\n\nThis is an individual contributor role with no direct reports."
+}

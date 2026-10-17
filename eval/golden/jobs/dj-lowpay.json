@@ -1,0 +1,24 @@
+{
+  "id": "node:eval-dj-lowpay",
+  "title": "Junior Data Analyst",
+  "company": {
+    "name": "Cornerstall",
+    "description": "Cornerstall runs convenience stores in Ontario."
+  },
+  "publishedAt": "__RECENT__",
+  "applyUrl": "https://jobs.example.test/eval/dj-lowpay",
+  "salary": {
+    "minimum": 45000,
+    "maximum": 52000,
+    "stated": null,
+    "currency": "CAD",
+    "period": "year"
+  },
+  "city": "Toronto",
+  "location": "Toronto, Canada",
+  "workMode": "onsite",
+  "locationEvidence": [
+    "Advertised role location: Toronto, Canada (onsite)"
+  ],
+  "ad": "Junior Data Analyst (Toronto, onsite). CAD 45,000–52,000 per year.\n\nWrite SQL reports on store sales and clean supplier data in Python.\n\nEssential: SQL.\nPreferred: Python data cleaning."
+}

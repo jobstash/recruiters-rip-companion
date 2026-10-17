@@ -1,0 +1,24 @@
+{
+  "id": "node:eval-backend-exact",
+  "title": "Senior Backend Engineer",
+  "company": {
+    "name": "Parcelwise",
+    "description": "Parcelwise builds delivery orchestration software for regional couriers."
+  },
+  "publishedAt": "__RECENT__",
+  "applyUrl": "https://jobs.example.test/eval/backend-exact",
+  "salary": {
+    "minimum": 95000,
+    "maximum": 115000,
+    "stated": null,
+    "currency": "EUR",
+    "period": "year"
+  },
+  "city": "Berlin",
+  "location": "Berlin, Germany",
+  "workMode": "hybrid",
+  "locationEvidence": [
+    "Advertised role location: Berlin, Germany (hybrid, two office days a week)"
+  ],
+  "ad": "Senior Backend Engineer (Berlin, hybrid). Salary EUR 95,000–115,000 per year.\n\nParcelwise routes parcels for regional couriers. You will design and operate the Go services that assign shipments to carriers, model delivery data in PostgreSQL and keep our event pipeline healthy.\n\nEssential: production Go service design and operation; PostgreSQL data modelling and query performance.\nPreferred: event-driven systems with Kafka; ownership of on-call for your services.\n\nIndividual contributor role, no direct reports."
+}

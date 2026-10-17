@@ -1,0 +1,18 @@
+{
+  "id": "node:eval-mic-fullstack",
+  "title": "Senior Full-Stack Engineer",
+  "company": {
+    "name": "Leafcycle",
+    "description": "Leafcycle helps households track and cut their carbon footprint."
+  },
+  "publishedAt": "__RECENT__",
+  "applyUrl": "https://jobs.example.test/eval/mic-fullstack",
+  "salary": null,
+  "city": null,
+  "location": "Europe",
+  "workMode": "remote",
+  "locationEvidence": [
+    "Advertised role location: Remote within the EU"
+  ],
+  "ad": "Senior Full-Stack Engineer, remote within the EU.\n\nHands-on role building our React and TypeScript web app and the Node.js APIs behind it. You will model data in PostgreSQL and keep our automated test suite trustworthy.\n\nEssential: hands-on React and TypeScript front-end development; Node.js API development.\nPreferred: PostgreSQL data modelling; automated end-to-end testing.\n\nNo direct reports."
+}

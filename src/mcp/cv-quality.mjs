@@ -8,19 +8,29 @@ const placeholders = [
 const wordCount = text => text.match(/\S+/gu)?.length ?? 0;
 
 /**
- * Every authored text field of a structured CvDocument, in reading order.
- * `bullet` marks list items; `date` marks structured date fields.
- * @returns {Array<{field: string, text: string, bullet?: boolean, date?: boolean}>}
+ * The rendered form of a stored CV draft: highlights and experience bullets are
+ * `{text, support}` claims in storage; renderers, measures and checks see text only.
+ */
+export function renderableCv(document) {
+  return { ...document, ...(document.highlights ? { highlights: document.highlights.map(claim => claim.text) } : {}),
+    experience: document.experience.map(entry => ({ ...entry, bullets: entry.bullets.map(claim => claim.text) })) };
+}
+
+/**
+ * Every authored text field of a renderable CvDocument, in reading order.
+ * `bullet` marks list items; `claim` marks evidence-cited highlights and
+ * experience bullets; `date` marks structured date fields.
+ * @returns {Array<{field: string, text: string, bullet?: boolean, claim?: boolean, date?: boolean}>}
  */
 export function cvDocumentTexts(document) {
   const texts = [{ field: 'headline', text: document.headline }, { field: 'summary', text: document.summary }];
   const add = (field, text, extra = {}) => { if (typeof text === 'string') texts.push({ field, text, ...extra }); };
-  (document.highlights ?? []).forEach((text, index) => add(`highlights[${index}]`, text, { bullet: true }));
+  (document.highlights ?? []).forEach((text, index) => add(`highlights[${index}]`, text, { bullet: true, claim: true }));
   document.experience.forEach((entry, index) => {
     const at = `experience[${index}]`;
     for (const key of ['employer', 'role', 'location']) add(`${at}.${key}`, entry[key]);
     for (const key of ['startDate', 'endDate']) add(`${at}.${key}`, entry[key], { date: true });
-    entry.bullets.forEach((text, bullet) => add(`${at}.bullets[${bullet}]`, text, { bullet: true }));
+    entry.bullets.forEach((text, bullet) => add(`${at}.bullets[${bullet}]`, text, { bullet: true, claim: true }));
   });
   (document.education ?? []).forEach((entry, index) => {
     for (const key of ['institution', 'qualification', 'details']) add(`education[${index}].${key}`, entry[key]);

@@ -11,10 +11,18 @@ export class CareerError extends Error {
   constructor(code, message) { super(message); this.code = code; }
 }
 export function fail(code, message) { throw new CareerError(code, message); }
+export const CAREER_SCHEMA = 2;
 export function createCareerState() {
-  return { version: 1, revision: 0, evidenceRevision: 0,
+  return { version: CAREER_SCHEMA, revision: 0, evidenceRevision: 0,
     profile: { name: null, headline: null, email: null, phone: null, location: null, links: [], roleCapabilities: [], seniority: null, skills: [], preferences: {} },
     sources: {}, facts: {}, applications: {}, receipts: {} };
+}
+/** Schema cutover without migration: keeps CV sources and profile, discards everything else and invalidates evidence and rankings. */
+export function upgradeCareer(old) {
+  if (old?.version === CAREER_SCHEMA) return old;
+  const fresh = createCareerState();
+  return { ...fresh, profile: old?.profile ?? fresh.profile, sources: old?.sources ?? {},
+    evidenceRevision: (old?.evidenceRevision ?? 0) + 1, rankingVersion: (old?.rankingVersion ?? 0) + 1 };
 }
 export function readCareer(store) { return store.get().career ?? createCareerState(); }
 function preflight(career, { requestId, revision }, operation, input) {

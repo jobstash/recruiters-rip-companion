@@ -1,0 +1,18 @@
+{
+  "id": "node:eval-mic-backend-node",
+  "title": "Senior Backend Engineer (Node.js)",
+  "company": {
+    "name": "Chalkline",
+    "description": "Chalkline makes classroom assessment tools for schools."
+  },
+  "publishedAt": "__RECENT__",
+  "applyUrl": "https://jobs.example.test/eval/mic-backend-node",
+  "salary": null,
+  "city": "Lisbon",
+  "location": "Lisbon, Portugal",
+  "workMode": "hybrid",
+  "locationEvidence": [
+    "Advertised role location: Lisbon, Portugal (hybrid)"
+  ],
+  "ad": "Senior Backend Engineer (Node.js), Lisbon hybrid.\n\nBuild the Node.js APIs teachers use to create and grade assessments, and design the PostgreSQL schemas behind them.\n\nEssential: Node.js API development; PostgreSQL schema design.\nPreferred: education product experience.\n\nIndividual contributor role."
+}

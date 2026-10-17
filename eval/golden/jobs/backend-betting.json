@@ -1,0 +1,24 @@
+{
+  "id": "node:eval-backend-betting",
+  "title": "Senior Backend Engineer",
+  "company": {
+    "name": "Spinstake",
+    "description": "Spinstake operates online sports betting and casino products."
+  },
+  "publishedAt": "__RECENT__",
+  "applyUrl": "https://jobs.example.test/eval/backend-betting",
+  "salary": {
+    "minimum": 100000,
+    "maximum": 120000,
+    "stated": null,
+    "currency": "EUR",
+    "period": "year"
+  },
+  "city": "Berlin",
+  "location": "Berlin, Germany",
+  "workMode": "hybrid",
+  "locationEvidence": [
+    "Advertised role location: Berlin, Germany (hybrid)"
+  ],
+  "ad": "Senior Backend Engineer (Berlin, hybrid). EUR 100,000–120,000 per year.\n\nSpinstake runs a sportsbook and online casino. You will build the services that settle bets and move player funds at high transaction volume.\n\nEssential: backend services at high transaction volume.\nPreferred: payments reconciliation.\n\nIndividual contributor role."
+}

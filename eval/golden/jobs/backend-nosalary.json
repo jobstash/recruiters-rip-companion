@@ -1,0 +1,18 @@
+{
+  "id": "node:eval-backend-nosalary",
+  "title": "Backend Engineer (Go)",
+  "company": {
+    "name": "Cratebox",
+    "description": "Cratebox makes developer tooling for package registries."
+  },
+  "publishedAt": "__RECENT__",
+  "applyUrl": "https://jobs.example.test/eval/backend-nosalary",
+  "salary": null,
+  "city": null,
+  "location": "Germany",
+  "workMode": "remote",
+  "locationEvidence": [
+    "Advertised role location: Remote within Germany"
+  ],
+  "ad": "Backend Engineer (Go), remote within Germany.\n\nCratebox runs package registries for engineering teams. You will build Go APIs, design relational schemas for package metadata and deploy services to AWS.\n\nEssential: Go API development; relational database design.\nPreferred: AWS deployment with infrastructure as code.\n\nSenior individual contributor role."
+}

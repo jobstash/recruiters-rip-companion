@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cvDocumentTexts, inspectCvQuality, unsupportedNumbers } from '../src/mcp/cv-quality.mjs';
+import { cvDocumentTexts, inspectCvQuality, renderableCv, unsupportedNumbers } from '../src/mcp/cv-quality.mjs';
 
 const words = count => Array.from({ length: count }, (_, index) => `word${index}`).join(' ');
 const heading = { name: 'Jane Candidate', contact: 'jane@example.test' };
@@ -53,6 +53,17 @@ test('document texts enumerate every authored field and mark dates', () => {
     ['experience[0].startDate', 'experience[0].endDate', 'education[0].startDate']);
   for (const field of ['headline', 'experience[0].employer', 'experience[0].bullets[0]', 'education[0].institution', 'languages[0].proficiency', 'certifications[0]', 'additional[0].title', 'additional[0].items[0]'])
     assert.ok(texts.some(item => item.field === field), field);
+  assert.deepEqual(cvDocumentTexts(cv({ highlights: ['Shipped.'] })).filter(item => item.claim).map(item => item.field), ['highlights[0]', 'experience[0].bullets[0]']);
+});
+
+test('renderable CVs replace cited claims with their text and never mutate the stored draft', () => {
+  const claim = text => ({ text, support: { cv: ['Built reliable services.'] } });
+  const stored = Object.freeze(cv({ highlights: [claim('Shipped.')],
+    experience: [{ employer: 'Acme', role: 'Engineer', startDate: '2018', endDate: '2024', bullets: [claim('Built reliable services.')] }] }));
+  const snapshot = structuredClone(stored);
+  assert.deepEqual(renderableCv(stored), cv({ highlights: ['Shipped.'] }));
+  assert.deepEqual(stored, snapshot);
+  assert.equal(Object.hasOwn(renderableCv(cv()), 'highlights'), false);
 });
 
 test('numeric guards compare whole tokens, not substrings or unqualified values', () => {

@@ -1,0 +1,24 @@
+{
+  "id": "node:eval-dj-lead",
+  "title": "Lead Data Analyst",
+  "company": {
+    "name": "Northgate Insurance",
+    "description": "Northgate Insurance sells home and auto insurance in Canada."
+  },
+  "publishedAt": "__RECENT__",
+  "applyUrl": "https://jobs.example.test/eval/dj-lead",
+  "salary": {
+    "minimum": 105000,
+    "maximum": 120000,
+    "stated": null,
+    "currency": "CAD",
+    "period": "year"
+  },
+  "city": "Toronto",
+  "location": "Toronto, Canada",
+  "workMode": "hybrid",
+  "locationEvidence": [
+    "Advertised role location: Toronto, Canada (hybrid)"
+  ],
+  "ad": "Lead Data Analyst (Toronto, hybrid). CAD 105,000–120,000 per year.\n\nLead a team of three analysts, set the analytics roadmap and advise executives.\n\nEssential: at least seven years of analytics experience; managing three analysts; advanced SQL."
+}

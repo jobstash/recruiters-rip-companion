@@ -1,0 +1,72 @@
+{
+  "id": "data-junior-visa",
+  "profile": {
+    "headline": "Junior data analyst",
+    "location": "Toronto, Canada",
+    "roleCapabilities": [
+      "SQL analysis",
+      "Dashboard reporting",
+      "Data cleaning"
+    ],
+    "seniority": "junior",
+    "skills": [
+      "SQL",
+      "Python",
+      "pandas",
+      "Tableau",
+      "Excel"
+    ],
+    "preferences": {
+      "roles": [
+        "Data analyst",
+        "Junior data analyst",
+        "Business intelligence analyst"
+      ],
+      "locations": [
+        "Toronto",
+        "Remote (Canada)"
+      ],
+      "workModes": [
+        "remote",
+        "hybrid",
+        "onsite"
+      ],
+      "employmentTypes": [
+        "permanent",
+        "contract"
+      ],
+      "salaryMinimum": 60000,
+      "salaryCurrency": "CAD",
+      "salaryPeriod": "year",
+      "requiresSponsorship": true,
+      "willingToRelocate": true,
+      "domains": [
+        "retail",
+        "transport",
+        "public sector"
+      ],
+      "notes": "Authorised to work in Canada. Needs visa sponsorship for any role outside Canada."
+    }
+  },
+  "cv": "Data Analyst (Graduate Programme), Maplewood Retail, Toronto, 2023–present\n- Wrote SQL queries against the sales warehouse to answer weekly merchandising questions.\n- Built Tableau dashboards tracking store performance for 40 regional managers.\n- Cleaned and joined supplier data in Python with pandas.\n\nAnalytics Intern, Northstar Transit, Toronto, 2022\n- Automated monthly ridership reports in Excel and Python.\n\nEducation: BSc Statistics, 2023",
+  "facts": [
+    {
+      "id": "d0000000-0000-4000-8000-000000000001",
+      "kind": "language",
+      "subject": "French",
+      "answer": "Professional"
+    },
+    {
+      "id": "d0000000-0000-4000-8000-000000000002",
+      "kind": "language",
+      "subject": "English",
+      "answer": "Native"
+    },
+    {
+      "id": "d0000000-0000-4000-8000-000000000003",
+      "kind": "yes_no",
+      "subject": "Authorised to work in Canada",
+      "answer": "Yes"
+    }
+  ]
+}

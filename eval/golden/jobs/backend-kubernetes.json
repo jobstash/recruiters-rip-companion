@@ -1,0 +1,24 @@
+{
+  "id": "node:eval-backend-kubernetes",
+  "title": "Senior Platform Engineer (Kubernetes)",
+  "company": {
+    "name": "Gridmesh",
+    "description": "Gridmesh runs a managed compute platform."
+  },
+  "publishedAt": "__RECENT__",
+  "applyUrl": "https://jobs.example.test/eval/backend-kubernetes",
+  "salary": {
+    "minimum": 100000,
+    "maximum": 120000,
+    "stated": null,
+    "currency": "EUR",
+    "period": "year"
+  },
+  "city": "Berlin",
+  "location": "Berlin, Germany",
+  "workMode": "hybrid",
+  "locationEvidence": [
+    "Advertised role location: Berlin, Germany (hybrid)"
+  ],
+  "ad": "Senior Platform Engineer (Kubernetes), Berlin hybrid. EUR 100,000–120,000 per year.\n\nYou will run and upgrade dozens of multi-tenant production Kubernetes clusters, write operators and own cluster reliability.\n\nEssential: expert operation of production Kubernetes clusters, including upgrades, networking and operators; infrastructure as code.\nPreferred: Go for internal tooling."
+}

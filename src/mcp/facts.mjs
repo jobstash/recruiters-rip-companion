@@ -7,7 +7,6 @@ export const ANSWER_OPTIONS = Object.freeze({
   language: Object.freeze(['Native', 'Fluent', 'Professional', 'Conversational', 'Basic']),
   yes_no: Object.freeze(['Yes', 'No']),
 });
-const FIELDS = new Set(['id', 'kind', 'subject', 'answer', 'detail', 'employer', 'question', 'context', 'applicationId', 'followUps', 'createdAt', 'updatedAt']);
 
 const UNCLEAR = [
   /\?/,
@@ -35,9 +34,10 @@ export const factInputSchema = Object.freeze({
   properties: { id: { type: 'string', format: 'uuid' }, kind: { enum: FACT_KINDS }, subject: text(120), answer: text(160), detail: text(1500, 0), employer: text(120, 0), question: text(300, 0), context: text(600, 0), applicationId: { type: 'string', format: 'uuid' } },
 });
 
-/** Upsert key: one fact per subject (case-insensitive, trimmed). */
-export const factKey = fact => fact.subject.trim().toLocaleLowerCase();
-export const compareFacts = (a, b) => a.subject.localeCompare(b.subject, undefined, { sensitivity: 'base' });
+/** Upsert key: one fact per subject and employer (each case-insensitive, trimmed; no employer is its own key). */
+export const factKey = fact => `${fact.subject.trim().toLocaleLowerCase()}\u0000${(fact.employer ?? '').trim().toLocaleLowerCase()}`;
+export const compareFacts = (a, b) => a.subject.localeCompare(b.subject, undefined, { sensitivity: 'base' }) ||
+  (a.employer ?? '').localeCompare(b.employer ?? '', undefined, { sensitivity: 'base' });
 
 /** Structural incompleteness only; the host evaluates the specificity of an explanation. */
 export function needsDetail(fact) {
@@ -67,18 +67,4 @@ export function normalizeFact({ kind, subject, answer, detail, employer, questio
     ...(applicationId !== undefined ? { applicationId } : {}) };
   for (const field of ['subject', 'answer', 'detail', 'employer']) if (fact[field]) assertCleanStatement(fact[field], field);
   return fact;
-}
-
-/** Accepts historical facts without inventing missing interview context. */
-export function isFact(fact) {
-  return Boolean(fact) && typeof fact === 'object' && FACT_KINDS.includes(fact.kind) &&
-    typeof fact.subject === 'string' && Boolean(fact.subject.trim()) && typeof fact.answer === 'string' && Boolean(fact.answer.trim()) &&
-    (!ANSWER_OPTIONS[fact.kind] || ANSWER_OPTIONS[fact.kind].includes(fact.answer)) &&
-    ['detail', 'employer', 'question', 'context'].every(field => fact[field] === undefined || typeof fact[field] === 'string') &&
-    (fact.applicationId === undefined || isUuid(fact.applicationId)) &&
-    (fact.followUps === undefined || (Array.isArray(fact.followUps) && fact.followUps.every(exchange =>
-      exchange && typeof exchange.question === 'string' && typeof exchange.answer === 'string' &&
-      (exchange.context === undefined || typeof exchange.context === 'string') &&
-      (exchange.applicationId === undefined || isUuid(exchange.applicationId))))) &&
-    Object.keys(fact).every(key => FIELDS.has(key));
 }

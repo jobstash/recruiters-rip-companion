@@ -1,0 +1,19 @@
+{
+  "id": "node:eval-mic-remote-us",
+  "title": "Senior Full-Stack Engineer (Remote)",
+  "company": {
+    "name": "Corvid Health",
+    "description": "Corvid Health builds patient scheduling tools for clinics."
+  },
+  "publishedAt": "__RECENT__",
+  "applyUrl": "https://jobs.example.test/eval/mic-remote-us",
+  "salary": null,
+  "city": null,
+  "location": "United States",
+  "workMode": "remote",
+  "locationEvidence": [
+    "Advertised role location: Remote",
+    "Candidates must reside in the United States"
+  ],
+  "ad": "Senior Full-Stack Engineer (Remote).\n\nBuild React and TypeScript features and Node.js services for clinic scheduling.\n\nEssential: React and TypeScript product development; Node.js services.\n\nThis is a fully remote position. Candidates must reside in the United States and be authorised to work there; we cannot employ people outside the US."
+}

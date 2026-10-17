@@ -1,0 +1,67 @@
+{
+  "id": "designer-to-pm",
+  "profile": {
+    "headline": "Product designer moving into product management",
+    "location": "London, United Kingdom",
+    "roleCapabilities": [
+      "User research",
+      "Interaction design",
+      "Product discovery",
+      "Design systems"
+    ],
+    "seniority": "senior",
+    "skills": [
+      "Figma",
+      "Customer interviews",
+      "Usability testing",
+      "Roadmapping",
+      "Prototyping"
+    ],
+    "preferences": {
+      "roles": [
+        "Product manager",
+        "Senior product manager",
+        "Senior product designer with product ownership"
+      ],
+      "locations": [
+        "London"
+      ],
+      "workModes": [
+        "hybrid",
+        "remote"
+      ],
+      "employmentTypes": [
+        "permanent"
+      ],
+      "salaryMinimum": 70000,
+      "salaryCurrency": "GBP",
+      "salaryPeriod": "year",
+      "willingToRelocate": false,
+      "domains": [
+        "travel",
+        "healthcare",
+        "consumer apps"
+      ],
+      "notes": "Moving into product management. Senior design roles count only when they include clear product ownership such as roadmap or outcome responsibility. Pure visual or brand design roles are not wanted."
+    }
+  },
+  "cv": "Senior Product Designer, Tidewater Travel, London, 2019–present\n- Owned end-to-end design for the booking flow across web and mobile apps.\n- Ran weekly customer interviews and synthesised findings into opportunity backlogs.\n- Partnered with the product manager to prioritise the quarterly roadmap using impact and effort scoring.\n- Defined success metrics for checkout experiments and lifted booking conversion by 9%.\n\nProduct Designer, Kestrel Health, London, 2015–2019\n- Designed patient appointment flows and a shared design system.\n- Planned and moderated usability tests with clinicians and patients.\n\nEducation: BA Interaction Design, 2015",
+  "facts": [
+    {
+      "id": "c0000000-0000-4000-8000-000000000001",
+      "kind": "capability",
+      "subject": "Roadmap ownership",
+      "answer": "Hands-on",
+      "detail": "Co-owned the booking roadmap with the product manager for two years.",
+      "employer": "Tidewater Travel"
+    },
+    {
+      "id": "c0000000-0000-4000-8000-000000000002",
+      "kind": "capability",
+      "subject": "Visual brand design",
+      "answer": "Some exposure",
+      "detail": "Applied existing brand guidelines to product screens.",
+      "employer": "Kestrel Health"
+    }
+  ]
+}

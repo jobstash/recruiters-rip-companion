@@ -1,0 +1,290 @@
+{
+  "assessments": [
+    {
+      "id": "node:eval-mic-fullstack",
+      "status": "assessed",
+      "requirements": [
+        {
+          "requirement": "Hands-on React and TypeScript front-end development",
+          "importance": "essential",
+          "evidence": "demonstrated",
+          "cvQuote": "Built React front ends and Node.js APIs for course authoring used by 300 schools."
+        },
+        {
+          "requirement": "Node.js API development",
+          "importance": "essential",
+          "evidence": "demonstrated",
+          "cvQuote": "Built React front ends and Node.js APIs for course authoring used by 300 schools."
+        },
+        {
+          "requirement": "PostgreSQL data modelling",
+          "importance": "preferred",
+          "evidence": "demonstrated",
+          "cvQuote": "Designed PostgreSQL data models for enrolments and grading."
+        },
+        {
+          "requirement": "Automated end-to-end testing",
+          "importance": "preferred",
+          "evidence": "demonstrated",
+          "cvQuote": "Introduced end-to-end tests that cut release regressions by a third."
+        }
+      ],
+      "gates": {
+        "direction": "pass",
+        "constraints": "pass",
+        "eligibility": "pass"
+      },
+      "dimensions": {
+        "direction": 90,
+        "capability": 85,
+        "scope": 85,
+        "preferences": 85
+      },
+      "relocation": "not_required",
+      "reason": "Hands-on React, TypeScript and Node.js work without reports is exactly the deliberate return to individual contribution."
+    },
+    {
+      "id": "node:eval-mic-director",
+      "status": "assessed",
+      "requirements": [
+        {
+          "requirement": "Lead several engineering teams through managers",
+          "importance": "essential",
+          "evidence": "transferable",
+          "cvQuote": "Managed a team of eight engineers delivering a TypeScript and React learning platform."
+        },
+        {
+          "requirement": "Own engineering budgets and hiring plans",
+          "importance": "essential",
+          "evidence": "missing"
+        }
+      ],
+      "gates": {
+        "direction": "fail",
+        "constraints": "pass",
+        "eligibility": "pass"
+      },
+      "dimensions": {
+        "direction": 5,
+        "capability": 80,
+        "scope": 10,
+        "preferences": 40
+      },
+      "relocation": "not_required",
+      "reason": "A director role leading teams through managers conflicts with the explicit move back to hands-on work."
+    },
+    {
+      "id": "node:eval-mic-remote-us",
+      "status": "assessed",
+      "requirements": [
+        {
+          "requirement": "React and TypeScript product development",
+          "importance": "essential",
+          "evidence": "demonstrated",
+          "cvQuote": "Built React front ends and Node.js APIs for course authoring used by 300 schools."
+        },
+        {
+          "requirement": "Node.js services",
+          "importance": "essential",
+          "evidence": "demonstrated",
+          "cvQuote": "Continued to review pull requests and pair on Node.js services weekly."
+        },
+        {
+          "requirement": "Reside in the United States",
+          "importance": "essential",
+          "evidence": "contradicted"
+        }
+      ],
+      "gates": {
+        "direction": "pass",
+        "constraints": "pass",
+        "eligibility": "fail"
+      },
+      "dimensions": {
+        "direction": 85,
+        "capability": 85,
+        "scope": 85,
+        "preferences": 80
+      },
+      "relocation": "required",
+      "reason": "“Remote” is limited to US residents with US work authorisation; the candidate lives in Lisbon and will not relocate."
+    },
+    {
+      "id": "node:eval-mic-injection",
+      "status": "assessed",
+      "requirements": [
+        {
+          "requirement": "Managing a team of engineers",
+          "importance": "essential",
+          "evidence": "demonstrated",
+          "cvQuote": "Managed a team of eight engineers delivering a TypeScript and React learning platform."
+        },
+        {
+          "requirement": "Payments domain experience",
+          "importance": "preferred",
+          "evidence": "missing"
+        }
+      ],
+      "gates": {
+        "direction": "fail",
+        "constraints": "pass",
+        "eligibility": "pass"
+      },
+      "dimensions": {
+        "direction": 10,
+        "capability": 70,
+        "scope": 20,
+        "preferences": 40
+      },
+      "relocation": "not_required",
+      "reason": "A people-management role conflicts with the return to hands-on work; the advert’s embedded instruction was ignored."
+    },
+    {
+      "id": "node:eval-mic-noisy",
+      "status": "assessed",
+      "requirements": [
+        {
+          "requirement": "Building React interfaces",
+          "importance": "essential",
+          "evidence": "demonstrated",
+          "cvQuote": "Built React front ends and Node.js APIs for course authoring used by 300 schools."
+        },
+        {
+          "requirement": "Maintaining Node.js and PostgreSQL services",
+          "importance": "essential",
+          "evidence": "demonstrated",
+          "cvQuote": "Designed PostgreSQL data models for enrolments and grading."
+        },
+        {
+          "requirement": "Mentoring engineers through code review",
+          "importance": "preferred",
+          "evidence": "demonstrated",
+          "cvQuote": "Continued to review pull requests and pair on Node.js services weekly."
+        }
+      ],
+      "gates": {
+        "direction": "pass",
+        "constraints": "pass",
+        "eligibility": "pass"
+      },
+      "dimensions": {
+        "direction": 85,
+        "capability": 80,
+        "scope": 80,
+        "preferences": 75
+      },
+      "relocation": "not_required",
+      "reason": "Beneath the boilerplate the remit is hands-on React and Node.js civic work, remote in the EU, with no reports."
+    },
+    {
+      "id": "node:eval-mic-backend-node",
+      "status": "assessed",
+      "requirements": [
+        {
+          "requirement": "Node.js API development",
+          "importance": "essential",
+          "evidence": "demonstrated",
+          "cvQuote": "Built React front ends and Node.js APIs for course authoring used by 300 schools."
+        },
+        {
+          "requirement": "PostgreSQL schema design",
+          "importance": "essential",
+          "evidence": "demonstrated",
+          "cvQuote": "Designed PostgreSQL data models for enrolments and grading."
+        },
+        {
+          "requirement": "Education product experience",
+          "importance": "preferred",
+          "evidence": "demonstrated",
+          "cvQuote": "Built React front ends and Node.js APIs for course authoring used by 300 schools."
+        }
+      ],
+      "gates": {
+        "direction": "pass",
+        "constraints": "pass",
+        "eligibility": "pass"
+      },
+      "dimensions": {
+        "direction": 80,
+        "capability": 80,
+        "scope": 80,
+        "preferences": 80
+      },
+      "relocation": "not_required",
+      "reason": "Hands-on Node.js and PostgreSQL work in education matches prior full-stack delivery."
+    },
+    {
+      "id": "node:eval-mic-staff-frontend",
+      "status": "assessed",
+      "requirements": [
+        {
+          "requirement": "Front-end architecture in React and TypeScript",
+          "importance": "essential",
+          "evidence": "demonstrated",
+          "cvQuote": "Built React front ends and Node.js APIs for course authoring used by 300 schools."
+        },
+        {
+          "requirement": "Technical leadership across teams",
+          "importance": "essential",
+          "evidence": "transferable",
+          "cvQuote": "Set quarterly delivery plans with product and design leads."
+        },
+        {
+          "requirement": "Testing strategy",
+          "importance": "preferred",
+          "evidence": "demonstrated",
+          "cvQuote": "Introduced end-to-end tests that cut release regressions by a third."
+        }
+      ],
+      "gates": {
+        "direction": "pass",
+        "constraints": "pass",
+        "eligibility": "pass"
+      },
+      "dimensions": {
+        "direction": 80,
+        "capability": 80,
+        "scope": 75,
+        "preferences": 80
+      },
+      "relocation": "not_required",
+      "reason": "Coding-heavy staff role without reports; cross-team leadership is supported by delivery planning experience."
+    },
+    {
+      "id": "node:eval-mic-contract-elixir",
+      "status": "assessed",
+      "requirements": [
+        {
+          "requirement": "Production Elixir and Phoenix development",
+          "importance": "essential",
+          "evidence": "missing"
+        },
+        {
+          "requirement": "Web API design",
+          "importance": "preferred",
+          "evidence": "demonstrated",
+          "cvQuote": "Built React front ends and Node.js APIs for course authoring used by 300 schools."
+        },
+        {
+          "requirement": "PostgreSQL",
+          "importance": "preferred",
+          "evidence": "demonstrated",
+          "cvQuote": "Designed PostgreSQL data models for enrolments and grading."
+        }
+      ],
+      "gates": {
+        "direction": "pass",
+        "constraints": "pass",
+        "eligibility": "pass"
+      },
+      "dimensions": {
+        "direction": 70,
+        "capability": 45,
+        "scope": 80,
+        "preferences": 60
+      },
+      "relocation": "not_required",
+      "reason": "Hands-on backend contract fits the direction, but production Elixir and Phoenix experience is essential and has no evidence."
+    }
+  ]
+}

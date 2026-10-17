@@ -1,0 +1,18 @@
+{
+  "id": "node:eval-mic-staff-frontend",
+  "title": "Staff Frontend Engineer",
+  "company": {
+    "name": "Brindle",
+    "description": "Brindle builds booking software for community venues."
+  },
+  "publishedAt": "__RECENT__",
+  "applyUrl": "https://jobs.example.test/eval/mic-staff-frontend",
+  "salary": null,
+  "city": null,
+  "location": "Europe",
+  "workMode": "remote",
+  "locationEvidence": [
+    "Advertised role location: Remote within the EU"
+  ],
+  "ad": "Staff Frontend Engineer, remote within the EU.\n\nSet the front-end architecture for our React and TypeScript apps and guide technical direction across three product teams, while writing code most days. No direct reports.\n\nEssential: front-end architecture in React and TypeScript; technical leadership across teams.\nPreferred: testing strategy."
+}

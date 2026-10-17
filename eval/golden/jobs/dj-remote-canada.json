@@ -1,0 +1,18 @@
+{
+  "id": "node:eval-dj-remote-canada",
+  "title": "Data Analyst (Remote, Canada)",
+  "company": {
+    "name": "Trailhead Logistics",
+    "description": "Trailhead Logistics runs freight brokerage across Canada."
+  },
+  "publishedAt": "__RECENT__",
+  "applyUrl": "https://jobs.example.test/eval/dj-remote-canada",
+  "salary": null,
+  "city": null,
+  "location": "Canada",
+  "workMode": "remote",
+  "locationEvidence": [
+    "Advertised role location: Remote within Canada"
+  ],
+  "ad": "Data Analyst, remote within Canada.\n\nAnalyse shipment data with SQL and Python and automate weekly operations reports.\n\nEssential: SQL; Python with pandas.\nPreferred: reporting automation."
+}

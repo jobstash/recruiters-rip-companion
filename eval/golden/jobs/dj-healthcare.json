@@ -1,0 +1,24 @@
+{
+  "id": "node:eval-dj-healthcare",
+  "title": "Data Analyst, Clinical Operations",
+  "company": {
+    "name": "Riverbend Health",
+    "description": "Riverbend Health operates community hospitals in Ontario."
+  },
+  "publishedAt": "__RECENT__",
+  "applyUrl": "https://jobs.example.test/eval/dj-healthcare",
+  "salary": {
+    "minimum": 65000,
+    "maximum": 72000,
+    "stated": null,
+    "currency": "CAD",
+    "period": "year"
+  },
+  "city": "Toronto",
+  "location": "Toronto, Canada",
+  "workMode": "hybrid",
+  "locationEvidence": [
+    "Advertised role location: Toronto, Canada (hybrid)"
+  ],
+  "ad": "Data Analyst, Clinical Operations (Toronto, hybrid). CAD 65,000–72,000 per year.\n\nAnalyse patient flow data and build dashboards for hospital managers.\n\nEssential: experience handling clinical data under health privacy rules; SQL.\nPreferred: dashboards."
+}

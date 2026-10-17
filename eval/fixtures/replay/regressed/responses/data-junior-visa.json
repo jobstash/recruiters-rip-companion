@@ -1,0 +1,286 @@
+{
+  "assessments": [
+    {
+      "id": "node:eval-dj-us-nosponsor",
+      "status": "assessed",
+      "requirements": [
+        {
+          "requirement": "SQL analysis",
+          "importance": "essential",
+          "evidence": "demonstrated",
+          "cvQuote": "Wrote SQL queries against the sales warehouse to answer weekly merchandising questions."
+        },
+        {
+          "requirement": "Dashboarding",
+          "importance": "essential",
+          "evidence": "demonstrated",
+          "cvQuote": "Built Tableau dashboards tracking store performance for 40 regional managers."
+        }
+      ],
+      "gates": {
+        "direction": "pass",
+        "constraints": "fail",
+        "eligibility": "pass"
+      },
+      "dimensions": {
+        "direction": 85,
+        "capability": 80,
+        "scope": 80,
+        "preferences": 75
+      },
+      "relocation": "required",
+      "reason": "The employer cannot sponsor visas and the candidate needs sponsorship outside Canada."
+    },
+    {
+      "id": "node:eval-dj-german",
+      "status": "assessed",
+      "requirements": [
+        {
+          "requirement": "German at C1 level",
+          "importance": "essential",
+          "evidence": "missing"
+        },
+        {
+          "requirement": "SQL",
+          "importance": "essential",
+          "evidence": "demonstrated",
+          "cvQuote": "Wrote SQL queries against the sales warehouse to answer weekly merchandising questions."
+        },
+        {
+          "requirement": "Python",
+          "importance": "preferred",
+          "evidence": "demonstrated",
+          "cvQuote": "Cleaned and joined supplier data in Python with pandas."
+        }
+      ],
+      "gates": {
+        "direction": "pass",
+        "constraints": "pass",
+        "eligibility": "fail"
+      },
+      "dimensions": {
+        "direction": 80,
+        "capability": 80,
+        "scope": 85,
+        "preferences": 70
+      },
+      "relocation": "required",
+      "reason": "German at C1 is essential; the candidate’s saved languages are English and French only."
+    },
+    {
+      "id": "node:eval-dj-french",
+      "status": "assessed",
+      "requirements": [
+        {
+          "requirement": "Professional French",
+          "importance": "essential",
+          "evidence": "demonstrated",
+          "factIds": [
+            "d0000000-0000-4000-8000-000000000001"
+          ]
+        },
+        {
+          "requirement": "SQL reporting",
+          "importance": "essential",
+          "evidence": "demonstrated",
+          "cvQuote": "Wrote SQL queries against the sales warehouse to answer weekly merchandising questions."
+        },
+        {
+          "requirement": "Tableau",
+          "importance": "preferred",
+          "evidence": "demonstrated",
+          "cvQuote": "Built Tableau dashboards tracking store performance for 40 regional managers."
+        }
+      ],
+      "gates": {
+        "direction": "pass",
+        "constraints": "pass",
+        "eligibility": "pass"
+      },
+      "dimensions": {
+        "direction": 85,
+        "capability": 80,
+        "scope": 85,
+        "preferences": 80
+      },
+      "relocation": "not_required",
+      "reason": "Professional French satisfies the bilingual requirement; SQL and Tableau reporting match the remit."
+    },
+    {
+      "id": "node:eval-dj-lead",
+      "status": "assessed",
+      "requirements": [
+        {
+          "requirement": "At least seven years of analytics experience",
+          "importance": "essential",
+          "evidence": "contradicted"
+        },
+        {
+          "requirement": "Managing three analysts",
+          "importance": "essential",
+          "evidence": "missing"
+        },
+        {
+          "requirement": "Advanced SQL",
+          "importance": "essential",
+          "evidence": "transferable",
+          "cvQuote": "Wrote SQL queries against the sales warehouse to answer weekly merchandising questions."
+        }
+      ],
+      "gates": {
+        "direction": "pass",
+        "constraints": "pass",
+        "eligibility": "pass"
+      },
+      "dimensions": {
+        "direction": 40,
+        "capability": 30,
+        "scope": 15,
+        "preferences": 60
+      },
+      "relocation": "not_required",
+      "reason": "Seven years of analytics and managing analysts are essential; the candidate is a junior analyst."
+    },
+    {
+      "id": "node:eval-dj-lowpay",
+      "status": "assessed",
+      "requirements": [
+        {
+          "requirement": "SQL",
+          "importance": "essential",
+          "evidence": "demonstrated",
+          "cvQuote": "Wrote SQL queries against the sales warehouse to answer weekly merchandising questions."
+        },
+        {
+          "requirement": "Python data cleaning",
+          "importance": "preferred",
+          "evidence": "demonstrated",
+          "cvQuote": "Cleaned and joined supplier data in Python with pandas."
+        }
+      ],
+      "gates": {
+        "direction": "pass",
+        "constraints": "fail",
+        "eligibility": "pass"
+      },
+      "dimensions": {
+        "direction": 85,
+        "capability": 85,
+        "scope": 85,
+        "preferences": 75
+      },
+      "relocation": "not_required",
+      "reason": "A suitable junior role, but the CAD 52,000 ceiling is below the CAD 60,000 minimum."
+    },
+    {
+      "id": "node:eval-dj-bi-toronto",
+      "status": "assessed",
+      "requirements": [
+        {
+          "requirement": "Building BI dashboards",
+          "importance": "essential",
+          "evidence": "demonstrated",
+          "cvQuote": "Built Tableau dashboards tracking store performance for 40 regional managers."
+        },
+        {
+          "requirement": "SQL",
+          "importance": "essential",
+          "evidence": "demonstrated",
+          "cvQuote": "Wrote SQL queries against the sales warehouse to answer weekly merchandising questions."
+        },
+        {
+          "requirement": "Excel reporting automation",
+          "importance": "preferred",
+          "evidence": "demonstrated",
+          "cvQuote": "Automated monthly ridership reports in Excel and Python."
+        }
+      ],
+      "gates": {
+        "direction": "pass",
+        "constraints": "pass",
+        "eligibility": "pass"
+      },
+      "dimensions": {
+        "direction": 85,
+        "capability": 78,
+        "scope": 80,
+        "preferences": 80
+      },
+      "relocation": "not_required",
+      "reason": "BI dashboards and SQL in retail continue the candidate’s current work in Toronto."
+    },
+    {
+      "id": "node:eval-dj-remote-canada",
+      "status": "assessed",
+      "requirements": [
+        {
+          "requirement": "SQL",
+          "importance": "essential",
+          "evidence": "demonstrated",
+          "cvQuote": "Wrote SQL queries against the sales warehouse to answer weekly merchandising questions."
+        },
+        {
+          "requirement": "Python with pandas",
+          "importance": "essential",
+          "evidence": "demonstrated",
+          "cvQuote": "Cleaned and joined supplier data in Python with pandas."
+        },
+        {
+          "requirement": "Reporting automation",
+          "importance": "preferred",
+          "evidence": "demonstrated",
+          "cvQuote": "Automated monthly ridership reports in Excel and Python."
+        }
+      ],
+      "gates": {
+        "direction": "pass",
+        "constraints": "pass",
+        "eligibility": "pass"
+      },
+      "dimensions": {
+        "direction": 80,
+        "capability": 80,
+        "scope": 80,
+        "preferences": 85
+      },
+      "relocation": "not_required",
+      "reason": "Remote analysis in Canada with SQL and pandas; missing salary is not a rejection."
+    },
+    {
+      "id": "node:eval-dj-healthcare",
+      "status": "assessed",
+      "requirements": [
+        {
+          "requirement": "Clinical data under health privacy rules",
+          "importance": "essential",
+          "evidence": "missing"
+        },
+        {
+          "requirement": "SQL",
+          "importance": "essential",
+          "evidence": "demonstrated",
+          "cvQuote": "Wrote SQL queries against the sales warehouse to answer weekly merchandising questions."
+        },
+        {
+          "requirement": "Dashboards",
+          "importance": "preferred",
+          "evidence": "demonstrated",
+          "cvQuote": "Built Tableau dashboards tracking store performance for 40 regional managers."
+        }
+      ],
+      "gates": {
+        "direction": "pass",
+        "constraints": "pass",
+        "eligibility": "pass"
+      },
+      "dimensions": {
+        "direction": 75,
+        "capability": 55,
+        "scope": 80,
+        "preferences": 75
+      },
+      "relocation": "not_required",
+      "reason": "Analyst remit fits, but handling clinical data under health privacy rules is essential and has no evidence."
+    }
+  ]
+}

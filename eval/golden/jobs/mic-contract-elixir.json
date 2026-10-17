@@ -1,0 +1,18 @@
+{
+  "id": "node:eval-mic-contract-elixir",
+  "title": "Senior Elixir Engineer (contract)",
+  "company": {
+    "name": "Ferrovia",
+    "description": "Ferrovia builds ticketing software for rail operators."
+  },
+  "publishedAt": "__RECENT__",
+  "applyUrl": "https://jobs.example.test/eval/mic-contract-elixir",
+  "salary": null,
+  "city": null,
+  "location": "Europe",
+  "workMode": "remote",
+  "locationEvidence": [
+    "Advertised role location: Remote within the EU"
+  ],
+  "ad": "Senior Elixir Engineer, six-month contract, remote within the EU.\n\nExtend our Elixir and Phoenix ticketing backend and its web APIs.\n\nEssential: production Elixir and Phoenix development.\nPreferred: web API design; PostgreSQL."
+}

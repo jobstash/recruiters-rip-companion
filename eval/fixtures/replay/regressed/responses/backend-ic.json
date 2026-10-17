@@ -1,0 +1,292 @@
+{
+  "assessments": [
+    {
+      "id": "node:eval-backend-exact",
+      "status": "assessed",
+      "requirements": [
+        {
+          "requirement": "Production Go service design and operation",
+          "importance": "essential",
+          "evidence": "demonstrated",
+          "cvQuote": "Designed and operate Go services that route 40,000 shipments a day across 12 carriers."
+        },
+        {
+          "requirement": "PostgreSQL data modelling and query performance",
+          "importance": "essential",
+          "evidence": "demonstrated",
+          "cvQuote": "Maintained PostgreSQL schemas and query performance for payment records."
+        },
+        {
+          "requirement": "Event-driven systems with Kafka",
+          "importance": "preferred",
+          "evidence": "demonstrated",
+          "cvQuote": "Built event pipelines on Kafka for real-time tracking updates."
+        },
+        {
+          "requirement": "On-call ownership",
+          "importance": "preferred",
+          "evidence": "demonstrated",
+          "cvQuote": "On call for production services; wrote runbooks and reduced paging volume by half."
+        }
+      ],
+      "gates": {
+        "direction": "pass",
+        "constraints": "pass",
+        "eligibility": "pass"
+      },
+      "dimensions": {
+        "direction": 90,
+        "capability": 88,
+        "scope": 85,
+        "preferences": 85
+      },
+      "relocation": "not_required",
+      "reason": "Hands-on Go and PostgreSQL service ownership in logistics matches the candidate’s current work; salary meets the minimum."
+    },
+    {
+      "id": "node:eval-backend-em",
+      "status": "assessed",
+      "requirements": [
+        {
+          "requirement": "Manage and grow a team of engineers",
+          "importance": "essential",
+          "evidence": "contradicted",
+          "factIds": [
+            "a0000000-0000-4000-8000-000000000002"
+          ]
+        },
+        {
+          "requirement": "Backend architecture background",
+          "importance": "essential",
+          "evidence": "demonstrated",
+          "cvQuote": "Designed and operate Go services that route 40,000 shipments a day across 12 carriers."
+        }
+      ],
+      "gates": {
+        "direction": "fail",
+        "constraints": "pass",
+        "eligibility": "pass"
+      },
+      "dimensions": {
+        "direction": 95,
+        "capability": 92,
+        "scope": 90,
+        "preferences": 90
+      },
+      "relocation": "not_required",
+      "reason": "The remit is predominantly people management; the candidate rules out people management and wants hands-on work."
+    },
+    {
+      "id": "node:eval-backend-lowpay",
+      "status": "assessed",
+      "requirements": [
+        {
+          "requirement": "Building backend services in Go",
+          "importance": "essential",
+          "evidence": "demonstrated",
+          "cvQuote": "Designed and operate Go services that route 40,000 shipments a day across 12 carriers."
+        },
+        {
+          "requirement": "PostgreSQL schema design",
+          "importance": "essential",
+          "evidence": "demonstrated",
+          "cvQuote": "Maintained PostgreSQL schemas and query performance for payment records."
+        }
+      ],
+      "gates": {
+        "direction": "pass",
+        "constraints": "pass",
+        "eligibility": "pass"
+      },
+      "dimensions": {
+        "direction": 88,
+        "capability": 88,
+        "scope": 85,
+        "preferences": 60
+      },
+      "relocation": "not_required",
+      "reason": "Strong technical fit, but the advertised ceiling of EUR 80,000 is below the EUR 95,000 minimum."
+    },
+    {
+      "id": "node:eval-backend-nosalary",
+      "status": "assessed",
+      "requirements": [
+        {
+          "requirement": "Go API development",
+          "importance": "essential",
+          "evidence": "demonstrated",
+          "cvQuote": "Built Python and Go APIs for merchant settlement and reconciliation."
+        },
+        {
+          "requirement": "Relational database design",
+          "importance": "essential",
+          "evidence": "demonstrated",
+          "cvQuote": "Maintained PostgreSQL schemas and query performance for payment records."
+        },
+        {
+          "requirement": "AWS deployment with infrastructure as code",
+          "importance": "preferred",
+          "evidence": "demonstrated",
+          "cvQuote": "Deployed services to AWS with Terraform"
+        }
+      ],
+      "gates": {
+        "direction": "pass",
+        "constraints": "pass",
+        "eligibility": "pass"
+      },
+      "dimensions": {
+        "direction": 85,
+        "capability": 85,
+        "scope": 80,
+        "preferences": 75
+      },
+      "relocation": "not_required",
+      "reason": "Remote Go API work on relational data; missing salary is not a rejection."
+    },
+    {
+      "id": "node:eval-backend-betting",
+      "status": "assessed",
+      "requirements": [
+        {
+          "requirement": "Backend services at high transaction volume",
+          "importance": "essential",
+          "evidence": "demonstrated",
+          "cvQuote": "Designed and operate Go services that route 40,000 shipments a day across 12 carriers."
+        },
+        {
+          "requirement": "Payments reconciliation",
+          "importance": "preferred",
+          "evidence": "demonstrated",
+          "cvQuote": "Built Python and Go APIs for merchant settlement and reconciliation."
+        }
+      ],
+      "gates": {
+        "direction": "pass",
+        "constraints": "fail",
+        "eligibility": "pass"
+      },
+      "dimensions": {
+        "direction": 80,
+        "capability": 85,
+        "scope": 85,
+        "preferences": 20
+      },
+      "relocation": "not_required",
+      "reason": "The employer’s business is sports betting and casino products, which the candidate explicitly excludes."
+    },
+    {
+      "id": "node:eval-backend-platform-berlin",
+      "status": "assessed",
+      "requirements": [
+        {
+          "requirement": "Design public backend APIs",
+          "importance": "essential",
+          "evidence": "demonstrated",
+          "cvQuote": "Built Python and Go APIs for merchant settlement and reconciliation."
+        },
+        {
+          "requirement": "Operate backend services in production",
+          "importance": "essential",
+          "evidence": "demonstrated",
+          "cvQuote": "On call for production services; wrote runbooks and reduced paging volume by half."
+        },
+        {
+          "requirement": "PostgreSQL performance tuning",
+          "importance": "preferred",
+          "evidence": "demonstrated",
+          "cvQuote": "Maintained PostgreSQL schemas and query performance for payment records."
+        }
+      ],
+      "gates": {
+        "direction": "pass",
+        "constraints": "pass",
+        "eligibility": "pass"
+      },
+      "dimensions": {
+        "direction": 88,
+        "capability": 85,
+        "scope": 85,
+        "preferences": 80
+      },
+      "relocation": "not_required",
+      "reason": "Hands-on platform API design and production ownership match the candidate’s Go API and on-call record."
+    },
+    {
+      "id": "node:eval-backend-platform-newyork",
+      "status": "assessed",
+      "requirements": [
+        {
+          "requirement": "Design public backend APIs",
+          "importance": "essential",
+          "evidence": "demonstrated",
+          "cvQuote": "Built Python and Go APIs for merchant settlement and reconciliation."
+        },
+        {
+          "requirement": "Operate backend services in production",
+          "importance": "essential",
+          "evidence": "demonstrated",
+          "cvQuote": "On call for production services; wrote runbooks and reduced paging volume by half."
+        },
+        {
+          "requirement": "PostgreSQL performance tuning",
+          "importance": "preferred",
+          "evidence": "demonstrated",
+          "cvQuote": "Maintained PostgreSQL schemas and query performance for payment records."
+        }
+      ],
+      "gates": {
+        "direction": "pass",
+        "constraints": "pass",
+        "eligibility": "pass"
+      },
+      "dimensions": {
+        "direction": 88,
+        "capability": 85,
+        "scope": 85,
+        "preferences": 65
+      },
+      "relocation": "required",
+      "reason": "Same strong API ownership fit; the role sits in New York and the candidate will not relocate."
+    },
+    {
+      "id": "node:eval-backend-kubernetes",
+      "status": "assessed",
+      "requirements": [
+        {
+          "requirement": "Expert operation of production Kubernetes clusters",
+          "importance": "essential",
+          "evidence": "contradicted",
+          "factIds": [
+            "a0000000-0000-4000-8000-000000000001"
+          ]
+        },
+        {
+          "requirement": "Infrastructure as code",
+          "importance": "essential",
+          "evidence": "transferable",
+          "cvQuote": "Deployed services to AWS with Terraform"
+        },
+        {
+          "requirement": "Go for internal tooling",
+          "importance": "preferred",
+          "evidence": "demonstrated",
+          "cvQuote": "Designed and operate Go services that route 40,000 shipments a day across 12 carriers."
+        }
+      ],
+      "gates": {
+        "direction": "pass",
+        "constraints": "pass",
+        "eligibility": "pass"
+      },
+      "dimensions": {
+        "direction": 60,
+        "capability": 35,
+        "scope": 80,
+        "preferences": 55
+      },
+      "relocation": "not_required",
+      "reason": "Expert Kubernetes operation is essential; the saved answer is only some exposure through a pilot."
+    }
+  ]
+}

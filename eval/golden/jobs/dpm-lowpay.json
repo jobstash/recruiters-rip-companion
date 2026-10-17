@@ -1,0 +1,24 @@
+{
+  "id": "node:eval-dpm-lowpay",
+  "title": "Product Manager",
+  "company": {
+    "name": "Pocketnest",
+    "description": "Pocketnest makes a budgeting app for students."
+  },
+  "publishedAt": "__RECENT__",
+  "applyUrl": "https://jobs.example.test/eval/dpm-lowpay",
+  "salary": {
+    "minimum": 55000,
+    "maximum": 62000,
+    "stated": null,
+    "currency": "GBP",
+    "period": "year"
+  },
+  "city": "London",
+  "location": "London, United Kingdom",
+  "workMode": "hybrid",
+  "locationEvidence": [
+    "Advertised role location: London, United Kingdom (hybrid)"
+  ],
+  "ad": "Product Manager (London, hybrid). GBP 55,000–62,000 per year.\n\nOwn the roadmap for our budgeting app and run user research with students.\n\nEssential: product roadmap ownership; user research."
+}

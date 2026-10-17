@@ -1,0 +1,63 @@
+{
+  "run": "regressed",
+  "policyId": "fixture",
+  "createdAt": "2026-01-01T00:00:00.000Z",
+  "packets": [
+    {
+      "file": "packets/backend-ic.md",
+      "candidate": "backend-ic",
+      "jobs": [
+        "node:eval-backend-exact",
+        "node:eval-backend-em",
+        "node:eval-backend-lowpay",
+        "node:eval-backend-nosalary",
+        "node:eval-backend-betting",
+        "node:eval-backend-platform-berlin",
+        "node:eval-backend-platform-newyork",
+        "node:eval-backend-kubernetes"
+      ]
+    },
+    {
+      "file": "packets/manager-to-ic.md",
+      "candidate": "manager-to-ic",
+      "jobs": [
+        "node:eval-mic-fullstack",
+        "node:eval-mic-director",
+        "node:eval-mic-remote-us",
+        "node:eval-mic-injection",
+        "node:eval-mic-noisy",
+        "node:eval-mic-backend-node",
+        "node:eval-mic-staff-frontend",
+        "node:eval-mic-contract-elixir"
+      ]
+    },
+    {
+      "file": "packets/designer-to-pm.md",
+      "candidate": "designer-to-pm",
+      "jobs": [
+        "node:eval-dpm-pm",
+        "node:eval-dpm-visual",
+        "node:eval-dpm-discovery",
+        "node:eval-dpm-regulated",
+        "node:eval-dpm-lowpay",
+        "node:eval-dpm-design-ownership",
+        "node:eval-dpm-senior-pm-scope",
+        "node:eval-dpm-healthcare-apm"
+      ]
+    },
+    {
+      "file": "packets/data-junior-visa.md",
+      "candidate": "data-junior-visa",
+      "jobs": [
+        "node:eval-dj-us-nosponsor",
+        "node:eval-dj-german",
+        "node:eval-dj-french",
+        "node:eval-dj-lead",
+        "node:eval-dj-lowpay",
+        "node:eval-dj-bi-toronto",
+        "node:eval-dj-remote-canada",
+        "node:eval-dj-healthcare"
+      ]
+    }
+  ]
+}

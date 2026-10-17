@@ -1,0 +1,24 @@
+{
+  "id": "node:eval-dj-german",
+  "title": "Junior Data Analyst",
+  "company": {
+    "name": "Kaufpunkt",
+    "description": "Kaufpunkt runs an online marketplace for household goods."
+  },
+  "publishedAt": "__RECENT__",
+  "applyUrl": "https://jobs.example.test/eval/dj-german",
+  "salary": {
+    "minimum": 48000,
+    "maximum": 55000,
+    "stated": null,
+    "currency": "EUR",
+    "period": "year"
+  },
+  "city": "Munich",
+  "location": "Munich, Germany",
+  "workMode": "onsite",
+  "locationEvidence": [
+    "Advertised role location: Munich, Germany (onsite)"
+  ],
+  "ad": "Junior Data Analyst (Munich, onsite). EUR 48,000–55,000 per year. Visa sponsorship and relocation support are available.\n\nAnswer business questions with SQL and present findings to German-speaking merchant teams.\n\nEssential: German at C1 level; SQL.\nPreferred: Python."
+}

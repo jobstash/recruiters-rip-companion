@@ -30,7 +30,7 @@ export function prepareQuestions(questions) {
     if (new Set(options.map(option => option.toLocaleLowerCase())).size !== options.length) fail('INVALID_INPUT', `Question "${resolved.subject}" repeats an option.`);
     return resolved;
   });
-  if (new Set(prepared.map(factKey)).size !== prepared.length) fail('INVALID_INPUT', 'Ask about each subject once per interview.');
+  if (new Set(prepared.map(factKey)).size !== prepared.length) fail('INVALID_INPUT', 'Ask about each subject and employer once per interview.');
   return prepared;
 }
 
@@ -135,19 +135,4 @@ export function parseReply(reply, questions) {
     answers.push({ number: token.number, answer: option, ...(detail ? { detail } : {}) });
   });
   return answers;
-}
-
-/** True for a stored pending interview with the expected shape. */
-export function isInterview(interview) {
-  return Boolean(interview) && typeof interview === 'object' && typeof interview.id === 'string' &&
-    typeof interview.applicationId === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(interview.applicationId) &&
-    Boolean(interview.job) && ['title', 'company'].every(field => typeof interview.job[field] === 'string' && interview.job[field].trim()) &&
-    (interview.title === undefined || typeof interview.title === 'string') && typeof interview.createdAt === 'string' &&
-    Array.isArray(interview.questions) && interview.questions.length > 0 && interview.questions.every(question =>
-      question && Number.isInteger(question.number) && question.number > 0 && typeof question.subject === 'string' &&
-      typeof question.prompt === 'string' && QUESTION_KINDS.includes(question.kind) &&
-      (question.stage === 'detail'
-        ? typeof question.factId === 'string' && typeof question.factSnapshot === 'string'
-        : question.stage === undefined && Array.isArray(question.options) &&
-          question.options.length >= 2 && question.options.length <= LETTERS.length && question.options.every(option => typeof option === 'string')));
 }

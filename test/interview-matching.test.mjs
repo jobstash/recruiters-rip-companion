@@ -29,13 +29,20 @@ function fixture() {
   return { store, applicationId, call: (name, args = {}) => tools.get(name).invoke(args) };
 }
 
-test('listing-specific answers invalidate old scores and reach the next evaluation with the original question and explanation', async () => {
+test('listing-specific answers invalidate old assessments and reach the next evaluation with the original question and explanation', async () => {
   const f = fixture();
   const initial = await f.call('career_match_jobs');
   assert.equal(initial.candidate.facts.length, 0, 'CV-only matching must work before interviews');
-  const score = { id: 'node:role', score: 70, decision: 'recommend', relocation: 'not_required', reason: 'Initial host assessment from the CV.' };
-  await f.call('career_match_save', { profileVersion: initial.profileVersion, scores: [score] });
-  assert.equal((await f.call('career_recommendations')).total, 1);
+  const assessment = (fit, managers, reason) => ({ id: 'node:role', status: 'assessed',
+    requirements: [{ requirement: 'Lead product engineers', importance: 'essential', evidence: 'demonstrated', cvQuote: 'Led product delivery at Acme.' },
+      { requirement: 'Develop engineering managers', importance: 'preferred', ...managers }],
+    gates: { direction: 'pass', constraints: 'pass', eligibility: 'pass' },
+    dimensions: { direction: fit, capability: fit, scope: fit, preferences: fit }, relocation: 'not_required', reason });
+  const first = assessment(70, { evidence: 'missing' }, 'Initial host assessment from the CV.');
+  await f.call('career_match_save', { profileVersion: initial.profileVersion, policyId: initial.policyId, assessments: [first] });
+  const recommended = await f.call('career_recommendations');
+  assert.equal(recommended.total, 1);
+  assert.equal(recommended.recommendations[0].overall, 70);
 
   const question = 'Have you directly managed engineering managers?';
   const interview = await f.call('career_interview_ask', { applicationId: f.applicationId, questions: [
@@ -47,7 +54,7 @@ test('listing-specific answers invalidate old scores and reach the next evaluati
   const explanation = 'At Acme I managed two engineering managers, set their team goals and coached them through hiring and performance reviews.';
   await f.call('career_interview_answer', { interviewId: interview.interviewId, reply: explanation });
 
-  await assert.rejects(f.call('career_match_save', { profileVersion: initial.profileVersion, scores: [score] }), { code: 'PROFILE_CHANGED' });
+  await assert.rejects(f.call('career_match_save', { profileVersion: initial.profileVersion, policyId: initial.policyId, assessments: [first] }), { code: 'PROFILE_CHANGED' });
   const updated = await f.call('career_match_jobs');
   assert.notEqual(updated.profileVersion, initial.profileVersion);
   assert.deepEqual(updated.jobIds, ['node:role']);
@@ -56,8 +63,12 @@ test('listing-specific answers invalidate old scores and reach the next evaluati
   assert.equal(fact.detail, explanation);
   assert.equal(fact.followUps[0].answer, explanation);
   assert.ok(fact.context.includes('developing engineering managers'));
-  // The host authors a new judgment; tools must not auto-generate a score bonus.
-  assert.equal(f.store.get().career.matching.scores['node:role'].score, 70);
-  await f.call('career_match_save', { profileVersion: updated.profileVersion, scores: [{ ...score, score: 88, reason: 'Reassessed by the host using the newly described management scope.' }] });
-  assert.equal((await f.call('career_recommendations')).recommendations[0].score, 88);
+  // The host authors a new judgment; tools must not auto-adjust the saved assessment.
+  const stale = (await f.call('career_matches')).matches[0];
+  assert.deepEqual([stale.overall, stale.decision, stale.reviewStatus], [70, 'recommend', 'needs_review']);
+  await f.call('career_match_save', { profileVersion: updated.profileVersion, policyId: updated.policyId, assessments: [
+    assessment(88, { evidence: 'demonstrated', factIds: [fact.id] }, 'Reassessed by the host using the newly described management scope.')] });
+  const reassessed = (await f.call('career_recommendations')).recommendations[0];
+  assert.deepEqual([reassessed.overall, reassessed.band, reassessed.decision, reassessed.reviewStatus], [88, 'strong', 'recommend', 'current']);
+  assert.deepEqual(reassessed.requirements[1].factIds, [fact.id]);
 });

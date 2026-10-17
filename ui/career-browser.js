@@ -2,10 +2,10 @@
 (() => {
   const element = id => document.getElementById(id);
   const categories = {
-    sources: { title: 'Sources', empty: 'No saved sources. Imported source documents will appear here.' },
+    sources: { title: 'CVs', empty: 'No saved CVs or supporting documents. Use Import CV to add one.' },
     facts: { title: 'Facts', empty: 'No saved career facts.' },
-    rankings: { title: 'Rankings', empty: 'No saved rankings. Saved role assessments and their reasons will appear here.' },
-    applications: { title: 'Applications', empty: 'No saved applications. Saved CV and cover letter wording will appear here.' },
+    jobs: { title: 'Jobs', empty: 'No saved jobs. Start a pre-scan or copy the review prompt for your connected chat app.' },
+    applications: { title: 'Job Applications', empty: 'No saved applications. Saved CV and cover letter wording will appear here.' },
   };
   const categoryButtons = [...document.querySelectorAll('[data-career-kind]')];
   const records = element('career-records');
@@ -24,7 +24,7 @@
   // Wide windows show the list and reader side by side, so the first record opens automatically.
   const sideBySide = window.matchMedia('(min-width: 760px)');
   let enabled = false;
-  let kind = 'sources';
+  let kind = 'jobs';
   let generation = 0;
   let readGeneration = 0;
   let offset = 0;
@@ -77,6 +77,7 @@
           term.textContent = field.label;
           const value = document.createElement('dd');
           value.textContent = field.value;
+          if (field.numeric === true) value.className = 'numeric';
           list.append(term, value);
         }
         block.append(list);
@@ -121,7 +122,7 @@
   }
 
   function showCategoryActions() {
-    deleteRankings.hidden = !enabled || kind !== 'rankings';
+    deleteRankings.hidden = !enabled || kind !== 'jobs';
   }
   async function loadPage(focusList = false) {
     if (!enabled) return;
@@ -137,7 +138,6 @@
     previous.disabled = true;
     next.disabled = true;
     const category = categories[kind];
-    element('career-list-title').textContent = category.title;
     listStatus.textContent = `Loading ${category.title.toLowerCase()}…`;
     let firstRecord = null;
     try {

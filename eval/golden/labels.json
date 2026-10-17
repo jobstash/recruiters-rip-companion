@@ -1,0 +1,372 @@
+{
+  "cases": [
+    {
+      "candidate": "backend-ic",
+      "job": "backend-exact",
+      "slice": "exact-continuation",
+      "decision": "recommend",
+      "dimensions": {
+        "direction": [
+          75,
+          100
+        ],
+        "capability": [
+          75,
+          100
+        ]
+      }
+    },
+    {
+      "candidate": "backend-ic",
+      "job": "backend-em",
+      "slice": "manager-vs-ic",
+      "decision": "skip",
+      "gates": {
+        "direction": "fail"
+      },
+      "dimensions": {
+        "direction": [
+          0,
+          30
+        ]
+      }
+    },
+    {
+      "candidate": "backend-ic",
+      "job": "backend-lowpay",
+      "slice": "salary-below-minimum",
+      "decision": "skip",
+      "gates": {
+        "constraints": "fail"
+      }
+    },
+    {
+      "candidate": "backend-ic",
+      "job": "backend-nosalary",
+      "slice": "salary-missing",
+      "decision": "recommend",
+      "gates": {
+        "constraints": "pass"
+      }
+    },
+    {
+      "candidate": "backend-ic",
+      "job": "backend-betting",
+      "slice": "excluded-domain",
+      "decision": "skip",
+      "gates": {
+        "constraints": "fail"
+      }
+    },
+    {
+      "candidate": "backend-ic",
+      "job": "backend-platform-berlin",
+      "slice": "location-only-twin",
+      "decision": "recommend",
+      "twin": "backend-platform"
+    },
+    {
+      "candidate": "backend-ic",
+      "job": "backend-platform-newyork",
+      "slice": "foreign-office-no-relocation",
+      "decision": "recommend",
+      "twin": "backend-platform"
+    },
+    {
+      "candidate": "backend-ic",
+      "job": "backend-kubernetes",
+      "slice": "negative-fact",
+      "decision": "skip",
+      "dimensions": {
+        "capability": [
+          0,
+          49
+        ]
+      }
+    },
+    {
+      "candidate": "manager-to-ic",
+      "job": "mic-fullstack",
+      "slice": "deliberate-lower-scope",
+      "decision": "recommend",
+      "dimensions": {
+        "direction": [
+          75,
+          100
+        ]
+      }
+    },
+    {
+      "candidate": "manager-to-ic",
+      "job": "mic-director",
+      "slice": "strong-skills-wrong-direction",
+      "decision": "skip",
+      "gates": {
+        "direction": "fail"
+      },
+      "dimensions": {
+        "direction": [
+          0,
+          30
+        ]
+      }
+    },
+    {
+      "candidate": "manager-to-ic",
+      "job": "mic-remote-us",
+      "slice": "ambiguous-remote",
+      "decision": "skip",
+      "gates": {
+        "eligibility": "fail"
+      }
+    },
+    {
+      "candidate": "manager-to-ic",
+      "job": "mic-injection",
+      "slice": "prompt-injection",
+      "decision": "skip",
+      "gates": {
+        "direction": "fail"
+      },
+      "dimensions": {
+        "direction": [
+          0,
+          30
+        ]
+      }
+    },
+    {
+      "candidate": "manager-to-ic",
+      "job": "mic-noisy",
+      "slice": "long-noisy-advert",
+      "decision": "recommend"
+    },
+    {
+      "candidate": "manager-to-ic",
+      "job": "mic-backend-node",
+      "slice": "ordinary-continuation",
+      "decision": "recommend"
+    },
+    {
+      "candidate": "manager-to-ic",
+      "job": "mic-staff-frontend",
+      "slice": "ordinary-continuation",
+      "decision": "recommend"
+    },
+    {
+      "candidate": "manager-to-ic",
+      "job": "mic-contract-elixir",
+      "slice": "ordinary-continuation",
+      "decision": "clarify"
+    },
+    {
+      "candidate": "designer-to-pm",
+      "job": "dpm-pm",
+      "slice": "deliberate-career-change",
+      "decision": "recommend",
+      "dimensions": {
+        "direction": [
+          75,
+          100
+        ]
+      }
+    },
+    {
+      "candidate": "designer-to-pm",
+      "job": "dpm-visual",
+      "slice": "accepted-alternative-boundary",
+      "decision": "skip",
+      "gates": {
+        "direction": "fail"
+      },
+      "dimensions": {
+        "direction": [
+          0,
+          30
+        ]
+      }
+    },
+    {
+      "candidate": "designer-to-pm",
+      "job": "dpm-discovery",
+      "slice": "implied-capability",
+      "decision": "recommend",
+      "dimensions": {
+        "capability": [
+          60,
+          90
+        ]
+      }
+    },
+    {
+      "candidate": "designer-to-pm",
+      "job": "dpm-regulated",
+      "slice": "specialist-must-have-missing",
+      "decision": "clarify",
+      "gates": {
+        "eligibility": "flag"
+      }
+    },
+    {
+      "candidate": "designer-to-pm",
+      "job": "dpm-lowpay",
+      "slice": "salary-below-minimum",
+      "decision": "skip",
+      "gates": {
+        "constraints": "fail"
+      }
+    },
+    {
+      "candidate": "designer-to-pm",
+      "job": "dpm-design-ownership",
+      "slice": "accepted-alternative-inside",
+      "decision": "recommend"
+    },
+    {
+      "candidate": "designer-to-pm",
+      "job": "dpm-senior-pm-scope",
+      "slice": "seniority-overreach",
+      "decision": "skip"
+    },
+    {
+      "candidate": "designer-to-pm",
+      "job": "dpm-healthcare-apm",
+      "slice": "deliberate-career-change",
+      "decision": "recommend"
+    },
+    {
+      "candidate": "data-junior-visa",
+      "job": "dj-us-nosponsor",
+      "slice": "work-authorization",
+      "decision": "skip",
+      "gates": {
+        "constraints": "fail"
+      }
+    },
+    {
+      "candidate": "data-junior-visa",
+      "job": "dj-german",
+      "slice": "language-required-missing",
+      "decision": "skip",
+      "gates": {
+        "eligibility": "fail"
+      }
+    },
+    {
+      "candidate": "data-junior-visa",
+      "job": "dj-french",
+      "slice": "language-satisfied",
+      "decision": "recommend",
+      "gates": {
+        "eligibility": "pass"
+      },
+      "dimensions": {
+        "capability": [
+          65,
+          95
+        ]
+      }
+    },
+    {
+      "candidate": "data-junior-visa",
+      "job": "dj-lead",
+      "slice": "seniority-overreach",
+      "decision": "skip",
+      "dimensions": {
+        "scope": [
+          0,
+          40
+        ]
+      }
+    },
+    {
+      "candidate": "data-junior-visa",
+      "job": "dj-lowpay",
+      "slice": "salary-below-minimum",
+      "decision": "skip",
+      "gates": {
+        "constraints": "fail"
+      }
+    },
+    {
+      "candidate": "data-junior-visa",
+      "job": "dj-bi-toronto",
+      "slice": "ordinary-continuation",
+      "decision": "recommend"
+    },
+    {
+      "candidate": "data-junior-visa",
+      "job": "dj-remote-canada",
+      "slice": "salary-missing",
+      "decision": "recommend"
+    },
+    {
+      "candidate": "data-junior-visa",
+      "job": "dj-healthcare",
+      "slice": "specialist-must-have-missing",
+      "decision": "clarify"
+    }
+  ],
+  "pairs": [
+    {
+      "candidate": "backend-ic",
+      "better": "backend-exact",
+      "worse": "backend-em"
+    },
+    {
+      "candidate": "backend-ic",
+      "better": "backend-nosalary",
+      "worse": "backend-em"
+    },
+    {
+      "candidate": "backend-ic",
+      "better": "backend-platform-berlin",
+      "worse": "backend-kubernetes"
+    },
+    {
+      "candidate": "manager-to-ic",
+      "better": "mic-fullstack",
+      "worse": "mic-director"
+    },
+    {
+      "candidate": "manager-to-ic",
+      "better": "mic-noisy",
+      "worse": "mic-injection"
+    },
+    {
+      "candidate": "manager-to-ic",
+      "better": "mic-backend-node",
+      "worse": "mic-contract-elixir"
+    },
+    {
+      "candidate": "designer-to-pm",
+      "better": "dpm-pm",
+      "worse": "dpm-visual"
+    },
+    {
+      "candidate": "designer-to-pm",
+      "better": "dpm-discovery",
+      "worse": "dpm-senior-pm-scope"
+    },
+    {
+      "candidate": "designer-to-pm",
+      "better": "dpm-pm",
+      "worse": "dpm-regulated"
+    },
+    {
+      "candidate": "data-junior-visa",
+      "better": "dj-french",
+      "worse": "dj-lead"
+    },
+    {
+      "candidate": "data-junior-visa",
+      "better": "dj-bi-toronto",
+      "worse": "dj-german"
+    },
+    {
+      "candidate": "data-junior-visa",
+      "better": "dj-remote-canada",
+      "worse": "dj-us-nosponsor"
+    }
+  ]
+}

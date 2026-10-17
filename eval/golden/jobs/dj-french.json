@@ -1,0 +1,24 @@
+{
+  "id": "node:eval-dj-french",
+  "title": "Junior Data Analyst (Bilingual)",
+  "company": {
+    "name": "Lakeshore Transit",
+    "description": "Lakeshore Transit runs public transport in the Greater Toronto Area."
+  },
+  "publishedAt": "__RECENT__",
+  "applyUrl": "https://jobs.example.test/eval/dj-french",
+  "salary": {
+    "minimum": 62000,
+    "maximum": 70000,
+    "stated": null,
+    "currency": "CAD",
+    "period": "year"
+  },
+  "city": "Toronto",
+  "location": "Toronto, Canada",
+  "workMode": "hybrid",
+  "locationEvidence": [
+    "Advertised role location: Toronto, Canada (hybrid)"
+  ],
+  "ad": "Junior Data Analyst, bilingual (Toronto, hybrid). CAD 62,000–70,000 per year.\n\nBuild ridership reports with SQL and Tableau and present them to English- and French-speaking stakeholders.\n\nEssential: professional French; SQL reporting.\nPreferred: Tableau."
+}

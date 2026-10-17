@@ -1,0 +1,24 @@
+{
+  "id": "node:eval-dpm-discovery",
+  "title": "Product Manager, Discovery",
+  "company": {
+    "name": "Harbourly",
+    "description": "Harbourly builds a marketplace for boat rentals."
+  },
+  "publishedAt": "__RECENT__",
+  "applyUrl": "https://jobs.example.test/eval/dpm-discovery",
+  "salary": {
+    "minimum": 70000,
+    "maximum": 85000,
+    "stated": null,
+    "currency": "GBP",
+    "period": "year"
+  },
+  "city": "London",
+  "location": "London, United Kingdom",
+  "workMode": "hybrid",
+  "locationEvidence": [
+    "Advertised role location: London, United Kingdom (hybrid)"
+  ],
+  "ad": "Product Manager, Discovery (London, hybrid). GBP 70,000–85,000 per year.\n\nLead continuous product discovery for new marketplace features and prioritise the backlog with engineering.\n\nEssential: leading continuous product discovery; prioritising a backlog with engineering.\nPreferred: experimentation."
+}

@@ -1,0 +1,24 @@
+{
+  "id": "node:eval-dpm-visual",
+  "title": "Senior Visual Designer",
+  "company": {
+    "name": "Lumen & Co",
+    "description": "Lumen & Co is a brand and marketing studio."
+  },
+  "publishedAt": "__RECENT__",
+  "applyUrl": "https://jobs.example.test/eval/dpm-visual",
+  "salary": {
+    "minimum": 72000,
+    "maximum": 80000,
+    "stated": null,
+    "currency": "GBP",
+    "period": "year"
+  },
+  "city": "London",
+  "location": "London, United Kingdom",
+  "workMode": "hybrid",
+  "locationEvidence": [
+    "Advertised role location: London, United Kingdom (hybrid)"
+  ],
+  "ad": "Senior Visual Designer (London, hybrid). GBP 72,000–80,000 per year.\n\nCreate brand identities, campaign assets and marketing illustrations for our clients. No product or roadmap responsibility.\n\nEssential: brand and marketing visual design.\nPreferred: illustration and campaign assets."
+}

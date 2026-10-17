@@ -1,0 +1,80 @@
+{
+  "id": "backend-ic",
+  "profile": {
+    "headline": "Senior backend engineer",
+    "location": "Berlin, Germany",
+    "roleCapabilities": [
+      "Backend service design",
+      "API development",
+      "Relational database design",
+      "Production operations"
+    ],
+    "seniority": "senior",
+    "skills": [
+      "Go",
+      "Python",
+      "PostgreSQL",
+      "Kafka",
+      "AWS",
+      "Terraform"
+    ],
+    "preferences": {
+      "roles": [
+        "Senior backend engineer",
+        "Staff backend engineer"
+      ],
+      "locations": [
+        "Berlin"
+      ],
+      "workModes": [
+        "remote",
+        "hybrid",
+        "onsite"
+      ],
+      "employmentTypes": [
+        "permanent"
+      ],
+      "salaryMinimum": 95000,
+      "salaryCurrency": "EUR",
+      "salaryPeriod": "year",
+      "willingToRelocate": false,
+      "responsibilityModes": [
+        "hands_on"
+      ],
+      "directReports": "not_preferred",
+      "technologies": [
+        "Go",
+        "PostgreSQL"
+      ],
+      "domains": [
+        "logistics",
+        "developer tools",
+        "fintech"
+      ],
+      "notes": "Hands-on individual contributor work only; no people management. Will not work for gambling or betting businesses. Staying in Berlin and not relocating."
+    }
+  },
+  "cv": "Senior Backend Engineer, Northwind Logistics, Berlin, 2020–present\n- Designed and operate Go services that route 40,000 shipments a day across 12 carriers.\n- Led the migration of order data from a monolith to PostgreSQL with zero downtime.\n- Built event pipelines on Kafka for real-time tracking updates.\n- On call for production services; wrote runbooks and reduced paging volume by half.\n\nBackend Engineer, Ledgerline Payments, Hamburg, 2016–2020\n- Built Python and Go APIs for merchant settlement and reconciliation.\n- Maintained PostgreSQL schemas and query performance for payment records.\n- Deployed services to AWS with Terraform; some exposure to Kubernetes through a platform team pilot.\n\nEducation: BSc Computer Science, 2016",
+  "facts": [
+    {
+      "id": "a0000000-0000-4000-8000-000000000001",
+      "kind": "capability",
+      "subject": "Kubernetes",
+      "answer": "Some exposure",
+      "detail": "Deployed two services to a pilot cluster run by the platform team.",
+      "employer": "Ledgerline Payments"
+    },
+    {
+      "id": "a0000000-0000-4000-8000-000000000002",
+      "kind": "capability",
+      "subject": "People management",
+      "answer": "None"
+    },
+    {
+      "id": "a0000000-0000-4000-8000-000000000003",
+      "kind": "language",
+      "subject": "German",
+      "answer": "Professional"
+    }
+  ]
+}

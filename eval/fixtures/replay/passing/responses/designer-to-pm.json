@@ -1,0 +1,283 @@
+{
+  "assessments": [
+    {
+      "id": "node:eval-dpm-pm",
+      "status": "assessed",
+      "requirements": [
+        {
+          "requirement": "Owning a product roadmap",
+          "importance": "essential",
+          "evidence": "transferable",
+          "cvQuote": "Partnered with the product manager to prioritise the quarterly roadmap using impact and effort scoring.",
+          "factIds": [
+            "c0000000-0000-4000-8000-000000000001"
+          ]
+        },
+        {
+          "requirement": "Customer discovery",
+          "importance": "essential",
+          "evidence": "demonstrated",
+          "cvQuote": "Ran weekly customer interviews and synthesised findings into opportunity backlogs."
+        },
+        {
+          "requirement": "Defining and tracking product metrics",
+          "importance": "preferred",
+          "evidence": "demonstrated",
+          "cvQuote": "Defined success metrics for checkout experiments and lifted booking conversion by 9%."
+        }
+      ],
+      "gates": {
+        "direction": "pass",
+        "constraints": "pass",
+        "eligibility": "pass"
+      },
+      "dimensions": {
+        "direction": 90,
+        "capability": 75,
+        "scope": 80,
+        "preferences": 85
+      },
+      "relocation": "not_required",
+      "reason": "A travel product manager role is the intended move; roadmap co-ownership and weekly discovery support it."
+    },
+    {
+      "id": "node:eval-dpm-visual",
+      "status": "assessed",
+      "requirements": [
+        {
+          "requirement": "Brand and marketing visual design",
+          "importance": "essential",
+          "evidence": "transferable",
+          "factIds": [
+            "c0000000-0000-4000-8000-000000000002"
+          ]
+        },
+        {
+          "requirement": "Illustration and campaign assets",
+          "importance": "preferred",
+          "evidence": "missing"
+        }
+      ],
+      "gates": {
+        "direction": "fail",
+        "constraints": "pass",
+        "eligibility": "pass"
+      },
+      "dimensions": {
+        "direction": 10,
+        "capability": 60,
+        "scope": 70,
+        "preferences": 30
+      },
+      "relocation": "not_required",
+      "reason": "Pure brand and marketing design with no product ownership is outside the accepted alternative and explicitly unwanted."
+    },
+    {
+      "id": "node:eval-dpm-discovery",
+      "status": "assessed",
+      "requirements": [
+        {
+          "requirement": "Leading continuous product discovery",
+          "importance": "essential",
+          "evidence": "transferable",
+          "cvQuote": "Ran weekly customer interviews and synthesised findings into opportunity backlogs."
+        },
+        {
+          "requirement": "Prioritising a backlog with engineering",
+          "importance": "essential",
+          "evidence": "transferable",
+          "cvQuote": "Partnered with the product manager to prioritise the quarterly roadmap using impact and effort scoring."
+        },
+        {
+          "requirement": "Experimentation",
+          "importance": "preferred",
+          "evidence": "demonstrated",
+          "cvQuote": "Defined success metrics for checkout experiments and lifted booking conversion by 9%."
+        }
+      ],
+      "gates": {
+        "direction": "pass",
+        "constraints": "pass",
+        "eligibility": "pass"
+      },
+      "dimensions": {
+        "direction": 88,
+        "capability": 72,
+        "scope": 80,
+        "preferences": 80
+      },
+      "relocation": "not_required",
+      "reason": "Sustained weekly interviews and roadmap prioritisation establish discovery and prioritisation competence for this PM role."
+    },
+    {
+      "id": "node:eval-dpm-regulated",
+      "status": "assessed",
+      "requirements": [
+        {
+          "requirement": "Current insurance distribution certification",
+          "importance": "essential",
+          "evidence": "missing"
+        },
+        {
+          "requirement": "Discovery with operational users",
+          "importance": "essential",
+          "evidence": "transferable",
+          "cvQuote": "Planned and moderated usability tests with clinicians and patients."
+        },
+        {
+          "requirement": "Roadmap prioritisation",
+          "importance": "preferred",
+          "evidence": "transferable",
+          "cvQuote": "Partnered with the product manager to prioritise the quarterly roadmap using impact and effort scoring."
+        }
+      ],
+      "gates": {
+        "direction": "pass",
+        "constraints": "pass",
+        "eligibility": "flag"
+      },
+      "dimensions": {
+        "direction": 80,
+        "capability": 55,
+        "scope": 75,
+        "preferences": 70
+      },
+      "relocation": "not_required",
+      "reason": "A PM role in the intended direction, but the regulator-required insurance certification is essential and not evidenced."
+    },
+    {
+      "id": "node:eval-dpm-lowpay",
+      "status": "assessed",
+      "requirements": [
+        {
+          "requirement": "Product roadmap ownership",
+          "importance": "essential",
+          "evidence": "transferable",
+          "cvQuote": "Partnered with the product manager to prioritise the quarterly roadmap using impact and effort scoring."
+        },
+        {
+          "requirement": "User research",
+          "importance": "essential",
+          "evidence": "demonstrated",
+          "cvQuote": "Ran weekly customer interviews and synthesised findings into opportunity backlogs."
+        }
+      ],
+      "gates": {
+        "direction": "pass",
+        "constraints": "fail",
+        "eligibility": "pass"
+      },
+      "dimensions": {
+        "direction": 85,
+        "capability": 75,
+        "scope": 80,
+        "preferences": 75
+      },
+      "relocation": "not_required",
+      "reason": "The PM remit fits, but the GBP 62,000 ceiling is below the GBP 70,000 minimum."
+    },
+    {
+      "id": "node:eval-dpm-design-ownership",
+      "status": "assessed",
+      "requirements": [
+        {
+          "requirement": "Owning design and outcome metrics for a product area",
+          "importance": "essential",
+          "evidence": "demonstrated",
+          "cvQuote": "Defined success metrics for checkout experiments and lifted booking conversion by 9%."
+        },
+        {
+          "requirement": "Design systems",
+          "importance": "preferred",
+          "evidence": "demonstrated",
+          "cvQuote": "Designed patient appointment flows and a shared design system."
+        },
+        {
+          "requirement": "Usability testing",
+          "importance": "preferred",
+          "evidence": "demonstrated",
+          "cvQuote": "Planned and moderated usability tests with clinicians and patients."
+        }
+      ],
+      "gates": {
+        "direction": "pass",
+        "constraints": "pass",
+        "eligibility": "pass"
+      },
+      "dimensions": {
+        "direction": 75,
+        "capability": 85,
+        "scope": 80,
+        "preferences": 75
+      },
+      "relocation": "not_required",
+      "reason": "A senior design role with explicit outcome and roadmap ownership sits inside the accepted alternative."
+    },
+    {
+      "id": "node:eval-dpm-senior-pm-scope",
+      "status": "assessed",
+      "requirements": [
+        {
+          "requirement": "At least eight years of product management experience",
+          "importance": "essential",
+          "evidence": "contradicted"
+        },
+        {
+          "requirement": "Managing a team of product managers",
+          "importance": "essential",
+          "evidence": "missing"
+        }
+      ],
+      "gates": {
+        "direction": "pass",
+        "constraints": "pass",
+        "eligibility": "pass"
+      },
+      "dimensions": {
+        "direction": 60,
+        "capability": 30,
+        "scope": 25,
+        "preferences": 60
+      },
+      "relocation": "not_required",
+      "reason": "Eight years of product management and managing PMs are essential; the candidate has not yet held a PM role."
+    },
+    {
+      "id": "node:eval-dpm-healthcare-apm",
+      "status": "assessed",
+      "requirements": [
+        {
+          "requirement": "Discovery with patients and clinicians",
+          "importance": "essential",
+          "evidence": "demonstrated",
+          "cvQuote": "Planned and moderated usability tests with clinicians and patients."
+        },
+        {
+          "requirement": "Writing product requirements with engineering",
+          "importance": "essential",
+          "evidence": "transferable",
+          "cvQuote": "Partnered with the product manager to prioritise the quarterly roadmap using impact and effort scoring."
+        },
+        {
+          "requirement": "Healthcare product experience",
+          "importance": "preferred",
+          "evidence": "demonstrated",
+          "cvQuote": "Designed patient appointment flows and a shared design system."
+        }
+      ],
+      "gates": {
+        "direction": "pass",
+        "constraints": "pass",
+        "eligibility": "pass"
+      },
+      "dimensions": {
+        "direction": 85,
+        "capability": 75,
+        "scope": 70,
+        "preferences": 80
+      },
+      "relocation": "not_required",
+      "reason": "An entry PM role in healthcare suits the change; clinician and patient research is directly evidenced."
+    }
+  ]
+}

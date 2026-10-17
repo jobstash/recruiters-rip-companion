@@ -1,0 +1,24 @@
+{
+  "id": "node:eval-dpm-regulated",
+  "title": "Product Manager, Claims",
+  "company": {
+    "name": "Assurely",
+    "description": "Assurely is a regulated insurance intermediary."
+  },
+  "publishedAt": "__RECENT__",
+  "applyUrl": "https://jobs.example.test/eval/dpm-regulated",
+  "salary": {
+    "minimum": 75000,
+    "maximum": 85000,
+    "stated": null,
+    "currency": "GBP",
+    "period": "year"
+  },
+  "city": "London",
+  "location": "London, United Kingdom",
+  "workMode": "hybrid",
+  "locationEvidence": [
+    "Advertised role location: London, United Kingdom (hybrid)"
+  ],
+  "ad": "Product Manager, Claims (London, hybrid). GBP 75,000–85,000 per year.\n\nOwn the claims journey roadmap and run discovery with claims handlers.\n\nEssential: a current insurance distribution certification, which our regulator requires for this role; discovery with operational users.\nPreferred: roadmap prioritisation."
+}

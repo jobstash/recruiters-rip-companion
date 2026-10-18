@@ -2,6 +2,8 @@
 
 Find suitable jobs and prepare tailored CVs, cover letters and job applications. Version 3.8.0 puts major actions on Home and combines preliminary and reviewed assessments into one Jobs list. Navigation is CVs, Facts, Jobs and Job Applications; Settings contains account, chat-app and API-key configuration.
 
+For current release state, repository ownership and safe cross-repository workflows, see [the agent handover](HANDOVER.md).
+
 ## Account and installation
 
 1. Visit https://recruiters.rip, connect your account, and complete the $9.99/month membership checkout.

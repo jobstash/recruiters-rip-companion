@@ -4,6 +4,7 @@ import { renderableCv } from './mcp/cv-quality.mjs';
 import { createMatchingTools } from './mcp/matching-tools.mjs';
 import { fail, readCareer } from './mcp/state.mjs';
 import { comparePrescanRows, currentPrescanRow } from './prescan/state.mjs';
+import { applicationProgress } from './job-intake.mjs';
 
 const kinds = ['sources', 'facts', 'jobs', 'applications'];
 const forbidden = new Set(['__proto__', 'prototype', 'constructor']);
@@ -77,11 +78,13 @@ function applicationTitle(app) {
   return [text(app.job?.title, ''), text(app.job?.company, '')].filter(Boolean).join(' — ') || 'Untitled application';
 }
 function applicationDetail(app, career) {
-  return { title: applicationTitle(app), sections: [
+  return { title: applicationTitle(app), application: { id: app.id, ...applicationProgress(app) }, sections: [
     fields('Application', [
       ['Company', app.job?.company], ['Location', app.job?.location], ['Job link', app.job?.url],
       ['Created', displayDate(app.createdAt)], ['Updated', displayDate(app.updatedAt)],
+      ['Documents', applicationProgress(app).label], ['Imported from', app.import?.kind],
     ], 'No application details saved.'),
+    section('Job advert', text(app.job?.description, 'No advert text is saved.')),
     ...draftSections('cv', app.cv, career), ...draftSections('cover_letter', app.coverLetter, career),
     ...(Array.isArray(app.cvHistory) ? app.cvHistory.flatMap(draft => draftSections('cv', draft, career, true)) : []),
     ...(Array.isArray(app.coverLetterHistory) ? app.coverLetterHistory.flatMap(draft => draftSections('cover_letter', draft, career, true)) : []),
@@ -233,10 +236,11 @@ export function createCareerBrowser({ store }) {
         return { items, total: rows.length, nextOffset: offset + items.length < rows.length ? offset + items.length : null };
       }
       const records = entries(career[kind]);
+      if (kind === 'applications') records.sort(([, a], [, b]) => String(b.updatedAt ?? '').localeCompare(String(a.updatedAt ?? '')));
       const items = records.slice(offset, offset + limit).map(([id, item]) => {
         if (kind === 'sources') return { id, title: text(item.name, 'Untitled source'), summary: [item.purpose === 'cv' ? '' : readable(item.purpose), item.archived ? 'Archived' : ''].filter(Boolean).join(' · ') };
         if (kind === 'facts') return { id, title: text(item.subject, 'Untitled fact'), summary: item.detail?.trim() ? item.detail : text(item.answer, '') };
-        return { id, title: applicationTitle(item), summary: `${item.cv ? 'CV draft saved' : 'No CV draft'} · ${item.coverLetter ? 'Cover letter saved' : 'No cover letter draft'}` };
+        return { id, title: applicationTitle(item), summary: applicationProgress(item).label };
       });
       return { items, total: records.length, nextOffset: offset + items.length < records.length ? offset + items.length : null };
     },

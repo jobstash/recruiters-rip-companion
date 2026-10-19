@@ -8,8 +8,8 @@ import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createVault, privateDirectory } from './vault.mjs';
 import { createDeviceClient } from './client.mjs';
-import { installNative, EXTENSION_ID } from './install-native.mjs';
-import { CareerError, fail, upgradeCareer } from './mcp/state.mjs';
+import { installNative, NATIVE_ORIGINS } from './install-native.mjs';
+import { CareerError, fail, upgradeCareer, readCareer } from './mcp/state.mjs';
 import { createMcpServer, createPlatformTools } from './mcp/server.mjs';
 import { createProfileTools } from './mcp/profile-tools.mjs';
 import { createApplicationTools } from './mcp/application-tools.mjs';
@@ -22,6 +22,7 @@ import { createCareerBrowser } from './career-browser.mjs';
 import { createPrescanCredentials } from './prescan/credentials.mjs';
 import { createPrescanController } from './prescan/service.mjs';
 import { createPrescanTools } from './mcp/prescan-tools.mjs';
+import { createJobIntake, applicationTask, applicationProgress } from './job-intake.mjs';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const packageMetadata = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
@@ -37,7 +38,7 @@ const vault = createVault(directory);
 let window, client, nativeBridge, mcpBridge, documents, files, locked = true, failure = '';
 let pendingApproval, confirmation = Promise.resolve(), initializing, exiting = false, screenLocked = false, sleeping = false;
 let heartbeatTimer, heartbeatBusy = false, browserConnection = 'pending', queuedPairing;
-let sessionEpoch = 0, careerViewRevision = 0;
+let sessionEpoch = 0, careerViewRevision = 0, applicationFocus;
 let windowLoaded;
 const sockets = new Set();
 const store = { get() { assertAvailable(false); return vault.get(); }, update(change) { assertAvailable(false); return vault.update(async state => { assertAvailable(false); await change(state); assertAvailable(false); }); } };
@@ -89,7 +90,7 @@ function localState() {
   if (locked) return { ...publicState, failure, browserConnection };
   const state = vault.get();
   return { ...publicState, account: state.pairing?.account ?? null, origin: state.pairing?.origin ?? null, browserConnection, failure,
-    setup: setup(), careerViewVersion: `${state.deviceId}:${sessionEpoch}:${careerViewRevision}`,
+    setup: setup(), careerViewVersion: `${state.deviceId}:${sessionEpoch}:${careerViewRevision}`, applicationFocus,
     prescan: { credentials: prescanCredentials.publicState(), run: prescan.status() },
     approval: pendingApproval ? { id: pendingApproval.id, title: pendingApproval.title, detail: pendingApproval.detail } : null };
 }
@@ -239,7 +240,46 @@ async function installConnections() {
   try { await installNative({ executable: process.execPath, appPath: app.getAppPath(), directory, packaged: app.isPackaged, localOnly }); browserConnection = 'installed'; }
   catch { browserConnection = 'unavailable'; }
 }
+function scopedIntake() {
+  const scoped = createScopedAccess(store, { assertAvailable, epoch: () => sessionEpoch });
+  return { scoped, intake: createJobIntake({ store: scoped.store }) };
+}
+async function importJob(input, reveal = false) {
+  const { scoped, intake } = scopedIntake();
+  const result = await intake.import(input);
+  scoped.assertAvailable(false);
+  applicationFocus = { applicationId: result.applicationId, version: ++careerViewRevision };
+  if (reveal) await showSettings();
+  emit();
+  return result;
+}
+async function applicationAction(op, input) {
+  exact(input, op === 'application-open-pdf' ? ['applicationId', 'kind'] : ['applicationId']);
+  const scoped = createScopedAccess(store, { assertAvailable, epoch: () => sessionEpoch });
+  if (typeof input.applicationId !== 'string' || !/^[a-f0-9-]{36}$/i.test(input.applicationId)) fail('INVALID_INPUT', 'Choose a saved application.');
+  const career = readCareer(scoped.store), application = career.applications[input.applicationId];
+  if (!application) fail('NOT_FOUND', 'This application is no longer saved. Refresh the list.');
+  if (op === 'application-copy-task') {
+    clipboard.writeText(applicationTask(career, application.id));
+    return { copied: true };
+  }
+  if (!['cv', 'cover_letter'].includes(input.kind)) fail('INVALID_INPUT', 'Choose the CV or intro letter.');
+  const draft = input.kind === 'cv' ? application.cv : application.coverLetter;
+  const exported = application.exports?.findLast(item => item.kind === input.kind && item.format === 'pdf' && item.documentVersion === draft?.version);
+  if (!exported || !/^recruiters:\/\/exports\/[a-f0-9]{64}\.pdf$/.test(exported.uri)) fail('NOT_FOUND', 'Ask your connected agent to export the current document as PDF first.');
+  const localFiles = createDocumentFiles({ directory, store: scoped.store, assertAvailable: scoped.assertAvailable });
+  await localFiles.readResource(exported.uri);
+  scoped.assertAvailable(false);
+  const error = await shell.openPath(path.join(localFiles.exportDirectory(), exported.uri.split('/').at(-1)));
+  scoped.assertAvailable(false);
+  if (error) fail('INVALID_INPUT', 'The PDF could not be opened. Use Open exports to choose a PDF viewer.');
+  return { opened: true };
+}
 async function nativeOperation(op, payload) {
+  if (op === 'job_import') {
+    const result = await importJob(payload, true);
+    return { applicationId: result.applicationId };
+  }
   exact(payload, op === 'pair' ? ['productOrigin', 'pairing'] : []);
   if (op === 'status') return status();
   if (op === 'open_settings') { showSettings(); return { opened: true }; }
@@ -255,13 +295,13 @@ async function startNativeBridge() {
     const timer = setTimeout(() => { if (!authenticated) socket.destroy(); }, 5000);
     socket.on('error', () => socket.destroy()); socket.on('close', () => { clearTimeout(timer); sockets.delete(socket); });
     socket.on('data', chunk => {
-      input = Buffer.concat([input, chunk]); if (input.length > 65536) { socket.destroy(); return; }
+      input = Buffer.concat([input, chunk]); if (input.length > 512 * 1024 + 4) { socket.destroy(); return; }
       while (input.length >= 4) {
-        const length = input.readUInt32LE(0); if (!length || length > 65532) { socket.destroy(); return; } if (input.length < length + 4) return;
+        const length = input.readUInt32LE(0); if (!length || length > 512 * 1024) { socket.destroy(); return; } if (input.length < length + 4) return;
         let message; try { message = JSON.parse(input.subarray(4, length + 4).toString('utf8')); } catch { socket.destroy(); return; } input = input.subarray(length + 4);
         if (!authenticated) {
           const supplied = typeof message.auth === 'string' ? Buffer.from(message.auth) : Buffer.alloc(0);
-          if (message.origin !== `chrome-extension://${EXTENSION_ID}/` || supplied.length !== token.length || !timingSafeEqual(supplied, Buffer.from(token))) { socket.destroy(); return; }
+          if (!NATIVE_ORIGINS.includes(message.origin) || supplied.length !== token.length || !timingSafeEqual(supplied, Buffer.from(token))) { socket.destroy(); return; }
           authenticated = true; clearTimeout(timer); sockets.add(socket); continue;
         }
         if (message.version !== 1 || typeof message.id !== 'string' || message.id.length > 100 || typeof message.op !== 'string' || ++pending > 8) { socket.destroy(); return; }
@@ -284,6 +324,14 @@ ipcMain.handle('local-settings', async (event, op, input = {}) => {
       scoped.assertAvailable(false);
       return { ok: true, result };
     }
+    if (op === 'job-preview') {
+      const { scoped, intake } = scopedIntake();
+      const result = await intake.preview(input);
+      scoped.assertAvailable(false);
+      return { ok: true, result };
+    }
+    if (op === 'job-import') return { ok: true, result: await importJob(input) };
+    if (op === 'application-copy-task' || op === 'application-open-pdf') return { ok: true, result: await applicationAction(op, input) };
     if (op.startsWith('prescan-')) {
       assertAvailable(false);
       let result;

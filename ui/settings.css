@@ -62,7 +62,8 @@ button:focus-visible { box-shadow: var(--shadow-focus-ring); z-index: 1; }
 .tab button { color: var(--color-smoke); }
 .tab button[aria-current="page"] { color: var(--color-ink); }
 .tab button[aria-current="page"]::after, .tab button:hover::after { content: ""; position: absolute; bottom: 0; left: var(--spacing-8); right: var(--spacing-8); height: 1px; background: var(--rr-dispersion); box-shadow: var(--shadow-edge-glow); }
-#notice { flex: none; margin: var(--spacing-16) var(--page-pad) 0; padding-left: var(--spacing-16); border-left: 1px solid var(--color-ink); }
+/* The notice is a top-right toast over the content: ruled surface, one ink edge, no colour or glow. Confirmations clear themselves; errors stay. */
+#notice { position: fixed; top: calc(var(--topbar-height, 77px) + var(--spacing-16)); right: var(--page-pad); z-index: 20; max-width: min(420px, calc(100vw - 2 * var(--page-pad))); padding: var(--spacing-16); background: var(--color-surface); border: 1px solid var(--color-facet); border-left: 1px solid var(--color-ink); }
 #notice:empty { display: none; }
 main { flex: 1; min-height: 0; overflow: auto; padding: var(--spacing-32) var(--page-pad); }
 #settings { height: 100%; min-height: 0; }

@@ -1,7 +1,14 @@
 'use strict';
 const $ = id => document.getElementById(id);
-let state, busy = false, noticeKind = '', careerViewVersion, stateRequest = 0, view = null;
-const notice = (text, kind = '') => { $('notice').textContent = text; noticeKind = kind; };
+let state, busy = false, noticeKind = '', noticeTimer, careerViewVersion, stateRequest = 0, view = null;
+// Confirmations leave on their own after a few seconds; errors and in-progress instructions stay until something replaces them.
+const notice = (text, kind = '', sticky = false) => {
+  clearTimeout(noticeTimer);
+  $('notice').textContent = text; noticeKind = kind;
+  if (text && !sticky) noticeTimer = setTimeout(() => { if ($('notice').textContent === text) notice(''); }, 5000);
+};
+// The topbar wraps at narrow widths, so the toast anchors to its measured height rather than a constant.
+new ResizeObserver(([entry]) => document.documentElement.style.setProperty('--topbar-height', `${entry.borderBoxSize[0].blockSize}px`)).observe(document.querySelector('.topbar'));
 async function invoke(op, input = {}) { const response = await window.companion.invoke(op, input); if (!response.ok) throw new Error(response.error.message); return response.result; }
 const views = ['me', 'jobs', 'setup', 'help'];
 function showView(next) {
@@ -67,14 +74,14 @@ async function refresh() {
     window.prescanUI?.refresh(state.prescan, state.paired);
     window.updatesUI?.refresh(state.updates);
     window.helpUI.refresh(state);
-    if (state.failure) notice(state.failure);
+    if (state.failure) notice(state.failure, 'error', true);
   } catch {
     if (request !== stateRequest) return;
     window.careerBrowser?.clear(); careerViewVersion = undefined;
     window.prescanUI?.clear();
     window.updatesUI?.clear();
     window.helpUI.clear();
-    notice('Could not load settings. Reopen the companion.');
+    notice('Could not load settings. Reopen the companion.', 'error', true);
   }
 }
 async function action(op, success) {
@@ -89,9 +96,9 @@ async function action(op, success) {
       showView('me');
       document.querySelector('[data-career-kind="sources"]').click();
     }
-    notice(typeof success === 'function' ? success(result) : success, op);
+    notice(typeof success === 'function' ? success(result) : success, op, op === 'connect-account');
   }
-  catch (error) { notice(error.message); }
+  catch (error) { notice(error.message, 'error', true); }
   finally { busy = false; controls.forEach((control, index) => { control.disabled = disabled[index]; }); await refresh(); }
 }
 for (const [id, op, message] of [
@@ -164,7 +171,7 @@ $('connect-github').addEventListener('click', async () => {
     await invoke('connect-github');
     githubPollUntil = Date.now() + 3 * 60 * 1000;
     $('github-status').textContent = 'Choose Link GitHub on the recruiters.rip page that opened, then come back here.';
-  } catch (error) { notice(error.message); button.disabled = false; }
+  } catch (error) { notice(error.message, 'error', true); button.disabled = false; }
 });
 window.addEventListener('focus', () => { if (state?.paired) void syncGithub(true, true); });
 $('sharing-toggle').addEventListener('click', () => {
@@ -174,7 +181,7 @@ $('sharing-toggle').addEventListener('click', () => {
 async function answerApproval(allow) {
   const id = state?.approval?.id; if (!id) return;
   $('approval-cancel').disabled = true; $('approval-allow').disabled = true;
-  try { await invoke('approval', { id, allow }); } catch (error) { notice(error.message); }
+  try { await invoke('approval', { id, allow }); } catch (error) { notice(error.message, 'error', true); }
   await refresh();
 }
 $('approval-cancel').addEventListener('click', () => { void answerApproval(false); });

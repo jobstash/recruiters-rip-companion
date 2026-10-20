@@ -103,7 +103,7 @@ A visible label, transparent field and bottom ink rule, not a rounded filled box
 
 Career records are a master/detail list, not a custom table engine. Keep full-result ordering before pagination and readable narrow-screen navigation. Current tabs/records use `aria-current`/`aria-pressed`, text weight and a thin edge or rule, never a mint panel. Do not change data or ranking semantics to match a mockup.
 
-State labels come from actual account, membership, device, lock, request or pre-scan state. Retain loading, empty, error, partial, stale, cancelled and disabled states. Do not infer membership, successful pairing, model completion or permission from the visual design. Notifications remain readable and announced with appropriate status/alert semantics.
+State labels come from actual account, membership, device, lock, request or pre-scan state. Retain loading, empty, error, partial, stale, cancelled and disabled states. Do not infer membership, successful pairing, model completion or permission from the visual design. Notifications remain readable and announced with appropriate status/alert semantics. In the companion the notice (`#notice`) is one top-right toast below the topbar: surface fill, facet rule, one ink left edge, no colour or glow, never a banner that pushes content. Confirmations (copied, saved, allowed) clear themselves after five seconds; errors and in-progress instructions (`Complete sign-in … then return here`) stay until something replaces them.
 
 ## Screen designs
 

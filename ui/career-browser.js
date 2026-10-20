@@ -70,8 +70,8 @@
   }
 
   /** One list + reader pair. `persistentReader` keeps the reader column rendered on wide screens.
-   *  `jobControls` are shown only while the jobs kind is active; sort, cutoff and Clear are also disabled otherwise. */
-  function createBrowser({ root, prefix, kind: initialKind, persistentReader = false, sortControl = null, cutoffControl = null, deleteRankings = null, jobControls = [] }) {
+   *  `jobControls` are shown only while the jobs kind is active; sort, the minimum-score slider and Clear are also disabled otherwise. */
+  function createBrowser({ root, prefix, kind: initialKind, persistentReader = false, sortControl = null, surfaceControl = null, deleteRankings = null, jobControls = [] }) {
     const element = name => document.getElementById(`${prefix}-${name}`);
     const categoryButtons = [...root.querySelectorAll('[data-career-kind]')];
     const records = element('records');
@@ -86,7 +86,9 @@
     const readerRetry = element('reader-retry');
     const content = element('reader-content');
     const sortSelect = sortControl ? element('sort') : null;
-    const cutoffInput = cutoffControl ? element('cutoff') : null;
+    const slider = surfaceControl ? element('minimum-score') : null;
+    const sliderValue = surfaceControl ? element('minimum-score-value') : null;
+    const surfaceSentence = surfaceControl ? element('surface-sentence') : null;
     const persistent = () => persistentReader && sideBySide.matches;
     let enabled = false;
     let kind = initialKind;
@@ -99,7 +101,7 @@
     let loading = false;
     let selected = null;
     let selectedButton = null;
-    let cutoff = null;
+    let minimumScore = null;
     // Set by an inclusion edit; the refresh that follows keeps the page, the open record and the toggled control.
     let keepPlace = null;
 
@@ -153,7 +155,7 @@
       list.append(term, value);
       block.append(heading, list);
       if (card.overridden) {
-        const reset = node('button', 'text', 'Reset to cutoff');
+        const reset = node('button', 'text', 'Reset to minimum score');
         reset.type = 'button';
         reset.id = `${prefix}-inclusion-reset`;
         reset.addEventListener('click', () => { void setInclusion(item, null); });
@@ -162,6 +164,23 @@
       return block;
     }
 
+    // Fit chart: one filled bar per dimension on a muted track; Overall first and heavier. Values are whole 0–100 scores.
+    function renderChart(rows) {
+      const chart = node('div', 'career-chart');
+      rows.forEach((entry, index) => {
+        if (typeof entry?.label !== 'string' || !Number.isInteger(entry?.value)) return;
+        const value = Math.min(100, Math.max(0, entry.value));
+        const row = node('div', index === 0 ? 'career-chart-row is-overall' : 'career-chart-row');
+        const track = node('span', 'career-chart-track');
+        track.setAttribute('aria-hidden', 'true');
+        const fill = node('span', 'career-chart-fill');
+        fill.style.width = `${value}%`;
+        track.append(fill);
+        row.append(node('span', 'career-chart-label', entry.label), track, node('span', 'career-chart-value', String(value)));
+        chart.append(row);
+      });
+      return chart;
+    }
     function renderDetail(detail, item) {
       readerTitle.textContent = typeof detail?.title === 'string' ? detail.title : selected.title;
       const sections = Array.isArray(detail?.sections) ? detail.sections : [];
@@ -170,14 +189,17 @@
       if (inclusion) content.append(inclusion);
       for (const section of sections) {
         const hasFields = Array.isArray(section?.fields) && section.fields.length;
-        if (!hasFields && typeof section?.text !== 'string') continue;
+        const hasChart = Array.isArray(section?.chart) && section.chart.length;
+        if (!hasFields && !hasChart && typeof section?.text !== 'string') continue;
         const block = document.createElement('section');
         if (typeof section.heading === 'string' && section.heading) {
           const heading = document.createElement('h3');
           heading.textContent = section.heading;
           block.append(heading);
         }
-        if (hasFields) {
+        if (hasChart) {
+          block.append(renderChart(section.chart));
+        } else if (hasFields) {
           const list = document.createElement('dl');
           for (const field of section.fields) {
             if (typeof field?.label !== 'string' || typeof field?.value !== 'string') continue;
@@ -234,17 +256,30 @@
       for (const control of jobControls) control.hidden = !active;
       if (deleteRankings) deleteRankings.disabled = !enabled || !active;
       if (sortSelect) sortSelect.disabled = !enabled || !active;
-      if (cutoffInput) cutoffInput.disabled = !enabled || !active;
+      if (slider) slider.disabled = !enabled || !active;
+    }
+    function showSliderValue(value) {
+      slider.value = String(value);
+      slider.setAttribute('aria-valuetext', `Minimum score ${value}`);
+      sliderValue.textContent = String(value);
+    }
+    // The surface block states what the slider decides: how many of the unreviewed jobs the agent will receive.
+    function renderSurface(inclusion) {
+      minimumScore = inclusion.minimumScore;
+      if (document.activeElement !== slider) showSliderValue(inclusion.minimumScore);
+      const jobs = `${integer(inclusion.candidates)} ${inclusion.candidates === 1 ? 'job' : 'jobs'}`;
+      surfaceSentence.textContent = inclusion.scored === null
+        ? `All ${jobs} will be sent`
+        : `${integer(inclusion.included)} of ${jobs} will be sent to the agent`;
     }
     function renderCutoff(inclusion, index) {
       const divider = document.createElement('li');
       divider.className = 'career-cutoff';
-      divider.append(node('span', 'career-cutoff-text',
-        `Cutoff · top ${integer(inclusion.cutoff)} go to the next run · ${integer(inclusion.included)} included`));
-      if (cutoffInput) {
+      divider.append(node('span', 'career-cutoff-text', `Below minimum score ${inclusion.minimumScore} · not sent to the agent`));
+      if (slider) {
         const change = node('button', 'text', 'Change');
         change.type = 'button';
-        change.addEventListener('click', () => cutoffInput.focus());
+        change.addEventListener('click', () => slider.focus());
         divider.append(change);
       }
       divider.dataset.index = String(index);
@@ -301,12 +336,9 @@
         records.hidden = result.items.length === 0;
         const range = `${integer(offset + 1)}–${integer(offset + result.items.length)} of ${integer(result.total)}`;
         listStatus.textContent = result.items.length
-          ? inclusion ? `${range} · ${integer(inclusion.included)} in next run` : range
+          ? inclusion ? `${range} · ${integer(inclusion.included)} sent to the agent` : range
           : offset ? 'No records on this page. Choose Previous.' : category.empty;
-        if (cutoffInput && inclusion) {
-          cutoff = inclusion.cutoff;
-          if (document.activeElement !== cutoffInput) cutoffInput.value = String(inclusion.cutoff);
-        }
+        if (slider && inclusion) renderSurface(inclusion);
         previous.disabled = priorOffsets.length === 0;
         next.disabled = nextOffset === null;
         pagination.hidden = previous.disabled && next.disabled;
@@ -355,21 +387,19 @@
       resetPlace();
       void loadPage();
     });
-    function commitCutoff() {
+    // Dragging only moves the number; the threshold is saved once on change so the list does not reload mid-drag.
+    slider?.addEventListener('input', () => { showSliderValue(Number.parseInt(slider.value, 10)); });
+    slider?.addEventListener('change', () => {
       if (!enabled || kind !== 'jobs') return;
-      const count = Number.parseInt(cutoffInput.value, 10);
-      if (!Number.isInteger(count) || count < 1) { if (cutoff !== null) cutoffInput.value = String(cutoff); return; }
-      if (count === cutoff) return;
+      const value = Number.parseInt(slider.value, 10);
+      if (!Number.isInteger(value) || value < 0 || value > 100) { if (minimumScore !== null) showSliderValue(minimumScore); return; }
+      if (value === minimumScore) return;
       keepPlace = { offset, priorOffsets: [...priorOffsets], selectedId: selected?.id ?? null, focusId: null };
-      request('prescan-cutoff', { count }).catch(error => {
+      request('prescan-threshold', { minimumScore: value }).catch(error => {
         keepPlace = null;
-        if (cutoff !== null) cutoffInput.value = String(cutoff);
-        listStatus.textContent = `Could not change the cutoff. ${error.message}`;
+        if (minimumScore !== null) showSliderValue(minimumScore);
+        listStatus.textContent = `Could not change the minimum score. ${error.message}`;
       });
-    }
-    cutoffInput?.addEventListener('change', commitCutoff);
-    cutoffInput?.addEventListener('keydown', event => {
-      if (event.key === 'Enter') { event.preventDefault(); commitCutoff(); }
     });
     previous.addEventListener('click', () => {
       if (!enabled || loading || !priorOffsets.length) return;
@@ -412,7 +442,8 @@
         closeReader();
         resetPlace();
         nextOffset = null;
-        cutoff = null;
+        minimumScore = null;
+        if (surfaceSentence) surfaceSentence.textContent = '';
         categoryButtons.forEach(button => { button.disabled = true; });
         records.replaceChildren();
         records.hidden = true;
@@ -431,9 +462,9 @@
   const me = createBrowser({ root: document.getElementById('me-browser'), prefix: 'me', kind: 'sources' });
   const jobs = createBrowser({
     root: document.getElementById('career-browser'), prefix: 'career', kind: 'jobs', persistentReader: true,
-    sortControl: document.getElementById('career-sort-control'), cutoffControl: document.getElementById('career-cutoff-control'),
+    sortControl: document.getElementById('career-sort-control'), surfaceControl: document.getElementById('career-surface'),
     deleteRankings: document.getElementById('delete-rankings'),
-    jobControls: [document.getElementById('prefilter-controls'), document.getElementById('career-cutoff-control'),
+    jobControls: [document.getElementById('prefilter-controls'), document.getElementById('career-surface'),
       document.getElementById('career-sort-control'), document.getElementById('delete-rankings')],
   });
   window.careerBrowser = {

@@ -380,10 +380,12 @@ test('partial batches requeue remaining IDs finitely, while missing ads and no-p
   assert.equal(batches, 3); assert.equal(f.apiCalls.length, 1);
   const summary = f.controller.status();
   assert.equal(summary.status, 'completed'); assert.equal(summary.processed, 5); assert.equal(summary.scored, 1); assert.equal(summary.unavailable, 4);
-  // Only the one scored row is inside the default cutoff; unscored jobs wait for a manual override.
-  assert.equal(summary.included, 1); assert.equal(summary.cutoff, 50);
-  await f.store.update(state => { state.career.prescanInclusion = { cutoff: 1, overrides: { 'node:1': true, 'node:0': false } }; });
-  assert.equal(f.controller.status().included, 1); assert.equal(f.controller.status().cutoff, 1);
+  // Only the one scored row (priority 75) clears the default minimum score of 60; unscored jobs wait for a manual override.
+  assert.equal(summary.included, 1); assert.equal(summary.minimumScore, 60);
+  await f.store.update(state => { state.career.prescanInclusion = { minimumScore: 76, overrides: { 'node:1': true, 'node:0': false } }; });
+  assert.equal(f.controller.status().included, 1); assert.equal(f.controller.status().minimumScore, 76);
+  await f.store.update(state => { state.career.prescanInclusion = { minimumScore: 75, overrides: {} }; });
+  assert.equal(f.controller.status().included, 1);
   assert.equal(f.apiCalls.length, 1);
   assert.equal(Object.keys(f.snapshot().career.prescan.rows).length, 5);
   assert.equal(Object.keys(f.store.get().career.matching.scores).length, 0);

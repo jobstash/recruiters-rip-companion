@@ -91,15 +91,21 @@ main { flex: 1; min-height: 0; overflow: auto; padding: var(--spacing-32) var(--
 .career-categories button:disabled { color: var(--color-dust); border-color: var(--color-facet); }
 .career-categories button:disabled::after { display: none; }
 .career-job-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--spacing-8) var(--spacing-16); min-width: 0; max-width: 100%; }
-.career-sort, .career-cutoff-field { display: flex; flex-wrap: wrap; align-items: center; gap: var(--spacing-8); min-width: 0; max-width: 100%; }
-.career-sort select, .career-cutoff-field input { min-width: 0; max-width: 100%; min-height: 44px; padding: var(--spacing-8); border: 1px solid var(--color-facet); border-radius: var(--radius-buttons); background: var(--color-canvas); color: var(--color-ink); font: inherit; }
-.career-sort select { cursor: pointer; }
-.career-cutoff-field input { width: 6ch; font-family: var(--font-geist-mono); font-variant-numeric: tabular-nums; }
-.career-sort select:disabled, .career-cutoff-field input:disabled { color: var(--color-dust); cursor: not-allowed; }
+.career-sort { display: flex; flex-wrap: wrap; align-items: center; gap: var(--spacing-8); min-width: 0; max-width: 100%; }
+.career-sort select { min-width: 0; max-width: 100%; min-height: 44px; padding: var(--spacing-8); border: 1px solid var(--color-facet); border-radius: var(--radius-buttons); background: var(--color-canvas); color: var(--color-ink); font: inherit; cursor: pointer; }
+.career-sort select:disabled { color: var(--color-dust); cursor: not-allowed; }
 .career-panes { display: grid; grid-template-columns: minmax(240px, 320px) minmax(0, 1fr); gap: 0; min-height: 0; }
 .career-panes:not(.jobs-panes):not(:has(.career-reader:not([hidden]))) { grid-template-columns: minmax(0, 1fr); }
 .jobs-panes { grid-template-columns: minmax(400px, 1fr) minmax(0, 1fr); }
+/* The list column is a fixed-height grid: surface block, status head, scrolling records, pinned pagination. Children are
+   placed on explicit rows because `hidden` children (retry, empty records) leave the grid, so implicit placement would hand the
+   records the `auto` row and push the pagination bar below the clipped column. */
 .career-list { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto minmax(0, 1fr) auto; min-height: 0; overflow: hidden; }
+.career-surface { grid-row: 1; }
+.career-list .panel-head { grid-row: 2; }
+.career-list > .ghost { grid-row: 3; align-self: start; }
+.career-records { grid-row: 3; }
+.career-list .pagination { grid-row: 4; }
 .career-reader { min-height: 0; overflow: auto; display: flex; flex-direction: column; }
 .career-list .panel-head p, .career-reader-status { font: 400 13px/1.6 var(--font-geist-mono); color: var(--color-smoke); }
 .career-list .panel-head p:empty, .career-reader-status:empty { display: none; }
@@ -121,17 +127,30 @@ main { flex: 1; min-height: 0; overflow: auto; padding: var(--spacing-32) var(--
 .career-card-company + .career-card-date::before { content: "·"; margin-right: var(--spacing-8); color: var(--color-smoke); }
 .career-card-date { font-variant-numeric: tabular-nums; color: var(--color-ink); }
 .career-card-facts { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 400 12px/1.5 var(--font-geist-mono); color: var(--color-smoke); }
-.career-card-side { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; width: 96px; padding: 20px var(--spacing-24) 20px 0; text-align: right; }
+.career-card-side { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; width: 128px; padding: 20px var(--spacing-24) 20px 0; text-align: right; }
 .career-card-fit { font: 500 24px/1 var(--font-geist-mono); font-variant-numeric: tabular-nums; letter-spacing: -.02em; color: var(--color-ink); }
 .career-card-caption { font: 400 10px/1.4 var(--font-geist-mono); letter-spacing: .02em; color: var(--color-smoke); }
-.career-card-include { display: flex; flex-direction: row-reverse; align-items: center; gap: var(--spacing-8); min-height: 24px; cursor: pointer; }
+.career-card-include { display: flex; flex-direction: row-reverse; align-items: center; gap: var(--spacing-8); min-height: 24px; white-space: nowrap; cursor: pointer; }
 .career-card-include:hover .career-card-caption { color: var(--color-ink); }
 /* Square switch: a native checkbox drawn as a ruled square; checked fills the inner square with ink. */
 .career-include { appearance: none; flex: none; width: 20px; height: 20px; margin: 0; padding: 3px; border: 1px solid var(--color-ink); border-radius: 0; background: transparent; background-clip: content-box; cursor: pointer; }
 .career-include:checked { background-color: var(--color-ink); }
 .career-include:focus-visible { box-shadow: var(--shadow-focus-ring); }
 .career-include:disabled { border-color: var(--color-facet); cursor: not-allowed; }
-/* The cutoff is a ruled line in the list itself: everything above it goes to the next agent run. */
+/* Surfaced to your agent: the one control that decides which unreviewed jobs the MCP exposes. A ruled block at the head
+   of the list column: caption, slider + large mono value, and the resulting count as a sentence. */
+.career-surface { display: grid; gap: var(--spacing-8); padding: var(--spacing-16) var(--spacing-24); border-bottom: 1px solid var(--color-ink); }
+.career-surface-caption { font: 500 12px/1.33 var(--font-geist-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--color-smoke); }
+.career-surface-control { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "label value" "slider value"; align-items: center; column-gap: var(--spacing-16); }
+.career-surface-control label { grid-area: label; }
+.career-surface-value { grid-area: value; font: 500 32px/1 var(--font-geist-mono); font-variant-numeric: tabular-nums; letter-spacing: -.02em; color: var(--color-ink); min-width: 3ch; text-align: right; }
+#career-minimum-score { grid-area: slider; }
+#career-minimum-score, #prescan-range { width: 100%; min-width: 0; min-height: 44px; margin: 0; accent-color: var(--color-ink); cursor: pointer; }
+#career-minimum-score:focus-visible, #prescan-range:focus-visible { outline: 2px solid var(--color-ink); outline-offset: 2px; box-shadow: var(--shadow-focus-ring); }
+#career-minimum-score:disabled, #prescan-range:disabled { cursor: not-allowed; }
+.career-surface-sentence { font: 400 13px/1.6 var(--font-geist-mono); font-variant-numeric: tabular-nums; color: var(--color-ink); }
+.career-surface-sentence:empty { display: none; }
+/* The minimum score is a ruled line in the list itself: everything above it is sent to the agent. */
 .career-cutoff { display: flex; flex-wrap: wrap; align-items: center; gap: var(--spacing-8) var(--spacing-16); padding: var(--spacing-8) var(--spacing-24); border-top: 1px solid var(--color-ink); border-bottom: 1px solid var(--color-facet); }
 .career-cutoff-text { flex: 1 1 auto; min-width: 0; font: 500 12px/1.5 var(--font-geist-mono); letter-spacing: .02em; color: var(--color-ink); }
 .career-cutoff button { min-height: 32px; padding-block: 4px; }
@@ -147,6 +166,16 @@ main { flex: 1; min-height: 0; overflow: auto; padding: var(--spacing-32) var(--
 .career-reader-content dl { display: grid; grid-template-columns: minmax(100px, 150px) minmax(0, 1fr); gap: var(--spacing-16); }
 .career-reader-content dd { color: var(--color-ink-2); }
 .career-reader-content dd.numeric { font-family: var(--font-geist-mono); font-variant-numeric: tabular-nums; }
+/* Reviewed fit chart: ink bars on a ruled track, no colour. Overall first and heavier; dimensions in ink-2. */
+.career-chart { display: grid; gap: var(--spacing-8); }
+.career-chart-row { display: grid; grid-template-columns: minmax(96px, 128px) minmax(0, 1fr) 3ch; align-items: center; gap: var(--spacing-16); }
+.career-chart-label { font: 400 12px/1.5 var(--font-geist-mono); letter-spacing: .02em; color: var(--color-smoke); }
+.career-chart-track { display: block; height: 12px; border: 1px solid var(--color-facet); }
+.career-chart-fill { display: block; height: 100%; width: 0; background: var(--color-ink-2); }
+.career-chart-value { font: 400 13px/1.5 var(--font-geist-mono); font-variant-numeric: tabular-nums; text-align: right; color: var(--color-ink); }
+.career-chart-row.is-overall .career-chart-label { color: var(--color-ink); font-weight: 500; }
+.career-chart-row.is-overall .career-chart-fill { background: var(--color-ink); }
+.career-chart-row.is-overall .career-chart-value { font-weight: 500; }
 
 /* Setup is a ledger of account, app, sharing and file controls. */
 .setup-view { display: grid; align-content: start; max-width: 100%; }
@@ -175,9 +204,6 @@ summary:hover { color: var(--color-ink); }
 .me-actions { display: grid; gap: var(--spacing-16); padding-bottom: var(--spacing-24); }
 #prescan-controls { display: grid; gap: var(--spacing-8); }
 .prescan-publication { display: grid; gap: var(--spacing-8); min-width: 0; max-width: var(--reading); }
-#prescan-range { width: 100%; min-width: 0; min-height: 44px; margin: 0; accent-color: var(--color-ink); cursor: pointer; }
-#prescan-range:focus-visible { outline: 2px solid var(--color-ink); outline-offset: 2px; box-shadow: var(--shadow-focus-ring); }
-#prescan-range:disabled { cursor: not-allowed; }
 .scan-actions { align-items: end; }
 .prescan-feedback { display: grid; gap: var(--spacing-8); font-variant-numeric: tabular-nums; }
 #prescan-progress { font: 400 13px/1.6 var(--font-geist-mono); }
@@ -215,8 +241,9 @@ dialog::backdrop { background: color-mix(in oklab, var(--color-void) 80%, transp
   .career-reader-content dl { grid-template-columns: minmax(0, 1fr); gap: var(--spacing-8); }
   .career-reader-content dd + dt { margin-top: var(--spacing-8); }
   .career-card .career-record { padding: var(--spacing-16); }
-  .career-card-side { width: 88px; padding: var(--spacing-16) var(--spacing-16) var(--spacing-16) 0; }
-  .career-cutoff { padding-inline: var(--spacing-16); }
+  .career-card-side { width: 112px; padding: var(--spacing-16) var(--spacing-16) var(--spacing-16) 0; }
+  .career-cutoff, .career-surface { padding-inline: var(--spacing-16); }
+  .career-chart-row { grid-template-columns: minmax(80px, 96px) minmax(0, 1fr) 3ch; gap: var(--spacing-8); }
   .dialog-body { padding: var(--spacing-24); }
   .dialog-actions { flex-direction: column-reverse; align-items: stretch; }
   .dialog-actions button { width: 100%; }
@@ -232,5 +259,7 @@ dialog::backdrop { background: color-mix(in oklab, var(--color-void) 80%, transp
   .career-record[aria-current="true"] { border-left: 2px solid Highlight; }
   .career-include { forced-color-adjust: none; border-color: CanvasText; }
   .career-include:checked { background-color: Highlight; }
+  .career-chart-track { border-color: CanvasText; }
+  .career-chart-fill, .career-chart-row.is-overall .career-chart-fill { forced-color-adjust: none; background: CanvasText; }
   :focus-visible { outline: 2px solid Highlight; outline-offset: 2px; }
 }

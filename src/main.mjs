@@ -19,7 +19,7 @@ import { createDocumentFiles, readSelectedSource } from './mcp/files.mjs';
 import { createScopedAccess } from './mcp/scope.mjs';
 import { createMatchingTools, deleteRankings } from './mcp/matching-tools.mjs';
 import { matchingProfileVersion } from './mcp/assessment-policy.mjs';
-import { setInclusionCutoff, setInclusionOverride } from './prescan/state.mjs';
+import { setInclusionMinimumScore, setInclusionOverride } from './prescan/state.mjs';
 import { installChatGptPlugin } from './host-setup.mjs';
 import { createCareerBrowser } from './career-browser.mjs';
 import { createPrescanCredentials } from './prescan/credentials.mjs';
@@ -429,13 +429,13 @@ async function settingsOperation(op, input) {
       else if (op === 'prescan-range-set') result = await prescan.setPublicationRange(input);
       else if (op === 'prescan-start') { assertPaidWorkAllowed(); result = await prescan.start(input); }
       else if (op === 'prescan-cancel') { exact(input, []); result = await prescan.cancel(); }
-      else if (op === 'prescan-include' || op === 'prescan-cutoff') {
-        exact(input, op === 'prescan-include' ? ['id', 'included'] : ['count']);
+      else if (op === 'prescan-include' || op === 'prescan-threshold') {
+        exact(input, op === 'prescan-include' ? ['id', 'included'] : ['minimumScore']);
         const scoped = createScopedAccess(store, { assertAvailable, epoch: () => sessionEpoch });
         await scoped.store.update(state => {
           const career = state.career ??= createCareerState();
           if (op === 'prescan-include') setInclusionOverride(career, input.id, input.included);
-          else setInclusionCutoff(career, input.count);
+          else setInclusionMinimumScore(career, input.minimumScore);
         });
         scoped.assertAvailable(false); careerViewRevision++;
         result = { completed: true };

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createCareerState } from '../src/mcp/state.mjs';
 import { matchingProfileVersion } from '../src/mcp/assessment-policy.mjs';
 import { decisionProviders } from '../src/prescan/providers.mjs';
-import { comparePrescanRows, currentPrescan, currentPrescanRow, prescanInclusion, setInclusionCutoff, setInclusionOverride } from '../src/prescan/state.mjs';
+import { comparePrescanRows, currentPrescan, currentPrescanRow, prescanInclusion, setInclusionMinimumScore, setInclusionOverride } from '../src/prescan/state.mjs';
 import { publicationWindowForRange } from '../src/prescan/publication-range.mjs';
 
 const date = new Date(Date.now() - 86400000).toISOString();
@@ -20,13 +20,16 @@ const order = (career, ids, window) => [...prescanInclusion(career, ids, window)
 const ranked = (career, ids, window) => prescanInclusion(career, ids, window).rankedIds;
 
 test('numeric priorities outrank gate verdicts; unscored and unseen IDs stay unranked and excluded by default', () => {
-  const rows = [row('conflict', 100, 'conflict'), row('aligned', 50), row('uncertain', 90, 'uncertain'), row('refused', null)];
+  const rows = [row('conflict', 100, 'conflict'), row('aligned', 60), row('uncertain', 90, 'uncertain'), row('refused', null)];
   const career = fixture(rows), ids = ['refused', 'aligned', 'unseen', 'uncertain', 'conflict'];
   const inclusion = prescanInclusion(career, ids);
   assert.deepEqual(inclusion.rankedIds, ['conflict', 'uncertain', 'aligned']);
   assert.deepEqual([...inclusion.rank], [['conflict', 1], ['uncertain', 2], ['aligned', 3]]);
+  // The default minimum score is 60: a priority equal to it is still sent.
   assert.deepEqual([...inclusion.includedIds], ['conflict', 'uncertain', 'aligned']);
-  assert.equal(inclusion.cutoff, 50);
+  assert.equal(inclusion.minimumScore, 60);
+  assert.equal(inclusion.current, true);
+  assert.equal(inclusion.candidates, 5);
   assert.deepEqual(rows.sort(comparePrescanRows).map(item => item.id), ['conflict', 'uncertain', 'aligned', 'refused']);
   assert.deepEqual(ids, ['refused', 'aligned', 'unseen', 'uncertain', 'conflict']);
 });
@@ -36,13 +39,17 @@ test('equal scores resolve by publication recency then stable ID', () => {
   assert.deepEqual([row('z', 80), row('old', 80, 'aligned', older), row('a', 80)].sort(comparePrescanRows).map(item => item.id), ['a', 'z', 'old']);
 });
 
-test('the cutoff splits the ranked queue and per-job overrides win in either direction until cleared', () => {
+test('the minimum score splits the ranked queue by priority and per-job overrides win in either direction until cleared', () => {
   const rows = Array.from({ length: 6 }, (_, index) => row(`job-${index}`, 90 - index * 10));
   const career = fixture([...rows, row('refused', null)]);
   const ids = [...rows.map(item => item.id), 'refused', 'unscored'];
   career.matching.jobs.unscored = { id: 'unscored', publishedAt: date };
-  setInclusionCutoff(career, 3);
+  setInclusionMinimumScore(career, 70);
+  // Priorities 90, 80, 70 pass; 69 would not.
   assert.deepEqual(order(career, ids), ['job-0', 'job-1', 'job-2']);
+  career.prescan.rows['job-2'].priority = 69;
+  assert.deepEqual(order(career, ids), ['job-0', 'job-1']);
+  career.prescan.rows['job-2'].priority = 70;
   assert.deepEqual(ranked(career, ids), rows.map(item => item.id));
   setInclusionOverride(career, 'job-4', true);
   setInclusionOverride(career, 'job-1', false);
@@ -55,7 +62,7 @@ test('the cutoff splits the ranked queue and per-job overrides win in either dir
   setInclusionOverride(career, 'job-1', null);
   setInclusionOverride(career, 'unscored', null);
   assert.deepEqual(order(career, ids), ['job-0', 'job-1', 'job-2', 'job-4', 'refused']);
-  assert.deepEqual(career.prescanInclusion, { cutoff: 3, overrides: { 'job-4': true, refused: true } });
+  assert.deepEqual(career.prescanInclusion, { minimumScore: 70, overrides: { 'job-4': true, refused: true } });
   // Overrides for jobs that left the catalogue are ignored, not deleted.
   delete career.matching.jobs['job-4'];
   assert.deepEqual(order(career, ids.filter(id => id !== 'job-4')), ['job-0', 'job-1', 'job-2', 'refused']);
@@ -68,34 +75,37 @@ test('without a current pre-scan every candidate is included unless excluded by 
   career.matching.jobs.plain = { id: 'plain', publishedAt: date };
   const inclusion = prescanInclusion(career, ['low', 'plain', 'high']);
   assert.deepEqual(inclusion.rankedIds, []);
+  assert.equal(inclusion.current, false);
   assert.deepEqual([...inclusion.includedIds], ['low', 'plain', 'high']);
   setInclusionOverride(career, 'plain', false);
   assert.deepEqual(order(career, ['low', 'plain', 'high']), ['low', 'high']);
 });
 
-test('inclusion writes validate the catalogue ID, the override value and the cutoff range', () => {
+test('inclusion writes validate the catalogue ID, the override value and the minimum score range', () => {
   const career = fixture([row('high', 99)]);
   for (const id of ['missing', '__proto__', 'constructor', 42, null, undefined])
     assert.throws(() => setInclusionOverride(career, id, true), { code: 'INVALID_INPUT' });
   for (const value of ['yes', 1, undefined, {}])
     assert.throws(() => setInclusionOverride(career, 'high', value), { code: 'INVALID_INPUT' });
-  for (const count of [0, -1, 1.5, 100001, '10', null, undefined, Number.NaN])
-    assert.throws(() => setInclusionCutoff(career, count), { code: 'INVALID_INPUT' });
+  for (const score of [-1, 0.5, 101, '10', null, undefined, Number.NaN])
+    assert.throws(() => setInclusionMinimumScore(career, score), { code: 'INVALID_INPUT' });
   assert.equal(career.prescanInclusion, undefined);
-  setInclusionCutoff(career, 100000);
-  assert.deepEqual(career.prescanInclusion, { cutoff: 100000, overrides: {} });
-  setInclusionCutoff(career, 1);
-  setInclusionOverride(career, 'high', false);
-  assert.deepEqual(career.prescanInclusion, { cutoff: 1, overrides: { high: false } });
+  setInclusionMinimumScore(career, 0);
+  assert.deepEqual(career.prescanInclusion, { minimumScore: 0, overrides: {} });
+  assert.deepEqual(order(career, ['high']), ['high']);
+  setInclusionMinimumScore(career, 100);
   assert.deepEqual(order(career, ['high']), []);
+  setInclusionOverride(career, 'high', true);
+  assert.deepEqual(career.prescanInclusion, { minimumScore: 100, overrides: { high: true } });
+  assert.deepEqual(order(career, ['high']), ['high']);
   // Saved garbage falls back to the defaults instead of breaking ranking.
-  career.prescanInclusion = { cutoff: 'all', overrides: null };
-  assert.equal(prescanInclusion(career, ['high']).cutoff, 50);
+  career.prescanInclusion = { minimumScore: 'all', overrides: null };
+  assert.equal(prescanInclusion(career, ['high']).minimumScore, 60);
   assert.deepEqual(order(career, ['high']), ['high']);
 });
 
 test('career evidence and provider policy changes invalidate ordering, final assessment policy does not', () => {
-  const career = fixture([row('high', 99), row('low', 20)]);
+  const career = fixture([row('high', 99), row('low', 70)]);
   career.prescan.assessmentPolicyId = 'unrelated-final-review-policy';
   assert.equal(currentPrescan(career), true);
   assert.deepEqual(order(career, ['low', 'high']), ['high', 'low']);

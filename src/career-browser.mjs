@@ -21,6 +21,11 @@ const fields = (heading, rows, empty) => {
     .map(([label, value, kind]) => ({ label, value: scalar(value), ...(kind === 'numeric' ? { numeric: true } : {}) }));
   return values.length ? { heading, fields: values } : { heading, text: empty };
 };
+// Chart sections carry integer 0–100 values the reader draws as horizontal bars; missing values are skipped.
+const chart = (heading, rows, empty) => {
+  const values = rows.filter(([, value]) => Number.isInteger(value) && value >= 0 && value <= 100).map(([label, value]) => ({ label, value }));
+  return values.length ? { heading, chart: values } : { heading, text: empty };
+};
 const amount = value => Number.isFinite(value) ? value.toLocaleString('en-GB') : null;
 const readable = value => typeof value === 'string' && value ? value === 'cv' ? 'CV' : value.replaceAll('_', ' ').replace(/^./, letter => letter.toUpperCase()) : undefined;
 const entries = value => record(value) ? Object.entries(value).filter(([id, item]) => !forbidden.has(id) && record(item)) : [];
@@ -106,7 +111,6 @@ const prescanStatuses = {
 };
 const prescanScore = row => row?.status === 'scored' && Number.isInteger(row.priority) && row.priority >= 0 && row.priority <= 100
   ? row.priority : -1;
-const prescanPriority = row => prescanScore(row) >= 0 ? `${row.priority}/100` : 'Not scored';
 const prescanStatus = row => prescanScore(row) >= 0 ? 'Scored' : prescanStatuses[row.status] || 'Not scored';
 const cardStatuses = new Set(['unavailable', 'refused', 'oversize']);
 // A card shows where the job stands: reviewed by an agent (score), ranked by the pre-filter for the next run
@@ -138,9 +142,9 @@ function reviewedSections(row) {
       ['Location match', assessmentLabel(row.matchStatus)],
       ['Pairwise rank', Number.isFinite(row.pairwiseWins) ? `${plural(row.pairwiseWins, 'win')} of ${plural(row.pairwiseCompared, 'comparison')}` : undefined],
     ], 'No assessment saved.'),
-    ...(record(row.dimensions) ? [fields('Fit breakdown', [
-      ['Direction', outOf100(row.dimensions.direction), 'numeric'], ['Capability', outOf100(row.dimensions.capability), 'numeric'],
-      ['Scope', outOf100(row.dimensions.scope), 'numeric'], ['Preferences', outOf100(row.dimensions.preferences), 'numeric'],
+    ...(record(row.dimensions) || Number.isInteger(row.overall) ? [chart('Fit', [
+      ['Overall', row.overall], ['Direction', row.dimensions?.direction], ['Capability', row.dimensions?.capability],
+      ['Scope', row.dimensions?.scope], ['Preferences', row.dimensions?.preferences],
     ], 'No breakdown saved.')] : []),
     ...(record(row.gates) ? [fields('Gates', [
       ['Career direction', gateLabels[row.gates.direction]], ['Mandatory conditions', gateLabels[row.gates.constraints]],
@@ -154,8 +158,8 @@ function reviewedSections(row) {
 }
 
 function prescanSection(row) {
+  // The Decisions number never surfaces to the user; only whether the job was scored and by what.
   return fields('Pre-filter', [
-    ['Priority', prescanPriority(row), prescanScore(row) >= 0 ? 'numeric' : undefined],
     ['Status', prescanStatus(row)], ['Freshness', row.current ? 'Current' : 'Out of date'],
     ['Provider', row.provider === 'openai' ? 'OpenAI Decisions' : row.provider], ['Model', row.model],
   ], 'No pre-filter result saved.');
@@ -286,12 +290,13 @@ export function createCareerBrowser({ store }) {
         const { rows, inclusion } = await jobUnion(career);
         const sorted = sortJobs(rows, inclusion, sort);
         const items = sorted.slice(offset, offset + limit).map(row => jobItem(row, inclusion));
-        // The divider sits before the first card ranked past the cutoff, reported once on the page that holds it.
-        const past = row => cardStage(row, inclusion).rank > inclusion.cutoff;
-        const divider = sort === 'rank' ? sorted.findIndex(past) - offset : -1;
+        // The divider sits before the first ranked card below the minimum score, reported once on the page that holds it.
+        const below = row => { const { rank } = cardStage(row, inclusion); return rank !== null && career.prescan.rows[row.id].priority < inclusion.minimumScore; };
+        const divider = sort === 'rank' ? sorted.findIndex(below) - offset : -1;
         return { items, total: sorted.length, nextOffset: offset + items.length < sorted.length ? offset + items.length : null,
           cutoffIndex: divider >= 0 && divider < items.length ? divider : null,
-          inclusion: { cutoff: inclusion.cutoff, included: inclusion.includedIds.size, rankedTotal: inclusion.rankedIds.length } };
+          inclusion: { minimumScore: inclusion.minimumScore, included: inclusion.includedIds.size,
+            scored: inclusion.current ? inclusion.rankedIds.length : null, candidates: inclusion.candidates } };
       }
       const records = entries(career[kind]);
       const items = records.slice(offset, offset + limit).map(([id, item]) => {

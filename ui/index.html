@@ -95,9 +95,6 @@
 </div>
 </details>
 <div class="career-job-actions">
-<label id="career-cutoff-control" class="career-cutoff-field caption" for="career-cutoff">Evaluate top
-<input id="career-cutoff" type="number" inputmode="numeric" min="1" step="1" disabled>
-</label>
 <label id="career-sort-control" class="career-sort caption" for="career-sort">Sort jobs
 <select id="career-sort" disabled><option value="rank" selected>Rank</option><option value="recent">Newest first</option></select>
 </label>
@@ -107,6 +104,15 @@
 </div>
 <div class="career-panes jobs-panes">
 <section class="career-list panel" aria-label="Saved jobs">
+<div id="career-surface" class="career-surface">
+<p class="career-surface-caption">Surfaced to your agent</p>
+<div class="career-surface-control">
+<label for="career-minimum-score" class="caption">Minimum pre-filter score</label>
+<input id="career-minimum-score" type="range" min="0" max="100" step="1" value="60" aria-valuetext="Minimum score 60" aria-describedby="career-surface-sentence" disabled>
+<span id="career-minimum-score-value" class="career-surface-value" aria-hidden="true">60</span>
+</div>
+<p id="career-surface-sentence" class="career-surface-sentence" role="status"></p>
+</div>
 <div class="panel-head"><p id="career-list-status" role="status">Open local storage to read saved jobs.</p></div>
 <button id="career-list-retry" class="ghost" type="button" hidden>Retry loading jobs</button>
 <ul id="career-records" class="career-records career-cards" aria-label="Saved jobs" hidden></ul>

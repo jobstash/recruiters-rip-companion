@@ -1109,28 +1109,33 @@ test('pre-scan discovery preserves existing final assessments while assigning on
   assert.equal(saved.matches[0].city, statedTerms.city);
 });
 
-test('discovery assigns only the jobs inside the pre-filter cutoff, honours overrides and reports the excluded count', async () => {
+test('discovery assigns only the jobs at or above the minimum pre-filter score, honours overrides and reports the excluded count', async () => {
   const ids = ['first', 'second', 'third', 'fourth', 'reviewed', 'plain'];
   const f = fixture({ jobs: ids.map(id => job(id)) });
   const planned = await f.call('career_match_jobs');
   assert.deepEqual(planned.jobIds, ids.map(id => `node:${id}`));
   assert.equal(planned.excluded, 0);
-  assert.equal(planned.cutoff, 50);
+  assert.equal(planned.minimumScore, 60);
   await f.save([assessment('reviewed', 70)], planned.profileVersion);
   const priorities = { first: 95, second: 90, third: 60, fourth: 40 };
   await f.store.update(state => {
     state.career.prescan = { profileVersion: matchingProfileVersion(state.career), prescanPolicyId: decisionProviders.openai.policyId,
       provider: 'openai', rows: Object.fromEntries(Object.entries(priorities).map(([id, priority]) =>
         [`node:${id}`, { priority, status: 'scored', publishedAt, direction: 'aligned', constraints: 'aligned', eligibility: 'aligned' }])) };
-    state.career.prescanInclusion = { cutoff: 2, overrides: { 'node:fourth': true, 'node:second': false, 'node:plain': true } };
+    state.career.prescanInclusion = { minimumScore: 91, overrides: { 'node:fourth': true, 'node:second': false, 'node:plain': true } };
   });
   const scoped = await f.call('career_match_jobs');
   assert.deepEqual(scoped.jobIds, ['node:first', 'node:fourth', 'node:plain']);
   assert.equal(scoped.excluded, 2);
-  assert.equal(scoped.cutoff, 2);
+  assert.equal(scoped.minimumScore, 91);
   assert.equal(scoped.pending, 5);
-  await f.store.update(state => { state.career.prescanInclusion = { cutoff: 3, overrides: {} }; });
+  // The boundary is inclusive: 60 passes a minimum of 60 and fails 61.
+  await f.store.update(state => { state.career.prescanInclusion = { minimumScore: 60, overrides: {} }; });
   assert.deepEqual((await f.call('career_match_jobs')).jobIds, ['node:first', 'node:second', 'node:third']);
+  await f.store.update(state => { state.career.prescanInclusion = { minimumScore: 61, overrides: {} }; });
+  const narrowed = await f.call('career_match_jobs');
+  assert.deepEqual(narrowed.jobIds, ['node:first', 'node:second']);
+  assert.equal(narrowed.excluded, 3);
   await f.call('career_rankings_delete');
   const career = f.store.get().career;
   assert.equal(career.prescan, undefined);

@@ -24,22 +24,21 @@ export function comparePrescanRows(a, b) {
     publishedTime(b.publishedAt) - publishedTime(a.publishedAt) || compareText(a.id, b.id);
 }
 
-export const DEFAULT_INCLUSION_CUTOFF = 50;
-export const MAX_INCLUSION_CUTOFF = 100000;
+export const DEFAULT_INCLUSION_MINIMUM_SCORE = 60;
 const forbidden = new Set(['__proto__', 'prototype', 'constructor']);
-const validCutoff = value => Number.isInteger(value) && value >= 1 && value <= MAX_INCLUSION_CUTOFF;
+const validMinimumScore = value => Number.isInteger(value) && value >= 0 && value <= 100;
 
 /** Saved inclusion settings; never created here. Overrides for IDs outside the catalogue are kept but ignored. */
 export function inclusionSettings(career) {
   const saved = career.prescanInclusion;
-  const cutoff = validCutoff(saved?.cutoff) ? saved.cutoff : DEFAULT_INCLUSION_CUTOFF;
+  const minimumScore = validMinimumScore(saved?.minimumScore) ? saved.minimumScore : DEFAULT_INCLUSION_MINIMUM_SCORE;
   const overrides = saved?.overrides && typeof saved.overrides === 'object' ? saved.overrides : {};
-  return { cutoff, override: id => !forbidden.has(id) && Object.hasOwn(overrides, id) && typeof overrides[id] === 'boolean' ? overrides[id] : null };
+  return { minimumScore, override: id => !forbidden.has(id) && Object.hasOwn(overrides, id) && typeof overrides[id] === 'boolean' ? overrides[id] : null };
 }
 
 /**
  * Which candidate jobs the next agent review covers. `ids` are the catalogue jobs without a current review.
- * Rank numbers only current scored pre-filter rows in pre-filter order; an override wins, then rank ≤ cutoff,
+ * Rank numbers only current scored pre-filter rows in pre-filter order; an override wins, then priority ≥ minimumScore,
  * and without any current pre-scan every candidate is included. `includedIds` iterates in review order:
  * ranked rows by rank, then the remaining candidates in the order given.
  */
@@ -53,8 +52,8 @@ export function prescanInclusion(career, ids, window) {
   }
   ranked.sort((a, b) => comparePrescanRows(career.prescan.rows[a], career.prescan.rows[b]));
   const rank = new Map(ranked.map((id, index) => [id, index + 1]));
-  const included = id => settings.override(id) ?? (current ? rank.has(id) && rank.get(id) <= settings.cutoff : true);
-  return { cutoff: settings.cutoff, rankedIds: ranked, rank,
+  const included = id => settings.override(id) ?? (current ? rank.has(id) && career.prescan.rows[id].priority >= settings.minimumScore : true);
+  return { minimumScore: settings.minimumScore, current, candidates: ids.length, rankedIds: ranked, rank,
     includedIds: new Set([...ranked, ...unranked].filter(included)), overridden: id => settings.override(id) !== null };
 }
 
@@ -63,14 +62,14 @@ export function setInclusionOverride(career, id, included) {
   if (typeof id !== 'string' || forbidden.has(id) || !Object.hasOwn(career.matching?.jobs ?? {}, id))
     fail('INVALID_INPUT', 'This job is not in the current catalogue. Refresh the list.');
   if (included !== null && typeof included !== 'boolean') fail('INVALID_INPUT', 'Choose include, exclude or reset.');
-  const saved = career.prescanInclusion ??= { cutoff: DEFAULT_INCLUSION_CUTOFF, overrides: {} };
+  const saved = career.prescanInclusion ??= { minimumScore: DEFAULT_INCLUSION_MINIMUM_SCORE, overrides: {} };
   saved.overrides ??= {};
   if (included === null) delete saved.overrides[id];
   else saved.overrides[id] = included;
 }
 
-export function setInclusionCutoff(career, count) {
-  if (!validCutoff(count)) fail('INVALID_INPUT', `Use a whole number from 1 to ${MAX_INCLUSION_CUTOFF.toLocaleString('en-GB')}.`);
-  const saved = career.prescanInclusion ??= { cutoff: DEFAULT_INCLUSION_CUTOFF, overrides: {} };
-  saved.cutoff = count;
+export function setInclusionMinimumScore(career, minimumScore) {
+  if (!validMinimumScore(minimumScore)) fail('INVALID_INPUT', 'Use a whole number from 0 to 100.');
+  const saved = career.prescanInclusion ??= { minimumScore: DEFAULT_INCLUSION_MINIMUM_SCORE, overrides: {} };
+  saved.minimumScore = minimumScore;
 }

@@ -370,7 +370,7 @@ export function createMatchingTools({ store, platform, exportDocument, preserveF
             publicationWindow: window,
             assessmentPolicy: { protocol: MATCHING_PROTOCOL, weights: DIMENSION_WEIGHTS, bands: BANDS, recommendMinimum: RECOMMEND_MINIMUM },
             assessmentSchema,
-            jobIds: [...inclusion.includedIds], excluded: candidates.length - inclusion.includedIds.size, cutoff: inclusion.cutoff,
+            jobIds: [...inclusion.includedIds], excluded: candidates.length - inclusion.includedIds.size, minimumScore: inclusion.minimumScore,
             total: Object.keys(currentJobs).length, ...counts(currentJobs, currentScores, profileVersion), batchSize: 10, workers: 8 };
         });
         return result;

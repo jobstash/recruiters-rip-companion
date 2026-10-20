@@ -89,7 +89,7 @@ export function createPrescanController({ store, makeScope, credentials, authori
     const profileVersion = matchingProfileVersion(career);
     const candidates = Object.keys(career.matching?.jobs ?? {}).filter(id => !currentAssessment(career.matching.scores?.[id], profileVersion));
     const inclusion = prescanInclusion(career, candidates, publicationWindowForRange(career.prescan?.publicationRange ?? DEFAULT_PUBLICATION_RANGE));
-    return { included: inclusion.includedIds.size, cutoff: inclusion.cutoff };
+    return { included: inclusion.includedIds.size, minimumScore: inclusion.minimumScore };
   }
   function summary(state, publicState) {
     const career = state.career ?? {}, stored = career.prescan;

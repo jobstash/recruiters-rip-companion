@@ -115,7 +115,7 @@ function renderSharing(introductions) {
   const granted = introductions?.consent?.granted === true;
   const since = sharingDate(introductions?.consent?.at);
   $('sharing-status').textContent = granted ? `CV sharing is on${since ? ` since ${since}` : ''}. Each upload still asks for your approval.`
-    : 'CV sharing is off. JobStash uses your CV and matched work history so you are included when it launches direct introductions.';
+    : 'CV sharing is off.';
   const shared = (introductions?.sources ?? []).filter(source => source.sharedAt).sort((a, b) => b.sharedAt.localeCompare(a.sharedAt))[0];
   $('sharing-shared').hidden = !shared;
   $('sharing-shared').textContent = shared ? `Last shared ${shared.name} · ${shared.roles ?? 0} ${shared.roles === 1 ? 'role' : 'roles'} · ${sharingDate(shared.sharedAt)}` : '';

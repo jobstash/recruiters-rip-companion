@@ -201,6 +201,7 @@ summary:hover { color: var(--color-ink); }
 #prescan-form, .prescan-disclosure, .prescan-feedback, .prescan-key-entry { display: grid; gap: var(--spacing-16); min-width: 0; }
 /* The key state reads as body copy, not a caption: it is the section's primary fact. */
 .prescan-key-status { max-width: var(--reading); line-height: 1.6; }
+.key-hint { text-transform: none; }
 .prescan-field { display: grid; gap: var(--spacing-8); min-width: 0; }
 .prescan-field input { width: 100%; min-width: 0; min-height: 44px; padding: 12px 0; border: 0; border-bottom: 1px solid var(--color-ink); border-radius: 0; background: transparent; color: var(--color-ink); font: 400 18px/1.4 var(--font-geist); letter-spacing: normal; text-transform: none; }
 .prescan-field input:focus { border-bottom-color: transparent; background-image: var(--rr-dispersion); background-repeat: no-repeat; background-size: 100% 2px; background-position: 0 100%; box-shadow: var(--shadow-input-focus); }

@@ -75,6 +75,12 @@
     element('key-saved').hidden = !configured || replacing;
     element('key-entry').hidden = !entering;
     element('cancel-entry').hidden = !(configured && replacing);
+    // The buttons name the key they act on; the hint keeps its real case so it can be matched against the OpenAI dashboard.
+    for (const name of ['replace', 'remove']) {
+      const button = element(name);
+      button.replaceChildren(`${name === 'replace' ? 'Replace' : 'Remove'} key`);
+      if (configured) { const span = document.createElement('span'); span.className = 'key-hint'; span.textContent = ` …${credentials.keyHint}`; button.append(span); }
+    }
     element('replace').disabled = !configured || pending;
     element('remove').disabled = !configured || pending;
     element('start').disabled = !available || pending || running || (!needsSetup && previewState !== 'ready');
@@ -99,8 +105,8 @@
     const since = savedDate(credentials?.savedAt);
     element('key-status').textContent = !available ? 'Open local storage to configure the optional Decisions API.'
       : !configured ? 'No API key saved. Job pre-filtering is off until you add an OpenAI API key.'
-        : replacing ? `Replacing the key ending in ${credentials.keyHint}. The saved key stays active until you save a new one.`
-          : `API key ending in ${credentials.keyHint} saved${since ? ` on ${since}` : ''}. Job pre-filtering can run.`;
+        : replacing ? `The key …${credentials.keyHint} stays active until you save a new one.`
+          : `API key saved${since ? ` on ${since}` : ''}. Job pre-filtering can run.`;
 
     if (!available) { element('progress').textContent = ''; element('recovery').textContent = ''; return; }
     const blocked = Number.isSafeInteger(run.blocked) && run.blocked >= 0 ? run.blocked : 0;

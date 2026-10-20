@@ -184,14 +184,14 @@
       section.append(node('h3', '', 'Block from evaluation'), actions);
       return section;
     }
-    // Each Career entry links to the JobStash profile its matched employer resolves to; the reader also offers it.
+    // Each Career entry can open its employer's ecosystem.vision page; the reader offers it as a named action.
     function renderProfileAction(item, className = 'ghost') {
       if (item?.profileLink !== true) return null;
-      const button = blockButton('Open JobStash profile', `Open the JobStash profile for ${item.title}`, async () => {
+      const button = blockButton(`Go to ${item.title}'s profile`, null, async () => {
         if (!enabled) return;
         button.disabled = true;
         try { await request('career-open-profile', { id: item.id }); }
-        catch (error) { listStatus.textContent = `Could not open the JobStash profile. ${error.message}`; }
+        catch (error) { listStatus.textContent = `Could not open ${item.title}'s profile. ${error.message}`; }
         finally { button.disabled = false; }
       }, className);
       return button;

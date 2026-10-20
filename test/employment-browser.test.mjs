@@ -44,19 +44,21 @@ test('the browser exposes Career as list and reader entries with a profile link'
   await assert.rejects(browser.read({ kind: 'career', id: 'missing' }), { code: 'NOT_FOUND' });
 });
 
-test('opening a profile resolves the saved ref through the platform and only opens a canonical JobStash slug', async () => {
+test('opening a profile resolves the saved ref through the platform and only opens a canonical ecosystem.vision page', async () => {
   const { store } = fixture();
   const [entry] = employmentHistory(store.get().career);
   const calls = [];
   const opened = [];
-  const run = (profile, args = { id: entry.id }) => openEmploymentProfile({ store,
-    platform: async (operation, params) => { calls.push({ operation, params }); return profile; },
+  const run = (page, args = { id: entry.id }) => openEmploymentProfile({ store,
+    platform: async (operation, params) => { calls.push({ operation, params }); return page; },
     openExternal: async url => { opened.push(url); } }, args);
-  assert.deepEqual(await run({ slug: 'second-co', name: 'Second Co' }), { opened: true });
+  assert.deepEqual(await run({ kind: 'organization', slug: 'second-co', name: 'Second Co' }), { opened: true });
   assert.deepEqual(calls, [{ operation: 'employer_profile', params: { ref: 'organization:7' } }]);
-  assert.deepEqual(opened, ['https://jobstash.xyz/profiles/second-co']);
-  await assert.rejects(run({ slug: '../admin' }), { code: 'PROFILE_UNAVAILABLE' });
-  await assert.rejects(run({ slug: 'x', url: 'https://evil.test' }, { id: 'nope' }), { code: 'NOT_FOUND' });
-  await assert.rejects(run({ slug: 'x' }, { id: entry.id, url: 'https://evil.test' }), { code: 'INVALID_INPUT' });
-  assert.equal(opened.length, 1);
+  assert.deepEqual(await run({ kind: 'project', slug: 'second-app', name: 'Second App' }), { opened: true });
+  assert.deepEqual(opened, ['https://ecosystem.vision/organizations/names/second-co', 'https://ecosystem.vision/projects/names/second-app']);
+  await assert.rejects(run({ kind: 'organization', slug: '../admin' }), { code: 'PROFILE_UNAVAILABLE' });
+  await assert.rejects(run({ kind: 'profile', slug: 'second-co' }), { code: 'PROFILE_UNAVAILABLE' });
+  await assert.rejects(run({ kind: 'organization', slug: 'x' }, { id: 'nope' }), { code: 'NOT_FOUND' });
+  await assert.rejects(run({ kind: 'organization', slug: 'x' }, { id: entry.id, url: 'https://evil.test' }), { code: 'INVALID_INPUT' });
+  assert.equal(opened.length, 2);
 });

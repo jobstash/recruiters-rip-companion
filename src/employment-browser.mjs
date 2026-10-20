@@ -38,9 +38,11 @@ export async function openEmploymentProfile({ store, platform, openExternal }, a
     fail('INVALID_INPUT', 'Choose a saved career entry.');
   const entry = employmentHistory(readCareer(store)).find(row => row.id === args.id);
   if (!entry) fail('NOT_FOUND', 'This career entry is no longer available. Refresh Career.');
-  const profile = await platform('employer_profile', { ref: entry.ref });
-  if (typeof profile?.slug !== 'string' || !/^[a-z0-9][a-z0-9-]{0,299}$/.test(profile.slug))
-    fail('PROFILE_UNAVAILABLE', 'This employer has no public JobStash profile available.');
-  await openExternal(new URL(`/profiles/${profile.slug}`, 'https://jobstash.xyz').href);
+  const page = await platform('employer_profile', { ref: entry.ref });
+  // ecosystem.vision pages are keyed by the organization's or project's normalized name, never by a display name.
+  if (!record(page) || !['organization', 'project'].includes(page.kind) ||
+      typeof page.slug !== 'string' || !/^[a-z0-9][a-z0-9-]{0,299}$/.test(page.slug))
+    fail('PROFILE_UNAVAILABLE', `${entry.company} has no public ecosystem.vision page yet.`);
+  await openExternal(new URL(`/${page.kind}s/names/${page.slug}`, 'https://ecosystem.vision').href);
   return { opened: true };
 }

@@ -4,6 +4,7 @@ import { matchingProfileVersion } from '../mcp/assessment-policy.mjs';
 import { candidateContext, createMatchingTools, currentAssessment, loadMatchingCatalogue } from '../mcp/matching-tools.mjs';
 import { decisionProviders } from './providers.mjs';
 import { currentPrescan, currentPrescanRow, prescanInclusion } from './state.mjs';
+import { blockFilter, blockedIds } from '../mcp/blocklist.mjs';
 import { DEFAULT_PUBLICATION_RANGE, assertPublicationRange, publicationInWindow, publicationWindowForRange } from './publication-range.mjs';
 
 const ASSUMED_INPUT_TOKENS_PER_JOB = 8000;
@@ -22,6 +23,7 @@ const messages = {
   PRESCAN_INVALID_INPUT: 'Could not prepare this job for pre-filtering.',
   PRESCAN_UNSUPPORTED_PROVIDER: 'This provider is not supported.',
   PROFILE_INCOMPLETE: 'Add your CV and career profile to start pre-filtering.',
+  PREFERENCES_REQUIRED: 'Tell your agent your target roles, locations, work modes, relocation and travel first; it saves them here.',
   PAIRING_REQUIRED: 'Connect your account in Settings.',
   LOCAL_LOCKED: 'Unlock local storage to continue.',
   IDENTITY_CHANGED: 'Your account connection changed. Reconnect in Settings.',
@@ -112,6 +114,7 @@ export function createPrescanController({ store, makeScope, credentials, authori
       ...inclusionSummary(career),
       totalCatalogue: run?.totalCatalogue ?? 0, inputTokens, requests: run?.requests ?? 0,
       ...(Number.isSafeInteger(run?.reused) ? { reused: run.reused } : {}),
+      ...(Number.isSafeInteger(run?.blocked) ? { blocked: run.blocked } : {}),
       estimatedCostUsd: inputTokens * (provider?.inputUsdPerMillion ?? publicState.inputUsdPerMillion) / 1_000_000,
       ...(run?.lastError ? { lastError: run.lastError } : {}) };
   }
@@ -128,7 +131,8 @@ export function createPrescanController({ store, makeScope, credentials, authori
   }
   async function plan(run, args, { readOnly = false } = {}) {
     const options = readOnly ? { stopped: true, readOnly: true } : undefined;
-    current(run, options);
+    // Scanning without the candidate's basic preferences wastes every request; nothing is fetched or billed first.
+    candidateContext(current(run, options).career);
     const catalogue = await loadMatchingCatalogue(async (operation, input) => {
       current(run, options);
       const page = await run.scope.platform(operation, input);
@@ -142,11 +146,14 @@ export function createPrescanController({ store, makeScope, credentials, authori
       previous.provider === run.provider.id && previous.model === run.provider.model &&
       previous.credentialVersion === run.credentialVersion;
     const cacheContext = { ...career, matching: { ...career.matching, jobs: catalogueJobs } };
+    // Blocked jobs are never sent to the provider; they stay in the catalogue and in the scope total.
+    const blocked = blockFilter(career);
     const ids = [];
-    let reused = 0;
+    let reused = 0, blockedCount = 0;
     for (const id of Object.keys(catalogueJobs)) {
       const row = reusable && previous.rows?.[id];
-      if (row?.status === 'scored' && currentPrescanRow(cacheContext, row, Date.now(), run.publicationWindow)) reused++;
+      if (blocked(catalogueJobs[id])) blockedCount++;
+      else if (row?.status === 'scored' && currentPrescanRow(cacheContext, row, Date.now(), run.publicationWindow)) reused++;
       else ids.push(id);
     }
     const averageTokens = previous?.requests > 0 && Number.isFinite(previous.inputTokens) && previous.inputTokens > 0
@@ -155,7 +162,7 @@ export function createPrescanController({ store, makeScope, credentials, authori
     const { id: provider, label, model, inputUsdPerMillion } = run.provider;
     return { jobs: catalogueJobs, ids, rows: reusable ? { ...previous.rows } : {},
       preview: { provider, label, model, inputUsdPerMillion, jobCount: ids.length,
-        totalCatalogue: catalogue.total, reused, estimatedInputTokens,
+        totalCatalogue: catalogue.total, reused, blocked: blockedCount, estimatedInputTokens,
         publicationRange: run.publicationRange, publicationWindow: run.publicationWindow,
         estimatedCostUsd: estimatedInputTokens * inputUsdPerMillion / 1_000_000 } };
   }
@@ -225,8 +232,15 @@ export function createPrescanController({ store, makeScope, credentials, authori
   async function worker(run, queue) {
     while (queue.next < queue.ids.length) {
       current(run);
-      const ids = queue.ids.slice(queue.next, queue.next + 10);
-      queue.next += ids.length;
+      const next = queue.ids.slice(queue.next, queue.next + 10);
+      queue.next += next.length;
+      // A job blocked while the run is going leaves the approved snapshot before its advert is fetched.
+      const isBlocked = blockedIds(current(run).career), dropped = next.filter(isBlocked), ids = next.filter(id => !isBlocked(id));
+      if (dropped.length) await change(run, saved => {
+        saved.selectedIds = saved.selectedIds.filter(id => !dropped.includes(id));
+        saved.blocked = (saved.blocked ?? 0) + dropped.length;
+      });
+      if (!ids.length) continue;
       const batch = await run.tools.get('career_match_batch').invoke({ ids });
       current(run);
       for (const id of batch.unavailableIds) await unavailable(run, id, 'Original job advert unavailable.');
@@ -267,7 +281,7 @@ export function createPrescanController({ store, makeScope, credentials, authori
       prescanPolicyId: provider.policyId,
       provider: provider.id, model: provider.model, credentialVersion: run.credentialVersion,
       publicationRange: run.publicationRange, publicationWindow: run.publicationWindow,
-      reused: 0,
+      reused: 0, blocked: 0,
       status: 'running', startedAt: now(), selectedIds: [], totalCatalogue: 0, rows: {}, inputTokens: 0, requests: 0 };
     active = run;
     notify();
@@ -277,6 +291,7 @@ export function createPrescanController({ store, makeScope, credentials, authori
       record.selectedIds = planned.ids;
       record.totalCatalogue = planned.preview.totalCatalogue;
       record.reused = planned.preview.reused;
+      record.blocked = planned.preview.blocked;
       for (const id of record.selectedIds) delete record.rows[id];
       if (!await authorize({ ...planned.preview, signal: run.abort.signal }))
         fail(run.abort.signal.aborted ? 'PRESCAN_CANCELLED' : 'PRESCAN_NOT_AUTHORIZED',

@@ -38,6 +38,7 @@
       "salaryCurrency": "EUR",
       "salaryPeriod": "year",
       "willingToRelocate": false,
+      "travel": "occasional",
       "responsibilityModes": [
         "hands_on"
       ],

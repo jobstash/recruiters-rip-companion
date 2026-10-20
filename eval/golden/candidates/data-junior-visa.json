@@ -40,6 +40,7 @@
       "salaryPeriod": "year",
       "requiresSponsorship": true,
       "willingToRelocate": true,
+      "travel": "any",
       "domains": [
         "retail",
         "transport",

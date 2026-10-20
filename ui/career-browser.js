@@ -5,6 +5,7 @@
     facts: { title: 'Facts', empty: 'No saved career facts.', locked: 'Open local storage to read saved records.', select: 'Select a record' },
     jobs: { title: 'Jobs', empty: 'No saved jobs. Copy the review prompt into your connected agent to start matching.', locked: 'Open local storage to read saved jobs.', select: 'Select a job' },
     applications: { title: 'Job Applications', empty: 'No saved applications.', locked: 'Open local storage to read saved applications.', select: 'Select an application' },
+    blocks: { title: 'Blocked jobs', empty: 'Nothing blocked. Open a job to block it, its company or its category.', locked: 'Open local storage to read blocked jobs.', select: 'Select a block' },
   };
   // Why an unscored job has no rank; the pre-filter never shows a number, only whether the job is in the next run.
   const statusWords = { unavailable: 'Advert unavailable', refused: 'Declined', oversize: 'Too large' };
@@ -140,6 +141,49 @@
       }
     }
 
+    // Blocking hides matching jobs from the list, so the refresh that follows keeps the page and focuses the list.
+    async function changeBlock(operation, args, notice) {
+      if (!enabled) return;
+      keepPlace = { offset, priorOffsets: [...priorOffsets], selectedId: null, focusId: null, focusList: true, notice };
+      try {
+        await request(operation, args);
+      } catch (error) {
+        keepPlace = null;
+        listStatus.textContent = `Could not change blocked jobs. ${error.message}`;
+      }
+    }
+    function blockButton(text, label, onClick, className = 'ghost') {
+      const button = node('button', className, text);
+      button.type = 'button';
+      if (label) button.setAttribute('aria-label', label);
+      button.addEventListener('click', event => { event.stopPropagation(); void onClick(); });
+      return button;
+    }
+    function removeBlock(item) {
+      return changeBlock('job-unblock', { id: item.id }, `Unblocked ${item.title}`);
+    }
+    // Jobs offer to block the job, its company or its category; a block's reader offers to remove it.
+    function renderBlockActions(item) {
+      const block = item?.block;
+      if (!block || typeof block !== 'object') return null;
+      const section = node('section', 'career-block');
+      if (kind === 'blocks') {
+        section.append(blockButton('Remove block', `Remove block ${item.title}`, () => removeBlock(item)));
+        return section;
+      }
+      if (kind !== 'jobs') return null;
+      const title = item.card?.title ?? item.title;
+      const actions = node('div', 'actions');
+      actions.append(blockButton('Block this job', `Block ${title}`,
+        () => changeBlock('job-block', { id: item.id, kind: 'job' }, `Blocked ${title}`)));
+      if (typeof block.company === 'string' && block.company) actions.append(blockButton(`Block all ${block.company} jobs`, null,
+        () => changeBlock('job-block', { id: item.id, kind: 'company' }, `Blocked ${block.company}`)));
+      if (typeof block.category === 'string' && block.category) actions.append(blockButton(`Block all ${block.category} jobs`, null,
+        () => changeBlock('job-block', { id: item.id, kind: 'category' }, `Blocked ${block.category}`)));
+      section.append(node('h3', '', 'Block from evaluation'), actions);
+      return section;
+    }
+
     function renderInclusion(item) {
       const card = item?.card;
       if (!card || card.stage === 'reviewed') return null;
@@ -187,6 +231,8 @@
       content.replaceChildren();
       const inclusion = renderInclusion(item);
       if (inclusion) content.append(inclusion);
+      const blockActions = kind === 'jobs' ? renderBlockActions(item) : null;
+      if (blockActions) content.append(blockActions);
       for (const section of sections) {
         const hasFields = Array.isArray(section?.fields) && section.fields.length;
         const hasChart = Array.isArray(section?.chart) && section.chart.length;
@@ -218,6 +264,8 @@
         }
         content.append(block);
       }
+      const removal = kind === 'blocks' ? renderBlockActions(item) : null;
+      if (removal) content.append(removal);
       readerStatus.textContent = content.childElementCount ? '' : 'No saved content is available for this record.';
     }
 
@@ -270,7 +318,7 @@
       const jobs = `${integer(inclusion.candidates)} ${inclusion.candidates === 1 ? 'job' : 'jobs'}`;
       surfaceSentence.textContent = inclusion.scored === null
         ? `All ${jobs} will be sent`
-        : `${integer(inclusion.included)} of ${jobs} will be sent to the agent`;
+        : `${integer(inclusion.included)} of ${jobs} will be sent to the agent${inclusion.stale ? ' · ranked before your profile changed; pre-filter again to update' : ''}`;
     }
     function renderCutoff(inclusion, index) {
       const divider = document.createElement('li');
@@ -325,6 +373,7 @@
           } else {
             renderRow(item, button);
             row.append(button);
+            if (kind === 'blocks') row.append(blockButton('Remove', `Remove block ${item.title}`, () => removeBlock(item), 'text career-row-action'));
           }
           button.addEventListener('click', () => { void openRecord(item, button); });
           firstRecord ??= { item, button };
@@ -338,11 +387,12 @@
         listStatus.textContent = result.items.length
           ? inclusion ? `${range} · ${integer(inclusion.included)} sent to the agent` : range
           : offset ? 'No records on this page. Choose Previous.' : category.empty;
+        if (typeof place?.notice === 'string' && place.notice) listStatus.textContent = `${place.notice} · ${listStatus.textContent}`;
         if (slider && inclusion) renderSurface(inclusion);
         previous.disabled = priorOffsets.length === 0;
         next.disabled = nextOffset === null;
         pagination.hidden = previous.disabled && next.disabled;
-        if (focusList) {
+        if (focusList || place?.focusList) {
           const target = records.querySelector('.career-record') || listStatus;
           target.setAttribute('tabindex', target.tagName === 'BUTTON' ? '0' : '-1');
           target.focus();

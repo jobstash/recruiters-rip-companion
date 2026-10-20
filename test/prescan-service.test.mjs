@@ -7,6 +7,7 @@ import { createScopedAccess } from '../src/mcp/scope.mjs';
 import { createPrescanController } from '../src/prescan/service.mjs';
 import { createPrescanTools } from '../src/mcp/prescan-tools.mjs';
 import { PUBLICATION_RANGES, publicationInWindow } from '../src/prescan/publication-range.mjs';
+import { addBlock } from '../src/mcp/blocklist.mjs';
 
 const publishedAt = new Date(Date.now() - 86400000).toISOString();
 const job = index => ({ id: `node:${index}`, title: `Role ${index}`, company: 'Synthetic company', publishedAt,
@@ -27,7 +28,8 @@ function fixture({ count = 3, assess = async () => assessment(), authorize = asy
   const career = createCareerState();
   Object.assign(career.profile, { headline: 'Software engineer', location: 'Dublin', name: 'PRIVATE NAME',
     email: 'private@example.test', phone: '+353123456789', links: ['https://private.example'],
-    preferences: { willingToRelocate: false, notes: 'I want hands-on product engineering.', salaryMinimum: 75000, salaryCurrency: 'EUR', salaryPeriod: 'year' } });
+    preferences: { willingToRelocate: false, notes: 'I want hands-on product engineering.', salaryMinimum: 75000, salaryCurrency: 'EUR', salaryPeriod: 'year',
+      roles: ['Software engineer'], locations: ['Dublin'], workModes: ['hybrid'], travel: 'occasional' } });
   career.sources.cv = { purpose: 'cv', text: 'Built reporting tools for local businesses.', originalBase64: 'PRIVATE PDF', archived: false };
   career.facts.work = { kind: 'capability', subject: 'Reporting', answer: 'Built it', detail: 'Used SQL and JavaScript.' };
   let state = { career, deviceId: 'synthetic-device', prescanCredentialVersion: 1,
@@ -656,4 +658,50 @@ test('authentication, transport and malformed-provider failures stop immediately
     assert.equal(f.apiCalls.length, 1); assert.equal(Object.keys(f.snapshot().career.prescan.rows).length, 0);
     assert.equal(JSON.stringify(f.controller.status()).includes('PRIVATE REQUEST'), false);
   }
+});
+
+test('blocked jobs, companies and categories are counted in scope but never fetched or sent to the provider', async () => {
+  const f = fixture({ count: 0 });
+  f.catalogue.push({ ...job(0), company: 'Blocked Co' }, { ...job(1), classification: 'SMART_CONTRACTS' }, job(2), job(3));
+  await f.store.update(state => {
+    // Blocks are made from saved jobs whose spelling differs from the catalogue's.
+    state.career.matching = { jobs: { 'node:2': { id: 'node:2', title: 'Role 2', company: 'Synthetic company' },
+      seenCompany: { id: 'seenCompany', company: 'BLOCKED  co' }, seenCategory: { id: 'seenCategory', classification: 'Smart Contracts' } }, scores: {} };
+    addBlock(state.career, { id: 'seenCompany', kind: 'company' });
+    addBlock(state.career, { id: 'seenCategory', kind: 'category' });
+    addBlock(state.career, { id: 'node:2', kind: 'job' });
+  });
+  const preview = await f.controller.preview();
+  assert.deepEqual([preview.totalCatalogue, preview.jobCount, preview.blocked, preview.reused], [4, 1, 3, 0]);
+  await f.controller.start(); await terminal(f);
+  const summary = f.controller.status();
+  assert.equal(summary.status, 'completed');
+  assert.deepEqual([summary.selected, summary.processed, summary.blocked, summary.totalCatalogue], [1, 1, 3, 4]);
+  assert.deepEqual(f.apiCalls.map(call => call.job.id), ['node:3']);
+  assert.deepEqual(f.platformCalls.filter(call => call.operation === 'matching_jobs').flatMap(call => call.args.ids), ['node:3']);
+});
+
+test('a job blocked while the run is going leaves the approved snapshot before its advert is fetched', async () => {
+  const gate = deferred();
+  const f = fixture({ count: 85, assess: async () => { await gate.promise; return assessment(); } });
+  await f.controller.start();
+  // Eight workers hold the first eighty IDs; the last five are taken only after a worker finishes its batch.
+  await f.waitFor(() => f.apiCalls.length === 8);
+  await f.store.update(state => { addBlock(state.career, { id: 'node:84', kind: 'job' }); });
+  gate.resolve();
+  await terminal(f);
+  const summary = f.controller.status();
+  assert.equal(summary.status, 'completed');
+  assert.deepEqual([summary.selected, summary.processed, summary.blocked], [84, 84, 1]);
+  assert.equal(f.apiCalls.some(call => call.job.id === 'node:84'), false);
+  assert.equal(f.platformCalls.some(call => call.operation === 'matching_jobs' && call.args.ids.includes('node:84')), false);
+});
+
+test('pre-filtering refuses to preview or start without the basic preferences, before any catalogue, approval or provider call', async () => {
+  const f = fixture();
+  await f.store.update(state => { delete state.career.profile.preferences.locations; });
+  await assert.rejects(f.controller.preview(), { code: 'PREFERENCES_REQUIRED' });
+  await assert.rejects(f.controller.start(), { code: 'PREFERENCES_REQUIRED' });
+  assert.deepEqual([f.platformCalls.length, f.authorizations.length, f.apiCalls.length], [0, 0, 0]);
+  assert.equal(f.controller.isActive(), false);
 });

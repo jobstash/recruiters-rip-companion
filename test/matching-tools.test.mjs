@@ -8,6 +8,7 @@ import { salaryEligibility, recentPublication, matchingProfileVersion } from '..
 import { ASSESSMENT_POLICY_ID, RERANK_POLICY, RERANK_SIZE, deriveDecision, fitBand, overallFit } from '../src/mcp/matching-contract.mjs';
 import { publicationInWindow } from '../src/prescan/publication-range.mjs';
 import { decisionProviders } from '../src/prescan/providers.mjs';
+import { addBlock, removeBlock } from '../src/mcp/blocklist.mjs';
 
 const publishedAt = new Date(Date.now() - 86400000).toISOString();
 const job = (id, date = publishedAt) => ({ id: `node:${id}`, title: `Engineer ${id}`, company: 'Company', publishedAt: date });
@@ -44,7 +45,8 @@ function fixture({ jobs = [job('a'), job('b'), job('c')], batch, emptyProfile = 
   if (!emptyProfile) {
     Object.assign(career.profile, { headline: 'Software engineer', skills: ['JavaScript'], location: 'Dublin',
       name: 'PRIVATE NAME', email: 'private@example.test', phone: '+353 123 456 789', links: ['https://private.test'],
-      preferences: { willingToRelocate: false, salaryMinimum: 0, locations: ['Dublin'], notes: 'Prefer hands-on work' } });
+      preferences: { willingToRelocate: false, salaryMinimum: 0, locations: ['Dublin'], notes: 'Prefer hands-on work',
+        roles: ['Software engineer'], workModes: ['hybrid', 'onsite'], travel: 'occasional' } });
     career.facts = { recent: fact('Reporting services', 'Hands-on', 'capability'), early: fact('Internal tooling', 'Led it', 'capability') };
     career.sources = { cv: { purpose: 'cv', text: 'Software engineer at Acme, 2019–2023. Built reporting services.', originalBase64: 'PRIVATE PDF', archived: false } };
   }
@@ -91,7 +93,7 @@ test('subscription assignment and original batches never expose saved preliminar
   const sentinel = 'PRIVATE_PRELIMINARY_JUDGMENT';
   await f.store.update(state => {
     state.career.prescan = { provider: 'openai', profileVersion: '0:0', rows: {
-      'node:a': { id: 'node:a', priority: 99, direction: sentinel, constraints: sentinel, eligibility: sentinel,
+      'node:a': { id: 'node:a', status: 'scored', publishedAt, priority: 99, direction: sentinel, constraints: sentinel, eligibility: sentinel,
         dimensions: { direction: sentinel }, confidence: sentinel, answers: [sentinel], reason: sentinel, commentary: sentinel },
     }, rawAnswers: sentinel, commentary: sentinel };
   });
@@ -100,7 +102,8 @@ test('subscription assignment and original batches never expose saved preliminar
   assert.equal(JSON.stringify({ context, batch }).includes(sentinel), false);
   assert.equal(context.candidate.cv, 'Software engineer at Acme, 2019–2023. Built reporting services.');
   assert.equal(batch.jobs[0].ad, 'Full original ad');
-  assert.deepEqual(new Set(context.jobIds), new Set(['node:a', 'node:b', 'node:c']));
+  // Only the pre-filtered job clears the minimum score; its preliminary judgments still never travel with it.
+  assert.deepEqual(context.jobIds, ['node:a']);
 });
 
 test('overall fit weights the four dimensions and bands follow their thresholds', () => {
@@ -304,7 +307,11 @@ test('full ads and partial availability are returned as plain objects without lo
   const f = fixture({ batch: () => response });
   await f.call('career_match_jobs');
   const before = f.store.get();
-  assert.deepEqual(await f.call('career_match_batch', { ids: ['node:a', 'node:b', 'node:c'] }), response);
+  const { candidate, profileVersion, ...transport } = await f.call('career_match_batch', { ids: ['node:a', 'node:b', 'node:c'] });
+  assert.deepEqual(transport, response);
+  // Every batch re-supplies the saved candidate, so reviewers after a new session or compaction use the companion's copy.
+  assert.deepEqual(candidate.preferences, f.store.get().career.profile.preferences);
+  assert.equal(profileVersion, matchingProfileVersion(f.store.get().career));
   assert.deepEqual(f.store.get(), before);
   assert.deepEqual(f.calls.at(-1), { operation: 'matching_jobs', args: { ids: ['node:a', 'node:b', 'node:c'] } });
   await f.save([assessment('a', 90), unavailable('c')]);
@@ -535,7 +542,8 @@ test('batch terms refresh saved display metadata without storing ads, company gr
   const before = f.store.get();
   assert.equal(f.tools.get('career_match_batch').readOnly, false);
   assert.equal(f.tools.get('career_matches').readOnly, true);
-  assert.deepEqual(await f.call('career_match_batch', { ids: ['node:a', 'node:b', 'node:c', 'node:d'] }), response);
+  const { candidate: _candidate, profileVersion: _version, ...transport } = await f.call('career_match_batch', { ids: ['node:a', 'node:b', 'node:c', 'node:d'] });
+  assert.deepEqual(transport, response);
   const after = f.store.get();
   assert.deepEqual(after.career.matching.scores, before.career.matching.scores);
   assert.deepEqual(after.career.profile, before.career.profile);
@@ -1240,4 +1248,42 @@ test('catalogue refresh and ranking deletion clear comparisons while ordinary di
   assert.equal(Object.keys(second.f.store.get().career.matching.pairs).length, 1);
   await second.f.call('career_match_jobs', { refresh: true });
   assert.deepEqual(second.f.store.get().career.matching.pairs, {});
+});
+
+test('blocked jobs, companies and categories leave the next run, the archive and recommendations until unblocked', async () => {
+  const f = fixture({ jobs: [job('a'), { ...job('b'), company: 'Other Co' }, { ...job('c'), company: 'Fourth', classification: 'SMART_CONTRACTS' },
+    { ...job('d'), company: 'Third' }, { ...job('e'), company: 'Fifth', classification: 'smart contracts' }] });
+  const planned = await f.call('career_match_jobs');
+  await f.save([assessment('a', 80, 'not_required'), assessment('b', 85, 'not_required')], planned.profileVersion);
+  const ids = ['b', 'a'].map(id => `node:${id}`);
+  assert.deepEqual((await f.call('career_recommendations')).recommendations.map(row => row.id), ids);
+  let company, category;
+  await f.store.update(state => {
+    company = addBlock(state.career, { id: 'node:b', kind: 'company' });
+    category = addBlock(state.career, { id: 'node:c', kind: 'category' });
+    addBlock(state.career, { id: 'node:d', kind: 'job' });
+  });
+  const scoped = await f.call('career_match_jobs');
+  assert.deepEqual(scoped.jobIds, []);
+  assert.equal(scoped.blocked, 3);
+  assert.equal(scoped.excluded, 0);
+  assert.deepEqual((await f.call('career_recommendations')).recommendations.map(row => row.id), ['node:a']);
+  assert.deepEqual((await f.call('career_matches')).matches.map(row => row.id), ['node:a']);
+  assert.deepEqual((await f.call('career_rerank_pairs')).candidates.map(row => row.id), ['node:a']);
+  await f.store.update(state => { removeBlock(state.career, company.id); removeBlock(state.career, category.id); });
+  assert.deepEqual((await f.call('career_recommendations')).recommendations.map(row => row.id), ids);
+  const restored = await f.call('career_match_jobs');
+  assert.deepEqual(restored.jobIds, ['node:c', 'node:e']);
+  assert.equal(restored.blocked, 1);
+});
+
+test('discovery and batches refuse to start until the basic preferences are answered, before any platform call', async () => {
+  const f = fixture();
+  await f.store.update(state => { state.career.profile.preferences.travel = null; state.career.profile.preferences.workModes = []; });
+  for (const [name, args] of [['career_match_jobs', {}], ['career_match_jobs', { localOnly: true }], ['career_match_batch', { ids: ['node:a'] }]])
+    await assert.rejects(f.call(name, args), error => error.code === 'PREFERENCES_REQUIRED' &&
+      error.message.includes('Which work modes suit you') && error.message.includes('How much work travel'));
+  assert.deepEqual(f.calls, []);
+  await f.store.update(state => { Object.assign(state.career.profile.preferences, { travel: 'any', workModes: ['remote'] }); });
+  assert.equal((await f.call('career_match_jobs')).jobIds.length, 3);
 });

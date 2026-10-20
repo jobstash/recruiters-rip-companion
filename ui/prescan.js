@@ -19,6 +19,7 @@
   let context = '';
   let preview = null;
   let previewState = 'idle';
+  let previewFailure = null;
   let previewRequest = 0;
   let rangeDraft = null;
 
@@ -71,13 +72,15 @@
     element('cancel').disabled = cancelling;
     element('form').setAttribute('aria-busy', String(pending));
     element('controls').setAttribute('aria-busy', String(pending));
-    const scopeLine = () => preview.jobCount === 0 ? `${count(preview.totalCatalogue)} jobs in scope · all pre-filtered`
-      : `${count(preview.totalCatalogue)} jobs in scope · ${count(preview.jobCount)} to pre-filter · ~${cost(preview.estimatedCostUsd)}`;
+    // Blocked jobs stay in the scope total but are never pre-filtered.
+    const blockedPart = () => Number.isSafeInteger(preview.blocked) && preview.blocked > 0 ? ` · ${count(preview.blocked)} blocked` : '';
+    const scopeLine = () => preview.jobCount === 0 ? `${count(preview.totalCatalogue)} jobs in scope${blockedPart()} · all pre-filtered`
+      : `${count(preview.totalCatalogue)} jobs in scope${blockedPart()} · ${count(preview.jobCount)} to pre-filter · ~${cost(preview.estimatedCostUsd)}`;
     element('preview').textContent = !available ? 'Open local storage to load the job count.'
       : running || starting ? ''
         : rangeDraft !== null ? pending ? 'Saving publication time…' : 'Job count needs updating.'
         : previewState === 'ready' ? scopeLine()
-          : previewState === 'failed' ? 'Job count unavailable. Reopen pre-filtering to try again.'
+          : previewState === 'failed' ? previewFailure ?? 'Job count unavailable. Reopen pre-filtering to try again.'
             : 'Loading job count…';
     element('preview').setAttribute('aria-busy', String(previewState === 'loading'));
     element('key-status').textContent = !available ? 'Open local storage to configure the optional Decisions API.'
@@ -85,16 +88,18 @@
         : 'No API key saved.';
 
     if (!available) { element('progress').textContent = ''; element('recovery').textContent = ''; return; }
+    const blocked = Number.isSafeInteger(run.blocked) && run.blocked >= 0 ? run.blocked : 0;
     const fullScope = Number.isSafeInteger(run.totalCatalogue) && Number.isSafeInteger(run.reused) &&
-      run.reused >= 0 && run.totalCatalogue === run.selected + run.reused;
+      run.reused >= 0 && run.totalCatalogue === run.selected + run.reused + blocked;
     const checked = run.processed + (fullScope ? run.reused : 0);
+    const scope = count(fullScope ? run.totalCatalogue - blocked : run.selected);
     const spent = Number.isFinite(run.estimatedCostUsd) && run.estimatedCostUsd > 0 ? ` · ${cost(run.estimatedCostUsd)}` : '';
     // Live progress only; a finished run is summarized by the scope line above.
     element('progress').textContent = running || starting
-      ? `Pre-filtering ${count(checked)}/${count(fullScope ? run.totalCatalogue : run.selected)}${spent}` : '';
+      ? `Pre-filtering ${count(checked)}/${scope}${spent}` : '';
     let advice = '';
     if (run.status === 'failed') advice = recovery(run.lastError?.code);
-    if (run.status === 'cancelled' || run.status === 'interrupted') advice = `Scan stopped at ${count(checked)}/${count(fullScope ? run.totalCatalogue : run.selected)}${spent}. Start again to continue.`;
+    if (run.status === 'cancelled' || run.status === 'interrupted') advice = `Scan stopped at ${count(checked)}/${scope}${spent}. Start again to continue.`;
     if (run.status === 'stale') advice = 'Profile changed. Start pre-filtering again.';
     if (run.status === 'completed' && run.unavailable) advice = `${count(run.unavailable)} jobs could not be pre-filtered.`;
     element('recovery').textContent = advice;
@@ -126,9 +131,11 @@
           !Number.isFinite(result.estimatedCostUsd) || result.estimatedCostUsd < 0) throw new Error('Preview unavailable.');
       preview = result;
       previewState = 'ready';
-    } catch {
+    } catch (error) {
       if (request !== previewRequest || token !== generation || expectedContext !== context) return;
       previewState = 'failed';
+      // Setup gaps are actionable; anything else keeps the generic retry line.
+      previewFailure = ['PREFERENCES_REQUIRED', 'PROFILE_INCOMPLETE'].includes(error?.code) ? error.message : null;
     }
     render();
   }

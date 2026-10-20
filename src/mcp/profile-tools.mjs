@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { createCareerState, fail, hash, mutateCareer, mutationSchema, readCareer, replayCareer } from './state.mjs';
-import { matchingProfileVersion } from './assessment-policy.mjs';
+import { ESSENTIAL_PREFERENCES, matchingProfileVersion, missingPreferences } from './assessment-policy.mjs';
+import { introductionsStatus } from './introduction-tools.mjs';
 import { FACT_KINDS, compareFacts, factInputSchema, factKey, needsDetail, normalizeFact } from './facts.mjs';
 import { chatText, formAnswers, formRequest, parseReply, prepareQuestions, questionSchema } from './interview.mjs';
 
@@ -163,12 +164,27 @@ function onboarding(career, pairing) {
     for (const source of cvs) action('profile', 'career_source_read', { sourceId: source.id }, 'Read the whole CV (follow nextOffset) before saving the profile.');
     action('profile', 'onboarding_commit', { mode }, 'Save headline, roleCapabilities, seniority and skills from the CV or stated background. Do not collect enrichment facts during onboarding. Keep demonstrated capabilities separate from future preferences; do not infer salary, relocation, travel or availability.');
   }
-  const locallyReady = hasBackground && hasRole;
+  // Basic preferences come straight from the candidate before any scan; never inferred from the CV.
+  const unansweredPreferences = hasBackground ? missingPreferences(career) : Object.keys(ESSENTIAL_PREFERENCES);
+  if (hasBackground) for (const field of unansweredPreferences) question(`preferences.${field}`, 'career_preferences_update', ESSENTIAL_PREFERENCES[field]);
+  const locallyReady = hasBackground && hasRole && !unansweredPreferences.length;
+  // CV sharing never blocks matching; these steps run once the basics are saved and on every later session.
+  const introductions = introductionsStatus(career);
+  const sharingSteps = [];
+  if (introductions.sources.some(source => source.status === 'needs_extraction'))
+    sharingSteps.push('For each CV with status needs_extraction in career_employment_status: read the whole CV, extract every employer with title and dates, search them with career_employer_search, keep only confident matches (prefer profiles) and save with career_employment_save.');
+  if (!introductions.consent)
+    sharingSteps.push(`Ask once whether JobStash may receive the CV and matched work history: ${introductions.purpose} Record the answer with career_introductions_update({consent}).`);
+  else if (introductions.consent.granted && introductions.sources.some(source => source.status === 'ready_to_share'))
+    sharingSteps.push('Share each ready_to_share CV with career_cv_share; the companion asks the candidate to approve the upload.');
+  if (!introductions.github)
+    sharingSteps.push('Ask whether they are a developer with open-source work. If so, open account_github_connect so they link GitHub through their sign-in, then confirm with account_status; otherwise record career_introductions_update({githubSkipped:true}).');
   return {
     revision: career.revision, mode, locallyReady, providerRequired: false,
     pairing: { paired: Boolean(pairing), account: pairing?.account ? { id: pairing.account.id, label: pairing.account.label } : null },
     catalogRequiresPairing: !pairing, sourceCount: currentSources(career).length, factCount, missing, actions, questions,
-    nextSteps: locallyReady ? ['Match jobs using the CV/profile and any existing facts once paired. Collect new facts only while reviewing an individual matched listing for submission; reuse them in subsequent matching. Optional preferences do not block search.'] : [...actions.map(item => item.instruction), ...questions.map(item => item.question)],
+    introductions: { ...introductions, nextSteps: locallyReady ? sharingSteps : [] },
+    nextSteps: locallyReady ? ['Match jobs using the CV/profile, saved preferences and any existing facts once paired. Collect new facts only while reviewing an individual matched listing for submission; reuse them in subsequent matching.'] : [...actions.map(item => item.instruction), ...questions.map(item => item.question), ...(hasBackground && unansweredPreferences.length ? ['Ask these preference questions together in one message, save every answer with career_preferences_update, then read career_profile_read to confirm before any pre-filter or job review.'] : [])],
   };
 }
 
@@ -219,6 +235,8 @@ export function createProfileTools({ store, selectSourceFile, extractFile, inter
     const career = readCareer(store);
     return {
       revision: career.revision, profile: profileView(career.profile), preferences: career.profile.preferences ?? {},
+      // Unanswered basics, with the question to ask for each; scans and reviews refuse to start until it is empty.
+      missingPreferences: missingPreferences(career).map(field => ({ field, question: ESSENTIAL_PREFERENCES[field] })),
       factCount: Object.keys(career.facts).length, sourceCount: currentSources(career).length, matchingProfileVersion: matchingProfileVersion(career),
     };
   });

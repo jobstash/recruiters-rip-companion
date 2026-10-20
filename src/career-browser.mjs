@@ -6,8 +6,9 @@ import { fail, readCareer } from './mcp/state.mjs';
 import { currentPrescanRow, prescanInclusion } from './prescan/state.mjs';
 import { DEFAULT_PUBLICATION_RANGE, publicationWindowForRange } from './prescan/publication-range.mjs';
 import { localJobMetadata } from './mcp/job-tools.mjs';
+import { blockedIds, listBlocks } from './mcp/blocklist.mjs';
 
-const kinds = ['sources', 'facts', 'jobs', 'applications'];
+const kinds = ['sources', 'facts', 'jobs', 'applications', 'blocks'];
 const forbidden = new Set(['__proto__', 'prototype', 'constructor']);
 const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const own = (value, key) => record(value) && Object.hasOwn(value, key);
@@ -106,6 +107,7 @@ const assessmentLabels = {
   unbounded_range: 'Upper salary bound not stated', not_stated: 'Salary not stated',
 };
 const assessmentLabel = value => own(assessmentLabels, value) ? assessmentLabels[value] : readable(value);
+const blockKinds = { job: 'Job', company: 'Company', category: 'Category' };
 const prescanStatuses = {
   unavailable: 'Original advert unavailable', oversize: 'Input exceeds the provider limit', refused: 'Provider declined assessment',
 };
@@ -186,10 +188,12 @@ function jobItem({ id, reviewed, prescan, imported, metadata }, inclusion) {
       ...fact(role('commitment')), ...fact(role('classification'))],
     ...cardStage({ id, reviewed, prescan }, inclusion),
   };
+  // What the reader can offer to block besides the job itself.
+  const block = { company: company || null, category: text(role('classification'), '') || null };
   const review = reviewed ? reviewedSections(reviewed) : [];
   // A current review supersedes the pre-filter, so the reader never shows both; a stale review follows a current pre-filter.
   const preliminary = prescan && !reviewCurrent ? [prescanSection(prescan)] : [];
-  return { id, title, card, sections: [
+  return { id, title, card, block, sections: [
     ...(reviewed && !prescan?.current ? [...review, ...preliminary] : [...preliminary, ...review]),
     ...(imported ? [
       fields('Capture', [['Status', imported.complete ? 'Saved' : 'Needs full advert'],
@@ -251,6 +255,9 @@ async function jobUnion(career) {
     item.imported = { ...localJobMetadata(job), description: job.description, updatedAt: job.updatedAt };
     rows.set(id, item);
   }
+  // Blocked jobs live only in the block list until it is removed.
+  const isBlocked = blockedIds(career);
+  for (const id of rows.keys()) if (isBlocked(id)) rows.delete(id);
   return { rows, inclusion: jobInclusion(career, rows) };
 }
 
@@ -296,7 +303,13 @@ export function createCareerBrowser({ store }) {
         return { items, total: sorted.length, nextOffset: offset + items.length < sorted.length ? offset + items.length : null,
           cutoffIndex: divider >= 0 && divider < items.length ? divider : null,
           inclusion: { minimumScore: inclusion.minimumScore, included: inclusion.includedIds.size,
-            scored: inclusion.current ? inclusion.rankedIds.length : null, candidates: inclusion.candidates } };
+            scored: inclusion.ranked ? inclusion.rankedIds.length : null, stale: inclusion.stale, candidates: inclusion.candidates } };
+      }
+      if (kind === 'blocks') {
+        const blocks = listBlocks(career);
+        const items = blocks.slice(offset, offset + limit).map(entry => ({ id: entry.id, title: entry.label,
+          summary: `${blockKinds[entry.kind]} · ${plural(entry.matches, 'saved job')}`, block: { kind: entry.kind } }));
+        return { items, total: blocks.length, nextOffset: offset + items.length < blocks.length ? offset + items.length : null };
       }
       const records = entries(career[kind]);
       const items = records.slice(offset, offset + limit).map(([id, item]) => {
@@ -319,6 +332,12 @@ export function createCareerBrowser({ store }) {
         if (!row) fail('NOT_FOUND', 'This saved job was not found. Refresh the list.');
         const { title, sections } = jobItem(row, inclusion);
         return { title, sections };
+      }
+      if (kind === 'blocks') {
+        const entry = listBlocks(career).find(item => item.id === id);
+        if (!entry) fail('NOT_FOUND', 'This block was already removed. Refresh the list.');
+        return { title: entry.label, sections: [fields('Block', [['Type', blockKinds[entry.kind]],
+          ['Saved jobs blocked', plural(entry.matches, 'job')], ['Added', displayDate(entry.createdAt)]], 'No block details saved.')] };
       }
       const item = lookup(career[kind], id);
       if (!item) fail('NOT_FOUND', 'This saved record was not found. Refresh the list.');

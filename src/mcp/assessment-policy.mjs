@@ -2,6 +2,18 @@ export const PUBLICATION_DAYS = 7;
 const PUBLICATION_WINDOW_MS = PUBLICATION_DAYS * 24 * 60 * 60 * 1000;
 export const matchingProfileVersion = career => `${career.evidenceRevision ?? 0}:${career.rankingVersion ?? 0}`;
 
+// Without these the agent and the pre-filter cannot judge role direction, location or work-mode fit, so every scan and
+// review would be spent on guesses. Onboarding asks for each one before any catalogue work; answers live in the vault.
+export const ESSENTIAL_PREFERENCES = Object.freeze({
+  roles: 'Which roles or job titles are you looking for?',
+  locations: 'Where are you based, and which countries or cities can you work from?',
+  workModes: 'Which work modes suit you: remote, hybrid, onsite?',
+  willingToRelocate: 'Would you relocate for the right role?',
+  travel: 'How much work travel is acceptable: none, occasional, frequent or any?',
+});
+const unanswered = value => value === null || value === undefined || (Array.isArray(value) && !value.length) || (typeof value === 'string' && !value.trim());
+export const missingPreferences = career => Object.keys(ESSENTIAL_PREFERENCES).filter(field => unanswered(career.profile?.preferences?.[field]));
+
 export function recentPublication(publishedAt, now = Date.now()) {
   const time = Date.parse(publishedAt);
   return Number.isFinite(time) && time >= now - PUBLICATION_WINDOW_MS && time <= now;

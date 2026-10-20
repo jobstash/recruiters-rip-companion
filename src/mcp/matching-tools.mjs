@@ -1,13 +1,14 @@
 import Ajv from 'ajv';
 import addFormats from 'ajv-formats';
 import { createCareerState, fail, readCareer } from './state.mjs';
-import { salaryEligibility, matchingProfileVersion } from './assessment-policy.mjs';
+import { ESSENTIAL_PREFERENCES, missingPreferences, salaryEligibility, matchingProfileVersion } from './assessment-policy.mjs';
 import {
   ASSESSMENT_POLICY_ID, BANDS, DIMENSION_WEIGHTS, MATCHING_PROTOCOL, MATCHING_TOOL_DESCRIPTIONS, RECOMMEND_MINIMUM,
   RERANK_POLICY, RERANK_SIZE, assessmentSchema, comparisonSchema, deriveDecision, idSchema,
 } from './matching-contract.mjs';
 import { compareFacts } from './facts.mjs';
 import { prescanInclusion } from '../prescan/state.mjs';
+import { blockFilter } from './blocklist.mjs';
 import { completeLocalJobs, localJob, localJobMetadata, localJobOriginal } from './job-tools.mjs';
 import { DEFAULT_PUBLICATION_RANGE, publicationInWindow, publicationWindowForRange } from '../prescan/publication-range.mjs';
 
@@ -149,6 +150,8 @@ export function candidateContext(career) {
     }));
   if (!(professional.headline?.trim() || professional.roleCapabilities?.length) || (!cv && !facts.length))
     fail('PROFILE_INCOMPLETE', 'Save a professional headline or roleCapabilities, and import a CV with career_source_import or save career facts with career_facts_save, before matching.');
+  const missing = missingPreferences(career);
+  if (missing.length) fail('PREFERENCES_REQUIRED', `Before any pre-filter or review, ask the candidate: ${missing.map(field => ESSENTIAL_PREFERENCES[field]).join(' ')} Save every answer with career_preferences_update (fields: ${missing.join(', ')}), read career_profile_read to confirm, then continue.`);
   return { ...professional, ...(cv ? { cv } : {}), facts, preferences };
 }
 
@@ -224,10 +227,12 @@ function pairwiseStats(saved, profileVersion) {
   return stats;
 }
 
-function rankedRows(saved, preferences, profileVersion) {
+// Blocked jobs (see blocklist.mjs) leave every agent-facing view of saved assessments.
+function rankedRows(career, profileVersion) {
+  const saved = matching(career), preferences = career.profile?.preferences, blocked = blockFilter(career);
   const willingToRelocate = preferences?.willingToRelocate;
   const stats = pairwiseStats(saved, profileVersion);
-  const rows = Object.entries(saved.scores).map(([id, assessment]) => {
+  const rows = Object.entries(saved.scores).filter(([id]) => !blocked({ id, ...saved.jobs[id] })).map(([id, assessment]) => {
     const job = saved.jobs[id] ?? {};
     const { profileVersion: _version, policyId: _policy, host: _host, ...visibleAssessment } = assessment;
     const pairwise = stats.get(id);
@@ -249,7 +254,7 @@ const recommendable = (row, window) => row.reviewStatus === 'current' && row.dec
 /** The top current recommendations by overall fit and every pair among them still awaiting a judgment. */
 function rerankSet(career, window) {
   const saved = matching(career), profileVersion = currentProfileVersion(career);
-  const candidates = rankedRows(saved, career.profile?.preferences, profileVersion).filter(row => recommendable(row, window))
+  const candidates = rankedRows(career, profileVersion).filter(row => recommendable(row, window))
     .sort(byOverall).slice(0, RERANK_SIZE);
   const judged = new Set(Object.values(saved.pairs).filter(pair => currentPair(pair, saved.scores, profileVersion))
     .map(pair => `${pair.a}|${pair.b}`));
@@ -370,7 +375,8 @@ export function createMatchingTools({ store, platform, exportDocument, preserveF
             publicationWindow: window,
             assessmentPolicy: { protocol: MATCHING_PROTOCOL, weights: DIMENSION_WEIGHTS, bands: BANDS, recommendMinimum: RECOMMEND_MINIMUM },
             assessmentSchema,
-            jobIds: [...inclusion.includedIds], excluded: candidates.length - inclusion.includedIds.size, minimumScore: inclusion.minimumScore,
+            jobIds: [...inclusion.includedIds], excluded: inclusion.candidates - inclusion.includedIds.size, blocked: inclusion.blocked,
+            minimumScore: inclusion.minimumScore, prefilterStale: inclusion.stale,
             total: Object.keys(currentJobs).length, ...counts(currentJobs, currentScores, profileVersion), batchSize: 10, workers: 8 };
         });
         return result;
@@ -383,6 +389,9 @@ export function createMatchingTools({ store, platform, exportDocument, preserveF
         assertObject(args, ['ids'], ['ids']);
         assertIds(args.ids);
         const before = readCareer(store), fetchVersion = rankingVersion(before), saved = matching(before);
+        // Every batch carries the saved candidate, so reviewers in a new session or after compaction assess against the
+        // companion's current CV, facts and preferences rather than remembered ones. It also refuses unanswered basics.
+        const candidate = candidateContext(before), profileVersion = currentProfileVersion(before);
         for (const id of args.ids) if (id.startsWith('local:')) localJobOriginal(before, id, true);
         assertKnown(saved.jobs, args.ids);
         assertCurrentWindow(saved.jobs, args.ids, publicationScope());
@@ -408,7 +417,7 @@ export function createMatchingTools({ store, platform, exportDocument, preserveF
             Object.assign(metadata, displayTerms(job));
           }
         });
-        return { ...result, jobs: [...result.jobs, ...local] };
+        return { ...result, jobs: [...result.jobs, ...local], candidate, profileVersion };
       },
     },
     {
@@ -460,7 +469,7 @@ export function createMatchingTools({ store, platform, exportDocument, preserveF
         const { limit, offset } = page(args);
         const career = readCareer(store), saved = matching(career);
         const profileVersion = currentProfileVersion(career);
-        const rows = rankedRows(saved, career.profile?.preferences, profileVersion);
+        const rows = rankedRows(career, profileVersion);
         const matches = rows.slice(offset, offset + limit);
         return { view: 'assessment_archive', matches, total: rows.length, policyId: ASSESSMENT_POLICY_ID,
           nextOffset: offset + matches.length < rows.length ? offset + matches.length : null,
@@ -474,7 +483,7 @@ export function createMatchingTools({ store, platform, exportDocument, preserveF
         const { limit, offset } = page(args);
         const career = readCareer(store), saved = matching(career), profileVersion = currentProfileVersion(career);
         const window = publicationScope();
-        const rows = rankedRows(saved, career.profile?.preferences, profileVersion).filter(row => recommendable(row, window));
+        const rows = rankedRows(career, profileVersion).filter(row => recommendable(row, window));
         // Pairwise-judged rows lead by wins; unjudged rows keep overall-fit order.
         const compared = rows.filter(row => row.pairwiseCompared > 0)
           .sort((a, b) => b.pairwiseWins - a.pairwiseWins || byOverall(a, b));
@@ -539,7 +548,7 @@ export function createMatchingTools({ store, platform, exportDocument, preserveF
         if (typeof exportDocument !== 'function') fail('EXPORT_UNAVAILABLE', 'Local document export is unavailable. Read all career_matches pages instead.');
         const career = readCareer(store), saved = matching(career);
         const profileVersion = currentProfileVersion(career);
-        const rows = rankedRows(saved, career.profile?.preferences, profileVersion);
+        const rows = rankedRows(career, profileVersion);
         const coverage = counts(saved.jobs, saved.scores, profileVersion);
         const exported = await exportDocument({ bytes: rankingCSV(rows), mediaType: 'text/csv' });
         return { view: 'assessment_archive', total: rows.length, ...coverage, export: { ...exported, mediaType: 'text/csv' } };

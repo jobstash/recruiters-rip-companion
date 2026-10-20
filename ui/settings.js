@@ -57,6 +57,7 @@ async function refresh() {
     $('connect-account').classList.toggle('ghost', state.paired);
     $('account-hint').textContent = state.paired ? 'Connected' : 'Not connected';
     $('me-account').hidden = state.paired;
+    renderSharing(state.introductions);
     if (!view) showView('me');
     if (state.paired && noticeKind === 'connect-account') notice('');
     if (window.careerBrowser && careerViewVersion !== state.careerViewVersion) {
@@ -108,6 +109,23 @@ for (const [id, op, message] of [
   ['delete-rankings', 'delete-rankings', 'Job assessments cleared.'],
   ['unlock', 'unlock', 'Local storage is open.'],
 ]) $(id).addEventListener('click', () => { void action(op, message); });
+// Sharing consent is standing but reversible: stopping blocks future uploads, and allowing again re-enables them.
+const sharingDate = value => typeof value === 'string' && Number.isFinite(Date.parse(value))
+  ? new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium' }).format(new Date(value)) : null;
+function renderSharing(introductions) {
+  const granted = introductions?.consent?.granted === true;
+  const since = sharingDate(introductions?.consent?.at);
+  $('sharing-status').textContent = granted ? `CV sharing is on${since ? ` since ${since}` : ''}. Each upload still asks for your approval.`
+    : 'CV sharing is off. JobStash uses your CV and matched work history so you are included when it launches direct introductions.';
+  const shared = (introductions?.sources ?? []).filter(source => source.sharedAt).sort((a, b) => b.sharedAt.localeCompare(a.sharedAt))[0];
+  $('sharing-shared').hidden = !shared;
+  $('sharing-shared').textContent = shared ? `Last shared ${shared.name} · ${shared.roles ?? 0} ${shared.roles === 1 ? 'role' : 'roles'} · ${sharingDate(shared.sharedAt)}` : '';
+  $('sharing-toggle').textContent = granted ? 'Stop sharing' : 'Allow CV sharing';
+}
+$('sharing-toggle').addEventListener('click', () => {
+  const granted = state?.introductions?.consent?.granted === true;
+  void action(granted ? 'sharing-stop' : 'sharing-allow', granted ? 'CV sharing stopped. Nothing new will be sent.' : 'CV sharing allowed.');
+});
 async function answerApproval(allow) {
   const id = state?.approval?.id; if (!id) return;
   $('approval-cancel').disabled = true; $('approval-allow').disabled = true;

@@ -8,7 +8,7 @@ import { createProfileTools } from '../src/mcp/profile-tools.mjs';
 function fixture() {
   let state = { career: createCareerState() }, queue = Promise.resolve();
   state.career.profile.headline = 'Engineering manager';
-  state.career.profile.preferences = { willingToRelocate: false };
+  state.career.profile.preferences = { willingToRelocate: false, roles: ['Engineering manager'], locations: ['Dublin'], workModes: ['hybrid'], travel: 'occasional' };
   state.career.sources.cv = { purpose: 'cv', text: 'Led product delivery at Acme.' };
   const applicationId = randomUUID();
   const job = { id: 'node:role', title: 'Engineering Manager', company: 'Example Employer', description: 'Lead product engineers and develop engineering managers.', publishedAt: new Date(Date.now() - 60000).toISOString() };

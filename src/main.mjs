@@ -10,6 +10,8 @@ import { createVault, privateDirectory } from './vault.mjs';
 import { createDeviceClient } from './client.mjs';
 import { installNative } from './install-native.mjs';
 import { BROWSER_IDENTITIES } from './browser-identity.mjs';
+import { claimInstance } from './instance-lock.mjs';
+import { createIntroductionTools, introductionsStatus, setSharingConsent } from './mcp/introduction-tools.mjs';
 import { CareerError, createCareerState, fail, upgradeCareer } from './mcp/state.mjs';
 import { createMcpServer, createPlatformTools } from './mcp/server.mjs';
 import { createProfileTools } from './mcp/profile-tools.mjs';
@@ -20,6 +22,7 @@ import { createScopedAccess } from './mcp/scope.mjs';
 import { createMatchingTools, deleteRankings } from './mcp/matching-tools.mjs';
 import { matchingProfileVersion } from './mcp/assessment-policy.mjs';
 import { setInclusionMinimumScore, setInclusionOverride } from './prescan/state.mjs';
+import { addBlock, removeBlock } from './mcp/blocklist.mjs';
 import { installChatGptPlugin } from './host-setup.mjs';
 import { createCareerBrowser } from './career-browser.mjs';
 import { createPrescanCredentials } from './prescan/credentials.mjs';
@@ -180,6 +183,7 @@ function localState() {
     prescan: { credentials: prescanCredentials.publicState(), run: prescan.status(),
       contextVersion: `${sessionEpoch}:${careerViewRevision}:${matchingProfileVersion(state.career ?? {})}` },
     updates: { ...updates.state(), blocked: paidWorkActive() || updateInstalling },
+    introductions: introductionsStatus(state.career ?? {}),
     approval: pendingApproval ? { id: pendingApproval.id, title: pendingApproval.title, detail: pendingApproval.detail } : null };
 }
 function emit(event = 'status', payload = status()) {
@@ -331,6 +335,15 @@ function createSessionServer() {
       scoped.assertAvailable(false);
       return result;
     }])) }),
+    ...createIntroductionTools({ store: scoped.store, platform: scopedPlatform, confirm: (title, detail) => confirm(title, detail),
+      shareCv: async body => {
+        scoped.assertAvailable(false);
+        if (!store.get().pairing) fail('PAIRING_REQUIRED', 'Connect your account in companion settings.');
+        const result = await client.request('POST', '/device/cv', body);
+        scoped.assertAvailable(false);
+        return result;
+      },
+      openGithub: async () => { scoped.assertAvailable(false); await shell.openExternal(new URL('/account#github', productOrigin).href); } }),
   ];
   for (const tool of tools) {
     if (tool.readOnly) continue;
@@ -420,6 +433,27 @@ async function settingsOperation(op, input) {
       return { ok: true, result };
     }
     if (op.startsWith('update-')) { exact(input, []); return { ok: true, result: await updateAction(op) }; }
+    if (op === 'job-block' || op === 'job-unblock') {
+      assertAvailable(false);
+      exact(input, op === 'job-block' ? ['id', 'kind'] : ['id']);
+      const scoped = createScopedAccess(store, { assertAvailable, epoch: () => sessionEpoch });
+      let result;
+      await scoped.store.update(state => {
+        const career = state.career ??= createCareerState();
+        if (op === 'job-block') { const entry = addBlock(career, input); result = { id: entry.id, kind: entry.kind, label: entry.label }; }
+        else { removeBlock(career, input.id); result = { completed: true }; }
+      });
+      scoped.assertAvailable(false); careerViewRevision++;
+      emit(); return { ok: true, result };
+    }
+    if (op === 'sharing-allow' || op === 'sharing-stop') {
+      assertAvailable(false); exact(input, []);
+      const scoped = createScopedAccess(store, { assertAvailable, epoch: () => sessionEpoch });
+      // Withdrawing stops future uploads only; anything already on JobStash stays there.
+      await scoped.store.update(state => { setSharingConsent(state.career ??= createCareerState(), op === 'sharing-allow'); });
+      scoped.assertAvailable(false);
+      emit(); return { ok: true, result: { completed: true } };
+    }
     if (op.startsWith('prescan-')) {
       assertAvailable(false);
       if (op === 'prescan-preview') { exact(input, []); return { ok: true, result: await prescan.preview({}) }; }
@@ -470,7 +504,7 @@ async function settingsOperation(op, input) {
       careerViewRevision++;
       result = { cancelled: Boolean(result.cancelled) };
     }
-    else if (op === 'copy-review-prompt') clipboard.writeText('Review my jobs using the saved pre-scan order. Do not reset rankings or pre-scan results. Read complete adverts before saving structured assessments, then rerank the top recommendations pairwise.');
+    else if (op === 'copy-review-prompt') clipboard.writeText('Use the recruiters.rip skill to review the jobs in my next run and show me the best matches.');
     else if (op === 'copy-command') clipboard.writeText(setup().command);
     else if (op === 'copy-config') clipboard.writeText(setup().claudeConfig);
     else if (op === 'install-chatgpt') result = await installChatGptPlugin({ directory, root: app.isPackaged ? root.replace(/app\.asar$/, 'app.asar.unpacked') : root, localOnly, command: setup().command });
@@ -527,6 +561,8 @@ else {
     for (const socket of sockets) socket.destroy();
   });
   void app.whenReady().then(async () => {
+    // A second live process would serve a separate in-memory vault and overwrite the first one's saves.
+    if (!await claimInstance(directory)) { app.exit(0); return; }
     documents = createRequire(import.meta.url)('./generated/document-engine.cjs');
     Menu.setApplicationMenu(Menu.buildFromTemplate([{ label: 'Recruiters.rip Companion', submenu: [{ label: 'Settings', click: showSettings }, { type: 'separator' }, { role: 'quit' }] }, { role: 'editMenu' }]));
     // Render the recovery controls before local storage opens.

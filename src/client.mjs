@@ -8,20 +8,23 @@ export function canonicalJSON(value) {
 }
 export function createDeviceClient(store, localOnly) {
   const originAllowed = origin => origin === PRODUCT_ORIGINS[localOnly ? 1 : 0];
+  // The CV share carries a ≤5 MiB document as base64 JSON; every other device route stays within 16 KiB.
+  const limits = { '/device/activate': 16 * 1024, '/device/heartbeat': 16 * 1024, '/device/platform': 16 * 1024, '/device/cv': 7.5 * 1024 * 1024 };
   async function request(method, backendPath, body, options = {}) {
-    if (!['GET', 'POST'].includes(method) || !/^\/device\/(?:activate|heartbeat|platform)$/.test(backendPath)) throw new Error('Device operation is unavailable.');
+    if (!['GET', 'POST'].includes(method) || !Object.hasOwn(limits, backendPath)) throw new Error('Device operation is unavailable.');
     const state = store.get();
     const origin = options.origin ?? state.pairing?.origin;
     if (!originAllowed(origin)) throw new Error('Pair this computer with recruiters.rip.');
     const raw = method === 'GET' ? '' : JSON.stringify(body ?? {});
-    if (Buffer.byteLength(raw) > 16 * 1024) throw new Error('The request exceeds the 16 KiB device transfer limit.');
+    if (Buffer.byteLength(raw) > limits[backendPath]) throw new Error(backendPath === '/device/cv' ? 'The CV upload exceeds the 7.5 MiB transfer limit.' : 'The request exceeds the 16 KiB device transfer limit.');
+    const timeout = backendPath === '/device/cv' ? 120_000 : 30_000;
     const time = String(Date.now());
     const nonce = randomUUID();
     const canonical = `${time}\n${nonce}\n${method}\n${backendPath}\n${createHash('sha256').update(raw).digest('hex')}`;
     const signature = edSign(null, Buffer.from(canonical), state.privateKey).toString('base64url');
     let response;
     try {
-      response = await fetch(`${origin}/api${backendPath}`, { method, redirect: 'error', headers: { 'Content-Type': 'application/json', 'X-Device-Id': state.deviceId, 'X-Device-Time': time, 'X-Device-Nonce': nonce, 'X-Device-Signature': signature }, ...(method === 'POST' ? { body: raw } : {}), signal: options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000) });
+      response = await fetch(`${origin}/api${backendPath}`, { method, redirect: 'error', headers: { 'Content-Type': 'application/json', 'X-Device-Id': state.deviceId, 'X-Device-Time': time, 'X-Device-Nonce': nonce, 'X-Device-Signature': signature }, ...(method === 'POST' ? { body: raw } : {}), signal: options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(timeout)]) : AbortSignal.timeout(timeout) });
     } catch { const error = new Error('Could not reach the platform. Check your connection.'); error.code = 'DEVICE_OFFLINE'; throw error; }
     if (!response.ok) {
       await response.body?.cancel();

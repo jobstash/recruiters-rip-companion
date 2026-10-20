@@ -32,9 +32,9 @@ const questions = () => [
     { value: 'uncertain', description: 'The user’s intent or the actual remit is insufficiently established to decide alignment.' },
     { value: 'conflict', description: 'The actual remit contradicts the user’s chosen direction; overlapping skills or attractive conditions do not waive this.' },
   ] },
-  { name: 'constraints', type: 'choice', instructions: 'Evaluate mandatory user conditions using all evidence and shared policies, including salary, explicit exclusions, employment type and sponsorship. Missing salary alone is not a conflict.', choices: [
+  { name: 'constraints', type: 'choice', instructions: 'Evaluate mandatory user conditions using all evidence and shared policies, including salary, explicit exclusions, employment type and sponsorship. The salary minimum applies only to comparable stated pay: unstated or non-comparable pay satisfies it.', choices: [
     { value: 'aligned', description: 'Evidence supports all applicable mandatory conditions, or the user has no mandatory conditions.' },
-    { value: 'uncertain', description: 'At least one mandatory condition is not established, with no confirmed contradiction.' },
+    { value: 'uncertain', description: 'At least one mandatory condition other than unstated or non-comparable pay is not established, with no confirmed contradiction.' },
     { value: 'conflict', description: 'At least one mandatory condition is explicitly contradicted, including a comparable salary ceiling below the saved minimum.' },
   ] },
   { name: 'eligibility', type: 'choice', instructions: 'Evaluate employer-imposed conditions the candidate must meet: required languages, work authorisation, residency, location eligibility, licences or credentials. Missing evidence is uncertain.', choices: [

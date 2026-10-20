@@ -4,6 +4,7 @@ import { createCareerState } from '../src/mcp/state.mjs';
 import { matchingProfileVersion } from '../src/mcp/assessment-policy.mjs';
 import { decisionProviders } from '../src/prescan/providers.mjs';
 import { comparePrescanRows, currentPrescan, currentPrescanRow, prescanInclusion, setInclusionMinimumScore, setInclusionOverride } from '../src/prescan/state.mjs';
+import { addBlock, listBlocks, removeBlock } from '../src/mcp/blocklist.mjs';
 import { publicationWindowForRange } from '../src/prescan/publication-range.mjs';
 
 const date = new Date(Date.now() - 86400000).toISOString();
@@ -28,7 +29,8 @@ test('numeric priorities outrank gate verdicts; unscored and unseen IDs stay unr
   // The default minimum score is 60: a priority equal to it is still sent.
   assert.deepEqual([...inclusion.includedIds], ['conflict', 'uncertain', 'aligned']);
   assert.equal(inclusion.minimumScore, 60);
-  assert.equal(inclusion.current, true);
+  assert.equal(inclusion.ranked, true);
+  assert.equal(inclusion.stale, false);
   assert.equal(inclusion.candidates, 5);
   assert.deepEqual(rows.sort(comparePrescanRows).map(item => item.id), ['conflict', 'uncertain', 'aligned', 'refused']);
   assert.deepEqual(ids, ['refused', 'aligned', 'unseen', 'uncertain', 'conflict']);
@@ -75,7 +77,7 @@ test('without a current pre-scan every candidate is included unless excluded by 
   career.matching.jobs.plain = { id: 'plain', publishedAt: date };
   const inclusion = prescanInclusion(career, ['low', 'plain', 'high']);
   assert.deepEqual(inclusion.rankedIds, []);
-  assert.equal(inclusion.current, false);
+  assert.equal(inclusion.ranked, false);
   assert.deepEqual([...inclusion.includedIds], ['low', 'plain', 'high']);
   setInclusionOverride(career, 'plain', false);
   assert.deepEqual(order(career, ['low', 'plain', 'high']), ['low', 'high']);
@@ -104,18 +106,24 @@ test('inclusion writes validate the catalogue ID, the override value and the min
   assert.deepEqual(order(career, ['high']), ['high']);
 });
 
-test('career evidence and provider policy changes invalidate ordering, final assessment policy does not', () => {
-  const career = fixture([row('high', 99), row('low', 70)]);
+test('profile and provider policy changes keep the pre-filter ranking, marked stale, instead of releasing every job', () => {
+  const career = fixture([row('high', 99), row('low', 70), row('weak', 30)]);
   career.prescan.assessmentPolicyId = 'unrelated-final-review-policy';
   assert.equal(currentPrescan(career), true);
-  assert.deepEqual(order(career, ['low', 'high']), ['high', 'low']);
-  for (const change of [value => value.evidenceRevision++, value => value.rankingVersion = 1,
-    value => value.prescan.prescanPolicyId = 'old', value => value.prescan.provider = '__proto__']) {
+  assert.deepEqual(order(career, ['low', 'weak', 'high']), ['high', 'low']);
+  for (const change of [value => value.evidenceRevision++, value => value.rankingVersion = 1, value => value.prescan.prescanPolicyId = 'old']) {
     const changed = structuredClone(career); change(changed);
     assert.equal(currentPrescan(changed), false);
-    assert.deepEqual(ranked(changed, ['low', 'high']), []);
-    assert.deepEqual(order(changed, ['low', 'high']), ['low', 'high']);
+    const inclusion = prescanInclusion(changed, ['low', 'weak', 'high']);
+    assert.equal(inclusion.stale, true);
+    assert.deepEqual(inclusion.rankedIds, ['high', 'low', 'weak']);
+    assert.deepEqual([...inclusion.includedIds], ['high', 'low']);
   }
+  // Only a run from an unknown provider carries no usable ranking.
+  const unknown = structuredClone(career); unknown.prescan.provider = '__proto__';
+  const inclusion = prescanInclusion(unknown, ['low', 'weak', 'high']);
+  assert.deepEqual([inclusion.ranked, inclusion.stale, inclusion.rankedIds], [false, false, []]);
+  assert.deepEqual([...inclusion.includedIds], ['low', 'weak', 'high']);
 });
 
 test('expired or changed adverts remain accessible but cannot influence current ordering', () => {
@@ -127,4 +135,33 @@ test('expired or changed adverts remain accessible but cannot influence current 
   career.matching.jobs.older.publishedAt = date;
   assert.equal(currentPrescanRow(career, career.prescan.rows.older, Date.now(), publicationWindowForRange('all')), false);
   assert.equal(Object.keys(career.prescan.rows).length, 2);
+});
+
+test('blocked jobs leave the next run even when switched on; company and category names match across spellings', () => {
+  const career = fixture([row('high', 99), row('mid', 80), row('low', 70), row('other', 65)]);
+  career.matching.jobs.high.company = 'Acme Labs';
+  career.matching.jobs.other.company = 'ACME  labs';
+  career.matching.jobs.mid.classification = 'Smart Contracts';
+  // The catalogue's raw code on the pre-filter row still matches the category label.
+  career.prescan.rows.low.classification = 'SMART_CONTRACTS';
+  setInclusionOverride(career, 'high', true);
+  const company = addBlock(career, { id: 'high', kind: 'company' });
+  addBlock(career, { id: 'mid', kind: 'category' });
+  assert.deepEqual(addBlock(career, { id: 'other', kind: 'company' }).id, company.id);
+  const ids = ['high', 'mid', 'low', 'other'];
+  const inclusion = prescanInclusion(career, ids);
+  assert.deepEqual([...inclusion.includedIds], []);
+  assert.deepEqual(inclusion.rankedIds, []);
+  assert.equal(inclusion.candidates, 0);
+  assert.equal(inclusion.blocked, 4);
+  assert.deepEqual(listBlocks(career).map(entry => [entry.kind, entry.label, entry.matches]).sort(),
+    [['category', 'Smart Contracts', 2], ['company', 'Acme Labs', 2]]);
+  removeBlock(career, company.id);
+  assert.deepEqual(order(career, ids), ['high', 'other']);
+  addBlock(career, { id: 'other', kind: 'job' });
+  assert.deepEqual(order(career, ids), ['high']);
+  assert.throws(() => removeBlock(career, company.id), { code: 'NOT_FOUND' });
+  assert.throws(() => addBlock(career, { id: 'low', kind: 'company' }), { code: 'INVALID_INPUT' });
+  assert.throws(() => addBlock(career, { id: 'missing', kind: 'job' }), { code: 'NOT_FOUND' });
+  assert.throws(() => addBlock(career, { id: 'high', kind: 'location' }), { code: 'INVALID_INPUT' });
 });

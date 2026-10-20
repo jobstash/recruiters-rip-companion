@@ -155,6 +155,9 @@ main { flex: 1; min-height: 0; overflow: auto; padding: var(--spacing-32) var(--
 .career-cutoff-text { flex: 1 1 auto; min-width: 0; font: 500 12px/1.5 var(--font-geist-mono); letter-spacing: .02em; color: var(--color-ink); }
 .career-cutoff button { min-height: 32px; padding-block: 4px; }
 .career-next-run button { justify-self: start; }
+/* Block list: reader actions wrap; a blocked entry's row keeps a Remove text button beside the record. */
+.career-block .actions { align-items: flex-start; }
+.career-row-action { flex: none; align-self: center; margin-right: var(--spacing-16); }
 .pagination { justify-content: space-between; padding: var(--spacing-8) var(--spacing-16); border-top: 1px solid var(--color-facet); }
 .career-reader { gap: var(--spacing-24); padding: var(--spacing-24); border-left: 0; }
 .career-reader > * { max-width: var(--reading); }

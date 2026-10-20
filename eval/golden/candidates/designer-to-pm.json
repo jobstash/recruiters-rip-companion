@@ -37,6 +37,7 @@
       "salaryCurrency": "GBP",
       "salaryPeriod": "year",
       "willingToRelocate": false,
+      "travel": "occasional",
       "domains": [
         "travel",
         "healthcare",

@@ -185,6 +185,12 @@ test('no-CV onboarding reaches local readiness without pairing or provider crede
   await f.edit('career_profile_update', { patch: { headline: 'Engineering manager', roleCapabilities: ['Managed engineering delivery'] } });
   await f.edit('career_preferences_update', { patch: { roles: ['Engineer'] } });
   status = await f.call('onboarding_status');
+  // A profile alone is not enough to scan: the remaining basics are asked as questions, saved in the companion.
+  assert.equal(status.locallyReady, false);
+  assert.deepEqual(status.questions.map(item => [item.field, item.tool]), ['locations', 'workModes', 'willingToRelocate', 'travel']
+    .map(field => [`preferences.${field}`, 'career_preferences_update']));
+  await f.edit('career_preferences_update', { patch: { locations: ['Amsterdam'], workModes: ['remote'], willingToRelocate: false, travel: 'any' } });
+  status = await f.call('onboarding_status');
   assert.equal(status.locallyReady, true);
   assert.equal(status.providerRequired, false);
   assert.deepEqual(status.pairing, { paired: false, account: null });
@@ -218,6 +224,14 @@ test('CV onboarding asks to import, then read, and is ready once the profile is 
   assert.equal(committed.facts.length, 2);
   assert.deepEqual(committed.saved, ['headline', 'roleCapabilities', 'seniority', 'skills']);
   assert.deepEqual(committed.preferences, {}, 'CV facts never invent future preferences');
+  status = await f.call('onboarding_status');
+  assert.equal(status.locallyReady, false);
+  assert.deepEqual((await f.call('career_profile_read')).missingPreferences.map(item => item.field),
+    ['roles', 'locations', 'workModes', 'willingToRelocate', 'travel']);
+  // An empty list is not an answer.
+  await f.edit('career_preferences_update', { patch: { roles: ['Platform engineer'], locations: ['Berlin'], workModes: [], willingToRelocate: true, travel: 'none' } });
+  assert.deepEqual((await f.call('career_profile_read')).missingPreferences, [{ field: 'workModes', question: 'Which work modes suit you: remote, hybrid, onsite?' }]);
+  await f.edit('career_preferences_update', { patch: { workModes: ['hybrid'] } });
   status = await f.call('onboarding_status');
   assert.equal(status.locallyReady, true);
   assert.deepEqual(status.missing, []);

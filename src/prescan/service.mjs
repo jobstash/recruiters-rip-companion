@@ -37,7 +37,8 @@ const safeError = error => {
 };
 const now = () => new Date().toISOString();
 const unscored = { priority: null, direction: null, constraints: null, eligibility: null, dimensions: null, confidence: null };
-const rowFields = ['id', 'title', 'company', 'publishedAt', 'applyUrl', 'salary', 'city', 'location', 'workMode'];
+const rowFields = ['id', 'title', 'company', 'publishedAt', 'applyUrl', 'salary', 'city', 'location', 'workMode',
+  'seniority', 'commitment', 'classification'];
 const rawGraphFields = new Set(['graph', 'graphs', 'rawGraph', 'rawGraphs', '@graph']);
 function jobInput(value) {
   if (Array.isArray(value)) return value.map(jobInput);

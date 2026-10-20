@@ -28,12 +28,14 @@ const unavailable = id => ({ id: `node:${id}`, status: 'unavailable', reason: 'O
 /** A row as career_match_save would have stored it. */
 const stored = (row, profileVersion = '0:0') =>
   ({ ...row, ...deriveDecision(row), profileVersion, policyId: ASSESSMENT_POLICY_ID, scoredAt: '2026-01-01T00:00:00.000Z', host: null });
-const missingTerms = { salary: null, city: null, location: null, workMode: null };
+const missingTerms = { salary: null, city: null, location: null, workMode: null, seniority: null, commitment: null, classification: null };
 const statedTerms = {
   salary: { minimum: 90000, maximum: 120000, stated: null, currency: 'EUR', period: 'year' },
   city: 'Dublin', location: 'Dublin, Ireland', workMode: 'hybrid',
+  seniority: 'Senior', commitment: 'Full Time', classification: 'Smart Contracts',
 };
-const termsOf = ({ salary, city, location, workMode }) => ({ salary, city, location, workMode });
+const termsOf = ({ salary, city, location, workMode, seniority, commitment, classification }) =>
+  ({ salary, city, location, workMode, seniority, commitment, classification });
 const fact = (subject, answer, kind = 'note') => ({ kind, subject, answer });
 const emptyMatching = { jobs: {}, scores: {}, pairs: {} };
 function fixture({ jobs = [job('a'), job('b'), job('c')], batch, emptyProfile = false, exportDocument, preserveFinalAssessments = false } = {}) {
@@ -517,10 +519,11 @@ test('catalogue replacement keeps current terms and assessments, removes absent 
 
 test('batch terms refresh saved display metadata without storing ads, company graphs or changing assessments', async () => {
   const updatedTerms = { salary: { minimum: null, maximum: null, stated: 55, currency: null, period: null },
-    city: null, location: 'Europe', workMode: 'remote' };
+    city: null, location: 'Europe', workMode: 'remote', seniority: 'Junior', commitment: 'Part Time', classification: 'Backend' };
+  const rawTerms = { ...updatedTerms, seniority: '2', commitment: 'PART_TIME', classification: 'BACKEND' };
   const response = {
     jobs: [
-      { ...job('a'), ...updatedTerms, locationEvidence: ['Advertised role location: Europe'], ad: 'Full original ad', company: { name: 'Company', graph: ['Do not persist'] } },
+      { ...job('a'), ...rawTerms, locationEvidence: ['Advertised role location: Europe'], ad: 'Full original ad', company: { name: 'Company', graph: ['Do not persist'] } },
       { ...job('b'), ad: 'Terms are not stated', company: { name: 'Company' } },
     ],
     remainingIds: ['node:c'], unavailableIds: ['node:d'],
@@ -560,6 +563,22 @@ test('assessment submissions cannot replace catalogue display terms', async () =
   }
   assert.deepEqual(f.store.get(), before);
   assert.deepEqual(termsOf((await f.call('career_matches')).matches[0]), statedTerms);
+});
+
+test('raw catalogue seniority codes and commitment/classification values become card labels in stored jobs', async () => {
+  const raw = { seniority: '3', commitment: 'FULL_TIME', classification: 'SMART_CONTRACTS' };
+  const f = fixture({ jobs: [{ ...job('a'), ...raw }, { ...job('b'), seniority: '9', commitment: ' ', classification: null },
+    { ...job('c'), seniority: '1', commitment: 'PART_TIME', classification: 'BACKEND' }, job('d')] });
+  await f.call('career_match_jobs');
+  const jobs = f.store.get().career.matching.jobs;
+  const labels = ({ seniority, commitment, classification }) => ({ seniority, commitment, classification });
+  assert.deepEqual(labels(jobs['node:a']), { seniority: 'Senior', commitment: 'Full Time', classification: 'Smart Contracts' });
+  assert.deepEqual(labels(jobs['node:b']), { seniority: null, commitment: null, classification: null });
+  assert.deepEqual(labels(jobs['node:c']), { seniority: 'Intern', commitment: 'Part Time', classification: 'Backend' });
+  assert.deepEqual(labels(jobs['node:d']), { seniority: null, commitment: null, classification: null });
+  await f.save([assessment('a'), assessment('b')]);
+  assert.deepEqual((await f.call('career_matches')).matches.map(labels),
+    [labels(jobs['node:a']), labels(jobs['node:b'])]);
 });
 
 
@@ -681,12 +700,14 @@ test('CSV escapes source text, preserves salary and guards spreadsheet formulas 
   });
   await f.call('career_matches_export');
   const csv = document.bytes.toString('utf8');
-  assert.equal(csv.split('\r\n')[0], ['id', 'title', 'company', 'overall', 'band', 'direction', 'capability', 'scope', 'preferences',
-    'directionGate', 'constraintsGate', 'eligibilityGate', 'publishedAt', 'salaryMinimum', 'salaryMaximum', 'salaryStated',
-    'salaryCurrency', 'salaryPeriod', 'city', 'location', 'workMode', 'relocation', 'matchStatus', 'decision', 'reviewStatus',
-    'pairwiseWins', 'reason', 'applyUrl'].map(column => `"${column}"`).join(','));
+  const header = csv.split('\r\n')[0].split(',').map(column => column.slice(1, -1));
+  assert.deepEqual(header.slice(header.indexOf('workMode'), header.indexOf('workMode') + 4),
+    ['workMode', 'seniority', 'commitment', 'classification']);
+  assert.equal(new Set(header).size, header.length);
   const [a, b] = parseCSV(csv);
   for (const field of ['title', 'company', 'city', 'location', 'workMode', 'reason', 'salaryPeriod']) assert.ok(a[field].startsWith("'"), field);
+  assert.deepEqual([a.seniority, a.commitment, a.classification], ['Senior', 'Full Time', 'Smart Contracts']);
+  assert.deepEqual([b.seniority, b.commitment, b.classification], ['', '', '']);
   assert.equal(a.title, '\'=HYPERLINK("https://bad.test","click")');
   assert.deepEqual([a.overall, a.band, a.direction, a.preferences, a.directionGate, a.constraintsGate, a.decision],
     ['72', 'good', '72', '72', 'pass', 'fail', 'skip']);

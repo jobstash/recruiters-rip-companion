@@ -107,8 +107,20 @@ const prescanScore = row => row?.status === 'scored' && Number.isInteger(row.pri
   ? row.priority : -1;
 const prescanPriority = row => prescanScore(row) >= 0 ? `${row.priority}/100` : 'Not scored';
 const prescanStatus = row => prescanScore(row) >= 0 ? 'Scored' : prescanStatuses[row.status] || 'Not scored';
-const prescanSummary = row => [`Pre-filter priority ${prescanPriority(row)}`, row.current ? 'Current' : 'Out of date',
-  prescanScore(row) < 0 ? prescanStatuses[row.status] : null].filter(Boolean).join(' · ');
+const cardScoreStatuses = new Set(['unavailable', 'refused', 'oversize']);
+// A job has one score: the best-known assessment. A current review supersedes the pre-filter, which only
+// exists to pick what to review; stale results rank below current ones and unscored jobs come last.
+const scoreGroups = { 'reviewed:false': 0, 'prefilter:false': 1, 'reviewed:true': 2, 'prefilter:true': 3 };
+const scoreGroup = score => score.source ? scoreGroups[`${score.source}:${score.stale}`] : 4;
+function cardScore(reviewed, prescan) {
+  const review = reviewed && Number.isInteger(reviewed.overall) ? { value: reviewed.overall, source: 'reviewed',
+    stale: reviewed.reviewStatus !== 'current', status: 'scored', decision: assessmentLabel(reviewed.decision) ?? null } : null;
+  const priority = prescanScore(prescan) >= 0 ? { value: prescan.priority, source: 'prefilter',
+    stale: prescan.current !== true, status: 'scored', decision: null } : null;
+  const scored = [review, priority].filter(Boolean).sort((a, b) => scoreGroup(a) - scoreGroup(b))[0];
+  return scored ?? { value: null, source: null, stale: false,
+    status: !prescan ? null : cardScoreStatuses.has(prescan.status) ? prescan.status : 'unscored', decision: null };
+}
 const bandLabel = band => typeof band === 'string' && band ? band.replace(/^./, letter => letter.toUpperCase()) : undefined;
 const overallLabel = row => Number.isInteger(row.overall) ? `${row.overall}/100 (${bandLabel(row.band)})` : 'Unavailable';
 const gateLabels = { pass: 'Passes', flag: 'Needs confirmation', fail: 'Fails' };
@@ -150,19 +162,31 @@ function prescanSection(row) {
 
 function jobItem({ id, reviewed, prescan, imported, metadata }) {
   const role = key => imported?.[key] ?? metadata?.[key] ?? reviewed?.[key] ?? prescan?.[key];
-  const title = [text(role('title'), ''), text(role('company'), '')].filter(Boolean).join(' — ') || 'Job details unavailable';
+  const roleTitle = text(role('title'), '');
+  const company = text(role('company'), '');
+  const title = [roleTitle, company].filter(Boolean).join(' — ') || 'Job details unavailable';
   const salary = role('salary');
   const range = salary && (amount(salary.stated) ?? [amount(salary.minimum), amount(salary.maximum)].filter(Boolean).join('–'));
   const pay = range ? [salary.currency, range, salary.period && `per ${salary.period}`].filter(Boolean).join(' ') : null;
-  const preferReviewed = reviewed && (reviewed.reviewStatus === 'current' || !prescan?.current);
-  const summary = preferReviewed
-    ? [`${assessmentLabel(reviewed.reviewStatus)} · ${Number.isInteger(reviewed.overall) ? `Overall ${reviewed.overall}/100 · ${bandLabel(reviewed.band)}` : 'Overall unavailable'} · ${assessmentLabel(reviewed.decision) || 'No saved decision'}`,
-      prescan ? prescanSummary(prescan) : null].filter(Boolean).join(' · ')
-    : prescan ? prescanSummary(prescan) : imported ? imported.complete ? 'Saved · Not assessed' : 'Needs full advert' : 'Saved · Not assessed';
+  const reviewCurrent = reviewed?.reviewStatus === 'current';
+  const publishedAt = role('publishedAt');
+  const chip = (kind, value) => typeof value === 'string' && value ? [{ kind, text: value }] : [];
+  // "Remote" as the posted location and "remote" as the work mode are one fact, not two.
+  const locationChip = (place, mode) => [place, mode && place?.toLowerCase() !== mode.toLowerCase() ? mode : null]
+    .filter(value => typeof value === 'string' && value).join(' · ');
+  const card = {
+    title: roleTitle || title, company: company || null,
+    publishedAt: typeof publishedAt === 'string' && Number.isFinite(Date.parse(publishedAt)) ? publishedAt : null,
+    score: cardScore(reviewed, prescan),
+    chips: [...chip('seniority', role('seniority')), ...chip('salary', pay),
+      ...chip('location', locationChip(role('city') || role('location'), role('workMode'))),
+      ...chip('commitment', role('commitment')), ...chip('classification', role('classification'))],
+  };
   const review = reviewed ? reviewedSections(reviewed) : [];
-  const preliminary = prescan ? [prescanSection(prescan)] : [];
-  return { id, title, summary, sections: [
-    ...(preferReviewed ? [...review, ...preliminary] : [...preliminary, ...review]),
+  // A current review supersedes the pre-filter, so the reader never shows both; a stale review follows a current pre-filter.
+  const preliminary = prescan && !reviewCurrent ? [prescanSection(prescan)] : [];
+  return { id, title, card, sections: [
+    ...(reviewed && !prescan?.current ? [...review, ...preliminary] : [...preliminary, ...review]),
     ...(imported ? [
       fields('Capture', [['Status', imported.complete ? 'Saved' : 'Needs full advert'],
         ['Source URL', imported.sourceUrl], ['Job URL', imported.url]], 'No capture details saved.'),
@@ -217,13 +241,15 @@ async function jobRows(career, sort) {
     item.imported = { ...localJobMetadata(job), description: job.description, updatedAt: job.updatedAt };
     rows.set(id, item);
   }
-  // Sort the whole saved union, never a page or a mixture of preliminary and final scores.
+  // Sort the whole saved union by the single effective score: current review, current pre-filter, stale review,
+  // stale pre-filter, then unscored; newer publication breaks ties, then ID.
   const sortable = [...rows.values()].map(row => {
     const publishedAt = row.imported?.publishedAt ?? row.metadata?.publishedAt ?? row.reviewed?.publishedAt ?? row.prescan?.publishedAt;
     const timestamp = typeof publishedAt === 'string' ? Date.parse(publishedAt) : NaN;
-    return { row, priority: prescanScore(row.prescan), published: Number.isFinite(timestamp) ? timestamp : -Infinity };
+    const score = cardScore(row.reviewed, row.prescan);
+    return { row, group: scoreGroup(score), value: score.value ?? -1, published: Number.isFinite(timestamp) ? timestamp : -Infinity };
   });
-  return sortable.sort((a, b) => (sort === 'score' ? b.priority - a.priority : 0) ||
+  return sortable.sort((a, b) => (sort === 'score' ? a.group - b.group || b.value - a.value : 0) ||
     (a.published === b.published ? 0 : a.published > b.published ? -1 : 1) ||
     (a.row.id < b.row.id ? -1 : a.row.id > b.row.id ? 1 : 0)).map(item => item.row);
 }

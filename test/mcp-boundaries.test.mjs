@@ -158,10 +158,10 @@ test('complete CSV export uses native MCP resources alongside existing PDF expor
   const lines = csv.text.split('\r\n');
   assert.equal(lines[0], ['id', 'title', 'company', 'overall', 'band', 'direction', 'capability', 'scope', 'preferences',
     'directionGate', 'constraintsGate', 'eligibilityGate', 'publishedAt', 'salaryMinimum', 'salaryMaximum', 'salaryStated',
-    'salaryCurrency', 'salaryPeriod', 'city', 'location', 'workMode', 'relocation', 'matchStatus', 'decision', 'reviewStatus',
-    'pairwiseWins', 'reason', 'applyUrl'].map(column => `"${column}"`).join(','));
+    'salaryCurrency', 'salaryPeriod', 'city', 'location', 'workMode', 'seniority', 'commitment', 'classification',
+    'relocation', 'matchStatus', 'decision', 'reviewStatus', 'pairwiseWins', 'reason', 'applyUrl'].map(column => `"${column}"`).join(','));
   assert.equal(lines.find(line => line.startsWith('"node:ny"')), ['node:ny', '', '', '88', 'strong', '88', '88', '88', '88',
-    'pass', 'pass', 'pass', '', '', '', '', '', '', '', '', '', 'required', 'incompatible_location', 'recommend', 'current',
+    'pass', 'pass', 'pass', '', '', '', '', '', '', '', '', '', '', '', '', 'required', 'incompatible_location', 'recommend', 'current',
     '', 'New York office required', ''].map(value => `"${value}"`).join(','));
   assert.equal(csv.text.includes('profileVersion') || csv.text.includes('policyId') || csv.text.includes(ASSESSMENT_POLICY_ID), false);
   let previousRow = -1;

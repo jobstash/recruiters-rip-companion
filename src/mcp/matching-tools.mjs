@@ -57,6 +57,16 @@ function assertCurrentWindow(jobs, ids, window) {
     fail('OUTSIDE_PUBLICATION_WINDOW', 'These jobs are outside the selected publication range. Refresh the catalogue and continue with its current IDs.');
 }
 
+// JobStash seniority codes; stored rows already carry labels, so labels pass through unchanged.
+const seniorityLabels = { 1: 'Intern', 2: 'Junior', 3: 'Senior', 4: 'Lead', 5: 'Head' };
+const seniorityLabel = value => {
+  const key = typeof value === 'string' ? value.trim() : '';
+  return seniorityLabels[key] ?? (Object.values(seniorityLabels).includes(key) ? key : null);
+};
+const titleCase = value => typeof value === 'string' && value.trim()
+  ? value.trim().toLowerCase().split(/[\s_]+/).map(word => word[0].toUpperCase() + word.slice(1)).join(' ')
+  : null;
+
 function displayTerms(job) {
   const text = value => typeof value === 'string' && value.trim() ? value : null;
   const salary = job.salary;
@@ -69,6 +79,8 @@ function displayTerms(job) {
       period: text(salary.period),
     } : null,
     city: text(job.city), location: text(job.location), workMode: text(job.workMode),
+    seniority: seniorityLabel(job.seniority), commitment: titleCase(job.commitment),
+    classification: titleCase(job.classification),
   };
 }
 
@@ -256,14 +268,14 @@ function escapedCSV(value) {
 function rankingCSV(rows) {
   const columns = ['id', 'title', 'company', 'overall', 'band', 'direction', 'capability', 'scope', 'preferences',
     'directionGate', 'constraintsGate', 'eligibilityGate', 'publishedAt', 'salaryMinimum', 'salaryMaximum',
-    'salaryStated', 'salaryCurrency', 'salaryPeriod', 'city', 'location', 'workMode', 'relocation', 'matchStatus',
-    'decision', 'reviewStatus', 'pairwiseWins', 'reason', 'applyUrl'];
+    'salaryStated', 'salaryCurrency', 'salaryPeriod', 'city', 'location', 'workMode', 'seniority', 'commitment',
+    'classification', 'relocation', 'matchStatus', 'decision', 'reviewStatus', 'pairwiseWins', 'reason', 'applyUrl'];
   return Buffer.from([columns, ...rows.map(row => [row.id, row.title, row.company, row.overall, row.band,
     row.dimensions?.direction, row.dimensions?.capability, row.dimensions?.scope, row.dimensions?.preferences,
     row.gates?.direction, row.gates?.constraints, row.gates?.eligibility, row.publishedAt,
     row.salary?.minimum, row.salary?.maximum, row.salary?.stated, row.salary?.currency, row.salary?.period,
-    row.city, row.location, row.workMode, row.relocation, row.matchStatus, row.decision, row.reviewStatus,
-    row.pairwiseWins, row.reason, row.applyUrl])]
+    row.city, row.location, row.workMode, row.seniority, row.commitment, row.classification, row.relocation,
+    row.matchStatus, row.decision, row.reviewStatus, row.pairwiseWins, row.reason, row.applyUrl])]
     .map(row => row.map(escapedCSV).join(',')).join('\r\n') + '\r\n', 'utf8');
 }
 

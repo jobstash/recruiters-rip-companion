@@ -251,7 +251,6 @@
     }
     if (previewState !== 'ready') return;
     key.value = '';
-    document.querySelector('[data-career-kind="jobs"]')?.click();
     void perform('prescan-start', {}, '');
   });
   element('cancel').addEventListener('click', async () => {

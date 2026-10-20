@@ -27,8 +27,10 @@
 <span class="brand-sub">Companion</span>
 </div>
 <nav id="views" class="view-nav" aria-label="Companion sections" hidden>
-<div class="tab"><button type="button" class="text" data-view="career">Home</button></div>
+<div class="tab"><button type="button" class="text" data-view="me">Me</button></div>
+<div class="tab"><button type="button" class="text" data-view="jobs">Jobs</button></div>
 <div class="tab"><button type="button" class="text" data-view="setup">Settings</button></div>
+<div class="tab"><button type="button" class="text" data-view="help">Help</button></div>
 </nav>
 </header>
 <p id="notice" role="status" aria-live="polite"></p>
@@ -38,9 +40,45 @@
 <h1>Local storage is locked</h1><p id="storage-message"></p><button id="unlock" class="primary" type="button">Open local storage</button>
 </section>
 <div id="settings" hidden>
-<section id="view-career" class="career-view" aria-label="Home" hidden>
-<div id="home-actions" class="home-actions">
-<div class="actions"><button id="import-cv" class="ghost" type="button">Import CV</button><button id="copy-review-prompt" class="ghost" type="button">Copy review prompt</button><button id="open-exports" class="text" type="button">Open exports</button><button id="backup" class="text" type="button">Export backup</button><button id="home-account" class="text" type="button" hidden>Connect account for job access</button><button id="home-chat-apps" class="text" type="button">Connect your agent</button></div>
+<section id="view-me" class="career-view" aria-label="Me" hidden>
+<div id="me-actions" class="me-actions">
+<div class="actions"><button id="import-cv" class="ghost" type="button">Import CV</button><button id="open-exports" class="text" type="button">Open exports</button><button id="backup" class="text" type="button">Export backup</button><button id="me-account" class="text" type="button" hidden>Connect account for job access</button><button id="me-chat-apps" class="text" type="button">Connect your agent</button></div>
+</div>
+<div id="me-browser" class="career-browser">
+<div class="career-toolbar">
+<div class="career-categories" role="group" aria-label="Saved career records">
+<button type="button" class="ghost" data-career-kind="sources" aria-pressed="true" disabled>CVs</button>
+<button type="button" class="ghost" data-career-kind="facts" aria-pressed="false" disabled>Facts</button>
+</div>
+</div>
+<div class="career-panes">
+<section class="career-list panel" aria-label="Saved records">
+<div class="panel-head"><p id="me-list-status" role="status">Open local storage to read saved records.</p></div>
+<button id="me-list-retry" class="ghost" type="button" hidden>Retry loading records</button>
+<ul id="me-records" class="career-records" aria-label="Saved records" hidden></ul>
+<nav id="me-pagination" class="actions pagination" aria-label="Record pages" hidden>
+<button id="me-previous" class="text" type="button" disabled>Previous</button>
+<button id="me-next" class="text" type="button" disabled>Next</button>
+</nav>
+</section>
+<section id="me-reader" class="career-reader panel" aria-labelledby="me-reader-title" hidden>
+<button id="me-close" class="back text" type="button">Back to list</button>
+<h2 id="me-reader-title" tabindex="-1"></h2>
+<div class="edge-rule" aria-hidden="true"></div>
+<p id="me-reader-status" class="career-reader-status" role="status"></p>
+<button id="me-reader-retry" class="ghost" type="button" hidden>Retry opening record</button>
+<div id="me-reader-content" class="career-reader-content"></div>
+</section>
+</div>
+</div>
+</section>
+<section id="view-jobs" class="career-view jobs-view" aria-label="Jobs" hidden>
+<div id="career-browser" class="career-browser">
+<div class="career-toolbar jobs-toolbar">
+<div class="career-categories" role="group" aria-label="Job lists">
+<button id="career-category-ranked" type="button" class="ghost" data-career-kind="jobs" aria-pressed="true" disabled>Ranked</button>
+<button id="career-category-applications" type="button" class="ghost" data-career-kind="applications" aria-pressed="false" disabled>Applications</button>
+</div>
 <details id="prefilter-controls" class="optional-prefilter">
 <summary>Optional job pre-filtering</summary>
 <div id="prescan-controls">
@@ -53,31 +91,23 @@
 <div class="actions scan-actions"><button id="prescan-start" class="primary" type="button" aria-describedby="prescan-preview" disabled>Start pre-filtering</button><button id="prescan-cancel" class="ghost" type="button" hidden>Cancel scan</button></div>
 <div class="prescan-feedback" role="status" aria-live="polite" aria-atomic="true"><p id="prescan-progress"></p><p id="prescan-recovery"></p></div>
 <p id="prescan-message" role="status" aria-live="polite"></p>
-<div class="actions"><button id="home-prescan-settings" class="text" type="button">Configure Decisions API</button></div>
+<div class="actions"><button id="jobs-prescan-settings" class="text" type="button">Configure Decisions API</button></div>
 </div>
 </details>
-</div>
-<div id="career-browser">
-<div class="career-toolbar">
-<div class="career-categories" role="group" aria-label="Saved career records">
-<button type="button" class="ghost" data-career-kind="sources" aria-pressed="false" disabled>CVs</button>
-<button type="button" class="ghost" data-career-kind="facts" aria-pressed="false" disabled>Facts</button>
-<button type="button" class="ghost" data-career-kind="jobs" aria-pressed="true" disabled>Jobs</button>
-<button type="button" class="ghost" data-career-kind="applications" aria-pressed="false" disabled>Job Applications</button>
-</div>
 <div class="career-job-actions">
-<label id="career-sort-control" class="career-sort caption" for="career-sort" hidden>Sort jobs
-<select id="career-sort" disabled><option value="recent">Newest first</option><option value="score" selected>Pre-filter score</option></select>
+<label id="career-sort-control" class="career-sort caption" for="career-sort">Sort jobs
+<select id="career-sort" disabled><option value="recent">Newest first</option><option value="score" selected>Score</option></select>
 </label>
-<button id="delete-rankings" class="text" type="button" hidden>Clear job assessments</button>
+<button id="delete-rankings" class="text" type="button" disabled>Clear job assessments</button>
+<button id="copy-review-prompt" class="text" type="button">Copy review prompt</button>
 </div>
 </div>
-<div class="career-panes">
-<section class="career-list panel" aria-label="Saved records">
-<div class="panel-head"><p id="career-list-status" role="status">Open local storage to read saved records.</p></div>
-<button id="career-list-retry" class="ghost" type="button" hidden>Retry loading records</button>
-<ul id="career-records" class="career-records" aria-label="Saved records" hidden></ul>
-<nav id="career-pagination" class="actions pagination" aria-label="Record pages" hidden>
+<div class="career-panes jobs-panes">
+<section class="career-list panel" aria-label="Saved jobs">
+<div class="panel-head"><p id="career-list-status" role="status">Open local storage to read saved jobs.</p></div>
+<button id="career-list-retry" class="ghost" type="button" hidden>Retry loading jobs</button>
+<ul id="career-records" class="career-records career-cards" aria-label="Saved jobs" hidden></ul>
+<nav id="career-pagination" class="actions pagination" aria-label="Job pages" hidden>
 <button id="career-previous" class="text" type="button" disabled>Previous</button>
 <button id="career-next" class="text" type="button" disabled>Next</button>
 </nav>
@@ -86,8 +116,8 @@
 <button id="career-close" class="back text" type="button">Back to list</button>
 <h2 id="career-reader-title" tabindex="-1"></h2>
 <div class="edge-rule" aria-hidden="true"></div>
-<p id="career-reader-status" role="status"></p>
-<button id="career-reader-retry" class="ghost" type="button" hidden>Retry opening record</button>
+<p id="career-reader-status" class="career-reader-status" role="status"></p>
+<button id="career-reader-retry" class="ghost" type="button" hidden>Retry opening job</button>
 <div id="career-reader-content" class="career-reader-content"></div>
 </section>
 </div>
@@ -140,6 +170,29 @@
 <p id="update-error" role="alert" hidden></p>
 <div class="actions"><button id="update-check" class="ghost" type="button" disabled>Check for updates</button><button id="update-download" class="ghost" type="button" hidden>Download update</button><button id="update-install" class="ghost" type="button" hidden>Install update</button><button id="update-cancel" class="text" type="button" hidden>Cancel update</button></div>
 </div>
+</section>
+</section>
+<section id="view-help" class="setup-view" aria-label="Help" hidden>
+<section class="setup-section account" aria-labelledby="help-start-title">
+<h2 id="help-start-title">Start</h2>
+<div class="settings-content"><p>Paste this into your connected agent:</p><pre id="help-prompt" class="command" tabindex="0">Use the recruiters.rip skill to find me a job.</pre></div>
+</section>
+<section class="setup-section" aria-labelledby="help-flow-title">
+<h2 id="help-flow-title">How it works</h2>
+<div class="settings-content"><ol id="help-steps" class="help-steps">
+<li>Connect your account in Settings.</li>
+<li>Optionally pre-filter jobs with the Decisions API.</li>
+<li>Your agent reviews jobs against your CVs and facts.</li>
+<li>Tailor documents and apply.</li>
+</ol></div>
+</section>
+<section class="setup-section" aria-labelledby="help-links-title">
+<h2 id="help-links-title">Links</h2>
+<div class="settings-content help-links"><p>Documentation: <code>https://recruiters.rip/docs</code></p><p>Downloads: <code>https://recruiters.rip/downloads</code></p></div>
+</section>
+<section class="setup-section" aria-labelledby="help-version-title">
+<h2 id="help-version-title">Version</h2>
+<div class="settings-content"><p id="help-version" class="caption"></p></div>
 </section>
 </section>
 </div>

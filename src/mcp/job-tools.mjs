@@ -57,7 +57,8 @@ export function localJob(career, id) {
 export function localJobMetadata(job) {
   return { id: job.id, title: job.title, company: job.company ?? null, publishedAt: job.publishedAt ?? null,
     url: job.url, applyUrl: job.applyUrl, sourceUrl: job.sourceUrl, location: job.location ?? null,
-    complete: job.complete, imported: true, salary: null, city: null, workMode: null };
+    complete: job.complete, imported: true, salary: null, city: null, workMode: null, seniority: null, commitment: null,
+    classification: null };
 }
 export function localJobOriginal(career, id, requireComplete = false) {
   const job = localJob(career, id);

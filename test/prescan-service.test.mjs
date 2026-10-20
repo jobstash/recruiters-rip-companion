@@ -214,6 +214,18 @@ test('changing the range cancels active work, preserves saved successes and cann
   assert.equal(Object.keys(f.snapshot().career.prescan.rows).length, 1); assert.equal(f.apiCalls.length, 2);
 });
 
+test('pre-scan rows carry mapped seniority, commitment and classification labels and null when absent', async () => {
+  const f = fixture({ count: 0 });
+  f.catalogue.push({ ...job(0), seniority: '4', commitment: 'FULL_TIME', classification: 'SMART_CONTRACTS' },
+    { ...job(1), seniority: '', commitment: null });
+  await f.controller.start(); await terminal(f);
+  const rows = f.snapshot().career.prescan.rows;
+  assert.equal(f.controller.status().status, 'completed');
+  assert.deepEqual([rows['node:0'].seniority, rows['node:0'].commitment, rows['node:0'].classification], ['Lead', 'Full Time', 'Smart Contracts']);
+  assert.deepEqual([rows['node:1'].seniority, rows['node:1'].commitment, rows['node:1'].classification], [null, null, null]);
+  assert.deepEqual([rows['node:0'].workMode, rows['node:0'].city, rows['node:0'].applyUrl], ['hybrid', 'Dublin', 'https://employer.example/jobs']);
+});
+
 test('invalid range selections and obsolete limits never fetch metadata, authorize or infer', async () => {
   const f = fixture(), before = f.snapshot();
   for (const publicationRange of ['week', '', null, 7, [], {}]) {

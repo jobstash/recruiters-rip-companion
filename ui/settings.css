@@ -76,10 +76,14 @@ main { flex: 1; min-height: 0; overflow: auto; padding: var(--spacing-32) var(--
 .locked p { max-width: 560px; }
 .mark-large { display: block; margin-bottom: var(--spacing-8); }
 
-/* The list and detail share one ruled workspace. */
+/* The list and detail share one ruled workspace. Me browses records; the Jobs tab is a fixed two-pane list + reader switched between Ranked and Applications. */
 .career-view { display: grid; grid-template-rows: auto minmax(0, 1fr); height: 100%; min-height: 0; }
-#career-browser { display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; }
+.jobs-view { grid-template-rows: minmax(0, 1fr); }
+.career-browser { display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; }
 .career-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--spacing-8) var(--spacing-16); padding-bottom: var(--spacing-16); }
+.jobs-toolbar { align-items: start; }
+.jobs-toolbar .optional-prefilter { flex: 1 1 320px; min-width: 0; }
+.jobs-toolbar .career-job-actions { min-height: 44px; }
 .career-categories { display: flex; flex-wrap: wrap; gap: var(--spacing-8); }
 .career-categories button { border-color: var(--color-facet); padding-inline: var(--spacing-16); color: var(--color-smoke); }
 .career-categories button[aria-pressed="true"] { color: var(--color-ink); border-color: var(--color-ink); }
@@ -91,19 +95,32 @@ main { flex: 1; min-height: 0; overflow: auto; padding: var(--spacing-32) var(--
 .career-sort select { min-width: 0; max-width: 100%; min-height: 44px; padding: var(--spacing-8); border: 1px solid var(--color-facet); border-radius: var(--radius-buttons); background: var(--color-canvas); color: var(--color-ink); font: inherit; cursor: pointer; }
 .career-sort select:disabled { color: var(--color-dust); cursor: not-allowed; }
 .career-panes { display: grid; grid-template-columns: minmax(240px, 320px) minmax(0, 1fr); gap: 0; min-height: 0; }
-.career-panes:not(:has(.career-reader:not([hidden]))) { grid-template-columns: minmax(0, 1fr); }
-.career-list, .career-reader { min-height: 0; overflow: auto; display: flex; flex-direction: column; }
-#career-list-status, #career-reader-status { font: 400 13px/1.6 var(--font-geist-mono); color: var(--color-smoke); }
-#career-list-status:empty, #career-reader-status:empty { display: none; }
-#career-list-retry, #career-reader-retry { margin: var(--spacing-24); }
-.career-records { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.career-panes:not(.jobs-panes):not(:has(.career-reader:not([hidden]))) { grid-template-columns: minmax(0, 1fr); }
+.jobs-panes { grid-template-columns: minmax(400px, 1fr) minmax(0, 1fr); }
+.career-list { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto minmax(0, 1fr) auto; min-height: 0; overflow: hidden; }
+.career-reader { min-height: 0; overflow: auto; display: flex; flex-direction: column; }
+.career-list .panel-head p, .career-reader-status { font: 400 13px/1.6 var(--font-geist-mono); color: var(--color-smoke); }
+.career-list .panel-head p:empty, .career-reader-status:empty { display: none; }
+.career-list > .ghost, .career-reader > .ghost { margin: var(--spacing-24); }
+.career-records { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; min-height: 0; overflow: auto; overscroll-behavior: contain; }
 .career-record { display: flex; flex-direction: column; align-items: stretch; gap: var(--spacing-8); width: 100%; padding: var(--spacing-16) var(--spacing-24); border: 0; border-bottom: 1px solid var(--color-facet); border-radius: 0; font-weight: 400; letter-spacing: 0; text-transform: none; }
 .career-record:hover::before, .career-record[aria-current="true"]::before { content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 1px; background: var(--rr-dispersion-v); box-shadow: var(--shadow-edge-glow); }
 .career-record[aria-current="true"] .career-record-title { font-weight: 600; }
 .career-record:focus-visible { box-shadow: inset 0 0 0 2px var(--color-canvas), inset 0 0 0 4px var(--color-ink); }
 .career-record-title { font-family: var(--font-geist); font-size: 14px; font-weight: 500; line-height: 1.5; }
 .career-record-summary { font: 400 13px/1.6 var(--font-geist-mono); color: var(--color-smoke); white-space: pre-wrap; }
-.pagination { justify-content: space-between; margin-top: auto; padding: var(--spacing-8) var(--spacing-16); border-top: 1px solid var(--color-facet); }
+/* Job cards: one score (best-known assessment) and publication date are the two sort axes, so both read first. */
+.career-record:has(.career-card-body) { flex-direction: row; align-items: flex-start; gap: var(--spacing-16); padding: 12px var(--spacing-16); }
+.career-card-body { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.career-card-score { flex: none; display: flex; flex-direction: column; align-items: flex-end; text-align: right; width: 112px; }
+.career-card-score-value { font: 500 24px/1 var(--font-geist-mono); font-variant-numeric: tabular-nums; letter-spacing: -.02em; color: var(--color-ink); }
+.career-card-score-caption { font: 500 10px/1.4 var(--font-geist-mono); letter-spacing: .06em; text-transform: uppercase; color: var(--color-smoke); }
+.career-card-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 var(--spacing-8); font: 400 13px/1.4 var(--font-geist); color: var(--color-ink-2); }
+.career-card-company + .career-card-date::before { content: "·"; margin-right: var(--spacing-8); color: var(--color-smoke); }
+.career-card-date { font-weight: 500; font-variant-numeric: tabular-nums; color: var(--color-ink); }
+.career-card-chips { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px; }
+.career-chip { max-width: 100%; overflow: hidden; text-overflow: ellipsis; padding: 1px 6px; border: 1px solid var(--color-facet); font: 500 11px/1.4 var(--font-geist-mono); letter-spacing: .04em; text-transform: uppercase; color: var(--color-ink-2); white-space: nowrap; }
+.pagination { justify-content: space-between; padding: var(--spacing-8) var(--spacing-16); border-top: 1px solid var(--color-facet); }
 .career-reader { gap: var(--spacing-24); padding: var(--spacing-24); border-left: 0; }
 .career-reader > * { max-width: var(--reading); }
 .career-reader .back { display: none; align-self: flex-start; }
@@ -139,7 +156,7 @@ summary:hover { color: var(--color-ink); }
 .prescan-field input:focus { border-bottom-color: transparent; background-image: var(--rr-dispersion); background-repeat: no-repeat; background-size: 100% 2px; background-position: 0 100%; box-shadow: var(--shadow-input-focus); }
 .prescan-field input:focus-visible { box-shadow: var(--shadow-focus-ring), var(--shadow-input-focus); }
 .prescan-field input:disabled { border-color: var(--color-facet); color: var(--color-dust); cursor: not-allowed; }
-.home-actions { display: grid; gap: var(--spacing-16); padding-bottom: var(--spacing-24); }
+.me-actions { display: grid; gap: var(--spacing-16); padding-bottom: var(--spacing-24); }
 #prescan-controls { display: grid; gap: var(--spacing-8); }
 .prescan-publication { display: grid; gap: var(--spacing-8); min-width: 0; max-width: var(--reading); }
 #prescan-range { width: 100%; min-width: 0; min-height: 44px; margin: 0; accent-color: var(--color-ink); cursor: pointer; }
@@ -154,6 +171,10 @@ summary:hover { color: var(--color-ink); }
 #update-progress { width: 100%; max-width: var(--reading); accent-color: var(--color-ink); }
 #update-status, #update-error { white-space: pre-wrap; }
 
+/* Help is a short ledger: the starting prompt, four steps, two plain-text URLs and the version. */
+.help-steps { margin: 0; padding-left: 1.25em; display: grid; gap: var(--spacing-8); color: var(--color-ink-2); line-height: 1.6; max-width: var(--reading); }
+.help-links code { font: 400 14px/1.6 var(--font-geist-mono); color: var(--color-ink); user-select: all; }
+
 /* Native modal semantics and focus management are retained. */
 dialog { width: min(600px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); padding: 0; border: 1px solid var(--color-facet); border-radius: 0; background: var(--color-canvas); color: var(--color-ink); overflow: auto; }
 dialog::backdrop { background: color-mix(in oklab, var(--color-void) 80%, transparent); }
@@ -167,13 +188,12 @@ dialog::backdrop { background: color-mix(in oklab, var(--color-void) 80%, transp
   .topbar { gap: var(--spacing-8); }
   .brand { gap: var(--spacing-16); }
   .career-panes { grid-template-columns: minmax(0, 1fr); }
-  #career-browser.is-reading .career-list { display: none; }
+  .career-browser.is-reading .career-list { display: none; }
   .career-reader { border-left: 1px solid var(--color-facet); padding: var(--spacing-16); }
   .career-reader .back { display: inline-flex; }
   .app-row { grid-template-columns: minmax(0, 1fr); grid-template-areas: "name" "action" "details"; }
   .setup-section { grid-template-columns: minmax(0, 1fr); gap: var(--spacing-24); }
-  .home-actions button { padding-inline: var(--spacing-8); }
-  .home-actions .actions { gap: var(--spacing-8); }
+  .me-actions button { padding-inline: var(--spacing-8); }
   .career-categories { gap: var(--spacing-8); }
   .career-categories button { padding-inline: var(--spacing-8); }
   .career-reader-content dl { grid-template-columns: minmax(0, 1fr); gap: var(--spacing-8); }
@@ -184,8 +204,9 @@ dialog::backdrop { background: color-mix(in oklab, var(--color-void) 80%, transp
 }
 @media (max-width: 479px), (max-height: 639px) {
   .career-view { height: auto; min-height: 100%; grid-template-rows: auto auto; }
-  #career-browser { grid-template-rows: auto auto; }
-  .career-list, .career-reader { overflow: visible; }
+  .career-browser { grid-template-rows: auto auto; }
+  .career-list { grid-template-rows: auto auto auto auto; }
+  .career-list, .career-records, .career-reader { overflow: visible; }
 }
 @media (forced-colors: active) {
   .tab button[aria-current="page"], .career-categories button[aria-pressed="true"] { border-bottom: 2px solid Highlight; }

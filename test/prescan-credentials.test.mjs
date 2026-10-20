@@ -13,23 +13,28 @@ function fixture() {
 test('save/read/remove keep key at root and only expose a secret-free descriptor', async () => {
   const { store, credentials, changes } = fixture();
   assert.deepEqual(credentials.publicState(), { provider: 'openai', model: 'gpt-6-luna', configured: false, credentialVersion: 0, inputUsdPerMillion: 0.1,
-    providers: [{ id: 'openai', label: 'OpenAI Decisions', model: 'gpt-6-luna', inputUsdPerMillion: 0.1 }] });
+    savedAt: null, keyHint: null, providers: [{ id: 'openai', label: 'OpenAI Decisions', model: 'gpt-6-luna', inputUsdPerMillion: 0.1 }] });
   assert.throws(() => credentials.read('openai'), { code: 'PRESCAN_KEY_REQUIRED' });
   const career = store.get().career;
   const saved = await credentials.save({ provider: 'openai', apiKey });
   assert.equal(saved.configured, true); assert.equal(saved.credentialVersion, 1);
-  assert.deepEqual(Object.keys(saved).sort(), ['configured', 'credentialVersion', 'inputUsdPerMillion', 'model', 'provider', 'providers']);
+  assert.deepEqual(Object.keys(saved).sort(), ['configured', 'credentialVersion', 'inputUsdPerMillion', 'keyHint', 'model', 'provider', 'providers', 'savedAt']);
+  // The descriptor names the key by its last four characters only; the full key never appears in it.
+  assert.equal(saved.keyHint, '7890');
+  assert.equal(saved.savedAt, store.get().prescanCredentials.openai.updatedAt);
   assert.deepEqual(credentials.read('openai'), { apiKey, credentialVersion: 1 });
   assert.equal(store.get().prescanCredentials.openai.apiKey, apiKey);
   assert.ok(Number.isFinite(Date.parse(store.get().prescanCredentials.openai.updatedAt)));
   assert.deepEqual(store.get().career, career);
   assert.equal(JSON.stringify(saved).includes('1234567890'), false);
+  assert.equal(JSON.stringify(saved).includes('sk-'), false);
   saved.providers[0].label = 'Changed by caller';
   assert.equal(credentials.publicState().providers[0].label, 'OpenAI Decisions');
   await credentials.save({ provider: 'openai', apiKey: `${apiKey}-replacement` });
   assert.equal(credentials.publicState().credentialVersion, 2);
   const removed = await credentials.remove({ provider: 'openai' });
   assert.equal(removed.configured, false); assert.equal(removed.credentialVersion, 3);
+  assert.deepEqual([removed.savedAt, removed.keyHint], [null, null]);
   assert.equal(JSON.stringify(store.get()).includes('sk-'), false);
   assert.throws(() => credentials.read('openai'), { code: 'PRESCAN_KEY_REQUIRED' });
   assert.equal(changes(), 3);

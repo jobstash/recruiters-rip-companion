@@ -22,7 +22,12 @@ export function createPrescanCredentials({ store, onChange = () => {} }) {
   function publicState() {
     const state = store.get();
     const { id: provider, model, inputUsdPerMillion } = decisionProviders.openai;
-    return { provider, model, configured: validKey(state.prescanCredentials?.openai?.apiKey), credentialVersion: version(state), inputUsdPerMillion,
+    const saved = state.prescanCredentials?.openai;
+    const configured = validKey(saved?.apiKey);
+    // The UI names the saved key by its last four characters and save date; the secret itself never leaves the main process.
+    return { provider, model, configured, credentialVersion: version(state), inputUsdPerMillion,
+      savedAt: configured && typeof saved.updatedAt === 'string' ? saved.updatedAt : null,
+      keyHint: configured ? saved.apiKey.slice(-4) : null,
       providers: Object.values(decisionProviders).map(({ id, label, model, inputUsdPerMillion }) => ({ id, label, model, inputUsdPerMillion })) };
   }
   return {

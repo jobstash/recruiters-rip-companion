@@ -462,6 +462,19 @@ async function settingsOperation(op, input) {
       scoped.assertAvailable(false);
       emit(); return { ok: true, result: { completed: true } };
     }
+    // GitHub linking happens on the website through Privy; middleware's copy of the link is what the platform status reports.
+    if (op === 'account-platform') {
+      assertAvailable(false); exact(input, []);
+      if (!store.get().pairing) return { ok: true, result: { paired: false } };
+      try { const status = await platform('status', {}); return { ok: true, result: { paired: true, github: status?.github ?? null, membership: status?.membership ?? null } }; }
+      catch (error) { return { ok: true, result: { paired: true, unavailable: error?.code === 'DEVICE_UNAUTHORIZED' ? 'reconnect' : 'offline' } }; }
+    }
+    if (op === 'connect-github') {
+      assertAvailable(false); exact(input, []);
+      if (!store.get().pairing) fail('PAIRING_REQUIRED', 'Connect your account first.');
+      await shell.openExternal(new URL('/account#github', productOrigin).href);
+      return { ok: true, result: { opened: true } };
+    }
     if (op.startsWith('prescan-')) {
       assertAvailable(false);
       if (op === 'prescan-preview') { exact(input, []); return { ok: true, result: await prescan.preview({}) }; }

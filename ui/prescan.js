@@ -22,6 +22,10 @@
   let previewFailure = null;
   let previewRequest = 0;
   let rangeDraft = null;
+  // The saved key stays active until a replacement is saved; Replace only reveals the entry field.
+  let replacing = false;
+  const savedDate = value => typeof value === 'string' && Number.isFinite(Date.parse(value))
+    ? new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium' }).format(new Date(value)) : null;
 
   const count = value => Number.isSafeInteger(value) && value >= 0 ? value.toLocaleString() : '—';
   const cost = value => `US$${value.toFixed(2)}`;
@@ -54,7 +58,9 @@
     const run = current?.run;
     const available = Boolean(credentials && run);
     const running = run?.status === 'running';
-    key.disabled = !available || pending;
+    const configured = Boolean(available && credentials.configured);
+    const entering = available && (!configured || replacing);
+    key.disabled = !entering || pending;
     const needsSetup = available && (!credentials.configured || !paired);
     const selectedRange = rangeDraft ?? run?.publicationRange ?? 'past_3_days';
     const rangeIndex = publicationRanges.findIndex(([value]) => value === selectedRange);
@@ -63,8 +69,14 @@
     range.disabled = !available || pending;
     range.setAttribute('aria-valuetext', rangeLabel);
     element('range-label').textContent = rangeLabel;
-    element('save').disabled = !available || pending || !key.value;
-    element('remove').disabled = !available || pending || !credentials.configured;
+    element('save').disabled = !entering || pending || !key.value;
+    element('save').textContent = configured ? 'Save new key' : 'Save key';
+    element('key-label').textContent = configured ? 'New OpenAI API key' : 'OpenAI API key';
+    element('key-saved').hidden = !configured || replacing;
+    element('key-entry').hidden = !entering;
+    element('cancel-entry').hidden = !(configured && replacing);
+    element('replace').disabled = !configured || pending;
+    element('remove').disabled = !configured || pending;
     element('start').disabled = !available || pending || running || (!needsSetup && previewState !== 'ready');
     element('start').textContent = available && !credentials.configured ? 'Set up optional pre-filtering'
       : available && !paired ? 'Connect account' : 'Start pre-filtering';
@@ -83,9 +95,12 @@
           : previewState === 'failed' ? previewFailure ?? 'Job count unavailable. Reopen pre-filtering to try again.'
             : 'Loading job count…';
     element('preview').setAttribute('aria-busy', String(previewState === 'loading'));
+    // The state line is the first thing in the section: it says whether pre-filtering can run and which key does it.
+    const since = savedDate(credentials?.savedAt);
     element('key-status').textContent = !available ? 'Open local storage to configure the optional Decisions API.'
-      : credentials.configured ? 'API key saved.'
-        : 'No API key saved.';
+      : !configured ? 'No API key saved. Job pre-filtering is off until you add an OpenAI API key.'
+        : replacing ? `Replacing the key ending in ${credentials.keyHint}. The saved key stays active until you save a new one.`
+          : `API key ending in ${credentials.keyHint} saved${since ? ` on ${since}` : ''}. Job pre-filtering can run.`;
 
     if (!available) { element('progress').textContent = ''; element('recovery').textContent = ''; return; }
     const blocked = Number.isSafeInteger(run.blocked) && run.blocked >= 0 ? run.blocked : 0;
@@ -107,6 +122,7 @@
 
   function clearInput() {
     key.value = '';
+    replacing = false;
     render();
   }
   function invalidatePreview() {
@@ -240,11 +256,24 @@
     if (pending || !current || !key.value) return;
     const input = { provider: 'openai', apiKey: key.value };
     key.value = '';
-    void perform('prescan-key-save', input, 'Decisions API key saved.');
+    replacing = false;
+    void perform('prescan-key-save', input, 'Decisions API key saved. Job pre-filtering can run.');
+  });
+  element('replace').addEventListener('click', () => {
+    if (pending || !current?.credentials.configured) return;
+    replacing = true;
+    element('key-message').textContent = '';
+    render();
+    key.focus();
+  });
+  element('cancel-entry').addEventListener('click', () => {
+    clearInput();
+    element('replace').focus();
   });
   element('remove').addEventListener('click', () => {
     key.value = '';
-    void perform('prescan-key-remove', { provider: 'openai' }, 'API key removed.');
+    replacing = false;
+    void perform('prescan-key-remove', { provider: 'openai' }, 'API key removed. Job pre-filtering is off.');
   });
   element('start').addEventListener('click', () => {
     if (pending || !current) return;
@@ -285,13 +314,11 @@
     if (disclosure.open) void loadPreview();
   });
 
-  document.getElementById('prescan-options').addEventListener('toggle', event => {
-    if (!event.currentTarget.open) clearInput();
-  });
-  // Navigation clears only unsaved input; parent state updates continue to own run status.
+  // Leaving Settings drops any unsaved key text and a pending replacement; the saved key is unaffected.
   const navigation = new MutationObserver(() => {
     if (document.getElementById('view-setup').hidden || document.getElementById('settings').hidden) {
       key.value = '';
+      replacing = false;
       render();
     }
   });

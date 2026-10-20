@@ -198,7 +198,9 @@ summary:hover { color: var(--color-ink); }
 .app-details > :not(summary) { margin-top: var(--spacing-16); }
 .optional-prefilter > :not(summary) { margin-top: var(--spacing-16); }
 .command { display: block; margin: 0; padding: var(--spacing-16); background: var(--color-surface); border: 1px solid var(--color-facet); font: 400 13px/1.6 var(--font-geist-mono); color: var(--color-ink); white-space: pre-wrap; overflow-wrap: anywhere; }
-#prescan-form, .prescan-disclosure, .prescan-feedback { display: grid; gap: var(--spacing-16); min-width: 0; }
+#prescan-form, .prescan-disclosure, .prescan-feedback, .prescan-key-entry { display: grid; gap: var(--spacing-16); min-width: 0; }
+/* The key state reads as body copy, not a caption: it is the section's primary fact. */
+.prescan-key-status { max-width: var(--reading); line-height: 1.6; }
 .prescan-field { display: grid; gap: var(--spacing-8); min-width: 0; }
 .prescan-field input { width: 100%; min-width: 0; min-height: 44px; padding: 12px 0; border: 0; border-bottom: 1px solid var(--color-ink); border-radius: 0; background: transparent; color: var(--color-ink); font: 400 18px/1.4 var(--font-geist); letter-spacing: normal; text-transform: none; }
 .prescan-field input:focus { border-bottom-color: transparent; background-image: var(--rr-dispersion); background-repeat: no-repeat; background-size: 100% 2px; background-position: 0 100%; box-shadow: var(--shadow-input-focus); }

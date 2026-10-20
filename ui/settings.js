@@ -16,8 +16,6 @@ for (const button of document.querySelectorAll('[data-view]')) button.addEventLi
 function openSettings(target) {
   showView('setup');
   const section = $(target);
-  const optional = section.querySelector('details.optional-prefilter');
-  if (optional) optional.open = true;
   section.scrollIntoView({ block: 'start' });
   section.querySelector('input:not(:disabled), button:not(:disabled)')?.focus({ preventScroll: true });
 }
@@ -58,6 +56,7 @@ async function refresh() {
     $('account-hint').textContent = state.paired ? 'Connected' : 'Not connected';
     $('me-account').hidden = state.paired;
     renderSharing(state.introductions);
+    syncGithub(state.paired);
     if (!view) showView('me');
     if (state.paired && noticeKind === 'connect-account') notice('');
     if (window.careerBrowser && careerViewVersion !== state.careerViewVersion) {
@@ -122,6 +121,52 @@ function renderSharing(introductions) {
   $('sharing-shared').textContent = shared ? `Last shared ${shared.name} · ${shared.roles ?? 0} ${shared.roles === 1 ? 'role' : 'roles'} · ${sharingDate(shared.sharedAt)}` : '';
   $('sharing-toggle').textContent = granted ? 'Stop sharing' : 'Allow CV sharing';
 }
+// GitHub linking is done on the website through the account sign-in. Only middleware's synchronized copy of the link counts,
+// so the row reads the platform status rather than a local flag, and re-reads it when the window regains focus after linking.
+let github = { paired: false, state: 'unknown', login: null };
+let githubRequest = 0, githubPollUntil = 0;
+function renderGithub() {
+  const row = $('github-row'), button = $('connect-github'), status = $('github-status');
+  row.hidden = !github.paired;
+  if (!github.paired) return;
+  const text = {
+    loading: 'Checking your GitHub link…',
+    linked: `Linked as @${github.login}. JobStash can match your open-source work to you.`,
+    unlinked: 'Not linked. Optional: developers with open-source work can link GitHub so JobStash can confirm those contributions are theirs.',
+    offline: 'Could not reach the platform to check your GitHub link. Check your connection.',
+    reconnect: 'Reconnect your account to check your GitHub link.',
+    unknown: '',
+  };
+  status.textContent = text[github.state];
+  button.textContent = github.state === 'linked' ? 'Manage on recruiters.rip' : 'Link GitHub';
+  button.disabled = github.state === 'loading' || github.state === 'reconnect';
+}
+async function syncGithub(paired, force = false) {
+  if (!paired) { github = { paired: false, state: 'unknown', login: null }; githubPollUntil = 0; renderGithub(); return; }
+  if (!force && github.paired && github.state !== 'unknown') return;
+  const request = ++githubRequest;
+  if (github.state === 'unknown') { github = { paired: true, state: 'loading', login: null }; renderGithub(); }
+  try {
+    const result = await invoke('account-platform');
+    if (request !== githubRequest) return;
+    github = result.unavailable ? { paired: true, state: result.unavailable, login: null }
+      : { paired: true, state: result.github?.login ? 'linked' : 'unlinked', login: result.github?.login ?? null };
+  } catch { if (request === githubRequest) github = { paired: true, state: 'offline', login: null }; }
+  renderGithub();
+  // The website links instantly, but the platform learns of it through a webhook; keep checking briefly after a link attempt.
+  if (github.state !== 'linked' && Date.now() < githubPollUntil) setTimeout(() => { void syncGithub(true, true); }, 4000);
+}
+$('connect-github').addEventListener('click', async () => {
+  if (github.state === 'linked') { await action('connect-account', ''); return; }
+  const button = $('connect-github');
+  button.disabled = true;
+  try {
+    await invoke('connect-github');
+    githubPollUntil = Date.now() + 3 * 60 * 1000;
+    $('github-status').textContent = 'Choose Link GitHub on the recruiters.rip page that opened, then come back here.';
+  } catch (error) { notice(error.message); button.disabled = false; }
+});
+window.addEventListener('focus', () => { if (state?.paired) void syncGithub(true, true); });
 $('sharing-toggle').addEventListener('click', () => {
   const granted = state?.introductions?.consent?.granted === true;
   void action(granted ? 'sharing-stop' : 'sharing-allow', granted ? 'CV sharing stopped. Nothing new will be sent.' : 'CV sharing allowed.');

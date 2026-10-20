@@ -137,7 +137,13 @@
 <section id="view-setup" class="setup-view" aria-label="Settings" hidden>
 <section id="account-settings" class="setup-section account" aria-labelledby="account-title">
 <h2 id="account-title">Account</h2>
-<div class="settings-content"><p id="account-hint">Not connected.</p><button id="connect-account" type="button">Connect account</button></div>
+<div class="settings-content"><p id="account-hint">Not connected.</p><button id="connect-account" type="button">Connect account</button>
+<div id="github-row" class="app-row" hidden>
+<h3 class="app-name">GitHub</h3>
+<button id="connect-github" class="ghost app-action" type="button" disabled>Link GitHub</button>
+<p id="github-status" class="app-details" role="status" aria-live="polite"></p>
+</div>
+</div>
 </section>
 <section id="sharing-settings" class="setup-section" aria-labelledby="sharing-title">
 <h2 id="sharing-title">JobStash profile</h2>
@@ -165,15 +171,18 @@
 <section id="prescan" class="setup-section" aria-labelledby="prescan-title">
 <h2 id="prescan-title">Optional Decisions API</h2>
 <div class="settings-content">
-<details id="prescan-options" class="optional-prefilter">
-<summary>Configure OpenAI Decisions API</summary>
+<p id="prescan-key-status" class="prescan-key-status" role="status" aria-live="polite">Open local storage to configure the optional Decisions API.</p>
 <form id="prescan-form" autocomplete="off">
-<label class="prescan-field" for="prescan-key">Decisions API key (optional)<input id="prescan-key" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" aria-describedby="prescan-key-status" disabled></label>
-<p id="prescan-key-status" class="caption">Open local storage to configure the optional Decisions API.</p>
-<div class="actions"><button id="prescan-save" class="ghost" type="button" disabled>Save Decisions key</button><button id="prescan-remove" class="text" type="button" disabled>Remove key</button></div>
+<div id="prescan-key-saved" class="actions" hidden>
+<button id="prescan-replace" class="ghost" type="button" disabled>Replace key</button>
+<button id="prescan-remove" class="text" type="button" disabled>Remove key</button>
+</div>
+<div id="prescan-key-entry" class="prescan-key-entry" hidden>
+<label class="prescan-field" for="prescan-key"><span id="prescan-key-label">OpenAI API key</span><input id="prescan-key" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" aria-describedby="prescan-key-status" disabled></label>
+<div class="actions"><button id="prescan-save" class="primary" type="button" disabled>Save key</button><button id="prescan-cancel-entry" class="text" type="button" hidden>Cancel</button></div>
+</div>
 <p id="prescan-key-message" role="status" aria-live="polite"></p>
 </form>
-</details>
 </div>
 </section>
 <section id="update-settings" class="setup-section" aria-labelledby="update-title">

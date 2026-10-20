@@ -7,8 +7,9 @@ import { currentPrescanRow, prescanInclusion } from './prescan/state.mjs';
 import { DEFAULT_PUBLICATION_RANGE, publicationWindowForRange } from './prescan/publication-range.mjs';
 import { localJobMetadata } from './mcp/job-tools.mjs';
 import { blockedIds, listBlocks } from './mcp/blocklist.mjs';
+import { employmentHistory } from './employment-browser.mjs';
 
-const kinds = ['sources', 'facts', 'jobs', 'applications', 'blocks'];
+const kinds = ['sources', 'facts', 'career', 'jobs', 'applications', 'blocks'];
 const forbidden = new Set(['__proto__', 'prototype', 'constructor']);
 const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const own = (value, key) => record(value) && Object.hasOwn(value, key);
@@ -277,6 +278,18 @@ function sortJobs(rows, inclusion, sort) {
     (a.row.id < b.row.id ? -1 : a.row.id > b.row.id ? 1 : 0)).map(item => item.row);
 }
 
+function employmentItem(entry) {
+  return {
+    id: entry.id, title: entry.company, summary: `${entry.title}\n${entry.period}`,
+    profileLink: true,
+    sections: [
+      fields('Employment', [['Company', entry.company], ['Title', entry.title], ['Dates', entry.period]]),
+      fields('Inferred from CV', [['CV', entry.sourceName],
+        ['Status', entry.stale ? 'CV changed since extraction. Ask your agent to refresh this career history.' : null]]),
+    ],
+  };
+}
+
 /** Read-only, allowlisted projections: never return the vault or binary source data. */
 export function createCareerBrowser({ store }) {
   // Every operation reads the store once; canonical projections share that immutable snapshot.
@@ -293,6 +306,11 @@ export function createCareerBrowser({ store }) {
         fail('INVALID_INPUT', 'Use limit 1–100 and a nonnegative safe integer offset.');
       }
       const career = readCareer(store);
+      if (kind === 'career') {
+        const entries = employmentHistory(career);
+        const items = entries.slice(offset, offset + limit).map(employmentItem);
+        return { items, total: entries.length, nextOffset: offset + items.length < entries.length ? offset + items.length : null };
+      }
       if (kind === 'jobs') {
         const { rows, inclusion } = await jobUnion(career);
         const sorted = sortJobs(rows, inclusion, sort);
@@ -326,6 +344,11 @@ export function createCareerBrowser({ store }) {
         fail('INVALID_INPUT', 'Choose a saved record ID.');
       }
       const career = readCareer(store);
+      if (kind === 'career') {
+        const entry = employmentHistory(career).find(row => row.id === id);
+        if (!entry) fail('NOT_FOUND', 'This career entry is no longer available. Refresh Career.');
+        return employmentItem(entry);
+      }
       if (kind === 'jobs') {
         const { rows, inclusion } = await jobUnion(career);
         const row = rows.get(id);

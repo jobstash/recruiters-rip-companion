@@ -3,6 +3,7 @@
   const categories = {
     sources: { title: 'CVs', empty: 'No saved CVs or supporting documents. Use Import CV to add one.', locked: 'Open local storage to read saved records.', select: 'Select a record' },
     facts: { title: 'Facts', empty: 'No saved career facts.', locked: 'Open local storage to read saved records.', select: 'Select a record' },
+    career: { title: 'Career', empty: 'No work history yet. Your agent extracts employers from your CV and links the ones it confidently matches to JobStash.', locked: 'Open local storage to read your work history.', select: 'Select an employer' },
     jobs: { title: 'Jobs', empty: 'No saved jobs. Copy the review prompt into your connected agent to start matching.', locked: 'Open local storage to read saved jobs.', select: 'Select a job' },
     applications: { title: 'Job Applications', empty: 'No saved applications.', locked: 'Open local storage to read saved applications.', select: 'Select an application' },
     blocks: { title: 'Blocked jobs', empty: 'Nothing blocked. Open a job to block it, its company or its category.', locked: 'Open local storage to read blocked jobs.', select: 'Select a block' },
@@ -183,6 +184,18 @@
       section.append(node('h3', '', 'Block from evaluation'), actions);
       return section;
     }
+    // Each Career entry links to the JobStash profile its matched employer resolves to; the reader also offers it.
+    function renderProfileAction(item, className = 'ghost') {
+      if (item?.profileLink !== true) return null;
+      const button = blockButton('Open JobStash profile', `Open the JobStash profile for ${item.title}`, async () => {
+        if (!enabled) return;
+        button.disabled = true;
+        try { await request('career-open-profile', { id: item.id }); }
+        catch (error) { listStatus.textContent = `Could not open the JobStash profile. ${error.message}`; }
+        finally { button.disabled = false; }
+      }, className);
+      return button;
+    }
 
     function renderInclusion(item) {
       const card = item?.card;
@@ -266,6 +279,8 @@
       }
       const removal = kind === 'blocks' ? renderBlockActions(item) : null;
       if (removal) content.append(removal);
+      const profile = kind === 'career' ? renderProfileAction(item) : null;
+      if (profile) { const section = node('section', 'career-block'); section.append(profile); content.append(section); }
       readerStatus.textContent = content.childElementCount ? '' : 'No saved content is available for this record.';
     }
 

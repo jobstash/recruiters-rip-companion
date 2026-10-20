@@ -12,6 +12,7 @@ import { installNative } from './install-native.mjs';
 import { BROWSER_IDENTITIES } from './browser-identity.mjs';
 import { claimInstance } from './instance-lock.mjs';
 import { createIntroductionTools, introductionsStatus, setSharingConsent } from './mcp/introduction-tools.mjs';
+import { openEmploymentProfile } from './employment-browser.mjs';
 import { CareerError, createCareerState, fail, upgradeCareer } from './mcp/state.mjs';
 import { createMcpServer, createPlatformTools } from './mcp/server.mjs';
 import { createProfileTools } from './mcp/profile-tools.mjs';
@@ -445,6 +446,13 @@ async function settingsOperation(op, input) {
       });
       scoped.assertAvailable(false); careerViewRevision++;
       emit(); return { ok: true, result };
+    }
+    if (op === 'career-open-profile') {
+      assertAvailable(false); exact(input, ['id']);
+      const scoped = createScopedAccess(store, { assertAvailable, epoch: () => sessionEpoch });
+      const result = await openEmploymentProfile({ store: scoped.store, platform, openExternal: url => shell.openExternal(url) }, input);
+      scoped.assertAvailable(false);
+      return { ok: true, result };
     }
     if (op === 'sharing-allow' || op === 'sharing-stop') {
       assertAvailable(false); exact(input, []);

@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { CareerError, fail } from '../mcp/state.mjs';
 import { matchingProfileVersion } from '../mcp/assessment-policy.mjs';
-import { candidateContext, createMatchingTools, loadMatchingCatalogue } from '../mcp/matching-tools.mjs';
+import { candidateContext, createMatchingTools, currentAssessment, loadMatchingCatalogue } from '../mcp/matching-tools.mjs';
 import { decisionProviders } from './providers.mjs';
-import { currentPrescan, currentPrescanRow } from './state.mjs';
+import { currentPrescan, currentPrescanRow, prescanInclusion } from './state.mjs';
 import { DEFAULT_PUBLICATION_RANGE, assertPublicationRange, publicationInWindow, publicationWindowForRange } from './publication-range.mjs';
 
 const ASSUMED_INPUT_TOKENS_PER_JOB = 8000;
@@ -84,6 +84,13 @@ export function createPrescanController({ store, makeScope, credentials, authori
     await run.scope.store.update(state => { check(run, state, options); mutation(state.career.prescan, state); });
     if (!options?.silent) notify();
   }
+  // Candidates are catalogue jobs without a current review; included ones form the next agent run.
+  function inclusionSummary(career) {
+    const profileVersion = matchingProfileVersion(career);
+    const candidates = Object.keys(career.matching?.jobs ?? {}).filter(id => !currentAssessment(career.matching.scores?.[id], profileVersion));
+    const inclusion = prescanInclusion(career, candidates, publicationWindowForRange(career.prescan?.publicationRange ?? DEFAULT_PUBLICATION_RANGE));
+    return { included: inclusion.includedIds.size, cutoff: inclusion.cutoff };
+  }
   function summary(state, publicState) {
     const career = state.career ?? {}, stored = career.prescan;
     const run = active && !active.persisted ? active.record : stored;
@@ -102,6 +109,7 @@ export function createPrescanController({ store, makeScope, credentials, authori
       selected: run?.selectedIds.length ?? 0, processed: rows.length,
       scored: rows.filter(row => row.status === 'scored').length,
       unavailable: rows.filter(row => row.status !== 'scored').length,
+      ...inclusionSummary(career),
       totalCatalogue: run?.totalCatalogue ?? 0, inputTokens, requests: run?.requests ?? 0,
       ...(Number.isSafeInteger(run?.reused) ? { reused: run.reused } : {}),
       estimatedCostUsd: inputTokens * (provider?.inputUsdPerMillion ?? publicState.inputUsdPerMillion) / 1_000_000,

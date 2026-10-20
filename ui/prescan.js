@@ -96,7 +96,7 @@
     if (run.status === 'failed') advice = recovery(run.lastError?.code);
     if (run.status === 'cancelled' || run.status === 'interrupted') advice = `Scan stopped at ${count(checked)}/${count(fullScope ? run.totalCatalogue : run.selected)}${spent}. Start again to continue.`;
     if (run.status === 'stale') advice = 'Profile changed. Start pre-filtering again.';
-    if (run.status === 'completed' && run.unavailable) advice = `${count(run.unavailable)} jobs could not be scored.`;
+    if (run.status === 'completed' && run.unavailable) advice = `${count(run.unavailable)} jobs could not be pre-filtered.`;
     element('recovery').textContent = advice;
   }
 

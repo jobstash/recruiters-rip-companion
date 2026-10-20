@@ -7,6 +7,7 @@ import { createCareerState } from '../src/mcp/state.mjs';
 import { salaryEligibility, recentPublication, matchingProfileVersion } from '../src/mcp/assessment-policy.mjs';
 import { ASSESSMENT_POLICY_ID, RERANK_POLICY, RERANK_SIZE, deriveDecision, fitBand, overallFit } from '../src/mcp/matching-contract.mjs';
 import { publicationInWindow } from '../src/prescan/publication-range.mjs';
+import { decisionProviders } from '../src/prescan/providers.mjs';
 
 const publishedAt = new Date(Date.now() - 86400000).toISOString();
 const job = (id, date = publishedAt) => ({ id: `node:${id}`, title: `Engineer ${id}`, company: 'Company', publishedAt: date });
@@ -1106,6 +1107,37 @@ test('pre-scan discovery preserves existing final assessments while assigning on
   const saved = await f.call('career_matches');
   assert.equal(saved.matches[0].overall, 84);
   assert.equal(saved.matches[0].city, statedTerms.city);
+});
+
+test('discovery assigns only the jobs inside the pre-filter cutoff, honours overrides and reports the excluded count', async () => {
+  const ids = ['first', 'second', 'third', 'fourth', 'reviewed', 'plain'];
+  const f = fixture({ jobs: ids.map(id => job(id)) });
+  const planned = await f.call('career_match_jobs');
+  assert.deepEqual(planned.jobIds, ids.map(id => `node:${id}`));
+  assert.equal(planned.excluded, 0);
+  assert.equal(planned.cutoff, 50);
+  await f.save([assessment('reviewed', 70)], planned.profileVersion);
+  const priorities = { first: 95, second: 90, third: 60, fourth: 40 };
+  await f.store.update(state => {
+    state.career.prescan = { profileVersion: matchingProfileVersion(state.career), prescanPolicyId: decisionProviders.openai.policyId,
+      provider: 'openai', rows: Object.fromEntries(Object.entries(priorities).map(([id, priority]) =>
+        [`node:${id}`, { priority, status: 'scored', publishedAt, direction: 'aligned', constraints: 'aligned', eligibility: 'aligned' }])) };
+    state.career.prescanInclusion = { cutoff: 2, overrides: { 'node:fourth': true, 'node:second': false, 'node:plain': true } };
+  });
+  const scoped = await f.call('career_match_jobs');
+  assert.deepEqual(scoped.jobIds, ['node:first', 'node:fourth', 'node:plain']);
+  assert.equal(scoped.excluded, 2);
+  assert.equal(scoped.cutoff, 2);
+  assert.equal(scoped.pending, 5);
+  await f.store.update(state => { state.career.prescanInclusion = { cutoff: 3, overrides: {} }; });
+  assert.deepEqual((await f.call('career_match_jobs')).jobIds, ['node:first', 'node:second', 'node:third']);
+  await f.call('career_rankings_delete');
+  const career = f.store.get().career;
+  assert.equal(career.prescan, undefined);
+  assert.equal(career.prescanInclusion, undefined);
+  const fresh = await f.call('career_match_jobs');
+  assert.deepEqual(fresh.jobIds, ids.map(id => `node:${id}`));
+  assert.equal(fresh.excluded, 0);
 });
 
 /** Seven recommendable rows r1..r7 (overall 90..61) plus high-overall rows that are not current recommendations. */

@@ -91,9 +91,11 @@ main { flex: 1; min-height: 0; overflow: auto; padding: var(--spacing-32) var(--
 .career-categories button:disabled { color: var(--color-dust); border-color: var(--color-facet); }
 .career-categories button:disabled::after { display: none; }
 .career-job-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--spacing-8) var(--spacing-16); min-width: 0; max-width: 100%; }
-.career-sort { display: flex; flex-wrap: wrap; align-items: center; gap: var(--spacing-8); min-width: 0; max-width: 100%; }
-.career-sort select { min-width: 0; max-width: 100%; min-height: 44px; padding: var(--spacing-8); border: 1px solid var(--color-facet); border-radius: var(--radius-buttons); background: var(--color-canvas); color: var(--color-ink); font: inherit; cursor: pointer; }
-.career-sort select:disabled { color: var(--color-dust); cursor: not-allowed; }
+.career-sort, .career-cutoff-field { display: flex; flex-wrap: wrap; align-items: center; gap: var(--spacing-8); min-width: 0; max-width: 100%; }
+.career-sort select, .career-cutoff-field input { min-width: 0; max-width: 100%; min-height: 44px; padding: var(--spacing-8); border: 1px solid var(--color-facet); border-radius: var(--radius-buttons); background: var(--color-canvas); color: var(--color-ink); font: inherit; }
+.career-sort select { cursor: pointer; }
+.career-cutoff-field input { width: 6ch; font-family: var(--font-geist-mono); font-variant-numeric: tabular-nums; }
+.career-sort select:disabled, .career-cutoff-field input:disabled { color: var(--color-dust); cursor: not-allowed; }
 .career-panes { display: grid; grid-template-columns: minmax(240px, 320px) minmax(0, 1fr); gap: 0; min-height: 0; }
 .career-panes:not(.jobs-panes):not(:has(.career-reader:not([hidden]))) { grid-template-columns: minmax(0, 1fr); }
 .jobs-panes { grid-template-columns: minmax(400px, 1fr) minmax(0, 1fr); }
@@ -103,23 +105,37 @@ main { flex: 1; min-height: 0; overflow: auto; padding: var(--spacing-32) var(--
 .career-list .panel-head p:empty, .career-reader-status:empty { display: none; }
 .career-list > .ghost, .career-reader > .ghost { margin: var(--spacing-24); }
 .career-records { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; min-height: 0; overflow: auto; overscroll-behavior: contain; }
-.career-record { display: flex; flex-direction: column; align-items: stretch; gap: var(--spacing-8); width: 100%; padding: var(--spacing-16) var(--spacing-24); border: 0; border-bottom: 1px solid var(--color-facet); border-radius: 0; font-weight: 400; letter-spacing: 0; text-transform: none; }
-.career-record:hover::before, .career-record[aria-current="true"]::before { content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 1px; background: var(--rr-dispersion-v); box-shadow: var(--shadow-edge-glow); }
+.career-row { position: relative; display: flex; align-items: flex-start; border-bottom: 1px solid var(--color-facet); }
+.career-record { display: flex; flex-direction: column; align-items: stretch; gap: var(--spacing-8); width: 100%; padding: var(--spacing-16) var(--spacing-24); border: 0; border-radius: 0; font-weight: 400; letter-spacing: 0; text-transform: none; }
+.career-row:hover::before, .career-row:has([aria-current="true"])::before { content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 1px; background: var(--rr-dispersion-v); box-shadow: var(--shadow-edge-glow); pointer-events: none; }
 .career-record[aria-current="true"] .career-record-title { font-weight: 600; }
 .career-record:focus-visible { box-shadow: inset 0 0 0 2px var(--color-canvas), inset 0 0 0 4px var(--color-ink); }
 .career-record-title { font-family: var(--font-geist); font-size: 14px; font-weight: 500; line-height: 1.5; }
 .career-record-summary { font: 400 13px/1.6 var(--font-geist-mono); color: var(--color-smoke); white-space: pre-wrap; }
-/* Job cards: one score (best-known assessment) and publication date are the two sort axes, so both read first. */
-.career-record:has(.career-card-body) { flex-direction: row; align-items: flex-start; gap: var(--spacing-16); padding: 12px var(--spacing-16); }
-.career-card-body { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
-.career-card-score { flex: none; display: flex; flex-direction: column; align-items: flex-end; text-align: right; width: 112px; }
-.career-card-score-value { font: 500 24px/1 var(--font-geist-mono); font-variant-numeric: tabular-nums; letter-spacing: -.02em; color: var(--color-ink); }
-.career-card-score-caption { font: 500 10px/1.4 var(--font-geist-mono); letter-spacing: .06em; text-transform: uppercase; color: var(--color-smoke); }
+/* Job cards: three plain lines (title, company · date, facts) and one right column that answers "is this job in the next run?"
+   A number appears only after an agent review. */
+.career-card .career-record { flex: 1 1 auto; min-width: 0; padding: 20px var(--spacing-24); }
+.career-card-body { display: flex; flex-direction: column; gap: var(--spacing-8); min-width: 0; }
+.career-card .career-record-title { font-size: 15px; }
 .career-card-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 var(--spacing-8); font: 400 13px/1.4 var(--font-geist); color: var(--color-ink-2); }
 .career-card-company + .career-card-date::before { content: "·"; margin-right: var(--spacing-8); color: var(--color-smoke); }
-.career-card-date { font-weight: 500; font-variant-numeric: tabular-nums; color: var(--color-ink); }
-.career-card-chips { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px; }
-.career-chip { max-width: 100%; overflow: hidden; text-overflow: ellipsis; padding: 1px 6px; border: 1px solid var(--color-facet); font: 500 11px/1.4 var(--font-geist-mono); letter-spacing: .04em; text-transform: uppercase; color: var(--color-ink-2); white-space: nowrap; }
+.career-card-date { font-variant-numeric: tabular-nums; color: var(--color-ink); }
+.career-card-facts { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 400 12px/1.5 var(--font-geist-mono); color: var(--color-smoke); }
+.career-card-side { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; width: 96px; padding: 20px var(--spacing-24) 20px 0; text-align: right; }
+.career-card-fit { font: 500 24px/1 var(--font-geist-mono); font-variant-numeric: tabular-nums; letter-spacing: -.02em; color: var(--color-ink); }
+.career-card-caption { font: 400 10px/1.4 var(--font-geist-mono); letter-spacing: .02em; color: var(--color-smoke); }
+.career-card-include { display: flex; flex-direction: row-reverse; align-items: center; gap: var(--spacing-8); min-height: 24px; cursor: pointer; }
+.career-card-include:hover .career-card-caption { color: var(--color-ink); }
+/* Square switch: a native checkbox drawn as a ruled square; checked fills the inner square with ink. */
+.career-include { appearance: none; flex: none; width: 20px; height: 20px; margin: 0; padding: 3px; border: 1px solid var(--color-ink); border-radius: 0; background: transparent; background-clip: content-box; cursor: pointer; }
+.career-include:checked { background-color: var(--color-ink); }
+.career-include:focus-visible { box-shadow: var(--shadow-focus-ring); }
+.career-include:disabled { border-color: var(--color-facet); cursor: not-allowed; }
+/* The cutoff is a ruled line in the list itself: everything above it goes to the next agent run. */
+.career-cutoff { display: flex; flex-wrap: wrap; align-items: center; gap: var(--spacing-8) var(--spacing-16); padding: var(--spacing-8) var(--spacing-24); border-top: 1px solid var(--color-ink); border-bottom: 1px solid var(--color-facet); }
+.career-cutoff-text { flex: 1 1 auto; min-width: 0; font: 500 12px/1.5 var(--font-geist-mono); letter-spacing: .02em; color: var(--color-ink); }
+.career-cutoff button { min-height: 32px; padding-block: 4px; }
+.career-next-run button { justify-self: start; }
 .pagination { justify-content: space-between; padding: var(--spacing-8) var(--spacing-16); border-top: 1px solid var(--color-facet); }
 .career-reader { gap: var(--spacing-24); padding: var(--spacing-24); border-left: 0; }
 .career-reader > * { max-width: var(--reading); }
@@ -198,6 +214,9 @@ dialog::backdrop { background: color-mix(in oklab, var(--color-void) 80%, transp
   .career-categories button { padding-inline: var(--spacing-8); }
   .career-reader-content dl { grid-template-columns: minmax(0, 1fr); gap: var(--spacing-8); }
   .career-reader-content dd + dt { margin-top: var(--spacing-8); }
+  .career-card .career-record { padding: var(--spacing-16); }
+  .career-card-side { width: 88px; padding: var(--spacing-16) var(--spacing-16) var(--spacing-16) 0; }
+  .career-cutoff { padding-inline: var(--spacing-16); }
   .dialog-body { padding: var(--spacing-24); }
   .dialog-actions { flex-direction: column-reverse; align-items: stretch; }
   .dialog-actions button { width: 100%; }
@@ -211,5 +230,7 @@ dialog::backdrop { background: color-mix(in oklab, var(--color-void) 80%, transp
 @media (forced-colors: active) {
   .tab button[aria-current="page"], .career-categories button[aria-pressed="true"] { border-bottom: 2px solid Highlight; }
   .career-record[aria-current="true"] { border-left: 2px solid Highlight; }
+  .career-include { forced-color-adjust: none; border-color: CanvasText; }
+  .career-include:checked { background-color: Highlight; }
   :focus-visible { outline: 2px solid Highlight; outline-offset: 2px; }
 }

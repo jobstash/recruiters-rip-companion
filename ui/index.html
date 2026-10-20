@@ -95,8 +95,11 @@
 </div>
 </details>
 <div class="career-job-actions">
+<label id="career-cutoff-control" class="career-cutoff-field caption" for="career-cutoff">Evaluate top
+<input id="career-cutoff" type="number" inputmode="numeric" min="1" step="1" disabled>
+</label>
 <label id="career-sort-control" class="career-sort caption" for="career-sort">Sort jobs
-<select id="career-sort" disabled><option value="recent">Newest first</option><option value="score" selected>Score</option></select>
+<select id="career-sort" disabled><option value="rank" selected>Rank</option><option value="recent">Newest first</option></select>
 </label>
 <button id="delete-rankings" class="text" type="button" disabled>Clear job assessments</button>
 <button id="copy-review-prompt" class="text" type="button">Copy review prompt</button>

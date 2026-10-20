@@ -7,7 +7,7 @@ import {
   RERANK_POLICY, RERANK_SIZE, assessmentSchema, comparisonSchema, deriveDecision, idSchema,
 } from './matching-contract.mjs';
 import { compareFacts } from './facts.mjs';
-import { prioritizePrescanIds } from '../prescan/state.mjs';
+import { prescanInclusion } from '../prescan/state.mjs';
 import { completeLocalJobs, localJob, localJobMetadata, localJobOriginal } from './job-tools.mjs';
 import { DEFAULT_PUBLICATION_RANGE, publicationInWindow, publicationWindowForRange } from '../prescan/publication-range.mjs';
 
@@ -48,6 +48,7 @@ export async function deleteRankings(store) {
     career.rankingVersion = rankingVersion(career) + 1;
     career.matching = { jobs: {}, scores: {}, pairs: {} };
     delete career.prescan;
+    delete career.prescanInclusion;
   });
   return result;
 }
@@ -363,11 +364,13 @@ export function createMatchingTools({ store, platform, exportDocument, preserveF
             .filter(([, pair]) => own(scores, pair.a) && own(scores, pair.b)));
           const saved = career.matching = { jobs: { ...retainedJobs, ...currentJobs }, scores, pairs };
           const profileVersion = matchingProfileVersion(career);
+          const candidates = Object.keys(currentJobs).filter(id => !currentAssessment(saved.scores[id], profileVersion));
+          const inclusion = prescanInclusion(career, candidates, window);
           result = { candidate, profileVersion, policyId: ASSESSMENT_POLICY_ID, evidenceRevision: career.evidenceRevision ?? 0,
             publicationWindow: window,
             assessmentPolicy: { protocol: MATCHING_PROTOCOL, weights: DIMENSION_WEIGHTS, bands: BANDS, recommendMinimum: RECOMMEND_MINIMUM },
             assessmentSchema,
-            jobIds: prioritizePrescanIds(career, Object.keys(currentJobs).filter(id => !currentAssessment(saved.scores[id], profileVersion)), window),
+            jobIds: [...inclusion.includedIds], excluded: candidates.length - inclusion.includedIds.size, cutoff: inclusion.cutoff,
             total: Object.keys(currentJobs).length, ...counts(currentJobs, currentScores, profileVersion), batchSize: 10, workers: 8 };
         });
         return result;

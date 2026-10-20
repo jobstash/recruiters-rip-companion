@@ -138,8 +138,8 @@ test('listing captures are readable in Jobs but cannot be used as full originals
   assert.equal(listing.jobs[0].company, null);
   assert.equal(listing.jobs[0].publishedAt, null);
   const list = await f.browser.list({ kind: 'jobs' });
-  assert.deepEqual(list.items[0].card, { title: 'Unknown employer role', company: null, publishedAt: null,
-    score: { value: null, source: null, stale: false, status: null, decision: null }, chips: [] });
+  assert.deepEqual(list.items[0].card, { title: 'Unknown employer role', company: null, publishedAt: null, facts: [],
+    stage: 'unscored', rank: null, included: false, overridden: false, score: null, stale: false, status: null });
   const detail = await f.browser.read({ kind: 'jobs', id });
   assert.equal(detail.sections.find(section => section.heading === 'Captured listing text').text, 'A short card');
   const original = await f.call('career_job_read', { id });
@@ -159,7 +159,7 @@ test('complete imports work offline end to end before assessment, without invent
   const [id, oldId] = captured.jobs.map(job => job.id);
   const initial = await f.browser.list({ kind: 'jobs' });
   assert.equal(initial.total, 2);
-  assert.ok(initial.items.every(item => item.card.score.value === null && item.card.score.source === null && !('reviewed' in item.card)));
+  assert.ok(initial.items.every(item => item.card.score === null && item.card.stage === 'unscored'));
   const detail = await f.browser.read({ kind: 'jobs', id });
   assert.equal(detail.sections.find(section => section.heading === 'Original advert').text, full().description);
   const app = await f.call('career_application_create', { ...f.mutation(), jobId: id });
@@ -180,8 +180,8 @@ test('complete imports work offline end to end before assessment, without invent
   assert.ok(ranked.recommendations.every(job => job.overall === 80));
   assert.equal((await f.call('career_rerank_pairs')).pairs.length, 1);
   const reviewedCard = (await f.browser.list({ kind: 'jobs' })).items[0].card;
-  assert.equal(reviewedCard.score.value, 80);
-  assert.equal(reviewedCard.score.source, 'reviewed');
+  assert.equal(reviewedCard.score, 80);
+  assert.equal(reviewedCard.stage, 'reviewed');
   const refreshed = await f.call('career_match_jobs', { localOnly: true, refresh: true });
   assert.equal(refreshed.total, 2);
   assert.equal((await f.call('career_jobs')).total, 2);

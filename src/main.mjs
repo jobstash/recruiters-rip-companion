@@ -10,7 +10,7 @@ import { createVault, privateDirectory } from './vault.mjs';
 import { createDeviceClient } from './client.mjs';
 import { installNative } from './install-native.mjs';
 import { BROWSER_IDENTITIES } from './browser-identity.mjs';
-import { CareerError, fail, upgradeCareer } from './mcp/state.mjs';
+import { CareerError, createCareerState, fail, upgradeCareer } from './mcp/state.mjs';
 import { createMcpServer, createPlatformTools } from './mcp/server.mjs';
 import { createProfileTools } from './mcp/profile-tools.mjs';
 import { createApplicationTools } from './mcp/application-tools.mjs';
@@ -19,6 +19,7 @@ import { createDocumentFiles, readSelectedSource } from './mcp/files.mjs';
 import { createScopedAccess } from './mcp/scope.mjs';
 import { createMatchingTools, deleteRankings } from './mcp/matching-tools.mjs';
 import { matchingProfileVersion } from './mcp/assessment-policy.mjs';
+import { setInclusionCutoff, setInclusionOverride } from './prescan/state.mjs';
 import { installChatGptPlugin } from './host-setup.mjs';
 import { createCareerBrowser } from './career-browser.mjs';
 import { createPrescanCredentials } from './prescan/credentials.mjs';
@@ -428,6 +429,17 @@ async function settingsOperation(op, input) {
       else if (op === 'prescan-range-set') result = await prescan.setPublicationRange(input);
       else if (op === 'prescan-start') { assertPaidWorkAllowed(); result = await prescan.start(input); }
       else if (op === 'prescan-cancel') { exact(input, []); result = await prescan.cancel(); }
+      else if (op === 'prescan-include' || op === 'prescan-cutoff') {
+        exact(input, op === 'prescan-include' ? ['id', 'included'] : ['count']);
+        const scoped = createScopedAccess(store, { assertAvailable, epoch: () => sessionEpoch });
+        await scoped.store.update(state => {
+          const career = state.career ??= createCareerState();
+          if (op === 'prescan-include') setInclusionOverride(career, input.id, input.included);
+          else setInclusionCutoff(career, input.count);
+        });
+        scoped.assertAvailable(false); careerViewRevision++;
+        result = { completed: true };
+      }
       else fail('INVALID_INPUT', 'This pre-scan action is unavailable.');
       emit(); return { ok: true, result };
     }

@@ -6,10 +6,12 @@
     jobs: { title: 'Jobs', empty: 'No saved jobs. Copy the review prompt into your connected agent to start matching.', locked: 'Open local storage to read saved jobs.', select: 'Select a job' },
     applications: { title: 'Job Applications', empty: 'No saved applications.', locked: 'Open local storage to read saved applications.', select: 'Select an application' },
   };
-  // Operational words for unscored cards; a scored card shows one number captioned by its source.
-  const scoreCaptions = { unscored: 'Not scored', unavailable: 'Advert unavailable', refused: 'Declined', oversize: 'Too large' };
+  // Why an unscored job has no rank; the pre-filter never shows a number, only whether the job is in the next run.
+  const statusWords = { unavailable: 'Advert unavailable', refused: 'Declined', oversize: 'Too large' };
+  const statusWord = card => statusWords[card.status] ?? 'Not pre-filtered';
   const dateFormat = new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium', timeZone: 'UTC' });
   const displayDate = value => typeof value === 'string' && Number.isFinite(Date.parse(value)) ? dateFormat.format(new Date(value)) : null;
+  const integer = value => value.toLocaleString('en-GB');
   // Wide windows show the list and reader side by side, so the first record opens automatically.
   const sideBySide = window.matchMedia('(min-width: 760px)');
   const node = (tag, className, text) => {
@@ -19,17 +21,18 @@
     return created;
   };
 
-  function scoreCaption(score) {
-    if (score.value === null) return scoreCaptions[score.status] ?? 'Not scored';
-    const source = score.source === 'reviewed' ? ['Reviewed', score.decision].filter(Boolean).join(' · ') : 'Pre-filter';
-    return score.stale ? `${source} · out of date` : source;
+  function cardSpoken(card, date) {
+    const stage = card.stage === 'reviewed'
+      ? [`fit ${card.score === null ? 'not saved' : `${card.score} of 100`}`, card.stale ? 'out of date' : null]
+      : card.stage === 'prefilter'
+        ? [card.rank === null ? null : `rank ${card.rank}`, card.included ? 'in next run' : 'not in next run', card.overridden ? 'manual' : null]
+        : [statusWord(card).toLowerCase(), card.included ? 'in next run' : 'not in next run'];
+    return [card.title, card.company, ...stage, date ? `published ${date}` : 'publication date not stated'].filter(Boolean).join(', ');
   }
-  function scoreSpoken(score) {
-    if (score.value === null) return scoreCaption(score).toLowerCase();
-    const source = score.source === 'reviewed' ? 'reviewed' : 'pre-filter';
-    return [`${source} score ${score.value} of 100`, score.decision, score.stale ? 'out of date' : null].filter(Boolean).join(', ');
-  }
-  function renderCard(card, button) {
+  /** Body goes inside the record button; the right column (fit number or the next-run switch) is a sibling so the
+   *  checkbox is never nested inside the button. */
+  function renderCard(item, button, side, onInclude) {
+    const card = item.card;
     const date = displayDate(card.publishedAt);
     const body = node('span', 'career-card-body');
     body.append(node('span', 'career-record-title', card.title));
@@ -37,32 +40,38 @@
     if (card.company) meta.append(node('span', 'career-card-company', card.company));
     meta.append(node('span', 'career-card-date', date ? `Published ${date}` : 'Publication date not stated'));
     body.append(meta);
-    const chips = Array.isArray(card.chips) ? card.chips.filter(chip => typeof chip?.text === 'string' && chip.text) : [];
-    if (chips.length) {
-      const list = node('ul', 'career-card-chips');
-      for (const chip of chips) {
-        const item = node('li', 'career-chip', chip.text);
-        item.dataset.kind = chip.kind;
-        list.append(item);
-      }
-      body.append(list);
+    const facts = Array.isArray(card.facts) ? card.facts.filter(fact => typeof fact === 'string' && fact) : [];
+    if (facts.length) body.append(node('span', 'career-card-facts', facts.join(' · ')));
+    button.append(body);
+    button.setAttribute('aria-label', cardSpoken(card, date));
+
+    if (card.stage === 'reviewed') {
+      side.append(node('span', 'career-card-fit', card.score === null ? '—' : String(card.score)),
+        node('span', 'career-card-caption', card.stale ? 'Fit · out of date' : 'Fit'));
+      return;
     }
-    const score = node('span', 'career-card-score');
-    score.append(node('span', 'career-card-score-value', card.score.value === null ? '—' : String(card.score.value)),
-      node('span', 'career-card-score-caption', scoreCaption(card.score)));
-    button.append(body, score);
-    button.setAttribute('aria-label', [card.title, card.company, scoreSpoken(card.score),
-      date ? `published ${date}` : 'publication date not stated'].filter(Boolean).join(', '));
+    const label = node('label', 'career-card-include');
+    const checkbox = node('input', 'career-include');
+    checkbox.type = 'checkbox';
+    checkbox.checked = card.included === true;
+    checkbox.setAttribute('aria-label', `Include ${card.title} in the next agent run`);
+    checkbox.dataset.id = item.id;
+    checkbox.addEventListener('click', event => event.stopPropagation());
+    checkbox.addEventListener('change', event => { void onInclude(item, event.target.checked, event.target); });
+    label.addEventListener('click', event => event.stopPropagation());
+    label.append(checkbox, node('span', 'career-card-caption', 'In next run'));
+    side.append(label);
+    if (card.stage === 'unscored') side.append(node('span', 'career-card-caption', statusWord(card)));
+    if (card.overridden) side.append(node('span', 'career-card-caption', 'manual'));
   }
   function renderRow(item, button) {
-    if (item.card && typeof item.card === 'object') { renderCard(item.card, button); return; }
     button.append(node('span', 'career-record-title', item.title));
     if (typeof item.summary === 'string' && item.summary) button.append(node('span', 'career-record-summary', item.summary));
   }
 
   /** One list + reader pair. `persistentReader` keeps the reader column rendered on wide screens.
-   *  `jobControls` are shown only while the jobs kind is active; sort and Clear are also disabled otherwise. */
-  function createBrowser({ root, prefix, kind: initialKind, persistentReader = false, sortControl = null, deleteRankings = null, jobControls = [] }) {
+   *  `jobControls` are shown only while the jobs kind is active; sort, cutoff and Clear are also disabled otherwise. */
+  function createBrowser({ root, prefix, kind: initialKind, persistentReader = false, sortControl = null, cutoffControl = null, deleteRankings = null, jobControls = [] }) {
     const element = name => document.getElementById(`${prefix}-${name}`);
     const categoryButtons = [...root.querySelectorAll('[data-career-kind]')];
     const records = element('records');
@@ -77,10 +86,11 @@
     const readerRetry = element('reader-retry');
     const content = element('reader-content');
     const sortSelect = sortControl ? element('sort') : null;
+    const cutoffInput = cutoffControl ? element('cutoff') : null;
     const persistent = () => persistentReader && sideBySide.matches;
     let enabled = false;
     let kind = initialKind;
-    let sort = 'score';
+    let sort = 'rank';
     let generation = 0;
     let readGeneration = 0;
     let offset = 0;
@@ -89,6 +99,9 @@
     let loading = false;
     let selected = null;
     let selectedButton = null;
+    let cutoff = null;
+    // Set by an inclusion edit; the refresh that follows keeps the page, the open record and the toggled control.
+    let keepPlace = null;
 
     async function request(operation, args) {
       const response = await window.companion.invoke(operation, args);
@@ -112,10 +125,49 @@
       if (restoreFocus && returnTo?.isConnected) returnTo.focus();
     }
 
-    function renderDetail(detail) {
+    // Inclusion is user-owned: the companion records the choice, then the state broadcast reloads this list in place.
+    async function setInclusion(item, included, control = null) {
+      if (!enabled) return;
+      keepPlace = { offset, priorOffsets: [...priorOffsets], selectedId: selected?.id ?? item.id, focusId: control ? item.id : null };
+      try {
+        await request('prescan-include', { id: item.id, included });
+      } catch (error) {
+        keepPlace = null;
+        if (control) control.checked = item.card.included === true;
+        listStatus.textContent = `Could not change the next run. ${error.message}`;
+      }
+    }
+
+    function renderInclusion(item) {
+      const card = item?.card;
+      if (!card || card.stage === 'reviewed') return null;
+      const block = document.createElement('section');
+      block.className = 'career-next-run';
+      const heading = document.createElement('h3');
+      heading.textContent = 'Next run';
+      const list = document.createElement('dl');
+      const term = document.createElement('dt');
+      term.textContent = 'Agent evaluation';
+      const value = document.createElement('dd');
+      value.textContent = `${card.included ? 'Included' : 'Excluded'}${card.overridden ? ' (manual)' : ''}`;
+      list.append(term, value);
+      block.append(heading, list);
+      if (card.overridden) {
+        const reset = node('button', 'text', 'Reset to cutoff');
+        reset.type = 'button';
+        reset.id = `${prefix}-inclusion-reset`;
+        reset.addEventListener('click', () => { void setInclusion(item, null); });
+        block.append(reset);
+      }
+      return block;
+    }
+
+    function renderDetail(detail, item) {
       readerTitle.textContent = typeof detail?.title === 'string' ? detail.title : selected.title;
       const sections = Array.isArray(detail?.sections) ? detail.sections : [];
       content.replaceChildren();
+      const inclusion = renderInclusion(item);
+      if (inclusion) content.append(inclusion);
       for (const section of sections) {
         const hasFields = Array.isArray(section?.fields) && section.fields.length;
         if (!hasFields && typeof section?.text !== 'string') continue;
@@ -167,7 +219,7 @@
           ? item
           : await request('career-read', { kind: currentKind, id: item.id });
         if (!enabled || currentGeneration !== generation || currentRead !== readGeneration) return;
-        renderDetail(detail);
+        renderDetail(detail, item);
       } catch (error) {
         if (!enabled || currentGeneration !== generation || currentRead !== readGeneration) return;
         readerStatus.textContent = `Could not open this record. ${error.message} Retry to load it again.`;
@@ -182,8 +234,23 @@
       for (const control of jobControls) control.hidden = !active;
       if (deleteRankings) deleteRankings.disabled = !enabled || !active;
       if (sortSelect) sortSelect.disabled = !enabled || !active;
+      if (cutoffInput) cutoffInput.disabled = !enabled || !active;
     }
-    async function loadPage(focusList = false) {
+    function renderCutoff(inclusion, index) {
+      const divider = document.createElement('li');
+      divider.className = 'career-cutoff';
+      divider.append(node('span', 'career-cutoff-text',
+        `Cutoff · top ${integer(inclusion.cutoff)} go to the next run · ${integer(inclusion.included)} included`));
+      if (cutoffInput) {
+        const change = node('button', 'text', 'Change');
+        change.type = 'button';
+        change.addEventListener('click', () => cutoffInput.focus());
+        divider.append(change);
+      }
+      divider.dataset.index = String(index);
+      return divider;
+    }
+    async function loadPage(focusList = false, place = null) {
       if (!enabled) return;
       const currentGeneration = ++generation;
       closeReader();
@@ -199,31 +266,52 @@
       const category = categories[kind];
       listStatus.textContent = `Loading ${category.title.toLowerCase()}…`;
       let firstRecord = null;
+      let reopen = null;
+      let refocus = null;
       try {
         const result = await request('career-list', { kind, offset, limit: 25, ...(kind === 'jobs' ? { sort } : {}) });
         if (!enabled || currentGeneration !== generation) return;
-        for (const item of result.items) {
+        const inclusion = kind === 'jobs' && result.inclusion && typeof result.inclusion === 'object' ? result.inclusion : null;
+        const cutoffIndex = inclusion && sort === 'rank' && Number.isInteger(result.cutoffIndex) ? result.cutoffIndex : null;
+        result.items.forEach((item, index) => {
+          if (cutoffIndex === index) records.append(renderCutoff(inclusion, index));
           const row = document.createElement('li');
+          row.className = 'career-row';
           const button = document.createElement('button');
           button.type = 'button';
           button.className = 'career-record';
           button.setAttribute('aria-controls', `${prefix}-reader`);
-          renderRow(item, button);
+          if (item.card && typeof item.card === 'object') {
+            row.className = 'career-row career-card';
+            const side = node('span', 'career-card-side');
+            renderCard(item, button, side, setInclusion);
+            row.append(button, side);
+            if (place?.focusId === item.id) refocus = side.querySelector('input');
+          } else {
+            renderRow(item, button);
+            row.append(button);
+          }
           button.addEventListener('click', () => { void openRecord(item, button); });
           firstRecord ??= { item, button };
-          row.append(button);
+          if (place?.selectedId === item.id) reopen = { item, button };
           records.append(row);
-        }
+        });
+        if (cutoffIndex === result.items.length) records.append(renderCutoff(inclusion, cutoffIndex));
         nextOffset = Number.isInteger(result.nextOffset) && result.nextOffset > offset ? result.nextOffset : null;
         records.hidden = result.items.length === 0;
+        const range = `${integer(offset + 1)}–${integer(offset + result.items.length)} of ${integer(result.total)}`;
         listStatus.textContent = result.items.length
-          ? `${(offset + 1).toLocaleString('en-GB')}–${(offset + result.items.length).toLocaleString('en-GB')} of ${result.total.toLocaleString('en-GB')}`
+          ? inclusion ? `${range} · ${integer(inclusion.included)} in next run` : range
           : offset ? 'No records on this page. Choose Previous.' : category.empty;
+        if (cutoffInput && inclusion) {
+          cutoff = inclusion.cutoff;
+          if (document.activeElement !== cutoffInput) cutoffInput.value = String(inclusion.cutoff);
+        }
         previous.disabled = priorOffsets.length === 0;
         next.disabled = nextOffset === null;
         pagination.hidden = previous.disabled && next.disabled;
         if (focusList) {
-          const target = records.querySelector('button') || listStatus;
+          const target = records.querySelector('.career-record') || listStatus;
           target.setAttribute('tabindex', target.tagName === 'BUTTON' ? '0' : '-1');
           target.focus();
         }
@@ -241,37 +329,59 @@
           records.removeAttribute('aria-busy');
         }
       }
-      // Side-by-side layouts always show a record, including after Next/Previous; focus stays where the user put it.
-      if (firstRecord && enabled && currentGeneration === generation && sideBySide.matches) {
-        void openRecord(firstRecord.item, firstRecord.button, false);
-      }
+      if (!enabled || currentGeneration !== generation) return;
+      // An inclusion edit reopens the record the user had open; otherwise side-by-side layouts show the first record.
+      const open = reopen ?? (sideBySide.matches ? firstRecord : null);
+      if (open) void openRecord(open.item, open.button, false);
+      if (refocus) refocus.focus();
     }
 
+    function resetPlace() {
+      offset = 0;
+      priorOffsets = [];
+      keepPlace = null;
+    }
     categoryButtons.forEach(button => button.addEventListener('click', () => {
       if (!enabled || button.dataset.careerKind === kind) return;
       kind = button.dataset.careerKind;
       categoryButtons.forEach(candidate => candidate.setAttribute('aria-pressed', String(candidate === button)));
-      offset = 0;
-      priorOffsets = [];
+      resetPlace();
       showJobActions();
       void loadPage();
     }));
     sortSelect?.addEventListener('change', () => {
-      if (!enabled || kind !== 'jobs' || !['score', 'recent'].includes(sortSelect.value) || sortSelect.value === sort) return;
+      if (!enabled || kind !== 'jobs' || !['rank', 'recent'].includes(sortSelect.value) || sortSelect.value === sort) return;
       sort = sortSelect.value;
-      offset = 0;
-      priorOffsets = [];
+      resetPlace();
       void loadPage();
+    });
+    function commitCutoff() {
+      if (!enabled || kind !== 'jobs') return;
+      const count = Number.parseInt(cutoffInput.value, 10);
+      if (!Number.isInteger(count) || count < 1) { if (cutoff !== null) cutoffInput.value = String(cutoff); return; }
+      if (count === cutoff) return;
+      keepPlace = { offset, priorOffsets: [...priorOffsets], selectedId: selected?.id ?? null, focusId: null };
+      request('prescan-cutoff', { count }).catch(error => {
+        keepPlace = null;
+        if (cutoff !== null) cutoffInput.value = String(cutoff);
+        listStatus.textContent = `Could not change the cutoff. ${error.message}`;
+      });
+    }
+    cutoffInput?.addEventListener('change', commitCutoff);
+    cutoffInput?.addEventListener('keydown', event => {
+      if (event.key === 'Enter') { event.preventDefault(); commitCutoff(); }
     });
     previous.addEventListener('click', () => {
       if (!enabled || loading || !priorOffsets.length) return;
       offset = priorOffsets.pop();
+      keepPlace = null;
       void loadPage(true);
     });
     next.addEventListener('click', () => {
       if (!enabled || loading || nextOffset === null) return;
       priorOffsets.push(offset);
       offset = nextOffset;
+      keepPlace = null;
       void loadPage(true);
     });
     listRetry.addEventListener('click', () => { void loadPage(true); });
@@ -288,19 +398,21 @@
       refresh() {
         enabled = true;
         categoryButtons.forEach(button => { button.disabled = false; });
-        offset = 0;
-        priorOffsets = [];
+        const place = keepPlace;
+        keepPlace = null;
+        if (place) { offset = place.offset; priorOffsets = place.priorOffsets; }
+        else { offset = 0; priorOffsets = []; }
         showJobActions();
-        return loadPage();
+        return loadPage(false, place);
       },
       clear() {
         enabled = false;
         generation += 1;
         loading = false;
         closeReader();
-        offset = 0;
-        priorOffsets = [];
+        resetPlace();
         nextOffset = null;
+        cutoff = null;
         categoryButtons.forEach(button => { button.disabled = true; });
         records.replaceChildren();
         records.hidden = true;
@@ -319,8 +431,10 @@
   const me = createBrowser({ root: document.getElementById('me-browser'), prefix: 'me', kind: 'sources' });
   const jobs = createBrowser({
     root: document.getElementById('career-browser'), prefix: 'career', kind: 'jobs', persistentReader: true,
-    sortControl: document.getElementById('career-sort-control'), deleteRankings: document.getElementById('delete-rankings'),
-    jobControls: [document.getElementById('prefilter-controls'), document.getElementById('career-sort-control'), document.getElementById('delete-rankings')],
+    sortControl: document.getElementById('career-sort-control'), cutoffControl: document.getElementById('career-cutoff-control'),
+    deleteRankings: document.getElementById('delete-rankings'),
+    jobControls: [document.getElementById('prefilter-controls'), document.getElementById('career-cutoff-control'),
+      document.getElementById('career-sort-control'), document.getElementById('delete-rankings')],
   });
   window.careerBrowser = {
     refresh() { return Promise.all([me.refresh(), jobs.refresh()]); },

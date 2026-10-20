@@ -3,7 +3,8 @@ import { cvHeading } from './mcp/application-tools.mjs';
 import { renderableCv } from './mcp/cv-quality.mjs';
 import { createMatchingTools } from './mcp/matching-tools.mjs';
 import { fail, readCareer } from './mcp/state.mjs';
-import { currentPrescanRow } from './prescan/state.mjs';
+import { currentPrescanRow, prescanInclusion } from './prescan/state.mjs';
+import { DEFAULT_PUBLICATION_RANGE, publicationWindowForRange } from './prescan/publication-range.mjs';
 import { localJobMetadata } from './mcp/job-tools.mjs';
 
 const kinds = ['sources', 'facts', 'jobs', 'applications'];
@@ -107,19 +108,19 @@ const prescanScore = row => row?.status === 'scored' && Number.isInteger(row.pri
   ? row.priority : -1;
 const prescanPriority = row => prescanScore(row) >= 0 ? `${row.priority}/100` : 'Not scored';
 const prescanStatus = row => prescanScore(row) >= 0 ? 'Scored' : prescanStatuses[row.status] || 'Not scored';
-const cardScoreStatuses = new Set(['unavailable', 'refused', 'oversize']);
-// A job has one score: the best-known assessment. A current review supersedes the pre-filter, which only
-// exists to pick what to review; stale results rank below current ones and unscored jobs come last.
-const scoreGroups = { 'reviewed:false': 0, 'prefilter:false': 1, 'reviewed:true': 2, 'prefilter:true': 3 };
-const scoreGroup = score => score.source ? scoreGroups[`${score.source}:${score.stale}`] : 4;
-function cardScore(reviewed, prescan) {
-  const review = reviewed && Number.isInteger(reviewed.overall) ? { value: reviewed.overall, source: 'reviewed',
-    stale: reviewed.reviewStatus !== 'current', status: 'scored', decision: assessmentLabel(reviewed.decision) ?? null } : null;
-  const priority = prescanScore(prescan) >= 0 ? { value: prescan.priority, source: 'prefilter',
-    stale: prescan.current !== true, status: 'scored', decision: null } : null;
-  const scored = [review, priority].filter(Boolean).sort((a, b) => scoreGroup(a) - scoreGroup(b))[0];
-  return scored ?? { value: null, source: null, stale: false,
-    status: !prescan ? null : cardScoreStatuses.has(prescan.status) ? prescan.status : 'unscored', decision: null };
+const cardStatuses = new Set(['unavailable', 'refused', 'oversize']);
+// A card shows where the job stands: reviewed by an agent (score), ranked by the pre-filter for the next run
+// (rank and inclusion), or neither. Pre-filter priorities never surface as scores.
+function cardStage({ id, reviewed, prescan }, inclusion) {
+  const reviewCurrent = reviewed?.reviewStatus === 'current';
+  const rank = reviewCurrent ? null : inclusion.rank.get(id) ?? null;
+  return {
+    stage: reviewCurrent ? 'reviewed' : rank !== null ? 'prefilter' : 'unscored',
+    rank, included: !reviewCurrent && inclusion.includedIds.has(id), overridden: !reviewCurrent && inclusion.overridden(id),
+    score: Number.isInteger(reviewed?.overall) ? reviewed.overall : null,
+    stale: reviewed ? !reviewCurrent : Boolean(prescan) && prescan.current !== true,
+    status: !reviewCurrent && prescan && cardStatuses.has(prescan.status) ? prescan.status : null,
+  };
 }
 const bandLabel = band => typeof band === 'string' && band ? band.replace(/^./, letter => letter.toUpperCase()) : undefined;
 const overallLabel = row => Number.isInteger(row.overall) ? `${row.overall}/100 (${bandLabel(row.band)})` : 'Unavailable';
@@ -160,7 +161,7 @@ function prescanSection(row) {
   ], 'No pre-filter result saved.');
 }
 
-function jobItem({ id, reviewed, prescan, imported, metadata }) {
+function jobItem({ id, reviewed, prescan, imported, metadata }, inclusion) {
   const role = key => imported?.[key] ?? metadata?.[key] ?? reviewed?.[key] ?? prescan?.[key];
   const roleTitle = text(role('title'), '');
   const company = text(role('company'), '');
@@ -170,17 +171,16 @@ function jobItem({ id, reviewed, prescan, imported, metadata }) {
   const pay = range ? [salary.currency, range, salary.period && `per ${salary.period}`].filter(Boolean).join(' ') : null;
   const reviewCurrent = reviewed?.reviewStatus === 'current';
   const publishedAt = role('publishedAt');
-  const chip = (kind, value) => typeof value === 'string' && value ? [{ kind, text: value }] : [];
+  const fact = value => typeof value === 'string' && value ? [value] : [];
   // "Remote" as the posted location and "remote" as the work mode are one fact, not two.
-  const locationChip = (place, mode) => [place, mode && place?.toLowerCase() !== mode.toLowerCase() ? mode : null]
+  const locationFact = (place, mode) => [place, mode && place?.toLowerCase() !== mode.toLowerCase() ? mode : null]
     .filter(value => typeof value === 'string' && value).join(' · ');
   const card = {
     title: roleTitle || title, company: company || null,
     publishedAt: typeof publishedAt === 'string' && Number.isFinite(Date.parse(publishedAt)) ? publishedAt : null,
-    score: cardScore(reviewed, prescan),
-    chips: [...chip('seniority', role('seniority')), ...chip('salary', pay),
-      ...chip('location', locationChip(role('city') || role('location'), role('workMode'))),
-      ...chip('commitment', role('commitment')), ...chip('classification', role('classification'))],
+    facts: [...fact(role('seniority')), ...fact(pay), ...fact(locationFact(role('city') || role('location'), role('workMode'))),
+      ...fact(role('commitment')), ...fact(role('classification'))],
+    ...cardStage({ id, reviewed, prescan }, inclusion),
   };
   const review = reviewed ? reviewedSections(reviewed) : [];
   // A current review supersedes the pre-filter, so the reader never shows both; a stale review follows a current pre-filter.
@@ -221,7 +221,13 @@ function prescanRow(career, id, row, now) {
     current: currentPrescanRow(career, saved, now) };
 }
 
-async function jobRows(career, sort) {
+// Candidates for the next agent run: every catalogue job without a current review, in catalogue order.
+function jobInclusion(career, rows) {
+  const candidates = entries(career.matching?.jobs).map(([id]) => id).filter(id => rows.get(id)?.reviewed?.reviewStatus !== 'current');
+  return prescanInclusion(career, candidates, publicationWindowForRange(career.prescan?.publicationRange ?? DEFAULT_PUBLICATION_RANGE));
+}
+
+async function jobUnion(career) {
   const now = Date.now();
   const rows = new Map(entries(career.matching?.jobs).map(([id, metadata]) => [id, { id, metadata }]));
   for (const reviewed of await reviewedRows(career)) {
@@ -241,15 +247,21 @@ async function jobRows(career, sort) {
     item.imported = { ...localJobMetadata(job), description: job.description, updatedAt: job.updatedAt };
     rows.set(id, item);
   }
-  // Sort the whole saved union by the single effective score: current review, current pre-filter, stale review,
-  // stale pre-filter, then unscored; newer publication breaks ties, then ID.
+  return { rows, inclusion: jobInclusion(career, rows) };
+}
+
+// Rank order: current reviews by overall fit, then the pre-filter queue by rank, then everything else;
+// newer publication breaks ties, then ID. Recent order ignores stages entirely.
+const stageOrder = { reviewed: 0, prefilter: 1, unscored: 2 };
+function sortJobs(rows, inclusion, sort) {
   const sortable = [...rows.values()].map(row => {
     const publishedAt = row.imported?.publishedAt ?? row.metadata?.publishedAt ?? row.reviewed?.publishedAt ?? row.prescan?.publishedAt;
     const timestamp = typeof publishedAt === 'string' ? Date.parse(publishedAt) : NaN;
-    const score = cardScore(row.reviewed, row.prescan);
-    return { row, group: scoreGroup(score), value: score.value ?? -1, published: Number.isFinite(timestamp) ? timestamp : -Infinity };
+    const stage = cardStage(row, inclusion);
+    const value = stage.stage === 'reviewed' ? -(stage.score ?? -1) : stage.stage === 'prefilter' ? stage.rank : 0;
+    return { row, group: stageOrder[stage.stage], value, published: Number.isFinite(timestamp) ? timestamp : -Infinity };
   });
-  return sortable.sort((a, b) => (sort === 'score' ? a.group - b.group || b.value - a.value : 0) ||
+  return sortable.sort((a, b) => (sort === 'rank' ? a.group - b.group || a.value - b.value : 0) ||
     (a.published === b.published ? 0 : a.published > b.published ? -1 : 1) ||
     (a.row.id < b.row.id ? -1 : a.row.id > b.row.id ? 1 : 0)).map(item => item.row);
 }
@@ -262,18 +274,24 @@ export function createCareerBrowser({ store }) {
   return {
     async list(args = {}) {
       validate(args, ['kind', 'offset', 'limit', 'sort']);
-      const { kind, offset = 0, limit = 25, sort = 'score' } = args;
-      if ((own(args, 'sort') && (kind !== 'jobs' || !['score', 'recent'].includes(args.sort)))) {
-        fail('INVALID_INPUT', 'Use sort score or recent for Jobs only.');
+      const { kind, offset = 0, limit = 25, sort = 'rank' } = args;
+      if ((own(args, 'sort') && (kind !== 'jobs' || !['rank', 'recent'].includes(args.sort)))) {
+        fail('INVALID_INPUT', 'Use sort rank or recent for Jobs only.');
       }
       if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isInteger(limit) || limit < 1 || limit > 100) {
         fail('INVALID_INPUT', 'Use limit 1–100 and a nonnegative safe integer offset.');
       }
       const career = readCareer(store);
       if (kind === 'jobs') {
-        const rows = await jobRows(career, sort);
-        const items = rows.slice(offset, offset + limit).map(jobItem);
-        return { items, total: rows.length, nextOffset: offset + items.length < rows.length ? offset + items.length : null };
+        const { rows, inclusion } = await jobUnion(career);
+        const sorted = sortJobs(rows, inclusion, sort);
+        const items = sorted.slice(offset, offset + limit).map(row => jobItem(row, inclusion));
+        // The divider sits before the first card ranked past the cutoff, reported once on the page that holds it.
+        const past = row => cardStage(row, inclusion).rank > inclusion.cutoff;
+        const divider = sort === 'rank' ? sorted.findIndex(past) - offset : -1;
+        return { items, total: sorted.length, nextOffset: offset + items.length < sorted.length ? offset + items.length : null,
+          cutoffIndex: divider >= 0 && divider < items.length ? divider : null,
+          inclusion: { cutoff: inclusion.cutoff, included: inclusion.includedIds.size, rankedTotal: inclusion.rankedIds.length } };
       }
       const records = entries(career[kind]);
       const items = records.slice(offset, offset + limit).map(([id, item]) => {
@@ -291,17 +309,10 @@ export function createCareerBrowser({ store }) {
       }
       const career = readCareer(store);
       if (kind === 'jobs') {
-        const assessment = lookup(career.matching?.scores, id);
-        const savedPrescan = lookup(career.prescan?.rows, id);
-        const captured = lookup(career.jobs, id);
-        const metadata = lookup(career.matching?.jobs, id);
-        if (!assessment && !savedPrescan && !captured && !metadata) fail('NOT_FOUND', 'This saved job was not found. Refresh the list.');
-        const now = Date.now();
-        // Project every final assessment so pairwise comparisons stay current, then pick this job.
-        const reviewed = assessment ? (await reviewedRows(career)).find(row => row.id === id) ?? null : null;
-        const prescan = savedPrescan ? prescanRow(career, id, savedPrescan, now) : null;
-        const imported = captured ? { ...localJobMetadata(captured), description: captured.description } : null;
-        const { title, sections } = jobItem({ id, reviewed, prescan, imported, metadata });
+        const { rows, inclusion } = await jobUnion(career);
+        const row = rows.get(id);
+        if (!row) fail('NOT_FOUND', 'This saved job was not found. Refresh the list.');
+        const { title, sections } = jobItem(row, inclusion);
         return { title, sections };
       }
       const item = lookup(career[kind], id);

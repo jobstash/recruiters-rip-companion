@@ -35,12 +35,6 @@ export function createPrescanTools({ controller }) {
       async invoke(args = {}) { exact(args, []); return controller.status(); },
     },
     {
-      name: 'career_prescan_results', readOnly: true,
-      description: 'Read every saved pre-scan result, globally ordered before pagination. Priority is not a final fit score or hiring probability. Stale, unavailable, refused and conflict rows remain visible and still need subscription review. Does not require a provider key or network access.',
-      inputSchema: object({ offset: { type: 'integer', minimum: 0, default: 0 }, limit: { type: 'integer', minimum: 1, maximum: 100, default: 25 } }),
-      async invoke(args = {}) { exact(args, ['offset', 'limit']); return controller.results(args); },
-    },
-    {
       name: 'career_prescan_cancel', readOnly: false,
       description: 'Stop the active pre-scan without removing completed results. Already dispatched provider requests may still be billed. Never changes final subscription assessments.',
       inputSchema: object({}),

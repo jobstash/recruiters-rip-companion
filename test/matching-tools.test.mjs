@@ -83,6 +83,23 @@ function fixture({ jobs = [job('a'), job('b'), job('c')], batch, emptyProfile = 
   return { store, calls, tools, call, save, setCatalogue: jobs => { catalogue = jobs; }, setPlatformError: error => { platformError = error; } };
 }
 
+test('subscription assignment and original batches never expose saved preliminary judgments', async () => {
+  const f = fixture();
+  const sentinel = 'PRIVATE_PRELIMINARY_JUDGMENT';
+  await f.store.update(state => {
+    state.career.prescan = { provider: 'openai', profileVersion: '0:0', rows: {
+      'node:a': { id: 'node:a', priority: 99, direction: sentinel, constraints: sentinel, eligibility: sentinel,
+        dimensions: { direction: sentinel }, confidence: sentinel, answers: [sentinel], reason: sentinel, commentary: sentinel },
+    }, rawAnswers: sentinel, commentary: sentinel };
+  });
+  const context = await f.call('career_match_jobs');
+  const batch = await f.call('career_match_batch', { ids: context.jobIds });
+  assert.equal(JSON.stringify({ context, batch }).includes(sentinel), false);
+  assert.equal(context.candidate.cv, 'Software engineer at Acme, 2019–2023. Built reporting services.');
+  assert.equal(batch.jobs[0].ad, 'Full original ad');
+  assert.deepEqual(new Set(context.jobIds), new Set(['node:a', 'node:b', 'node:c']));
+});
+
 test('overall fit weights the four dimensions and bands follow their thresholds', () => {
   const only = (key, value = 100) => ({ ...dimensions(0), [key]: value });
   assert.equal(overallFit(only('direction')), 30);

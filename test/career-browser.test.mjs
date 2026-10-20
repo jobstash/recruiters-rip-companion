@@ -1,11 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { runInNewContext } from 'node:vm';
 import { createCareerState } from '../src/mcp/state.mjs';
 import { createCareerBrowser } from '../src/career-browser.mjs';
 import { ASSESSMENT_POLICY_ID, deriveDecision } from '../src/mcp/matching-contract.mjs';
 import { createMatchingTools } from '../src/mcp/matching-tools.mjs';
 import { decisionProviders } from '../src/prescan/providers.mjs';
-import { comparePrescanRows } from '../src/prescan/state.mjs';
 
 function fixture() {
   const state = { privateKey: 'PRIVATE_KEY_SENTINEL', career: createCareerState() };
@@ -81,22 +82,59 @@ test('browser kinds cut over to jobs without keeping obsolete assessment endpoin
   await assert.rejects(browser.read({ kind: 'jobs', id: 'missing' }), { code: 'NOT_FOUND' });
 });
 
-test('jobs sort reviewed results before pagination and keep skip judgments visible', async () => {
+test('Jobs sort is strictly validated and is not accepted by other browser categories', async () => {
+  const { browser } = fixture();
+  for (const sort of [null, undefined, '', 'newest', 'Score', 0, {}, ['score']])
+    await assert.rejects(browser.list({ kind: 'jobs', sort }), { code: 'INVALID_INPUT' });
+  for (const kind of ['sources', 'facts', 'applications'])
+    await assert.rejects(browser.list({ kind, sort: 'score' }), { code: 'INVALID_INPUT' });
+  for (const sort of ['score', 'recent'])
+    assert.deepEqual(await browser.list({ kind: 'jobs', sort }), { items: [], total: 0, nextOffset: null });
+  await assert.rejects(browser.read({ kind: 'jobs', id: 'missing', sort: 'score' }), { code: 'INVALID_INPUT' });
+});
+
+test('Jobs sort the complete union by pre-filter priority or publication without using final fit or gates', async () => {
   const { state, browser } = fixture();
-  state.career.matching = { jobs: {}, scores: {} };
-  for (const [id, overall, changes] of [['low', 40, {}], ['high', 90, {}], ['middle', 70, { gates: { ...passing, eligibility: 'flag' } }]]) {
-    state.career.matching.jobs[id] = { title: id, company: 'Company', publishedAt: '2026-10-14T12:00:00Z' };
-    state.career.matching.scores[id] = finalAssessment(overall, { ...changes, reason: `Saved reasoning for ${id}` });
+  const rows = [
+    preliminary('high-conflict', '2026-10-10T12:00:00Z', 90, { direction: 'conflict' }),
+    preliminary('low-aligned', '2026-10-11T12:00:00Z', 10),
+    preliminary('zero', '2026-10-12T12:00:00Z', 0),
+    preliminary('refused', '2026-10-13T12:00:00Z', 100, { status: 'refused' }),
+    preliminary('invalid-score', '2026-10-09T12:00:00Z', 101),
+    preliminary('unknown-b', null, 10),
+    preliminary('unknown-a', 'not a date', 10),
+  ];
+  savePrescan(state.career, rows);
+  state.career.matching = {
+    jobs: { 'final-fit-99': { title: 'Reviewed', publishedAt: '2026-10-14T12:00:00Z' },
+      'catalogue-only': { title: 'Saved unscored', publishedAt: '2026-10-11T13:00:00+01:00' } },
+    scores: { 'final-fit-99': finalAssessment(99) },
+  };
+  state.career.jobs = {};
+  state.career.jobs.capture = { title: 'Captured', publishedAt: '2026-10-15T12:00:00Z', complete: true,
+    description: 'The original captured advert.', updatedAt: '2000-01-01T00:00:00Z' };
+  const expectedScore = ['high-conflict', 'low-aligned', 'unknown-a', 'unknown-b', 'zero', 'capture', 'final-fit-99',
+    'refused', 'catalogue-only', 'invalid-score'];
+  const expectedRecent = ['capture', 'final-fit-99', 'refused', 'zero', 'catalogue-only', 'low-aligned',
+    'high-conflict', 'invalid-score', 'unknown-a', 'unknown-b'];
+  for (const [sort, expected] of [['score', expectedScore], ['recent', expectedRecent]]) {
+    const seen = [];
+    let offset = 0;
+    do {
+      const page = await browser.list({ kind: 'jobs', sort, offset, limit: 3 });
+      assert.equal(page.total, expected.length);
+      seen.push(...page.items.map(item => item.id));
+      offset = page.nextOffset;
+    } while (offset !== null);
+    assert.deepEqual(seen, expected);
   }
-  const first = await browser.list({ kind: 'jobs', limit: 2 });
-  assert.deepEqual(first.items.map(item => item.id), ['high', 'middle']);
-  assert.match(first.items[1].summary, /Needs clarification$/);
-  const second = await browser.list({ kind: 'jobs', limit: 2, offset: first.nextOffset });
-  assert.deepEqual(second.items.map(item => item.id), ['low']);
-  assert.equal(second.nextOffset, null);
-  assert.ok(second.items[0].sections.some(section => section.text?.includes('Saved reasoning for low')));
-  assert.equal(second.items[0].summary, 'Reviewed · Overall 40/100 · Weak · Not recommended');
-  assert.equal(fieldValue(second.items[0], 'Reviewed fit', 'Overall fit'), '40/100 (Weak)');
+  assert.deepEqual((await browser.list({ kind: 'jobs' })).items.map(item => item.id), expectedScore);
+  const reviewed = await browser.read({ kind: 'jobs', id: 'final-fit-99' });
+  assert.equal(fieldValue(reviewed, 'Reviewed fit', 'Overall fit'), '99/100 (Strong)');
+  assert.equal(reviewed.sections.some(section => section.heading === 'Pre-filter'), false);
+  assert.equal((await browser.read({ kind: 'jobs', id: 'catalogue-only' })).title, 'Saved unscored');
+  assert.equal((await browser.read({ kind: 'jobs', id: 'capture' })).sections.find(section => section.heading === 'Original advert').text,
+    'The original captured advert.');
 });
 
 test('reviewed jobs show overall fit with its breakdown, gates, requirements and pairwise rank', async () => {
@@ -147,8 +185,8 @@ test('reviewed jobs show overall fit with its breakdown, gates, requirements and
   assert.equal(fieldValue(await browser.read({ kind: 'jobs', id: 'leader' }), 'Reviewed fit', 'Pairwise rank'), '1 win of 1 comparison');
 });
 
-test('jobs union every assessment before paging and preserve canonical final ordering across archive pages', async () => {
-  const { state, store, browser } = fixture();
+test('Jobs preserve every archived assessment and capture across globally sorted pages', async () => {
+  const { state, browser } = fixture();
   const publishedAt = currentDate();
   const career = state.career;
   career.matching = { jobs: {}, scores: {} };
@@ -161,27 +199,26 @@ test('jobs union every assessment before paging and preserve canonical final ord
     preliminary('pre-high', publishedAt, 99)];
   savePrescan(career, scans);
   for (const row of scans) career.matching.jobs[row.id] = { ...row };
+  career.jobs = {};
+  career.jobs.capture = { title: 'Saved capture', complete: false, description: 'Listing excerpt.' };
   const before = structuredClone(state);
-  const canonical = createMatchingTools({ store }).find(tool => tool.name === 'career_matches');
-  const expected = [...(await canonical.invoke({ limit: 100 })).matches,
-    ...(await canonical.invoke({ limit: 100, offset: 100 })).matches].map(row => row.id);
-  expected.push(...scans.filter(row => row.id.startsWith('pre-')).sort(comparePrescanRows).map(row => row.id));
+  const expected = ['reviewed-0', 'pre-high', 'pre-low',
+    ...Object.keys(career.matching.scores).filter(id => id !== 'reviewed-0').sort(), 'capture'];
   const items = [];
   let offset = 0;
   do {
     const page = await browser.list({ kind: 'jobs', offset, limit: 17 });
-    assert.equal(page.total, 107);
+    assert.equal(page.total, 108);
     items.push(...page.items);
     offset = page.nextOffset;
   } while (offset !== null);
   assert.deepEqual(items.map(item => item.id), expected);
   assert.equal(new Set(items.map(item => item.id)).size, items.length);
-  assert.deepEqual(await browser.list({ kind: 'jobs', offset: 107 }), { items: [], total: 107, nextOffset: null });
+  assert.deepEqual(await browser.list({ kind: 'jobs', offset: 108 }), { items: [], total: 108, nextOffset: null });
   const merged = items.find(item => item.id === 'reviewed-0');
-  assert.equal(merged.summary, 'Reviewed · Overall 1/100 · Poor · Not recommended');
-  assert.equal(fieldValue(merged, 'Pre-scan result', 'Priority'), '100/100');
+  assert.match(merged.summary, /^Reviewed · Overall 1\/100 · Poor · Not recommended · Pre-filter priority 100\/100/);
+  assert.equal(fieldValue(merged, 'Pre-filter', 'Priority'), '100/100');
   assert.equal(merged.sections.filter(section => section.heading === 'Role').length, 1);
-  assert.equal(merged.sections.some(section => section.heading === 'Preliminary ranking'), false);
   assert.deepEqual(await browser.read({ kind: 'jobs', id: merged.id }), { title: merged.title, sections: merged.sections });
   assert.deepEqual(state, before);
 });
@@ -236,7 +273,7 @@ test('jobs retain stale, excluded, unavailable, old, relocation and missing-meta
   assert.deepEqual(state, before);
 });
 
-test('current pre-scans lead stale reviews without converting priority into overall fit', async () => {
+test('pre-filter presentation keeps priority, freshness and operational failures separate from reviewed fit', async () => {
   const { state, browser } = fixture();
   const publishedAt = currentDate();
   const rows = [
@@ -258,50 +295,52 @@ test('current pre-scans lead stale reviews without converting priority into over
   const before = structuredClone(state);
   const page = await browser.list({ kind: 'jobs' });
   assert.equal(page.total, rows.length);
-  const current = rows.filter(row => !['old', 'missing-ad', 'changed-ad'].includes(row.id)).sort(comparePrescanRows);
-  const stale = rows.filter(row => ['old', 'missing-ad', 'changed-ad'].includes(row.id)).sort(comparePrescanRows);
-  assert.deepEqual(page.items.map(item => item.id), [...current, ...stale].map(row => row.id));
+  const stale = rows.filter(row => ['old', 'missing-ad', 'changed-ad'].includes(row.id));
+  assert.deepEqual(page.items.slice(0, 4).map(item => item.id), ['conflict', 'ineligible', 'uncertain', 'merged']);
   const merged = page.items.find(item => item.id === 'merged');
-  assert.match(merged.summary, /^Pre-scan · Priority 82\/100 · Potentially aligned$/);
-  assert.equal(merged.sections[0].heading, 'Pre-scan result');
+  assert.equal(merged.sections[0].heading, 'Pre-filter');
+  assert.equal(fieldValue(merged, 'Pre-filter', 'Priority'), '82/100');
   assert.equal(fieldValue(merged, 'Reviewed fit', 'Overall fit'), '99/100 (Strong)');
   assert.equal(fieldValue(merged, 'Role', 'Location'), 'London');
   assert.equal(merged.sections.filter(section => section.heading === 'Role').length, 1);
-  const uncertain = page.items.find(item => item.id === 'uncertain');
-  assert.match(uncertain.summary, /Unresolved$/);
-  assert.equal(fieldValue(uncertain, 'Pre-scan result', 'Mandatory conditions'), 'Unresolved');
-  assert.match(page.items.find(item => item.id === 'conflict').summary, /Potential conflict$/);
-  const ineligible = page.items.find(item => item.id === 'ineligible');
-  assert.match(ineligible.summary, /Potential conflict$/);
-  assert.equal(fieldValue(ineligible, 'Pre-scan result', 'Eligibility'), 'Potential conflict');
-  assert.equal(fieldValue(page.items.find(item => item.id === 'refused'), 'Pre-scan result', 'Preliminary breakdown'), undefined);
+  for (const item of page.items) {
+    assert.deepEqual(sectionFields(item, 'Pre-filter').map(field => field.label),
+      ['Priority', 'Status', 'Freshness', 'Provider', 'Model']);
+  }
+  const failures = { refused: 'Provider declined assessment', unavailable: 'Original advert unavailable',
+    oversize: 'Input exceeds the provider limit' };
+  for (const [id, reason] of Object.entries(failures)) {
+    const item = page.items.find(item => item.id === id);
+    assert.equal(fieldValue(item, 'Pre-filter', 'Status'), reason);
+    assert.ok(item.summary.includes(reason));
+  }
   for (const id of ['refused', 'unavailable', 'oversize']) {
     const item = page.items.find(item => item.id === id);
-    assert.equal(fieldValue(item, 'Pre-scan result', 'Priority'), 'Not scored');
+    assert.equal(fieldValue(item, 'Pre-filter', 'Priority'), 'Not scored');
     assert.equal(item.sections.some(section => section.heading === 'Reviewed fit'), false);
   }
   for (const row of stale) {
     const item = page.items.find(item => item.id === row.id);
-    assert.match(item.summary, /^Out of date pre-scan/);
-    assert.equal(fieldValue(item, 'Pre-scan result', 'Status'), 'Out of date');
+    assert.ok(item.summary.includes('Out of date'));
+    assert.equal(fieldValue(item, 'Pre-filter', 'Freshness'), 'Out of date');
   }
   for (const item of page.items)
     assert.deepEqual(await browser.read({ kind: 'jobs', id: item.id }), { title: item.title, sections: item.sections });
   assert.deepEqual(state, before);
 });
 
-test('pre-scan freshness respects the saved profile version and both policy IDs in list and detail', async () => {
+test('pre-scan freshness respects the saved career evidence and provider policy', async () => {
   const { state, browser } = fixture();
   const row = preliminary('saved', currentDate());
   state.career.matching = { jobs: { saved: { ...row } }, scores: {} };
   savePrescan(state.career, [row]);
-  assert.equal(fieldValue((await browser.list({ kind: 'jobs' })).items[0], 'Pre-scan result', 'Status'), 'Preliminary');
-  for (const changed of [{ profileVersion: '1:0' }, { assessmentPolicyId: 'earlier-policy' }, { prescanPolicyId: 'earlier-policy' }]) {
+  assert.equal(fieldValue((await browser.list({ kind: 'jobs' })).items[0], 'Pre-filter', 'Freshness'), 'Current');
+  for (const changed of [{ profileVersion: '1:0' }, { prescanPolicyId: 'earlier-policy' }]) {
     savePrescan(state.career, [row]);
     Object.assign(state.career.prescan, changed);
     const page = await browser.list({ kind: 'jobs' });
-    assert.equal(fieldValue(page.items[0], 'Pre-scan result', 'Status'), 'Out of date');
-    assert.match(page.items[0].summary, /^Out of date pre-scan/);
+    assert.equal(fieldValue(page.items[0], 'Pre-filter', 'Freshness'), 'Out of date');
+    assert.ok(page.items[0].summary.includes('Out of date'));
     assert.deepEqual(await browser.read({ kind: 'jobs', id: row.id }), { title: page.items[0].title, sections: page.items[0].sections });
   }
 });
@@ -336,10 +375,10 @@ test('a current final review keeps stale pre-scan context and missing catalogue 
   assert.equal(page.total, 1);
   const item = page.items[0];
   assert.equal(item.title, 'Saved role title — Saved employer');
-  assert.equal(item.summary, 'Reviewed · Overall 0/100 · Poor · Not recommended');
+  assert.match(item.summary, /^Reviewed · Overall 0\/100 · Poor · Not recommended · Pre-filter priority 99\/100 · Out of date$/);
   assert.equal(item.sections[0].heading, 'Reviewed fit');
-  assert.equal(fieldValue(item, 'Pre-scan result', 'Status'), 'Out of date');
-  assert.equal(fieldValue(item, 'Pre-scan result', 'Priority'), '99/100');
+  assert.equal(fieldValue(item, 'Pre-filter', 'Freshness'), 'Out of date');
+  assert.equal(fieldValue(item, 'Pre-filter', 'Priority'), '99/100');
   assert.equal(fieldValue(item, 'Role', 'City'), 'London');
   assert.equal(fieldValue(item, 'Role', 'Apply URL'), 'https://example.test/saved');
   assert.equal(item.sections.filter(section => section.heading === 'Role').length, 1);
@@ -390,4 +429,103 @@ test('facts lead with explanations and preserve actual interview context; applic
   assert.equal(JSON.stringify(detail).includes('CV_SUPPORT_SENTINEL'), false);
   assert.match(sections['Earlier CV'], /^Jane Candidate\nEngineer\n/);
   assert.equal(sections['Cover letter'], 'Dear team,\n\nI build payment pipelines.');
+});
+
+async function rendererFixture(browser, wide) {
+  let focused = null;
+  class Node {
+    constructor(tag = 'div') {
+      this.tagName = tag.toUpperCase();
+      this.children = [];
+      this.attributes = new Map();
+      this.listeners = new Map();
+      this.classList = { add() {}, remove() {} };
+      this.hidden = false;
+      this.disabled = false;
+      this.isConnected = true;
+      this.textContent = '';
+      this.dataset = {};
+    }
+    append(...children) { this.children.push(...children); }
+    replaceChildren(...children) { this.children = children; }
+    get childElementCount() { return this.children.length; }
+    setAttribute(name, value) { this.attributes.set(name, value); }
+    removeAttribute(name) { this.attributes.delete(name); }
+    addEventListener(name, callback) { this.listeners.set(name, callback); }
+    focus() { focused = this; }
+    querySelectorAll(selector) {
+      return this.children.flatMap(child => [
+        ...((selector === 'button' ? child.tagName === 'BUTTON' : child.attributes.has('aria-current')) ? [child] : []),
+        ...child.querySelectorAll(selector),
+      ]);
+    }
+    querySelector(selector) { return this.querySelectorAll(selector)[0] ?? null; }
+    fire(name) { this.listeners.get(name)?.({ target: this }); }
+  }
+  const ids = ['career-records', 'career-list-status', 'career-list-retry', 'career-pagination', 'career-previous',
+    'career-next', 'career-reader', 'career-reader-title', 'career-reader-status', 'career-reader-retry',
+    'career-reader-content', 'career-browser', 'delete-rankings', 'career-sort-control', 'career-sort', 'career-close'];
+  const nodes = Object.fromEntries(ids.map(id => [id, new Node()]));
+  nodes['career-sort'].value = 'score';
+  const categories = Object.fromEntries(['sources', 'facts', 'jobs', 'applications'].map(kind => {
+    const node = new Node('button');
+    node.dataset.careerKind = kind;
+    return [kind, node];
+  }));
+  const calls = [];
+  const window = { matchMedia: () => ({ matches: wide }), companion: { async invoke(operation, args) {
+    const input = structuredClone(args);
+    calls.push({ operation, args: input });
+    return { ok: true, result: await (operation === 'career-list' ? browser.list(input) : browser.read(input)) };
+  } } };
+  const document = { getElementById: id => nodes[id], createElement: tag => new Node(tag),
+    querySelectorAll: () => Object.values(categories) };
+  runInNewContext(await readFile(new URL('../ui/career-browser.js', import.meta.url), 'utf8'), { window, document });
+  return { window, nodes, categories, calls, focused: () => focused,
+    settle: () => new Promise(resolve => setImmediate(resolve)),
+    titles: () => nodes['career-records'].children.map(row => row.children[0].children[0].textContent) };
+}
+
+for (const wide of [false, true]) test(`Jobs sort changes reset page and reader selection in ${wide ? 'wide' : 'narrow'} mode`, async () => {
+  const { state, browser } = fixture();
+  const rows = Array.from({ length: 27 }, (_, index) => preliminary(String(index).padStart(2, '0'),
+    new Date(Date.UTC(2026, 9, 20) - index * 60000).toISOString(), index));
+  savePrescan(state.career, rows);
+  state.career.matching = { jobs: Object.fromEntries(rows.map(row => [row.id, row])), scores: {} };
+  const ui = await rendererFixture(browser, wide);
+  await ui.window.careerBrowser.refresh();
+  await ui.settle();
+  assert.equal(ui.titles()[0], '26 — Company');
+  assert.equal(ui.nodes['career-sort-control'].hidden, false);
+  ui.nodes['career-next'].fire('click');
+  await ui.settle();
+  assert.deepEqual(ui.titles(), ['01 — Company', '00 — Company']);
+  ui.nodes['career-records'].children[0].children[0].fire('click');
+  await ui.settle();
+  assert.equal(ui.nodes['career-reader-title'].textContent, '01 — Company');
+
+  ui.nodes['career-sort'].focus();
+  ui.nodes['career-sort'].value = 'recent';
+  ui.nodes['career-sort'].fire('change');
+  await ui.settle();
+  assert.equal(ui.titles()[0], '00 — Company');
+  assert.equal(ui.nodes['career-previous'].disabled, true);
+  assert.equal(ui.nodes['career-next'].disabled, false);
+  assert.equal(ui.nodes['career-reader'].hidden, !wide);
+  assert.equal(ui.nodes['career-reader-title'].textContent, wide ? '00 — Company' : '');
+  assert.equal(ui.focused(), ui.nodes['career-sort']);
+  assert.equal(ui.nodes['career-records'].querySelectorAll('[aria-current]').length, wide ? 1 : 0);
+
+  ui.categories.facts.fire('click');
+  await ui.settle();
+  assert.equal(ui.nodes['career-sort-control'].hidden, true);
+  assert.equal(ui.nodes['career-sort'].disabled, true);
+  assert.equal(Object.hasOwn(ui.calls.at(-1).args, 'sort'), false);
+  ui.categories.jobs.fire('click');
+  await ui.settle();
+  assert.equal(ui.titles()[0], '00 — Company');
+  assert.equal(ui.calls.at(-1).args.sort, 'recent');
+  ui.window.careerBrowser.clear();
+  assert.equal(ui.nodes['career-sort-control'].hidden, true);
+  assert.equal(ui.nodes['career-sort'].disabled, true);
 });

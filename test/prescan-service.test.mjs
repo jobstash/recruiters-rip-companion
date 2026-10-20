@@ -104,7 +104,7 @@ test('construction and local readers never authorize, fetch or infer; constructo
     credentials: { publicState: unavailable }, authorize: unavailable });
   const f = fixture();
   assert.equal(f.controller.status().status, 'idle');
-  assert.deepEqual(f.controller.results().items, []);
+  assert.equal(f.controller.status().processed, 0);
   assert.deepEqual(f.apiCalls, []); assert.deepEqual(f.platformCalls, []); assert.deepEqual(f.authorizations, []);
 });
 
@@ -211,7 +211,7 @@ test('changing the range cancels active work, preserves saved successes and cann
   assert.equal(preview.jobCount, 2); assert.equal(preview.reused, 1);
   assert.equal(f.apiCalls.length, 2); assert.equal(f.authorizations.length, 1);
   pending.resolve(); await f.waitFor(() => !f.controller.isActive());
-  assert.equal(f.controller.results().total, 1); assert.equal(f.apiCalls.length, 2);
+  assert.equal(Object.keys(f.snapshot().career.prescan.rows).length, 1); assert.equal(f.apiCalls.length, 2);
 });
 
 test('invalid range selections and obsolete limits never fetch metadata, authorize or infer', async () => {
@@ -368,7 +368,7 @@ test('partial batches requeue remaining IDs finitely, while missing ads and no-p
   assert.equal(batches, 3); assert.equal(f.apiCalls.length, 1);
   const summary = f.controller.status();
   assert.equal(summary.status, 'completed'); assert.equal(summary.processed, 5); assert.equal(summary.scored, 1); assert.equal(summary.unavailable, 4);
-  assert.equal(f.controller.results().total, 5);
+  assert.equal(Object.keys(f.snapshot().career.prescan.rows).length, 5);
   assert.equal(Object.keys(f.store.get().career.matching.scores).length, 0);
 });
 
@@ -380,7 +380,7 @@ test('oversize and refusal are explicit non-scored outcomes without final-score 
   } });
   await f.controller.start(); await terminal(f);
   assert.equal(f.apiCalls.length, 2); assert.equal(f.controller.status().requests, 1);
-  const rows = f.controller.results().items;
+  const rows = Object.values(f.snapshot().career.prescan.rows);
   assert.deepEqual(new Set(rows.map(row => row.status)), new Set(['oversize', 'refused']));
   assert.equal(rows.every(row => row.priority === null), true);
   assert.equal(JSON.stringify(rows).includes('private payload'), false);
@@ -394,15 +394,15 @@ test('partial successes are visible immediately; provider failure stops dispatch
     return assessment();
   } });
   await f.controller.start(); await f.waitFor(() => f.apiCalls.length === 2);
-  assert.equal(f.controller.status().status, 'running'); assert.equal(f.controller.results().items.length, 1);
+  assert.equal(f.controller.status().status, 'running'); assert.equal(Object.keys(f.snapshot().career.prescan.rows).length, 1);
   second.resolve(); await terminal(f);
   assert.equal(f.controller.status().status, 'failed'); assert.equal(f.controller.status().lastError.code, 'PRESCAN_RATE_LIMIT');
-  assert.equal(f.apiCalls.length, 2); assert.equal(f.controller.results().items.length, 1);
+  assert.equal(f.apiCalls.length, 2); assert.equal(Object.keys(f.snapshot().career.prescan.rows).length, 1);
   assert.equal(JSON.stringify(f.controller.status()).includes('RAW PROVIDER'), false);
   failing = false;
   await f.controller.start(); await terminal(f);
   assert.equal(f.apiCalls.filter(input => input.job.id === 'node:0').length, 1);
-  assert.equal(f.controller.results().total, 4); assert.equal(f.controller.status().selected, 3);
+  assert.equal(Object.keys(f.snapshot().career.prescan.rows).length, 4); assert.equal(f.controller.status().selected, 3);
 });
 
 test('preview and restarts reuse every current successful result; refresh reruns the catalogue without touching final scores', async () => {
@@ -417,8 +417,11 @@ test('preview and restarts reuse every current successful result; refresh reruns
   assert.deepEqual(f.snapshot(), before);
   assert.equal(f.apiCalls.length, calls); assert.equal(f.authorizations.length, authorizations);
   await f.controller.start(); await terminal(f);
-  assert.equal(f.apiCalls.length, 5); assert.equal(f.controller.results().total, 5);
+  assert.equal(f.apiCalls.length, 5); assert.equal(Object.keys(f.snapshot().career.prescan.rows).length, 5);
   assert.equal(f.controller.status().requests, 2); assert.equal(f.controller.status().inputTokens, 34);
+  const coverage = f.controller.status();
+  assert.equal(coverage.selected, 2); assert.equal(coverage.reused, 3);
+  assert.equal(coverage.processed + coverage.reused, coverage.totalCatalogue);
   assert.equal(f.authorizations.at(-1).jobCount, preview.jobCount);
   assert.equal(f.authorizations.at(-1).estimatedCostUsd, preview.estimatedCostUsd);
   const reused = await f.controller.preview();
@@ -427,7 +430,7 @@ test('preview and restarts reuse every current successful result; refresh reruns
   assert.equal(refresh.jobCount, 5); assert.equal(refresh.reused, 0); assert.equal(refresh.estimatedInputTokens, 85);
   const finalScores = f.store.get().career.matching.scores;
   await f.controller.start({ refresh: true }); await terminal(f);
-  assert.equal(f.apiCalls.length, 10); assert.equal(f.controller.results().total, 5);
+  assert.equal(f.apiCalls.length, 10); assert.equal(Object.keys(f.snapshot().career.prescan.rows).length, 5);
   assert.deepEqual(f.store.get().career.matching.scores, finalScores);
 });
 
@@ -454,7 +457,7 @@ test('cancel returns before an uncooperative request finishes and cannot commit 
   assert.equal(cancelled.status, 'cancelled'); assert.equal(cancelled.processed, 1);
   assert.equal(f.apiCalls[1].signal.aborted, true);
   pending.resolve(); await new Promise(resolve => setImmediate(resolve));
-  assert.equal(f.apiCalls.length, 2); assert.equal(f.controller.results().total, 1);
+  assert.equal(f.apiCalls.length, 2); assert.equal(Object.keys(f.snapshot().career.prescan.rows).length, 1);
   assert.equal(f.controller.status().status, 'cancelled');
 });
 
@@ -466,7 +469,7 @@ test('lock cancellation suppresses writes and reports interrupted after unlock, 
   assert.equal((await f.controller.cancel()).status, 'interrupted');
   assert.equal(f.apiCalls[0].signal.aborted, true);
   f.setLocked(false); pending.resolve(); await new Promise(resolve => setImmediate(resolve));
-  assert.equal(f.controller.status().status, 'interrupted'); assert.equal(f.controller.results().total, 0);
+  assert.equal(f.controller.status().status, 'interrupted'); assert.equal(Object.keys(f.snapshot().career.prescan.rows).length, 0);
   assert.equal(f.apiCalls.length, 1);
 });
 
@@ -543,26 +546,39 @@ test('cancel and restart still share eight provider slots when older requests ig
   assert.equal(f.controller.status().processed, 80); assert.equal(f.controller.status().requests, 80);
 });
 
-test('a persisted running record is interrupted on startup; results remain readable after key removal', async () => {
+test('saved rows remain intact after credentials are removed while operational status becomes stale', async () => {
   const f = fixture(); await f.controller.start(); await terminal(f);
   await f.store.update(state => { state.career.prescan.status = 'running'; delete state.prescanCredentials; state.prescanCredentialVersion++; });
   const before = f.apiCalls.length;
   const restarted = createPrescanController({ store: f.store, credentials: f.credentials,
     makeScope: () => assert.fail('Reading interrupted results must not create a run'),
     authorize: () => assert.fail('Reading interrupted results must not authorize a run') });
-  assert.equal(restarted.status().status, 'interrupted'); assert.equal(restarted.status().configured, false);
-  assert.equal(restarted.results().total, 3); assert.equal(restarted.results().current, true);
+  assert.equal(restarted.status().status, 'stale'); assert.equal(restarted.status().configured, false);
+  assert.equal(Object.keys(f.snapshot().career.prescan.rows).length, 3);
   assert.equal(f.apiCalls.length, before);
 });
 
-test('a run saved under another assessment or provider policy is stale and not reused', async () => {
-  for (const field of ['assessmentPolicyId', 'prescanPolicyId']) {
+test('a run saved under another provider policy is stale and not reused', async () => {
+  for (const field of ['prescanPolicyId']) {
     const f = fixture(); await f.controller.start(); await terminal(f);
     await f.store.update(state => { state.career.prescan[field] = 'old-policy'; });
-    assert.equal(f.controller.status().status, 'stale'); assert.equal(f.controller.results().current, false);
+    assert.equal(f.controller.status().status, 'stale');
     await f.controller.start(); await terminal(f);
     assert.equal(f.apiCalls.length, 6); assert.equal(f.controller.status().status, 'completed');
   }
+});
+
+test('final-review policy changes reuse paid results while credential changes require a new scan', async () => {
+  const f = fixture(); await f.controller.start(); await terminal(f);
+  await f.store.update(state => { state.career.prescan.assessmentPolicyId = 'changed-final-review-only'; });
+  const preview = await f.controller.preview();
+  assert.equal(preview.jobCount, 0); assert.equal(preview.reused, 3);
+  await f.controller.start(); await terminal(f);
+  assert.equal(f.apiCalls.length, 3);
+  await f.store.update(state => { state.prescanCredentialVersion++; });
+  assert.equal((await f.controller.preview()).jobCount, 3);
+  await f.controller.start(); await terminal(f);
+  assert.equal(f.apiCalls.length, 6);
 });
 
 test('MCP preview and reads keep credentials private and only start requests native approval', async () => {
@@ -574,8 +590,25 @@ test('MCP preview and reads keep credentials private and only start requests nat
   assert.equal(f.authorizations.length, 0); assert.equal(f.apiCalls.length, 0);
   await assert.rejects(tools.find(tool => tool.name === 'career_prescan_start').invoke({ limit: 1 }), { code: 'INVALID_INPUT' });
   await tools.find(tool => tool.name === 'career_prescan_start').invoke({}); await terminal(f);
-  const result = await tools.find(tool => tool.name === 'career_prescan_results').invoke({});
-  assert.equal(result.total, 3); assert.equal(JSON.stringify(result).includes('sk-synthetic'), false);
+  await f.store.update(state => {
+    state.career.prescan.rows[f.catalogue[0].id].answers = [{ reason: 'PRIVATE_PRE_SCAN_JUDGMENT' }];
+  });
+  const judgmentFields = new Set(['priority', 'score', 'direction', 'constraints', 'eligibility', 'dimensions', 'confidence', 'answers']);
+  for (const tool of tools.filter(tool => tool.readOnly)) {
+    const modelVisible = await tool.invoke({});
+    assert.equal(JSON.stringify(modelVisible).includes('PRIVATE_PRE_SCAN_JUDGMENT'), false);
+    const pending = [modelVisible];
+    while (pending.length) {
+      const value = pending.pop();
+      if (!value || typeof value !== 'object') continue;
+      for (const [key, child] of Object.entries(value)) {
+        assert.equal(judgmentFields.has(key), false, `Pre-scan judgment exposed to the model: ${key}`);
+        pending.push(child);
+      }
+    }
+  }
+  const result = await tools.find(tool => tool.name === 'career_prescan_status').invoke({});
+  assert.equal(result.processed, 3); assert.equal(JSON.stringify(result).includes('sk-synthetic'), false);
   assert.equal(f.authorizations.length, 1);
   const reads = f.apiCalls.length, fetches = f.platformCalls.length;
   await tools.find(tool => tool.name === 'career_prescan_status').invoke({});
@@ -601,7 +634,7 @@ test('authentication, transport and malformed-provider failures stop immediately
     await f.controller.start(); await terminal(f);
     assert.equal(f.controller.status().status, 'failed');
     assert.equal(f.controller.status().lastError.code, code ?? 'PRESCAN_FAILED');
-    assert.equal(f.apiCalls.length, 1); assert.equal(f.controller.results().total, 0);
+    assert.equal(f.apiCalls.length, 1); assert.equal(Object.keys(f.snapshot().career.prescan.rows).length, 0);
     assert.equal(JSON.stringify(f.controller.status()).includes('PRIVATE REQUEST'), false);
   }
 });

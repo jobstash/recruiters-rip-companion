@@ -94,8 +94,12 @@
       cancelled: 'Scan canceled.', failed: 'Scan stopped.',
       stale: 'Results need updating.', interrupted: 'Scan interrupted.',
     };
-    const progress = run.status === 'idle' ? ''
-      : ` ${count(run.processed)}/${count(run.selected)} jobs · ${count(run.unavailable)} unresolved.`;
+    const fullScope = Number.isSafeInteger(run.totalCatalogue) && Number.isSafeInteger(run.reused) &&
+      run.reused >= 0 && run.totalCatalogue === run.selected + run.reused;
+    const checked = run.processed + (fullScope ? run.reused : 0);
+    const progress = run.status === 'idle' ? '' : ` ${count(checked)}/${count(fullScope ? run.totalCatalogue : run.selected)} jobs checked` +
+      (fullScope && run.reused ? ` · ${count(run.reused)} reused` : '') +
+      (run.unavailable ? ` · ${count(run.unavailable)} without a score` : '') + '.';
     element('progress').textContent = `${labels[run.status] ?? 'Status unavailable.'}${progress}`;
     const usage = [];
     if (Number.isSafeInteger(run.requests)) usage.push(`${count(run.requests)} requests`);
@@ -109,6 +113,8 @@
     if (run.status === 'failed') advice = recovery(run.lastError?.code);
     if (run.status === 'cancelled' || run.status === 'interrupted') advice = 'Start pre-filtering to continue.';
     if (run.status === 'stale') advice = 'Start pre-filtering with your updated profile.';
+    if (run.status === 'completed' && !fullScope)
+      advice = 'This run does not record whole-range coverage. Start pre-filtering to cover the selected period.';
     element('recovery').textContent = advice;
   }
 

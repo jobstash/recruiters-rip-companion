@@ -1,10 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { CareerError, fail } from '../mcp/state.mjs';
 import { matchingProfileVersion } from '../mcp/assessment-policy.mjs';
-import { ASSESSMENT_POLICY_ID } from '../mcp/matching-contract.mjs';
 import { candidateContext, createMatchingTools, loadMatchingCatalogue } from '../mcp/matching-tools.mjs';
 import { decisionProviders } from './providers.mjs';
-import { currentPrescan, currentPrescanRow, getPrescanResults } from './state.mjs';
+import { currentPrescan, currentPrescanRow } from './state.mjs';
 import { DEFAULT_PUBLICATION_RANGE, assertPublicationRange, publicationInWindow, publicationWindowForRange } from './publication-range.mjs';
 
 const ASSUMED_INPUT_TOKENS_PER_JOB = 8000;
@@ -67,7 +66,7 @@ export function createPrescanController({ store, makeScope, credentials, authori
         (state.prescanCredentialVersion ?? 0) !== run.credentialVersion ||
         (state.prescanPublicationRange ?? DEFAULT_PUBLICATION_RANGE) !== run.configuredPublicationRange ||
         career.prescan?.id !== run.expectedRunId || (run.persisted &&
-          (career.prescan.profileVersion !== run.profileVersion || career.prescan.assessmentPolicyId !== ASSESSMENT_POLICY_ID ||
+          (career.prescan.profileVersion !== run.profileVersion ||
            career.prescan.prescanPolicyId !== run.provider.policyId || career.prescan.provider !== run.provider.id ||
            career.prescan.model !== run.provider.model || career.prescan.credentialVersion !== run.credentialVersion ||
            career.prescan.publicationRange !== run.publicationRange)) ||
@@ -90,7 +89,8 @@ export function createPrescanController({ store, makeScope, credentials, authori
     const live = Boolean(active && active.record.id === run?.id);
     const rows = (run?.selectedIds ?? []).map(id => run.rows?.[id]).filter(Boolean);
     let status = run?.status ?? 'idle';
-    if (run && (run.profileVersion !== matchingProfileVersion(career) || run.assessmentPolicyId !== ASSESSMENT_POLICY_ID ||
+    if (run && (run.profileVersion !== matchingProfileVersion(career) ||
+      run.credentialVersion !== (state.prescanCredentialVersion ?? 0) ||
       run.prescanPolicyId !== providers[run.provider]?.policyId)) status = 'stale';
     else if (status === 'running' && !live) status = 'interrupted';
     const provider = providers[run?.provider ?? publicState.provider];
@@ -102,11 +102,11 @@ export function createPrescanController({ store, makeScope, credentials, authori
       scored: rows.filter(row => row.status === 'scored').length,
       unavailable: rows.filter(row => row.status !== 'scored').length,
       totalCatalogue: run?.totalCatalogue ?? 0, inputTokens, requests: run?.requests ?? 0,
+      ...(Number.isSafeInteger(run?.reused) ? { reused: run.reused } : {}),
       estimatedCostUsd: inputTokens * (provider?.inputUsdPerMillion ?? publicState.inputUsdPerMillion) / 1_000_000,
       ...(run?.lastError ? { lastError: run.lastError } : {}) };
   }
   function status() { return summary(store.get(), credentials.publicState()); }
-  function results(args = {}) { return { ...getPrescanResults(store, args), status: status() }; }
   function context(provider, scope, args) {
     scope.assertAvailable(false);
     const state = scope.store.get();
@@ -130,7 +130,8 @@ export function createPrescanController({ store, makeScope, credentials, authori
     const catalogueJobs = Object.fromEntries(catalogue.jobs.map(job => [job.id, job]));
     const previous = career.prescan;
     const reusable = !args.refresh && currentPrescan(career) &&
-      previous.provider === run.provider.id && previous.model === run.provider.model;
+      previous.provider === run.provider.id && previous.model === run.provider.model &&
+      previous.credentialVersion === run.credentialVersion;
     const cacheContext = { ...career, matching: { ...career.matching, jobs: catalogueJobs } };
     const ids = [];
     let reused = 0;
@@ -254,9 +255,10 @@ export function createPrescanController({ store, makeScope, credentials, authori
     const run = { ...context(provider, makeScope(), args), abort: new AbortController() };
     credentials.read(provider.id);
     const record = run.record = { id: randomUUID(), profileVersion: run.profileVersion,
-      assessmentPolicyId: ASSESSMENT_POLICY_ID, prescanPolicyId: provider.policyId,
+      prescanPolicyId: provider.policyId,
       provider: provider.id, model: provider.model, credentialVersion: run.credentialVersion,
       publicationRange: run.publicationRange, publicationWindow: run.publicationWindow,
+      reused: 0,
       status: 'running', startedAt: now(), selectedIds: [], totalCatalogue: 0, rows: {}, inputTokens: 0, requests: 0 };
     active = run;
     notify();
@@ -265,6 +267,7 @@ export function createPrescanController({ store, makeScope, credentials, authori
       record.rows = planned.rows;
       record.selectedIds = planned.ids;
       record.totalCatalogue = planned.preview.totalCatalogue;
+      record.reused = planned.preview.reused;
       for (const id of record.selectedIds) delete record.rows[id];
       if (!await authorize({ ...planned.preview, signal: run.abort.signal }))
         fail(run.abort.signal.aborted ? 'PRESCAN_CANCELLED' : 'PRESCAN_NOT_AUTHORIZED',
@@ -319,5 +322,5 @@ export function createPrescanController({ store, makeScope, credentials, authori
     notify();
     return status();
   }
-  return { preview, start, cancel, setPublicationRange, status, results, isActive: () => active !== null || providerCalls > 0 };
+  return { preview, start, cancel, setPublicationRange, status, isActive: () => active !== null || providerCalls > 0 };
 }

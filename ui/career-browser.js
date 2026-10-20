@@ -21,10 +21,13 @@
   const content = element('career-reader-content');
   const root = element('career-browser');
   const deleteRankings = element('delete-rankings');
+  const sortControl = element('career-sort-control');
+  const sortSelect = element('career-sort');
   // Wide windows show the list and reader side by side, so the first record opens automatically.
   const sideBySide = window.matchMedia('(min-width: 760px)');
   let enabled = false;
   let kind = 'jobs';
+  let sort = 'score';
   let generation = 0;
   let readGeneration = 0;
   let offset = 0;
@@ -123,6 +126,8 @@
 
   function showCategoryActions() {
     deleteRankings.hidden = !enabled || kind !== 'jobs';
+    sortControl.hidden = !enabled || kind !== 'jobs';
+    sortSelect.disabled = !enabled || kind !== 'jobs';
   }
   async function loadPage(focusList = false) {
     if (!enabled) return;
@@ -141,7 +146,7 @@
     listStatus.textContent = `Loading ${category.title.toLowerCase()}…`;
     let firstRecord = null;
     try {
-      const result = await request('career-list', { kind, offset, limit: 25 });
+      const result = await request('career-list', { kind, offset, limit: 25, ...(kind === 'jobs' ? { sort } : {}) });
       if (!enabled || currentGeneration !== generation) return;
       for (const item of result.items) {
         const row = document.createElement('li');
@@ -205,6 +210,13 @@
     showCategoryActions();
     void loadPage();
   }));
+  sortSelect.addEventListener('change', () => {
+    if (!enabled || kind !== 'jobs' || !['score', 'recent'].includes(sortSelect.value) || sortSelect.value === sort) return;
+    sort = sortSelect.value;
+    offset = 0;
+    priorOffsets = [];
+    void loadPage();
+  });
   previous.addEventListener('click', () => {
     if (!enabled || loading || !priorOffsets.length) return;
     offset = priorOffsets.pop();

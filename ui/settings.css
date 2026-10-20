@@ -86,6 +86,10 @@ main { flex: 1; min-height: 0; overflow: auto; padding: var(--spacing-32) var(--
 .career-categories button[aria-pressed="true"]::after { content: ""; position: absolute; bottom: -1px; left: 0; right: 0; height: 1px; background: var(--rr-dispersion); box-shadow: var(--shadow-edge-glow); }
 .career-categories button:disabled { color: var(--color-dust); border-color: var(--color-facet); }
 .career-categories button:disabled::after { display: none; }
+.career-job-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--spacing-8) var(--spacing-16); min-width: 0; max-width: 100%; }
+.career-sort { display: flex; flex-wrap: wrap; align-items: center; gap: var(--spacing-8); min-width: 0; max-width: 100%; }
+.career-sort select { min-width: 0; max-width: 100%; min-height: 44px; padding: var(--spacing-8); border: 1px solid var(--color-facet); border-radius: var(--radius-buttons); background: var(--color-canvas); color: var(--color-ink); font: inherit; cursor: pointer; }
+.career-sort select:disabled { color: var(--color-dust); cursor: not-allowed; }
 .career-panes { display: grid; grid-template-columns: minmax(240px, 320px) minmax(0, 1fr); gap: 0; min-height: 0; }
 .career-panes:not(:has(.career-reader:not([hidden]))) { grid-template-columns: minmax(0, 1fr); }
 .career-list, .career-reader { min-height: 0; overflow: auto; display: flex; flex-direction: column; }

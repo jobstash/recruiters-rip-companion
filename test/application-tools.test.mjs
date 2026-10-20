@@ -146,6 +146,20 @@ test('a catalogue job is read and mapped; mismatched or ambiguous requests are r
   await assert.rejects(wrong.create({ jobId: 'node:9001' }), { code: 'INVALID_JOB' });
 });
 
+test('application review receives original evidence, not preliminary Decisions judgments', async t => {
+  const sentinel = 'PRIVATE_PRESCAN_JUDGMENT';
+  const f = await fixture(t);
+  await f.store.update(state => {
+    state.career.prescan = { rows: { 'node:9001': { priority: 98, direction: sentinel, constraints: sentinel,
+      eligibility: sentinel, confidence: sentinel, dimensions: { direction: sentinel }, answers: [sentinel], reason: sentinel } } };
+  });
+  const { applicationId } = await f.create({ jobId: 'node:9001' });
+  const result = await f.call('application_context', { applicationId });
+  assert.equal(JSON.stringify(result).includes(sentinel), false);
+  assert.equal(result.job.description, 'Operate data services.');
+  assert.equal(result.cv, cvText);
+});
+
 test('the context carries the current saved match assessment of a catalogue job, never a stale one', async t => {
   const f = await fixture(t);
   const { applicationId } = await f.create({ jobId: 'node:9001' });

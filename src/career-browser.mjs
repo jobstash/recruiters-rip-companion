@@ -3,7 +3,7 @@ import { cvHeading } from './mcp/application-tools.mjs';
 import { renderableCv } from './mcp/cv-quality.mjs';
 import { createMatchingTools } from './mcp/matching-tools.mjs';
 import { fail, readCareer } from './mcp/state.mjs';
-import { comparePrescanRows, currentPrescanRow } from './prescan/state.mjs';
+import { currentPrescanRow } from './prescan/state.mjs';
 import { localJobMetadata } from './mcp/job-tools.mjs';
 
 const kinds = ['sources', 'facts', 'jobs', 'applications'];
@@ -100,16 +100,15 @@ const assessmentLabels = {
   unbounded_range: 'Upper salary bound not stated', not_stated: 'Salary not stated',
 };
 const assessmentLabel = value => own(assessmentLabels, value) ? assessmentLabels[value] : readable(value);
-const prescanLabels = {
-  aligned: 'Potentially aligned', uncertain: 'Unresolved', conflict: 'Potential conflict',
+const prescanStatuses = {
   unavailable: 'Original advert unavailable', oversize: 'Input exceeds the provider limit', refused: 'Provider declined assessment',
 };
-const prescanPriority = row => row.status === 'scored' && Number.isInteger(row.priority) && row.priority >= 0 && row.priority <= 100
-  ? `${row.priority}/100` : 'Not scored';
-const prescanVerdicts = row => [row.direction, row.constraints, row.eligibility];
-const prescanOutcome = row => prescanPriority(row) === 'Not scored' ? prescanLabels[row.status] || 'Unresolved'
-  : prescanVerdicts(row).includes('conflict') ? 'Potential conflict'
-    : prescanVerdicts(row).every(verdict => verdict === 'aligned') ? 'Potentially aligned' : 'Unresolved';
+const prescanScore = row => row?.status === 'scored' && Number.isInteger(row.priority) && row.priority >= 0 && row.priority <= 100
+  ? row.priority : -1;
+const prescanPriority = row => prescanScore(row) >= 0 ? `${row.priority}/100` : 'Not scored';
+const prescanStatus = row => prescanScore(row) >= 0 ? 'Scored' : prescanStatuses[row.status] || 'Not scored';
+const prescanSummary = row => [`Pre-filter priority ${prescanPriority(row)}`, row.current ? 'Current' : 'Out of date',
+  prescanScore(row) < 0 ? prescanStatuses[row.status] : null].filter(Boolean).join(' · ');
 const bandLabel = band => typeof band === 'string' && band ? band.replace(/^./, letter => letter.toUpperCase()) : undefined;
 const overallLabel = row => Number.isInteger(row.overall) ? `${row.overall}/100 (${bandLabel(row.band)})` : 'Unavailable';
 const gateLabels = { pass: 'Passes', flag: 'Needs confirmation', fail: 'Fails' };
@@ -142,29 +141,24 @@ function reviewedSections(row) {
 }
 
 function prescanSection(row) {
-  return fields('Pre-scan result', [
-    ['Status', row.current ? 'Preliminary' : 'Out of date'],
-    ['Priority', prescanPriority(row), row.status === 'scored' && Number.isInteger(row.priority) ? 'numeric' : undefined], ['Outcome', prescanOutcome(row)],
-    ['Career direction', prescanLabels[row.direction]], ['Mandatory conditions', prescanLabels[row.constraints]],
-    ['Eligibility', prescanLabels[row.eligibility]],
-    ['Preliminary breakdown', record(row.dimensions) && Number.isInteger(row.dimensions.direction)
-      ? `Direction ${row.dimensions.direction} · Capability ${row.dimensions.capability} · Scope ${row.dimensions.scope} · Preferences ${row.dimensions.preferences}` : undefined],
-    ['Model confidence', Number.isFinite(row.confidence) ? `${Math.round(row.confidence * 100)}%` : undefined],
+  return fields('Pre-filter', [
+    ['Priority', prescanPriority(row), prescanScore(row) >= 0 ? 'numeric' : undefined],
+    ['Status', prescanStatus(row)], ['Freshness', row.current ? 'Current' : 'Out of date'],
     ['Provider', row.provider === 'openai' ? 'OpenAI Decisions' : row.provider], ['Model', row.model],
-  ], 'No pre-scan result saved.');
+  ], 'No pre-filter result saved.');
 }
 
-function jobItem({ id, reviewed, prescan, imported }) {
-  const role = key => imported?.[key] ?? reviewed?.[key] ?? prescan?.[key];
+function jobItem({ id, reviewed, prescan, imported, metadata }) {
+  const role = key => imported?.[key] ?? metadata?.[key] ?? reviewed?.[key] ?? prescan?.[key];
   const title = [text(role('title'), ''), text(role('company'), '')].filter(Boolean).join(' — ') || 'Job details unavailable';
   const salary = role('salary');
   const range = salary && (amount(salary.stated) ?? [amount(salary.minimum), amount(salary.maximum)].filter(Boolean).join('–'));
   const pay = range ? [salary.currency, range, salary.period && `per ${salary.period}`].filter(Boolean).join(' ') : null;
   const preferReviewed = reviewed && (reviewed.reviewStatus === 'current' || !prescan?.current);
   const summary = preferReviewed
-    ? `${assessmentLabel(reviewed.reviewStatus)} · ${Number.isInteger(reviewed.overall) ? `Overall ${reviewed.overall}/100 · ${bandLabel(reviewed.band)}` : 'Overall unavailable'} · ${assessmentLabel(reviewed.decision) || 'No saved decision'}`
-    : prescan ? `${prescan.current ? 'Pre-scan' : 'Out of date pre-scan'} · Priority ${prescanPriority(prescan)} · ${prescanOutcome(prescan)}`
-      : imported?.complete ? 'Saved · Not assessed' : 'Needs full advert';
+    ? [`${assessmentLabel(reviewed.reviewStatus)} · ${Number.isInteger(reviewed.overall) ? `Overall ${reviewed.overall}/100 · ${bandLabel(reviewed.band)}` : 'Overall unavailable'} · ${assessmentLabel(reviewed.decision) || 'No saved decision'}`,
+      prescan ? prescanSummary(prescan) : null].filter(Boolean).join(' · ')
+    : prescan ? prescanSummary(prescan) : imported ? imported.complete ? 'Saved · Not assessed' : 'Needs full advert' : 'Saved · Not assessed';
   const review = reviewed ? reviewedSections(reviewed) : [];
   const preliminary = prescan ? [prescanSection(prescan)] : [];
   return { id, title, summary, sections: [
@@ -203,11 +197,15 @@ function prescanRow(career, id, row, now) {
     current: currentPrescanRow(career, saved, now) };
 }
 
-async function jobRows(career) {
+async function jobRows(career, sort) {
   const now = Date.now();
-  const rows = new Map();
-  for (const [index, reviewed] of (await reviewedRows(career)).entries()) {
-    if (!forbidden.has(reviewed.id)) rows.set(reviewed.id, { id: reviewed.id, reviewed, index });
+  const rows = new Map(entries(career.matching?.jobs).map(([id, metadata]) => [id, { id, metadata }]));
+  for (const reviewed of await reviewedRows(career)) {
+    if (!forbidden.has(reviewed.id)) {
+      const item = rows.get(reviewed.id) ?? { id: reviewed.id };
+      item.reviewed = reviewed;
+      rows.set(reviewed.id, item);
+    }
   }
   for (const [id, row] of entries(career.prescan?.rows)) {
     const item = rows.get(id) ?? { id };
@@ -219,14 +217,15 @@ async function jobRows(career) {
     item.imported = { ...localJobMetadata(job), description: job.description, updatedAt: job.updatedAt };
     rows.set(id, item);
   }
-  // Current final reviews lead, then current preliminary results, then the saved archive.
-  // Never compare a pre-scan priority with a final score.
-  const group = row => row.reviewed?.reviewStatus === 'current' ? 0 : row.prescan?.current ? 1 : row.reviewed ? 2 : 3;
-  return [...rows.values()].sort((a, b) => group(a) - group(b) ||
-    (group(a) === 0 || group(a) === 2 ? a.index - b.index
-      : a.prescan && b.prescan ? comparePrescanRows(a.prescan, b.prescan)
-        : a.prescan ? -1 : b.prescan ? 1
-          : (b.imported?.updatedAt ?? '').localeCompare(a.imported?.updatedAt ?? '') || a.id.localeCompare(b.id)));
+  // Sort the whole saved union, never a page or a mixture of preliminary and final scores.
+  const sortable = [...rows.values()].map(row => {
+    const publishedAt = row.imported?.publishedAt ?? row.metadata?.publishedAt ?? row.reviewed?.publishedAt ?? row.prescan?.publishedAt;
+    const timestamp = typeof publishedAt === 'string' ? Date.parse(publishedAt) : NaN;
+    return { row, priority: prescanScore(row.prescan), published: Number.isFinite(timestamp) ? timestamp : -Infinity };
+  });
+  return sortable.sort((a, b) => (sort === 'score' ? b.priority - a.priority : 0) ||
+    (a.published === b.published ? 0 : a.published > b.published ? -1 : 1) ||
+    (a.row.id < b.row.id ? -1 : a.row.id > b.row.id ? 1 : 0)).map(item => item.row);
 }
 
 /** Read-only, allowlisted projections: never return the vault or binary source data. */
@@ -236,14 +235,17 @@ export function createCareerBrowser({ store }) {
     kind === 'facts' ? factDetail(item, career) : applicationDetail(item, career);
   return {
     async list(args = {}) {
-      validate(args, ['kind', 'offset', 'limit']);
-      const { kind, offset = 0, limit = 25 } = args;
+      validate(args, ['kind', 'offset', 'limit', 'sort']);
+      const { kind, offset = 0, limit = 25, sort = 'score' } = args;
+      if ((own(args, 'sort') && (kind !== 'jobs' || !['score', 'recent'].includes(args.sort)))) {
+        fail('INVALID_INPUT', 'Use sort score or recent for Jobs only.');
+      }
       if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isInteger(limit) || limit < 1 || limit > 100) {
         fail('INVALID_INPUT', 'Use limit 1–100 and a nonnegative safe integer offset.');
       }
       const career = readCareer(store);
       if (kind === 'jobs') {
-        const rows = await jobRows(career);
+        const rows = await jobRows(career, sort);
         const items = rows.slice(offset, offset + limit).map(jobItem);
         return { items, total: rows.length, nextOffset: offset + items.length < rows.length ? offset + items.length : null };
       }
@@ -266,13 +268,14 @@ export function createCareerBrowser({ store }) {
         const assessment = lookup(career.matching?.scores, id);
         const savedPrescan = lookup(career.prescan?.rows, id);
         const captured = lookup(career.jobs, id);
-        if (!assessment && !savedPrescan && !captured) fail('NOT_FOUND', 'This saved job was not found. Refresh the list.');
+        const metadata = lookup(career.matching?.jobs, id);
+        if (!assessment && !savedPrescan && !captured && !metadata) fail('NOT_FOUND', 'This saved job was not found. Refresh the list.');
         const now = Date.now();
         // Project every final assessment so pairwise comparisons stay current, then pick this job.
         const reviewed = assessment ? (await reviewedRows(career)).find(row => row.id === id) ?? null : null;
         const prescan = savedPrescan ? prescanRow(career, id, savedPrescan, now) : null;
         const imported = captured ? { ...localJobMetadata(captured), description: captured.description } : null;
-        const { title, sections } = jobItem({ id, reviewed, prescan, imported });
+        const { title, sections } = jobItem({ id, reviewed, prescan, imported, metadata });
         return { title, sections };
       }
       const item = lookup(career[kind], id);

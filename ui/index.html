@@ -65,7 +65,12 @@
 <button type="button" class="ghost" data-career-kind="jobs" aria-pressed="true" disabled>Jobs</button>
 <button type="button" class="ghost" data-career-kind="applications" aria-pressed="false" disabled>Job Applications</button>
 </div>
+<div class="career-job-actions">
+<label id="career-sort-control" class="career-sort caption" for="career-sort" hidden>Sort jobs
+<select id="career-sort" disabled><option value="recent">Newest first</option><option value="score" selected>Pre-filter score</option></select>
+</label>
 <button id="delete-rankings" class="text" type="button" hidden>Clear job assessments</button>
+</div>
 </div>
 <div class="career-panes">
 <section class="career-list panel" aria-label="Saved records">

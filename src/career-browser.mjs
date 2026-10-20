@@ -111,19 +111,30 @@ const assessmentLabel = value => own(assessmentLabels, value) ? assessmentLabels
 const blockKinds = { job: 'Job', company: 'Company', category: 'Category' };
 const prescanStatuses = {
   unavailable: 'Original advert unavailable', oversize: 'Input exceeds the provider limit', refused: 'Provider declined assessment',
+  incompatible_location: 'Location conflict predicted', below_minimum: 'Below your minimum',
 };
 const prescanScore = row => row?.status === 'scored' && Number.isInteger(row.priority) && row.priority >= 0 && row.priority <= 100
   ? row.priority : -1;
 const prescanStatus = row => prescanScore(row) >= 0 ? 'Scored' : prescanStatuses[row.status] || 'Not scored';
-const cardStatuses = new Set(['unavailable', 'refused', 'oversize']);
-// A card shows where the job stands: reviewed by an agent (score), ranked by the pre-filter for the next run
-// (rank and inclusion), or neither. Pre-filter priorities never surface as scores.
+const prescanLocations = { aligned: 'Compatible', uncertain: 'Not established', conflict: 'Conflict' };
+const cardStatuses = new Set(['unavailable', 'refused', 'oversize', 'incompatible_location', 'below_minimum']);
+// A saved review with one of these verdicts makes the job ineligible: the card shows the verdict, never a number.
+const ineligibleMatches = new Set(['incompatible_location', 'excluded']);
+const ineligibleLabel = reviewed => ineligibleMatches.has(reviewed?.matchStatus) ? assessmentLabel(reviewed.matchStatus) : 'Location incompatible';
+// A card shows where the job stands: reviewed by an agent (score), ineligible (a saved verdict instead of a number),
+// ranked by the pre-filter for the next run (rank and inclusion), or neither. Pre-filter priorities never surface as scores.
+// An established incompatibility (any saved gate fail, or relocation required against a refusal to relocate) is never a
+// candidate and has no switch; a predicted one (pre-scan only) keeps the switch.
 function cardStage({ id, reviewed, prescan }, inclusion) {
   const reviewCurrent = reviewed?.reviewStatus === 'current';
-  const rank = reviewCurrent ? null : inclusion.rank.get(id) ?? null;
+  const established = !reviewCurrent && inclusion.established(id);
+  const ineligible = reviewCurrent ? ineligibleMatches.has(reviewed.matchStatus) : established;
+  const candidate = !reviewCurrent && !established;
+  const rank = candidate ? inclusion.rank.get(id) ?? null : null;
   return {
-    stage: reviewCurrent ? 'reviewed' : rank !== null ? 'prefilter' : 'unscored',
-    rank, included: !reviewCurrent && inclusion.includedIds.has(id), overridden: !reviewCurrent && inclusion.overridden(id),
+    stage: ineligible ? 'ineligible' : reviewCurrent ? 'reviewed' : rank !== null ? 'prefilter' : 'unscored',
+    label: ineligible ? ineligibleLabel(reviewed) : null, established,
+    rank, included: candidate && inclusion.includedIds.has(id), overridden: candidate && inclusion.overridden(id),
     score: Number.isInteger(reviewed?.overall) ? reviewed.overall : null,
     stale: reviewed ? !reviewCurrent : Boolean(prescan) && prescan.current !== true,
     status: !reviewCurrent && prescan && cardStatuses.has(prescan.status) ? prescan.status : null,
@@ -132,6 +143,8 @@ function cardStage({ id, reviewed, prescan }, inclusion) {
 const bandLabel = band => typeof band === 'string' && band ? band.replace(/^./, letter => letter.toUpperCase()) : undefined;
 const overallLabel = row => Number.isInteger(row.overall) ? `${row.overall}/100 (${bandLabel(row.band)})` : 'Unavailable';
 const gateLabels = { pass: 'Passes', flag: 'Needs confirmation', fail: 'Fails' };
+// Ineligible reviews keep their dimension chart, but the heading says what the number cannot: the job is out.
+const fitHeadings = { incompatible_location: 'Fit excluding location — not eligible', excluded: 'Fit — excluded by a gate' };
 const outOf100 = value => Number.isInteger(value) ? `${value}/100` : undefined;
 const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
 
@@ -145,7 +158,7 @@ function reviewedSections(row) {
       ['Location match', assessmentLabel(row.matchStatus)],
       ['Pairwise rank', Number.isFinite(row.pairwiseWins) ? `${plural(row.pairwiseWins, 'win')} of ${plural(row.pairwiseCompared, 'comparison')}` : undefined],
     ], 'No assessment saved.'),
-    ...(record(row.dimensions) || Number.isInteger(row.overall) ? [chart('Fit', [
+    ...(record(row.dimensions) || Number.isInteger(row.overall) ? [chart(fitHeadings[row.matchStatus] ?? 'Fit', [
       ['Overall', row.overall], ['Direction', row.dimensions?.direction], ['Capability', row.dimensions?.capability],
       ['Scope', row.dimensions?.scope], ['Preferences', row.dimensions?.preferences],
     ], 'No breakdown saved.')] : []),
@@ -164,6 +177,8 @@ function prescanSection(row) {
   // The Decisions number never surfaces to the user; only whether the job was scored and by what.
   return fields('Pre-filter', [
     ['Status', prescanStatus(row)], ['Freshness', row.current ? 'Current' : 'Out of date'],
+    ['Location', own(prescanLocations, row.location) ? prescanLocations[row.location] : undefined],
+    ['Next run', row.status === 'incompatible_location' ? 'Location conflict predicted — include anyway with the switch above' : undefined],
     ['Provider', row.provider === 'openai' ? 'OpenAI Decisions' : row.provider], ['Model', row.model],
   ], 'No pre-filter result saved.');
 }
@@ -262,9 +277,9 @@ async function jobUnion(career) {
   return { rows, inclusion: jobInclusion(career, rows) };
 }
 
-// Rank order: current reviews by overall fit, then the pre-filter queue by rank, then everything else;
-// newer publication breaks ties, then ID. Recent order ignores stages entirely.
-const stageOrder = { reviewed: 0, prefilter: 1, unscored: 2 };
+// Rank order: current reviews by overall fit, then the pre-filter queue by rank, then everything else, with
+// ineligible jobs last; newer publication breaks ties, then ID. Recent order ignores stages entirely.
+const stageOrder = { reviewed: 0, prefilter: 1, unscored: 2, ineligible: 3 };
 function sortJobs(rows, inclusion, sort) {
   const sortable = [...rows.values()].map(row => {
     const publishedAt = row.imported?.publishedAt ?? row.metadata?.publishedAt ?? row.reviewed?.publishedAt ?? row.prescan?.publishedAt;

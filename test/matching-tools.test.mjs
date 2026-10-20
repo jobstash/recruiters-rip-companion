@@ -5,6 +5,7 @@ import addFormats from 'ajv-formats';
 import { createMatchingTools } from '../src/mcp/matching-tools.mjs';
 import { createCareerState } from '../src/mcp/state.mjs';
 import { salaryEligibility, recentPublication, matchingProfileVersion } from '../src/mcp/assessment-policy.mjs';
+import { DEFAULT_INCLUSION_MINIMUM_SCORE } from '../src/prescan/state.mjs';
 import { ASSESSMENT_POLICY_ID, RERANK_POLICY, RERANK_SIZE, deriveDecision, fitBand, overallFit } from '../src/mcp/matching-contract.mjs';
 import { publicationInWindow } from '../src/prescan/publication-range.mjs';
 import { decisionProviders } from '../src/prescan/providers.mjs';
@@ -1123,14 +1124,14 @@ test('discovery assigns only the jobs at or above the minimum pre-filter score, 
   const planned = await f.call('career_match_jobs');
   assert.deepEqual(planned.jobIds, ids.map(id => `node:${id}`));
   assert.equal(planned.excluded, 0);
-  assert.equal(planned.minimumScore, 60);
+  assert.equal(planned.minimumScore, DEFAULT_INCLUSION_MINIMUM_SCORE);
   await f.save([assessment('reviewed', 70)], planned.profileVersion);
   const priorities = { first: 95, second: 90, third: 60, fourth: 40 };
   await f.store.update(state => {
     state.career.prescan = { profileVersion: matchingProfileVersion(state.career), prescanPolicyId: decisionProviders.openai.policyId,
       provider: 'openai', rows: Object.fromEntries(Object.entries(priorities).map(([id, priority]) =>
         [`node:${id}`, { priority, status: 'scored', publishedAt, direction: 'aligned', constraints: 'aligned', eligibility: 'aligned' }])) };
-    state.career.prescanInclusion = { minimumScore: 91, overrides: { 'node:fourth': true, 'node:second': false, 'node:plain': true } };
+    state.career.prescanInclusion = { minimumScore: 91, scale: 2, overrides: { 'node:fourth': true, 'node:second': false, 'node:plain': true } };
   });
   const scoped = await f.call('career_match_jobs');
   assert.deepEqual(scoped.jobIds, ['node:first', 'node:fourth', 'node:plain']);
@@ -1138,9 +1139,9 @@ test('discovery assigns only the jobs at or above the minimum pre-filter score, 
   assert.equal(scoped.minimumScore, 91);
   assert.equal(scoped.pending, 5);
   // The boundary is inclusive: 60 passes a minimum of 60 and fails 61.
-  await f.store.update(state => { state.career.prescanInclusion = { minimumScore: 60, overrides: {} }; });
+  await f.store.update(state => { state.career.prescanInclusion = { minimumScore: 60, scale: 2, overrides: {} }; });
   assert.deepEqual((await f.call('career_match_jobs')).jobIds, ['node:first', 'node:second', 'node:third']);
-  await f.store.update(state => { state.career.prescanInclusion = { minimumScore: 61, overrides: {} }; });
+  await f.store.update(state => { state.career.prescanInclusion = { minimumScore: 61, scale: 2, overrides: {} }; });
   const narrowed = await f.call('career_match_jobs');
   assert.deepEqual(narrowed.jobIds, ['node:first', 'node:second']);
   assert.equal(narrowed.excluded, 3);

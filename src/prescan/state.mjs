@@ -29,19 +29,35 @@ export function currentPrescanRow(career, row, now = Date.now(), window = public
 }
 
 const scored = row => row.status === 'scored' && Number.isInteger(row.priority) && row.priority >= 0 && row.priority <= 100;
+// Unrounded fit orders the list; the integer priority is only the threshold key, so discounted jobs do not collapse into date-ordered bins.
+const fitOf = row => Number.isFinite(row.fit) ? row.fit : row.priority;
 export function comparePrescanRows(a, b) {
-  return Number(scored(b)) - Number(scored(a)) || (scored(a) && scored(b) ? b.priority - a.priority : 0) ||
+  return Number(scored(b)) - Number(scored(a)) || (scored(a) && scored(b) ? fitOf(b) - fitOf(a) : 0) ||
     publishedTime(b.publishedAt) - publishedTime(a.publishedAt) || compareText(a.id, b.id);
 }
 
-export const DEFAULT_INCLUSION_MINIMUM_SCORE = 60;
+// Priority scale 2 (recommend-share utility × gate discount): the default is the integer threshold whose shortlist matched the
+// previous scale's size on the 1,127-row recompute (65 vs 66 jobs). A threshold saved on the old scale is reset once.
+export const DEFAULT_INCLUSION_MINIMUM_SCORE = 36;
+export const INCLUSION_SCALE = 2;
 const forbidden = new Set(['__proto__', 'prototype', 'constructor']);
 const validMinimumScore = value => Number.isInteger(value) && value >= 0 && value <= 100;
+
+/**
+ * A saved review (current or stale) that already settles the job as not usable: any gate fail, or relocation required while the
+ * candidate will not relocate. Never a candidate for the next run and no switch; the correction route is the saved preference.
+ */
+export function establishedIncompatibility(career, id) {
+  const review = career.matching?.scores?.[id];
+  if (!review || typeof review !== 'object') return false;
+  return Object.values(review.gates ?? {}).includes('fail') ||
+    (review.relocation === 'required' && career.profile?.preferences?.willingToRelocate === false);
+}
 
 /** Saved inclusion settings; never created here. Overrides for IDs outside the catalogue are kept but ignored. */
 export function inclusionSettings(career) {
   const saved = career.prescanInclusion;
-  const minimumScore = validMinimumScore(saved?.minimumScore) ? saved.minimumScore : DEFAULT_INCLUSION_MINIMUM_SCORE;
+  const minimumScore = saved?.scale === INCLUSION_SCALE && validMinimumScore(saved.minimumScore) ? saved.minimumScore : DEFAULT_INCLUSION_MINIMUM_SCORE;
   const overrides = saved?.overrides && typeof saved.overrides === 'object' ? saved.overrides : {};
   return { minimumScore, override: id => !forbidden.has(id) && Object.hasOwn(overrides, id) && typeof overrides[id] === 'boolean' ? overrides[id] : null };
 }
@@ -66,10 +82,11 @@ export function prescanInclusion(career, allIds, window) {
   }
   ranked.sort((a, b) => comparePrescanRows(career.prescan.rows[a], career.prescan.rows[b]));
   const rank = new Map(ranked.map((id, index) => [id, index + 1]));
-  const included = id => settings.override(id) ?? (ranking ? rank.has(id) && career.prescan.rows[id].priority >= settings.minimumScore : true);
+  const established = id => establishedIncompatibility(career, id);
+  const included = id => !established(id) && (settings.override(id) ?? (ranking ? rank.has(id) && career.prescan.rows[id].priority >= settings.minimumScore : true));
   return { minimumScore: settings.minimumScore, ranked: ranking, stale: ranking && !current, candidates: ids.length,
-    blocked: allIds.length - ids.length, rankedIds: ranked, rank,
-    includedIds: new Set([...ranked, ...unranked].filter(included)), overridden: id => settings.override(id) !== null };
+    blocked: allIds.length - ids.length, rankedIds: ranked, rank, established,
+    includedIds: new Set([...ranked, ...unranked].filter(included)), overridden: id => !established(id) && settings.override(id) !== null };
 }
 
 /** Save a per-job override (`null` clears it). The ID must be in the current catalogue. */
@@ -77,7 +94,7 @@ export function setInclusionOverride(career, id, included) {
   if (typeof id !== 'string' || forbidden.has(id) || !Object.hasOwn(career.matching?.jobs ?? {}, id))
     fail('INVALID_INPUT', 'This job is not in the current catalogue. Refresh the list.');
   if (included !== null && typeof included !== 'boolean') fail('INVALID_INPUT', 'Choose include, exclude or reset.');
-  const saved = career.prescanInclusion ??= { minimumScore: DEFAULT_INCLUSION_MINIMUM_SCORE, overrides: {} };
+  const saved = career.prescanInclusion ??= { minimumScore: DEFAULT_INCLUSION_MINIMUM_SCORE, scale: INCLUSION_SCALE, overrides: {} };
   saved.overrides ??= {};
   if (included === null) delete saved.overrides[id];
   else saved.overrides[id] = included;
@@ -85,6 +102,7 @@ export function setInclusionOverride(career, id, included) {
 
 export function setInclusionMinimumScore(career, minimumScore) {
   if (!validMinimumScore(minimumScore)) fail('INVALID_INPUT', 'Use a whole number from 0 to 100.');
-  const saved = career.prescanInclusion ??= { minimumScore: DEFAULT_INCLUSION_MINIMUM_SCORE, overrides: {} };
+  const saved = career.prescanInclusion ??= { minimumScore: DEFAULT_INCLUSION_MINIMUM_SCORE, scale: INCLUSION_SCALE, overrides: {} };
   saved.minimumScore = minimumScore;
+  saved.scale = INCLUSION_SCALE;
 }

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createCareerState, CareerError } from '../src/mcp/state.mjs';
 import { ASSESSMENT_POLICY_ID, deriveDecision } from '../src/mcp/matching-contract.mjs';
 import { decisionProviders } from '../src/prescan/providers.mjs';
+import { DEFAULT_INCLUSION_MINIMUM_SCORE } from '../src/prescan/state.mjs';
 import { createScopedAccess } from '../src/mcp/scope.mjs';
 import { createPrescanController } from '../src/prescan/service.mjs';
 import { createPrescanTools } from '../src/mcp/prescan-tools.mjs';
@@ -382,11 +383,11 @@ test('partial batches requeue remaining IDs finitely, while missing ads and no-p
   assert.equal(batches, 3); assert.equal(f.apiCalls.length, 1);
   const summary = f.controller.status();
   assert.equal(summary.status, 'completed'); assert.equal(summary.processed, 5); assert.equal(summary.scored, 1); assert.equal(summary.unavailable, 4);
-  // Only the one scored row (priority 75) clears the default minimum score of 60; unscored jobs wait for a manual override.
-  assert.equal(summary.included, 1); assert.equal(summary.minimumScore, 60);
-  await f.store.update(state => { state.career.prescanInclusion = { minimumScore: 76, overrides: { 'node:1': true, 'node:0': false } }; });
+  // Only the one scored row (priority 75) clears the default minimum score; unscored jobs wait for a manual override.
+  assert.equal(summary.included, 1); assert.equal(summary.minimumScore, DEFAULT_INCLUSION_MINIMUM_SCORE);
+  await f.store.update(state => { state.career.prescanInclusion = { minimumScore: 76, scale: 2, overrides: { 'node:1': true, 'node:0': false } }; });
   assert.equal(f.controller.status().included, 1); assert.equal(f.controller.status().minimumScore, 76);
-  await f.store.update(state => { state.career.prescanInclusion = { minimumScore: 75, overrides: {} }; });
+  await f.store.update(state => { state.career.prescanInclusion = { minimumScore: 75, scale: 2, overrides: {} }; });
   assert.equal(f.controller.status().included, 1);
   assert.equal(f.apiCalls.length, 1);
   assert.equal(Object.keys(f.snapshot().career.prescan.rows).length, 5);
@@ -406,6 +407,29 @@ test('oversize and refusal are explicit non-scored outcomes without final-score 
   assert.equal(rows.every(row => row.priority === null), true);
   assert.equal(JSON.stringify(rows).includes('private payload'), false);
   assert.equal(Object.keys(f.store.get().career.matching.scores).length, 0);
+});
+
+test('a stated ceiling below the saved minimum is settled before dispatch; predicted location conflicts are settled rows that restarts reuse', async () => {
+  const f = fixture({ count: 3, assess: async input => input.job.id === 'node:1'
+    ? { ...assessment(), status: 'incompatible_location', priority: null, fit: null, dimensions: null, confidence: null, conflictProbability: null,
+      location: 'conflict', locationConflict: 0.9, answers: [] }
+    : { ...assessment(), fit: 74.6, location: 'aligned', locationConflict: 0.05, conflictProbability: 0.2 } });
+  // EUR 60k–70k against a saved EUR 75k minimum: no request, no billing, no approval line item.
+  f.catalogue[2].salary = { minimum: 60000, maximum: 70000, currency: 'EUR', period: 'year' };
+  const preview = await f.controller.preview();
+  assert.equal(preview.jobCount, 2); assert.equal(preview.totalCatalogue, 3);
+  await f.controller.start(); await terminal(f);
+  assert.deepEqual(f.apiCalls.map(call => call.job.id).sort(), ['node:0', 'node:1']);
+  const rows = f.snapshot().career.prescan.rows;
+  assert.equal(rows['node:2'].status, 'below_minimum'); assert.equal(rows['node:2'].priority, null); assert.equal(rows['node:2'].title, 'Role 2');
+  assert.equal(rows['node:1'].status, 'incompatible_location'); assert.equal(rows['node:1'].locationConflict, 0.9); assert.equal(rows['node:1'].location, 'conflict');
+  assert.equal(rows['node:0'].fit, 74.6); assert.equal(rows['node:0'].conflictProbability, 0.2); assert.equal(rows['node:0'].location, 'aligned');
+  const summary = f.controller.status();
+  // Both API verdicts are settled, nothing is "unavailable", and only the scored job reaches the agent by default.
+  assert.equal(summary.scored, 2); assert.equal(summary.unavailable, 0); assert.equal(summary.included, 1);
+  // A restart re-bills nothing: every settled row is reused.
+  const again = await f.controller.preview();
+  assert.equal(again.jobCount, 0); assert.equal(again.reused, 3);
 });
 
 test('partial successes are visible immediately; provider failure stops dispatch without automatic retry', async () => {

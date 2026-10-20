@@ -142,6 +142,8 @@ main { flex: 1; min-height: 0; overflow: auto; padding: var(--spacing-32) var(--
 .career-card-side { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; width: 128px; padding: 20px var(--spacing-24) 20px 0; text-align: right; }
 .career-card-fit { font: 500 24px/1 var(--font-geist-mono); font-variant-numeric: tabular-nums; letter-spacing: -.02em; color: var(--color-ink); }
 .career-card-caption { font: 400 10px/1.4 var(--font-geist-mono); letter-spacing: .02em; color: var(--color-smoke); }
+/* Ineligible job: the saved verdict stands where the number would, in ink, wrapping within the column if it must. */
+.career-card-verdict { font-size: 12px; color: var(--color-ink); white-space: normal; overflow-wrap: anywhere; }
 .career-card-include { display: flex; flex-direction: row-reverse; align-items: center; gap: var(--spacing-8); min-height: 24px; white-space: nowrap; cursor: pointer; }
 .career-card-include:hover .career-card-caption { color: var(--color-ink); }
 /* Square switch: a native checkbox drawn as a ruled square; checked fills the inner square with ink. */

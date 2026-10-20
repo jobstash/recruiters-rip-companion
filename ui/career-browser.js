@@ -9,8 +9,10 @@
     blocks: { title: 'Blocked jobs', empty: 'Nothing blocked. Open a job to block it, its company or its category.', locked: 'Open local storage to read blocked jobs.', select: 'Select a block' },
   };
   // Why an unscored job has no rank; the pre-filter never shows a number, only whether the job is in the next run.
-  const statusWords = { unavailable: 'Advert unavailable', refused: 'Declined', oversize: 'Too large' };
+  const statusWords = { unavailable: 'Advert unavailable', refused: 'Declined', oversize: 'Too large',
+    incompatible_location: 'Location conflict predicted', below_minimum: 'Below your minimum' };
   const statusWord = card => statusWords[card.status] ?? 'Not pre-filtered';
+  const notEligible = 'Not eligible for review: change your location or relocation preference to reconsider';
   const dateFormat = new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium', timeZone: 'UTC' });
   const displayDate = value => typeof value === 'string' && Number.isFinite(Date.parse(value)) ? dateFormat.format(new Date(value)) : null;
   const integer = value => value.toLocaleString('en-GB');
@@ -26,9 +28,11 @@
   function cardSpoken(card, date) {
     const stage = card.stage === 'reviewed'
       ? [`fit ${card.score === null ? 'not saved' : `${card.score} of 100`}`, card.stale ? 'out of date' : null]
-      : card.stage === 'prefilter'
-        ? [card.rank === null ? null : `rank ${card.rank}`, card.included ? 'in next run' : 'not in next run', card.overridden ? 'manual' : null]
-        : [statusWord(card).toLowerCase(), card.included ? 'in next run' : 'not in next run'];
+      : card.stage === 'ineligible'
+        ? ['not eligible', card.label]
+        : card.stage === 'prefilter'
+          ? [card.rank === null ? null : `rank ${card.rank}`, card.included ? 'in next run' : 'not in next run', card.overridden ? 'manual' : null]
+          : [statusWord(card).toLowerCase(), card.included ? 'in next run' : 'not in next run'];
     return [card.title, card.company, ...stage, date ? `published ${date}` : 'publication date not stated'].filter(Boolean).join(', ');
   }
   /** Body goes inside the record button; the right column (fit number or the next-run switch) is a sibling so the
@@ -50,6 +54,11 @@
     if (card.stage === 'reviewed') {
       side.append(node('span', 'career-card-fit', card.score === null ? '—' : String(card.score)),
         node('span', 'career-card-caption', card.stale ? 'Fit · out of date' : 'Fit'));
+      return;
+    }
+    // Ineligible: the saved verdict is the whole column; no number, no switch.
+    if (card.stage === 'ineligible') {
+      side.append(node('span', 'career-card-caption career-card-verdict', card.label));
       return;
     }
     const label = node('label', 'career-card-include');
@@ -199,7 +208,7 @@
 
     function renderInclusion(item) {
       const card = item?.card;
-      if (!card || card.stage === 'reviewed') return null;
+      if (!card || card.stage === 'reviewed' || (card.stage === 'ineligible' && !card.established)) return null;
       const block = document.createElement('section');
       block.className = 'career-next-run';
       const heading = document.createElement('h3');
@@ -208,7 +217,7 @@
       const term = document.createElement('dt');
       term.textContent = 'Agent evaluation';
       const value = document.createElement('dd');
-      value.textContent = `${card.included ? 'Included' : 'Excluded'}${card.overridden ? ' (manual)' : ''}`;
+      value.textContent = card.established ? notEligible : `${card.included ? 'Included' : 'Excluded'}${card.overridden ? ' (manual)' : ''}`;
       list.append(term, value);
       block.append(heading, list);
       if (card.overridden) {

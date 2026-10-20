@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { CareerError, fail } from '../mcp/state.mjs';
-import { matchingProfileVersion } from '../mcp/assessment-policy.mjs';
+import { matchingProfileVersion, salaryEligibility } from '../mcp/assessment-policy.mjs';
 import { candidateContext, createMatchingTools, currentAssessment, loadMatchingCatalogue } from '../mcp/matching-tools.mjs';
 import { decisionProviders } from './providers.mjs';
 import { currentPrescan, currentPrescanRow, prescanInclusion } from './state.mjs';
@@ -38,9 +38,13 @@ const safeError = error => {
   return { code, message: messages[code] };
 };
 const now = () => new Date().toISOString();
-const unscored = { priority: null, direction: null, constraints: null, eligibility: null, dimensions: null, confidence: null };
+const unscored = { priority: null, fit: null, direction: null, constraints: null, eligibility: null, location: null, dimensions: null,
+  confidence: null, conflictProbability: null, locationConflict: null };
+// Rows that already carry a complete verdict for this profile and policy; a restart never re-bills them.
+const settled = new Set(['scored', 'incompatible_location', 'below_minimum']);
 const rowFields = ['id', 'title', 'company', 'publishedAt', 'applyUrl', 'salary', 'city', 'location', 'workMode',
   'seniority', 'commitment', 'classification'];
+const rowMetadata = job => Object.fromEntries(rowFields.filter(field => job[field] !== undefined).map(field => [field, job[field]]));
 const rawGraphFields = new Set(['graph', 'graphs', 'rawGraph', 'rawGraphs', '@graph']);
 function jobInput(value) {
   if (Array.isArray(value)) return value.map(jobInput);
@@ -109,8 +113,8 @@ export function createPrescanController({ store, makeScope, credentials, authori
       model: run?.model ?? publicState.model, ...(run ? { runId: run.id } : {}), status,
       publicationRange: state.prescanPublicationRange ?? DEFAULT_PUBLICATION_RANGE,
       selected: run?.selectedIds.length ?? 0, processed: rows.length,
-      scored: rows.filter(row => row.status === 'scored').length,
-      unavailable: rows.filter(row => row.status !== 'scored').length,
+      scored: rows.filter(row => settled.has(row.status)).length,
+      unavailable: rows.filter(row => !settled.has(row.status)).length,
       ...inclusionSummary(career),
       totalCatalogue: run?.totalCatalogue ?? 0, inputTokens, requests: run?.requests ?? 0,
       ...(Number.isSafeInteger(run?.reused) ? { reused: run.reused } : {}),
@@ -146,21 +150,24 @@ export function createPrescanController({ store, makeScope, credentials, authori
       previous.provider === run.provider.id && previous.model === run.provider.model &&
       previous.credentialVersion === run.credentialVersion;
     const cacheContext = { ...career, matching: { ...career.matching, jobs: catalogueJobs } };
-    // Blocked jobs are never sent to the provider; they stay in the catalogue and in the scope total.
-    const blocked = blockFilter(career);
-    const ids = [];
+    // Blocked jobs are never sent to the provider; they stay in the catalogue and in the scope total. A comparable stated
+    // ceiling below the saved minimum is a verified contradiction: settled here with no request and no billing.
+    const blocked = blockFilter(career), preferences = career.profile?.preferences;
+    const ids = [], rows = reusable ? { ...previous.rows } : {};
     let reused = 0, blockedCount = 0;
     for (const id of Object.keys(catalogueJobs)) {
       const row = reusable && previous.rows?.[id];
       if (blocked(catalogueJobs[id])) blockedCount++;
-      else if (row?.status === 'scored' && currentPrescanRow(cacheContext, row, Date.now(), run.publicationWindow)) reused++;
-      else ids.push(id);
+      else if (settled.has(row?.status) && currentPrescanRow(cacheContext, row, Date.now(), run.publicationWindow)) reused++;
+      else if (salaryEligibility(preferences, catalogueJobs[id].salary).status === 'below_minimum') {
+        rows[id] = { ...rowMetadata(catalogueJobs[id]), status: 'below_minimum', ...unscored, assessedAt: now() };
+      } else ids.push(id);
     }
     const averageTokens = previous?.requests > 0 && Number.isFinite(previous.inputTokens) && previous.inputTokens > 0
       ? previous.inputTokens / previous.requests : ASSUMED_INPUT_TOKENS_PER_JOB;
     const estimatedInputTokens = Math.ceil(ids.length * averageTokens);
     const { id: provider, label, model, inputUsdPerMillion } = run.provider;
-    return { jobs: catalogueJobs, ids, rows: reusable ? { ...previous.rows } : {},
+    return { jobs: catalogueJobs, ids, rows,
       preview: { provider, label, model, inputUsdPerMillion, jobCount: ids.length,
         totalCatalogue: catalogue.total, reused, blocked: blockedCount, estimatedInputTokens,
         publicationRange: run.publicationRange, publicationWindow: run.publicationWindow,
@@ -189,8 +196,7 @@ export function createPrescanController({ store, makeScope, credentials, authori
   }
   function release() { providerCalls--; for (const ready of [...slots]) ready(); notify(); }
   function metadata(run, id) {
-    const state = current(run, { id }), job = state.career.matching.jobs[id];
-    return Object.fromEntries(rowFields.filter(field => job[field] !== undefined).map(field => [field, job[field]]));
+    return rowMetadata(current(run, { id }).career.matching.jobs[id]);
   }
   async function saveRow(run, id, outcome, { unsent = false } = {}) {
     const row = { ...metadata(run, id), ...outcome, assessedAt: now() };
@@ -221,9 +227,10 @@ export function createPrescanController({ store, makeScope, credentials, authori
       const key = credentials.read(run.provider.id);
       if (key.credentialVersion !== run.credentialVersion) fail('PRESCAN_CONTEXT_CHANGED', messages.PRESCAN_CONTEXT_CHANGED);
       const answer = await run.provider.assess({ apiKey: key.apiKey, candidate: run.candidate, job: input, signal: run.abort.signal });
-      await saveRow(run, job.id, { status: answer.status, priority: answer.priority, direction: answer.direction,
-        constraints: answer.constraints, eligibility: answer.eligibility, dimensions: answer.dimensions,
-        confidence: answer.confidence, answers: answer.answers, inputTokens: answer.inputTokens });
+      await saveRow(run, job.id, { status: answer.status, priority: answer.priority, fit: answer.fit, direction: answer.direction,
+        constraints: answer.constraints, eligibility: answer.eligibility, location: answer.location, dimensions: answer.dimensions,
+        confidence: answer.confidence, conflictProbability: answer.conflictProbability, locationConflict: answer.locationConflict,
+        answers: answer.answers, inputTokens: answer.inputTokens });
     } catch (error) {
       if (error?.code !== 'PRESCAN_INPUT_TOO_LARGE') throw error;
       await saveRow(run, job.id, { status: 'oversize', ...unscored, error: safeError(error) }, { unsent: true });

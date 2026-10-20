@@ -1,20 +1,22 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { decisionProviders, getDecisionProvider } from '../src/prescan/providers.mjs';
-import { CAREER_DIRECTION_POLICY, COMPETENCY_POLICY, SALARY_POLICY, overallFit } from '../src/mcp/matching-contract.mjs';
+import { CAREER_DIRECTION_POLICY, COMPETENCY_POLICY, SALARY_POLICY } from '../src/mcp/matching-contract.mjs';
 
 const provider = getDecisionProvider('openai');
 const input = { apiKey: 'sk-test-provider-key-1234567890', candidate: { preferences: { desiredRole: 'Chosen direction' }, career: 'Complete career evidence' }, job: { id: 'one', ad: 'Full original job advert', company: { name: 'Employer' } } };
 const labels = ['Poor', 'Weak', 'Partial', 'Strong', 'Excellent'];
-const choices = ['direction', 'constraints', 'eligibility'], scores = ['direction_fit', 'capability_fit', 'scope_fit', 'preferences_fit'];
+const choices = ['direction', 'constraints', 'eligibility', 'location'], scores = ['direction_fit', 'capability_fit', 'scope_fit', 'preferences_fit'];
 const levels = [3, 4, 2, 1];
+const distribution = probabilities => labels.map((label, value) => ({ label, value, probability: probabilities[value] }));
+const mean = probabilities => probabilities.reduce((sum, probability, value) => sum + probability * value, 0);
 function responseData() {
   return { model: 'gpt-6-luna', usage: { input_tokens: 123 }, answers: [
-    ...choices.map((name, index) => ({ name, type: 'choice', choice: 'aligned', confidence: [0.8, 0.7, 0.6][index], probabilities: [
+    ...choices.map((name, index) => ({ name, type: 'choice', choice: 'aligned', confidence: [0.8, 0.7, 0.6, 0.9][index], probabilities: [
       { value: 'aligned', probability: 0.8 }, { value: 'uncertain', probability: 0.15 }, { value: 'conflict', probability: 0.05 },
     ] })),
     ...scores.map((name, index) => ({ name, type: 'score', score: levels[index], confidence: 0.9,
-      probabilities: labels.map((label, value) => ({ label, value, probability: value === levels[index] ? 1 : 0 })) })),
+      probabilities: distribution(labels.map((label, value) => value === levels[index] ? 1 : 0)) })),
   ] };
 }
 const jsonResponse = data => new Response(JSON.stringify(data), { status: 200 });
@@ -37,16 +39,20 @@ test('fixed registry and documented direct Decisions wire shape preserve complet
     for (const policy of [CAREER_DIRECTION_POLICY, COMPETENCY_POLICY, SALARY_POLICY]) assert.ok(body.input[0].content.includes(policy));
     assert.deepEqual(body.questions.map(({ name, type }) => ({ name, type })),
       [...choices.map(name => ({ name, type: 'choice' })), ...scores.map(name => ({ name, type: 'score' }))]);
-    for (const question of body.questions.slice(3)) {
+    // Location has its own gate; the other gates no longer adjudicate it, so a location veto can never be a salary conflict.
+    assert.match(body.questions[3].instructions, /worksite and work mode/);
+    assert.match(body.questions[1].instructions, /other than location/);
+    for (const question of body.questions.slice(4)) {
       assert.deepEqual(question.levels.map(level => level.label), labels);
       assert.match(question.instructions, /^Preliminary: /);
     }
     return jsonResponse({ ...responseData(), extra: input.apiKey });
   } });
-  const dimensions = { direction: 75, capability: 100, scope: 50, preferences: 25 };
-  assert.equal(calls, 1); assert.deepEqual(result.dimensions, dimensions);
-  assert.equal(result.priority, overallFit(dimensions)); assert.equal(result.confidence, 0.6);
-  assert.deepEqual([result.direction, result.constraints, result.eligibility], ['aligned', 'aligned', 'aligned']);
+  // Certain Strong / Excellent / Partial / Weak → recommend shares 1 / 1 / ½ / 0, weighted .30/.25/.15/.30, discounted by the 5% conflict.
+  assert.equal(calls, 1); assert.deepEqual(result.dimensions, { direction: 100, capability: 100, scope: 50, preferences: 0 });
+  assert.equal(result.fit, 100 * 0.95 * 0.625); assert.equal(result.priority, 59); assert.equal(result.confidence, 0.6);
+  assert.equal(result.conflictProbability, 0.05); assert.equal(result.locationConflict, 0.05);
+  assert.deepEqual([result.direction, result.constraints, result.eligibility, result.location], ['aligned', 'aligned', 'aligned', 'aligned']);
   assert.match(provider.policyId, /^[0-9a-f]{16}$/);
   assert.equal(result.inputTokens, 123); assert.equal(result.status, 'scored');
   assert.deepEqual(result.answers, responseData().answers);
@@ -56,19 +62,52 @@ test('fixed registry and documented direct Decisions wire shape preserve complet
 test('refusal is explicit and cannot produce a score or explanation', async () => {
   const data = responseData(); data.answers[0] = { name: 'direction', type: 'refusal', refusal: input.apiKey };
   const result = await assess(data);
-  assert.equal(result.status, 'refused'); assert.equal(result.priority, null); assert.equal(result.confidence, null);
-  assert.equal(result.dimensions, null); assert.equal(result.eligibility, null);
+  assert.equal(result.status, 'refused'); assert.equal(result.priority, null); assert.equal(result.fit, null); assert.equal(result.confidence, null);
+  assert.equal(result.dimensions, null); assert.equal(result.eligibility, null); assert.equal(result.location, null); assert.equal(result.locationConflict, null);
   assert.deepEqual(result.answers[0], { name: 'direction', type: 'refusal' });
+});
+
+test('priority is the recommend-share utility of the full distribution, never the mode, discounted by the largest gate conflict', async () => {
+  const cases = [
+    // [distribution, mean-based score, expected share]: a Poor/Excellent coin flip is half credit, a 60% Excellent is 75, Weak earns nothing.
+    [[0.5, 0, 0, 0, 0.5], 50], [[0.1, 0.1, 0.1, 0.1, 0.6], 75], [[0.2, 0.2, 0.2, 0.2, 0.2], 50], [[0.1, 0.7, 0.2, 0, 0], 10],
+  ];
+  for (const [probabilities, share] of cases) {
+    const data = responseData();
+    for (const answer of data.answers.slice(4)) { answer.probabilities = distribution(probabilities); answer.score = mean(probabilities); }
+    for (const answer of data.answers.slice(0, 4)) answer.probabilities = [{ value: 'aligned', probability: 1 }, { value: 'uncertain', probability: 0 }, { value: 'conflict', probability: 0 }];
+    const result = await assess(data);
+    assert.deepEqual(result.dimensions, { direction: share, capability: share, scope: share, preferences: share });
+    assert.equal(result.priority, share); assert.equal(result.conflictProbability, 0);
+  }
+  // The discount takes the largest conflict probability across all four gates; uncertain mass never counts.
+  const data = responseData();
+  data.answers[1].probabilities = [{ value: 'aligned', probability: 0.3 }, { value: 'uncertain', probability: 0.3 }, { value: 'conflict', probability: 0.4 }];
+  data.answers[2].probabilities = [{ value: 'aligned', probability: 0 }, { value: 'uncertain', probability: 0.9 }, { value: 'conflict', probability: 0.1 }];
+  const discounted = await assess(data);
+  assert.equal(discounted.conflictProbability, 0.4); assert.equal(discounted.fit, 100 * 0.6 * 0.625); assert.equal(discounted.priority, 38);
+});
+
+test('a predicted location conflict at or above one half vetoes the job instead of weighing it', async () => {
+  for (const [conflict, status] of [[0.49, 'scored'], [0.5, 'incompatible_location'], [0.9, 'incompatible_location']]) {
+    const data = responseData();
+    data.answers[3].choice = conflict >= 0.5 ? 'conflict' : 'aligned';
+    data.answers[3].probabilities = [{ value: 'aligned', probability: Number((1 - conflict).toFixed(2)) }, { value: 'uncertain', probability: 0 }, { value: 'conflict', probability: conflict }];
+    const result = await assess(data);
+    assert.equal(result.status, status); assert.equal(result.locationConflict, conflict);
+    if (status === 'scored') { assert.equal(result.conflictProbability, 0.49); assert.equal(result.priority, Math.round(100 * 0.51 * 0.625)); }
+    else { assert.equal(result.priority, null); assert.equal(result.fit, null); assert.equal(result.dimensions, null); assert.equal(result.location, 'conflict'); }
+  }
 });
 
 test('invalid response shapes fail closed', async () => {
   const changes = [
-    data => { data.model = 'other'; }, data => { data.answers.pop(); }, data => { data.answers.splice(3); },
+    data => { data.model = 'other'; }, data => { data.answers.pop(); }, data => { data.answers.splice(4); },
     data => { data.answers[1].name = 'direction'; }, data => { data.answers[0].choice = true; },
     data => { data.answers[0].confidence = 2; }, data => { data.answers[0].probabilities[0].probability = 0; },
-    data => { data.answers[0].probabilities[1].value = 'aligned'; }, data => { data.answers[3].probabilities[0].label = 'injected'; },
-    data => { data.answers[3].score = 4.1; }, data => { data.answers[3].score = 1; }, data => { data.answers[2].type = 'score'; },
-    data => { data.answers[3].probabilities[0].value = 0.5; }, data => { data.usage.input_tokens = -1; },
+    data => { data.answers[0].probabilities[1].value = 'aligned'; }, data => { data.answers[4].probabilities[0].label = 'injected'; },
+    data => { data.answers[4].score = 4.1; }, data => { data.answers[4].score = 1; }, data => { data.answers[2].type = 'score'; },
+    data => { data.answers[4].probabilities[0].value = 0.5; }, data => { data.usage.input_tokens = -1; },
     data => { data.usage.input_tokens = 1.5; }, data => { data.usage.input_tokens = Number.MAX_SAFE_INTEGER + 1; },
   ];
   for (const change of changes) { const data = responseData(); change(data); await assert.rejects(assess(data), { code: 'PRESCAN_INVALID_RESPONSE' }); }

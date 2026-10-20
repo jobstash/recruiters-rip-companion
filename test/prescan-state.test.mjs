@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createCareerState } from '../src/mcp/state.mjs';
 import { matchingProfileVersion } from '../src/mcp/assessment-policy.mjs';
 import { decisionProviders } from '../src/prescan/providers.mjs';
-import { comparePrescanRows, currentPrescan, currentPrescanRow, prescanInclusion, setInclusionMinimumScore, setInclusionOverride } from '../src/prescan/state.mjs';
+import { DEFAULT_INCLUSION_MINIMUM_SCORE, comparePrescanRows, currentPrescan, currentPrescanRow, establishedIncompatibility, prescanInclusion, setInclusionMinimumScore, setInclusionOverride } from '../src/prescan/state.mjs';
 import { addBlock, listBlocks, removeBlock } from '../src/mcp/blocklist.mjs';
 import { publicationWindowForRange } from '../src/prescan/publication-range.mjs';
 
@@ -21,14 +21,14 @@ const order = (career, ids, window) => [...prescanInclusion(career, ids, window)
 const ranked = (career, ids, window) => prescanInclusion(career, ids, window).rankedIds;
 
 test('numeric priorities outrank gate verdicts; unscored and unseen IDs stay unranked and excluded by default', () => {
-  const rows = [row('conflict', 100, 'conflict'), row('aligned', 60), row('uncertain', 90, 'uncertain'), row('refused', null)];
+  const rows = [row('conflict', 100, 'conflict'), row('aligned', DEFAULT_INCLUSION_MINIMUM_SCORE), row('uncertain', 90, 'uncertain'), row('refused', null)];
   const career = fixture(rows), ids = ['refused', 'aligned', 'unseen', 'uncertain', 'conflict'];
   const inclusion = prescanInclusion(career, ids);
   assert.deepEqual(inclusion.rankedIds, ['conflict', 'uncertain', 'aligned']);
   assert.deepEqual([...inclusion.rank], [['conflict', 1], ['uncertain', 2], ['aligned', 3]]);
-  // The default minimum score is 60: a priority equal to it is still sent.
+  // A priority equal to the default minimum score is still sent.
   assert.deepEqual([...inclusion.includedIds], ['conflict', 'uncertain', 'aligned']);
-  assert.equal(inclusion.minimumScore, 60);
+  assert.equal(inclusion.minimumScore, DEFAULT_INCLUSION_MINIMUM_SCORE);
   assert.equal(inclusion.ranked, true);
   assert.equal(inclusion.stale, false);
   assert.equal(inclusion.candidates, 5);
@@ -36,9 +36,32 @@ test('numeric priorities outrank gate verdicts; unscored and unseen IDs stay unr
   assert.deepEqual(ids, ['refused', 'aligned', 'unseen', 'uncertain', 'conflict']);
 });
 
-test('equal scores resolve by publication recency then stable ID', () => {
+test('equal priorities order by unrounded fit, then publication recency, then stable ID', () => {
   const older = new Date(Date.now() - 2 * 86400000).toISOString();
   assert.deepEqual([row('z', 80), row('old', 80, 'aligned', older), row('a', 80)].sort(comparePrescanRows).map(item => item.id), ['a', 'z', 'old']);
+  // Two jobs rounded to the same priority keep their real order: the discount compresses many jobs into one integer.
+  const fit = (id, value) => ({ ...row(id, Math.round(value)), fit: value });
+  assert.deepEqual([fit('low', 12.2), fit('high', 12.4), row('legacy', 12)].sort(comparePrescanRows).map(item => item.id), ['high', 'low', 'legacy']);
+});
+
+test('a saved review that settles the location is never a candidate for the next run, even with an override', () => {
+  const career = fixture([row('moved', 95), row('failed', 90), row('fine', 85)]);
+  career.profile = { preferences: { willingToRelocate: false } };
+  career.matching.scores.moved = { relocation: 'required', gates: { direction: 'pass', constraints: 'pass', eligibility: 'pass' } };
+  career.matching.scores.failed = { relocation: 'not_required', gates: { direction: 'pass', constraints: 'fail', eligibility: 'pass' } };
+  career.matching.scores.fine = { relocation: 'required', gates: { direction: 'pass', constraints: 'pass', eligibility: 'pass' } };
+  career.profile.preferences.willingToRelocate = true;
+  assert.deepEqual(['moved', 'failed', 'fine'].map(id => establishedIncompatibility(career, id)), [false, true, false]);
+  career.profile.preferences.willingToRelocate = false;
+  assert.deepEqual(['moved', 'failed', 'fine'].map(id => establishedIncompatibility(career, id)), [true, true, true]);
+  setInclusionOverride(career, 'moved', true);
+  const inclusion = prescanInclusion(career, ['moved', 'failed', 'fine']);
+  assert.deepEqual([...inclusion.includedIds], []);
+  assert.equal(inclusion.overridden('moved'), false);
+  assert.deepEqual(['moved', 'failed', 'fine'].map(inclusion.established), [true, true, true]);
+  // The correction route is the preference, which re-admits relocation-only cases but never a gate fail.
+  career.profile.preferences.willingToRelocate = true;
+  assert.deepEqual([...prescanInclusion(career, ['moved', 'failed', 'fine']).includedIds], ['moved', 'fine']);
 });
 
 test('the minimum score splits the ranked queue by priority and per-job overrides win in either direction until cleared', () => {
@@ -64,7 +87,7 @@ test('the minimum score splits the ranked queue by priority and per-job override
   setInclusionOverride(career, 'job-1', null);
   setInclusionOverride(career, 'unscored', null);
   assert.deepEqual(order(career, ids), ['job-0', 'job-1', 'job-2', 'job-4', 'refused']);
-  assert.deepEqual(career.prescanInclusion, { minimumScore: 70, overrides: { 'job-4': true, refused: true } });
+  assert.deepEqual(career.prescanInclusion, { minimumScore: 70, scale: 2, overrides: { 'job-4': true, refused: true } });
   // Overrides for jobs that left the catalogue are ignored, not deleted.
   delete career.matching.jobs['job-4'];
   assert.deepEqual(order(career, ids.filter(id => id !== 'job-4')), ['job-0', 'job-1', 'job-2', 'refused']);
@@ -93,17 +116,19 @@ test('inclusion writes validate the catalogue ID, the override value and the min
     assert.throws(() => setInclusionMinimumScore(career, score), { code: 'INVALID_INPUT' });
   assert.equal(career.prescanInclusion, undefined);
   setInclusionMinimumScore(career, 0);
-  assert.deepEqual(career.prescanInclusion, { minimumScore: 0, overrides: {} });
+  assert.deepEqual(career.prescanInclusion, { minimumScore: 0, scale: 2, overrides: {} });
   assert.deepEqual(order(career, ['high']), ['high']);
   setInclusionMinimumScore(career, 100);
   assert.deepEqual(order(career, ['high']), []);
   setInclusionOverride(career, 'high', true);
-  assert.deepEqual(career.prescanInclusion, { minimumScore: 100, overrides: { high: true } });
+  assert.deepEqual(career.prescanInclusion, { minimumScore: 100, scale: 2, overrides: { high: true } });
   assert.deepEqual(order(career, ['high']), ['high']);
-  // Saved garbage falls back to the defaults instead of breaking ranking.
-  career.prescanInclusion = { minimumScore: 'all', overrides: null };
-  assert.equal(prescanInclusion(career, ['high']).minimumScore, 60);
-  assert.deepEqual(order(career, ['high']), ['high']);
+  // Saved garbage, and a threshold saved on the previous priority scale, fall back to the default instead of breaking ranking.
+  for (const saved of [{ minimumScore: 'all', overrides: null }, { minimumScore: 100, overrides: {} }, { minimumScore: 100, scale: 1, overrides: {} }]) {
+    career.prescanInclusion = saved;
+    assert.equal(prescanInclusion(career, ['high']).minimumScore, DEFAULT_INCLUSION_MINIMUM_SCORE);
+    assert.deepEqual(order(career, ['high']), ['high']);
+  }
 });
 
 test('profile and provider policy changes keep the pre-filter ranking, marked stale, instead of releasing every job', () => {

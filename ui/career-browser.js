@@ -4,8 +4,8 @@
   const categories = {
     sources: { title: 'CVs', empty: 'No saved CVs or supporting documents. Use Import CV to add one.' },
     facts: { title: 'Facts', empty: 'No saved career facts.' },
-    jobs: { title: 'Jobs', empty: 'No saved jobs. Start a pre-scan or copy the review prompt for your connected chat app.' },
-    applications: { title: 'Job Applications', empty: 'No saved applications. Saved CV and cover letter wording will appear here.' },
+    jobs: { title: 'Jobs', empty: 'No saved jobs. Copy the review prompt into your connected agent to start matching.' },
+    applications: { title: 'Job Applications', empty: 'No saved applications.' },
   };
   const categoryButtons = [...document.querySelectorAll('[data-career-kind]')];
   const records = element('career-records');
@@ -168,7 +168,7 @@
       records.hidden = result.items.length === 0;
       listStatus.textContent = result.items.length
         ? `${offset + 1}–${offset + result.items.length} of ${result.total}`
-        : offset ? 'No records remain on this page. Return to the previous page.' : category.empty;
+        : offset ? 'No records on this page. Choose Previous.' : category.empty;
       previous.disabled = priorOffsets.length === 0;
       next.disabled = nextOffset === null;
       pagination.hidden = previous.disabled && next.disabled;

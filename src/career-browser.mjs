@@ -4,6 +4,7 @@ import { renderableCv } from './mcp/cv-quality.mjs';
 import { createMatchingTools } from './mcp/matching-tools.mjs';
 import { fail, readCareer } from './mcp/state.mjs';
 import { comparePrescanRows, currentPrescanRow } from './prescan/state.mjs';
+import { localJobMetadata } from './mcp/job-tools.mjs';
 
 const kinds = ['sources', 'facts', 'jobs', 'applications'];
 const forbidden = new Set(['__proto__', 'prototype', 'constructor']);
@@ -148,14 +149,13 @@ function prescanSection(row) {
     ['Eligibility', prescanLabels[row.eligibility]],
     ['Preliminary breakdown', record(row.dimensions) && Number.isInteger(row.dimensions.direction)
       ? `Direction ${row.dimensions.direction} · Capability ${row.dimensions.capability} · Scope ${row.dimensions.scope} · Preferences ${row.dimensions.preferences}` : undefined],
-    ['Model confidence', Number.isFinite(row.confidence) ? `${Math.round(row.confidence * 100)}% (not a hiring probability)` : undefined],
+    ['Model confidence', Number.isFinite(row.confidence) ? `${Math.round(row.confidence * 100)}%` : undefined],
     ['Provider', row.provider === 'openai' ? 'OpenAI Decisions' : row.provider], ['Model', row.model],
   ], 'No pre-scan result saved.');
 }
 
-function jobItem({ id, reviewed, prescan }) {
-  // Both assessments describe one role; prefer catalogue metadata and retain saved pre-scan fallbacks.
-  const role = key => reviewed?.[key] ?? prescan?.[key];
+function jobItem({ id, reviewed, prescan, imported }) {
+  const role = key => imported?.[key] ?? reviewed?.[key] ?? prescan?.[key];
   const title = [text(role('title'), ''), text(role('company'), '')].filter(Boolean).join(' — ') || 'Job details unavailable';
   const salary = role('salary');
   const range = salary && (amount(salary.stated) ?? [amount(salary.minimum), amount(salary.maximum)].filter(Boolean).join('–'));
@@ -163,11 +163,18 @@ function jobItem({ id, reviewed, prescan }) {
   const preferReviewed = reviewed && (reviewed.reviewStatus === 'current' || !prescan?.current);
   const summary = preferReviewed
     ? `${assessmentLabel(reviewed.reviewStatus)} · ${Number.isInteger(reviewed.overall) ? `Overall ${reviewed.overall}/100 · ${bandLabel(reviewed.band)}` : 'Overall unavailable'} · ${assessmentLabel(reviewed.decision) || 'No saved decision'}`
-    : `${prescan.current ? 'Pre-scan' : 'Out of date pre-scan'} · Priority ${prescanPriority(prescan)} · ${prescanOutcome(prescan)}`;
+    : prescan ? `${prescan.current ? 'Pre-scan' : 'Out of date pre-scan'} · Priority ${prescanPriority(prescan)} · ${prescanOutcome(prescan)}`
+      : imported?.complete ? 'Saved · Not assessed' : 'Needs full advert';
   const review = reviewed ? reviewedSections(reviewed) : [];
   const preliminary = prescan ? [prescanSection(prescan)] : [];
   return { id, title, summary, sections: [
     ...(preferReviewed ? [...review, ...preliminary] : [...preliminary, ...review]),
+    ...(imported ? [
+      fields('Capture', [['Status', imported.complete ? 'Saved' : 'Needs full advert'],
+        ['Source URL', imported.sourceUrl], ['Job URL', imported.url]], 'No capture details saved.'),
+      section(imported.complete ? 'Original advert' : 'Captured listing text', imported.description?.trim()
+        ? imported.description : 'No advert text was captured. Open the job page and capture its full advert.'),
+    ] : []),
     fields('Role', [
       ['City', role('city')], ['Location', role('location')], ['Work mode', role('workMode')],
       ['Relocation', assessmentLabel(reviewed?.relocation)], ['Salary', pay || 'Not stated'],
@@ -207,11 +214,19 @@ async function jobRows(career) {
     item.prescan = prescanRow(career, id, row, now);
     rows.set(id, item);
   }
+  for (const [id, job] of entries(career.jobs)) {
+    const item = rows.get(id) ?? { id };
+    item.imported = { ...localJobMetadata(job), description: job.description, updatedAt: job.updatedAt };
+    rows.set(id, item);
+  }
   // Current final reviews lead, then current preliminary results, then the saved archive.
   // Never compare a pre-scan priority with a final score.
   const group = row => row.reviewed?.reviewStatus === 'current' ? 0 : row.prescan?.current ? 1 : row.reviewed ? 2 : 3;
   return [...rows.values()].sort((a, b) => group(a) - group(b) ||
-    (group(a) === 0 || group(a) === 2 ? a.index - b.index : comparePrescanRows(a.prescan, b.prescan)));
+    (group(a) === 0 || group(a) === 2 ? a.index - b.index
+      : a.prescan && b.prescan ? comparePrescanRows(a.prescan, b.prescan)
+        : a.prescan ? -1 : b.prescan ? 1
+          : (b.imported?.updatedAt ?? '').localeCompare(a.imported?.updatedAt ?? '') || a.id.localeCompare(b.id)));
 }
 
 /** Read-only, allowlisted projections: never return the vault or binary source data. */
@@ -250,12 +265,14 @@ export function createCareerBrowser({ store }) {
       if (kind === 'jobs') {
         const assessment = lookup(career.matching?.scores, id);
         const savedPrescan = lookup(career.prescan?.rows, id);
-        if (!assessment && !savedPrescan) fail('NOT_FOUND', 'This saved job was not found. Refresh the list.');
+        const captured = lookup(career.jobs, id);
+        if (!assessment && !savedPrescan && !captured) fail('NOT_FOUND', 'This saved job was not found. Refresh the list.');
         const now = Date.now();
         // Project every final assessment so pairwise comparisons stay current, then pick this job.
         const reviewed = assessment ? (await reviewedRows(career)).find(row => row.id === id) ?? null : null;
         const prescan = savedPrescan ? prescanRow(career, id, savedPrescan, now) : null;
-        const { title, sections } = jobItem({ id, reviewed, prescan });
+        const imported = captured ? { ...localJobMetadata(captured), description: captured.description } : null;
+        const { title, sections } = jobItem({ id, reviewed, prescan, imported });
         return { title, sections };
       }
       const item = lookup(career[kind], id);

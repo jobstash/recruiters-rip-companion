@@ -8,6 +8,7 @@ import {
 } from './matching-contract.mjs';
 import { compareFacts } from './facts.mjs';
 import { prioritizePrescanIds } from '../prescan/state.mjs';
+import { completeLocalJobs, localJob, localJobMetadata, localJobOriginal } from './job-tools.mjs';
 
 const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
 const object = (properties, required = []) => ({ type: 'object', properties, required, additionalProperties: false });
@@ -26,7 +27,10 @@ const compareText = (a, b) => a < b ? -1 : a > b ? 1 : 0;
 const date = value => Number.isFinite(Date.parse(value)) ? Date.parse(value) : -Infinity;
 const newerFirst = (a, b) => date(a.publishedAt) === date(b.publishedAt) ? 0 : date(a.publishedAt) > date(b.publishedAt) ? -1 : 1;
 const byOverall = (a, b) => (b.overall ?? -1) - (a.overall ?? -1) || newerFirst(a, b) || compareText(a.id, b.id);
-const matching = career => ({ jobs: {}, scores: {}, pairs: {}, ...career.matching });
+const matching = career => {
+  const saved = { jobs: {}, scores: {}, pairs: {}, ...career.matching };
+  return { ...saved, jobs: { ...saved.jobs, ...Object.fromEntries(completeLocalJobs(career).map(job => [job.id, job])) } };
+};
 const writableMatching = career => {
   const saved = career.matching ??= { jobs: {}, scores: {} };
   saved.pairs ??= {};
@@ -39,7 +43,7 @@ export async function deleteRankings(store) {
   let result;
   await store.update(state => {
     const career = state.career ??= createCareerState(), saved = matching(career);
-    result = { deletedRankings: Object.keys(saved.scores).length, deletedJobs: Object.keys(saved.jobs).length };
+    result = { deletedRankings: Object.keys(saved.scores).length, deletedJobs: Object.values(saved.jobs).filter(job => !job.imported).length };
     career.rankingVersion = rankingVersion(career) + 1;
     career.matching = { jobs: {}, scores: {}, pairs: {} };
     delete career.prescan;
@@ -49,7 +53,7 @@ export async function deleteRankings(store) {
 
 function assertCurrentWindow(jobs, ids) {
   const now = Date.now();
-  if (ids.some(id => !recentPublication(jobs[id]?.publishedAt, now)))
+  if (ids.some(id => !jobs[id]?.imported && !recentPublication(jobs[id]?.publishedAt, now)))
     fail('OUTSIDE_PUBLICATION_WINDOW', 'Only jobs published in the past seven days can be selected. Refresh the catalogue and continue with its current IDs.');
 }
 
@@ -226,7 +230,7 @@ function rankedRows(saved, preferences, profileVersion) {
 }
 
 const recommendable = row => row.reviewStatus === 'current' && row.decision === 'recommend' &&
-  recentPublication(row.publishedAt) && row.salaryEligibility.status !== 'below_minimum' &&
+  (row.imported || recentPublication(row.publishedAt)) && row.salaryEligibility.status !== 'below_minimum' &&
   ['eligible', 'requires_relocation'].includes(row.matchStatus);
 
 /** The top current recommendations by overall fit and every pair among them still awaiting a judgment. */
@@ -281,14 +285,14 @@ export function createMatchingTools({ store, platform, exportDocument, preserveF
     },
     {
       name: 'career_match_jobs', description: describe('career_match_jobs'),
-      inputSchema: object({ refresh: { type: 'boolean' } }), readOnly: false,
+      inputSchema: object({ refresh: { type: 'boolean' }, localOnly: { type: 'boolean', description: 'Discover only complete locally captured jobs, without accessing the platform feed.' } }), readOnly: false,
       async invoke(args = {}) {
-        assertObject(args, ['refresh']);
-        if (args.refresh !== undefined && typeof args.refresh !== 'boolean') fail('INVALID_INPUT', 'refresh must be a boolean.');
+        assertObject(args, ['refresh', 'localOnly']);
+        for (const field of ['refresh', 'localOnly']) if (args[field] !== undefined && typeof args[field] !== 'boolean') fail('INVALID_INPUT', `${field} must be a boolean.`);
         candidateContext(readCareer(store));
         if (args.refresh) await deleteRankings(store);
         const fetchVersion = rankingVersion(readCareer(store));
-        const catalogue = await platform('matching_catalogue', {});
+        const catalogue = args.localOnly ? { jobs: [], total: 0 } : await platform('matching_catalogue', {});
         if (!Array.isArray(catalogue?.jobs) || catalogue.total !== catalogue.jobs.length ||
             new Set(catalogue.jobs.map(job => job?.id)).size !== catalogue.jobs.length || catalogue.jobs.some(job =>
               !job || typeof job.id !== 'string' || !job.id.startsWith('node:') || typeof job.title !== 'string' ||
@@ -306,10 +310,11 @@ export function createMatchingTools({ store, platform, exportDocument, preserveF
           if (rankingVersion(career) !== fetchVersion)
             fail('RANKINGS_CHANGED', 'Rankings were deleted while the catalogue was loading. Request the current catalogue; discarded results were not restored.');
           const previous = career.matching;
-          const currentJobs = Object.fromEntries(jobs.map(job => [job.id, job]));
+          const currentJobs = Object.fromEntries([...jobs, ...completeLocalJobs(career)].map(job => [job.id, job]));
           const currentScores = Object.fromEntries(Object.entries(previous?.scores ?? {}).filter(([id]) => own(currentJobs, id)));
-          const scores = preserveFinalAssessments ? previous?.scores ?? {} : currentScores;
-          const retainedJobs = preserveFinalAssessments
+          const keepArchive = preserveFinalAssessments || args.localOnly;
+          const scores = keepArchive ? previous?.scores ?? {} : currentScores;
+          const retainedJobs = keepArchive
             ? Object.fromEntries(Object.entries(previous?.jobs ?? {}).filter(([id]) => own(scores, id) && !own(currentJobs, id)))
             : {};
           const pairs = Object.fromEntries(Object.entries(previous?.pairs ?? {})
@@ -321,7 +326,7 @@ export function createMatchingTools({ store, platform, exportDocument, preserveF
             assessmentPolicy: { protocol: MATCHING_PROTOCOL, weights: DIMENSION_WEIGHTS, bands: BANDS, recommendMinimum: RECOMMEND_MINIMUM },
             assessmentSchema,
             jobIds: prioritizePrescanIds(career, Object.keys(currentJobs).filter(id => !currentAssessment(saved.scores[id], profileVersion))),
-            total: jobs.length, ...counts(currentJobs, currentScores, profileVersion), batchSize: 10, workers: 8 };
+            total: Object.keys(currentJobs).length, ...counts(currentJobs, currentScores, profileVersion), batchSize: 10, workers: 8 };
         });
         return result;
       },
@@ -333,18 +338,22 @@ export function createMatchingTools({ store, platform, exportDocument, preserveF
         assertObject(args, ['ids'], ['ids']);
         assertIds(args.ids);
         const before = readCareer(store), fetchVersion = rankingVersion(before), saved = matching(before);
+        for (const id of args.ids) if (id.startsWith('local:')) localJobOriginal(before, id, true);
         assertKnown(saved.jobs, args.ids);
         assertCurrentWindow(saved.jobs, args.ids);
-        const result = await platform('matching_jobs', { ids: args.ids });
+        const local = args.ids.filter(id => localJob(before, id)).map(id => localJobOriginal(before, id, true));
+        const platformIds = args.ids.filter(id => !id.startsWith('local:'));
+        const result = platformIds.length ? await platform('matching_jobs', { ids: platformIds })
+          : { jobs: [], remainingIds: [], unavailableIds: [] };
         if (!Array.isArray(result?.jobs) || !Array.isArray(result.remainingIds) || !Array.isArray(result.unavailableIds))
           fail('INVALID_BATCH', 'The platform did not report job availability. Retry career_match_batch; saved assessments are unchanged.');
         const covered = [...result.jobs.map(job => job?.id), ...result.remainingIds, ...result.unavailableIds];
-        if (covered.length !== args.ids.length || new Set(covered).size !== covered.length || covered.some(id => !args.ids.includes(id)))
+        if (covered.length !== platformIds.length || new Set(covered).size !== covered.length || covered.some(id => !platformIds.includes(id)))
           fail('INVALID_BATCH', 'The platform response did not account for every requested job. Retry career_match_batch.');
         if (result.jobs.length) await store.update(state => {
           if (rankingVersion(state.career) !== fetchVersion)
             fail('RANKINGS_CHANGED', 'Rankings were deleted while job details were loading. Discarded jobs were not restored.');
-          const saved = matching(state.career ?? {});
+          const saved = writableMatching(state.career ??= createCareerState());
           for (const job of result.jobs) {
             const metadata = saved.jobs[job.id] ??= { id: job.id, title: null, company: null, publishedAt: null, applyUrl: null };
             for (const field of ['title', 'publishedAt', 'applyUrl'])
@@ -354,7 +363,7 @@ export function createMatchingTools({ store, platform, exportDocument, preserveF
             Object.assign(metadata, displayTerms(job));
           }
         });
-        return result;
+        return { ...result, jobs: [...result.jobs, ...local] };
       },
     },
     {
@@ -375,8 +384,13 @@ export function createMatchingTools({ store, platform, exportDocument, preserveF
           const career = state.career ??= createCareerState();
           assertProfile(career, args.profileVersion);
           const saved = writableMatching(career);
-          assertKnown({ ...saved.jobs, ...saved.scores }, ids);
-          assertCurrentWindow(saved.jobs, ids);
+          const allJobs = matching(career).jobs;
+          for (const id of ids) if (id.startsWith('local:')) {
+            localJobOriginal(career, id, true);
+            saved.jobs[id] = localJobMetadata(localJob(career, id));
+          }
+          assertKnown({ ...allJobs, ...saved.scores }, ids);
+          assertCurrentWindow(allJobs, ids);
           const cv = normalizeQuote(candidateCv(career));
           for (const row of args.assessments) {
             const problem = validateCitations(career, row, cv);

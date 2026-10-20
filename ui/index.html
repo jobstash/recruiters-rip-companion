@@ -9,6 +9,7 @@
 <link rel="stylesheet" href="settings.css">
 <script src="career-browser.js" defer></script>
 <script src="prescan.js" defer></script>
+<script src="updates.js" defer></script>
 <script src="settings.js" defer></script>
 </head>
 <body>
@@ -39,14 +40,16 @@
 <div id="settings" hidden>
 <section id="view-career" class="career-view" aria-label="Home" hidden>
 <div id="home-actions" class="home-actions">
-<div class="actions"><button id="import-cv" class="ghost" type="button">Import CV</button><button id="copy-review-prompt" class="ghost" type="button">Copy review prompt</button><button id="open-exports" class="text" type="button">Open exports</button><button id="backup" class="text" type="button">Export backup</button></div>
+<div class="actions"><button id="import-cv" class="ghost" type="button">Import CV</button><button id="copy-review-prompt" class="ghost" type="button">Copy review prompt</button><button id="open-exports" class="text" type="button">Open exports</button><button id="backup" class="text" type="button">Export backup</button><button id="home-account" class="text" type="button" hidden>Connect account for job access</button><button id="home-chat-apps" class="text" type="button">Connect your agent</button></div>
+<details id="prefilter-controls" class="optional-prefilter">
+<summary>Optional job pre-filtering</summary>
 <div id="prescan-controls">
-<div class="actions scan-actions"><label class="prescan-field prescan-limit" for="prescan-limit">Job limit<input id="prescan-limit" type="number" min="1" max="2000" step="1" value="100" required aria-describedby="prescan-limit-note" disabled></label><button id="prescan-start" class="primary" type="button" aria-describedby="prescan-limit-note" disabled>Start pre-scan</button><button id="prescan-cancel" class="ghost" type="button" disabled>Cancel scan</button></div>
-<p id="prescan-limit-note" class="caption">OpenAI API charges apply. Up to 2,000 jobs per run. Not a spending cap.</p>
-<div class="prescan-feedback" role="status" aria-live="polite" aria-atomic="true"><p id="prescan-progress">Loading pre-scan state…</p><p id="prescan-usage" class="caption"></p><p id="prescan-recovery"></p></div>
+<div class="actions scan-actions"><label class="prescan-field prescan-limit" for="prescan-limit">Job limit<input id="prescan-limit" type="number" min="1" max="2000" step="1" value="100" required disabled></label><button id="prescan-start" class="primary" type="button" disabled>Start pre-filtering</button><button id="prescan-cancel" class="ghost" type="button" disabled>Cancel scan</button></div>
+<div class="prescan-feedback" role="status" aria-live="polite" aria-atomic="true"><p id="prescan-progress">Loading…</p><p id="prescan-usage" class="caption"></p><p id="prescan-recovery"></p></div>
 <p id="prescan-message" role="status" aria-live="polite"></p>
-<div class="actions"><button id="home-account" class="text" type="button" hidden>Connect account for job access</button><button id="home-chat-apps" class="text" type="button">Set up chat app</button><button id="home-prescan-settings" class="text" type="button">API key settings</button></div>
+<div class="actions"><button id="home-prescan-settings" class="text" type="button">Configure Decisions API</button></div>
 </div>
+</details>
 </div>
 <div id="career-browser">
 <div class="career-toolbar">
@@ -89,28 +92,43 @@
 <div class="settings-content"><div class="app-row">
 <h3 class="app-name">ChatGPT desktop · Codex</h3>
 <button id="install-chatgpt" class="app-action ghost" type="button">Install ChatGPT plugin</button>
-<details class="app-details"><summary>Manual MCP setup</summary><p>In a compatible local MCP host, register this command as <strong>recruiters-rip</strong>. It does not connect ordinary ChatGPT chats.</p><code id="mcp-command" class="command"></code><button id="copy-command" class="text" type="button">Copy command</button></details>
+<details class="app-details"><summary>Manual MCP setup</summary><p>Register this command as <strong>recruiters-rip</strong> in your local MCP host.</p><code id="mcp-command" class="command"></code><button id="copy-command" class="text" type="button">Copy command</button></details>
 </div>
 <div class="app-row">
 <h3 class="app-name">Claude Desktop</h3>
 <button id="install-claude" class="app-action ghost" type="button">Install Claude extension</button>
-<details class="app-details"><summary>Manual configuration</summary><p>Add this entry to Claude Desktop’s MCP configuration. Keep your other servers in place.</p><pre id="mcp-config" class="command"></pre><button id="copy-config" class="text" type="button">Copy configuration</button></details>
+<details class="app-details"><summary>Manual configuration</summary><p>Merge this entry into Claude Desktop’s MCP configuration.</p><pre id="mcp-config" class="command"></pre><button id="copy-config" class="text" type="button">Copy configuration</button></details>
+</div>
+<div class="app-row">
+<h3 class="app-name">Chrome extension</h3>
+<button id="open-extension-folder" class="app-action ghost" type="button">Open extension folder</button>
+<p class="app-details">In Chrome, open Extensions → Manage extensions, turn on Developer mode, choose Load unpacked and select the opened folder.</p>
 </div>
 </div>
 </section>
 <section id="prescan" class="setup-section" aria-labelledby="prescan-title">
-<h2 id="prescan-title">Pre-scan</h2>
+<h2 id="prescan-title">Optional Decisions API</h2>
+<div class="settings-content">
+<details id="prescan-options" class="optional-prefilter">
+<summary>Configure OpenAI Decisions API</summary>
 <form id="prescan-form" autocomplete="off">
-<div class="prescan-fields">
-<label class="prescan-field" for="prescan-provider">Provider<select id="prescan-provider" disabled><option value="openai">OpenAI Decisions</option></select></label>
-<label class="prescan-field" for="prescan-key">API key<input id="prescan-key" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" aria-describedby="prescan-key-status" disabled></label>
-</div>
-<p id="prescan-key-status" class="caption">Open local storage to manage your API key.</p>
-<div class="actions"><button id="prescan-save" class="ghost" type="button" disabled>Save key</button><button id="prescan-remove" class="text" type="button" disabled>Remove key</button></div>
-<p>Scans send your CV, preferences, saved answers and job ads to OpenAI, including any personal details. Your API key stays on this computer.</p>
-<p>OpenAI bills API usage separately from ChatGPT. You approve each scan; saving a key starts nothing.</p>
+<label class="prescan-field" for="prescan-key">Decisions API key (optional)<input id="prescan-key" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" aria-describedby="prescan-key-status" disabled></label>
+<p id="prescan-key-status" class="caption">Open local storage to configure the optional Decisions API.</p>
+<div class="actions"><button id="prescan-save" class="ghost" type="button" disabled>Save Decisions key</button><button id="prescan-remove" class="text" type="button" disabled>Remove key</button></div>
 <p id="prescan-key-message" role="status" aria-live="polite"></p>
 </form>
+</details>
+</div>
+</section>
+<section id="update-settings" class="setup-section" aria-labelledby="update-title">
+<h2 id="update-title">Updates</h2>
+<div class="settings-content update-content">
+<p id="update-version" class="caption"></p>
+<p id="update-status" role="status" aria-live="polite" aria-atomic="true"></p>
+<progress id="update-progress" aria-label="Update download progress" hidden></progress>
+<p id="update-error" role="alert" hidden></p>
+<div class="actions"><button id="update-check" class="ghost" type="button" disabled>Check for updates</button><button id="update-download" class="ghost" type="button" hidden>Download update</button><button id="update-install" class="ghost" type="button" hidden>Install update</button><button id="update-cancel" class="text" type="button" hidden>Cancel update</button></div>
+</div>
 </section>
 </section>
 </div>

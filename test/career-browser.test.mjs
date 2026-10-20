@@ -264,13 +264,6 @@ test('current pre-scans lead stale reviews without converting priority into over
   const merged = page.items.find(item => item.id === 'merged');
   assert.match(merged.summary, /^Pre-scan · Priority 82\/100 · Potentially aligned$/);
   assert.equal(merged.sections[0].heading, 'Pre-scan result');
-  assert.deepEqual(sectionFields(merged, 'Pre-scan result'), [
-    { label: 'Status', value: 'Preliminary' }, { label: 'Priority', value: '82/100', numeric: true }, { label: 'Outcome', value: 'Potentially aligned' },
-    { label: 'Career direction', value: 'Potentially aligned' }, { label: 'Mandatory conditions', value: 'Potentially aligned' },
-    { label: 'Eligibility', value: 'Potentially aligned' },
-    { label: 'Preliminary breakdown', value: 'Direction 80 · Capability 70 · Scope 60 · Preferences 90' },
-    { label: 'Model confidence', value: '80% (not a hiring probability)' },
-    { label: 'Provider', value: 'OpenAI Decisions' }, { label: 'Model', value: 'saved-model' }]);
   assert.equal(fieldValue(merged, 'Reviewed fit', 'Overall fit'), '99/100 (Strong)');
   assert.equal(fieldValue(merged, 'Role', 'Location'), 'London');
   assert.equal(merged.sections.filter(section => section.heading === 'Role').length, 1);

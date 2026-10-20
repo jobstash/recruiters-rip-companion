@@ -8,28 +8,28 @@ import { currentPrescan, currentPrescanRow, getPrescanResults } from './state.mj
 
 const PRICE_NOTE = 'Base-rate estimate from reported input tokens, not a guaranteed invoice. Regional or long-context premiums may apply. Already dispatched requests may be billed after cancellation.';
 const messages = {
-  PRESCAN_KEY_REQUIRED: 'Save an OpenAI API key in companion settings before starting a pre-scan.',
-  PRESCAN_NOT_AUTHORIZED: 'Pre-scan was not authorized. No provider requests were sent.',
-  PRESCAN_CANCELLED: 'Pre-scan was cancelled. Completed results were kept; dispatched requests may still be billed.',
-  PRESCAN_CONTEXT_CHANGED: 'The profile, rankings, device or API key changed. Pre-scan stopped; start a new run when ready.',
-  PRESCAN_AUTH: 'OpenAI rejected the API key. Update the key in companion settings before starting again.',
-  PRESCAN_RATE_LIMIT: 'OpenAI rate or account limits stopped the pre-scan. Check your API account before starting again.',
-  PRESCAN_TIMEOUT: 'OpenAI did not respond in time. Completed results were kept; start again when ready.',
-  PRESCAN_NETWORK: 'OpenAI could not be reached. Completed results were kept; check your connection before starting again.',
-  PRESCAN_PROVIDER_ERROR: 'OpenAI could not complete the request. Completed results were kept; start again when ready.',
-  PRESCAN_INVALID_RESPONSE: 'OpenAI returned an invalid assessment. Pre-scan stopped without saving that assessment.',
-  PRESCAN_INPUT_TOO_LARGE: 'The complete candidate context and original advertisement exceed the provider input limit. No request was sent for this job.',
-  PRESCAN_INVALID_INPUT: 'The provider input could not be prepared. No assessment was saved for this job.',
-  PRESCAN_UNSUPPORTED_PROVIDER: 'This pre-scan provider is not supported.',
-  PROFILE_INCOMPLETE: 'Save a professional headline or role capabilities and a CV or career facts before starting a pre-scan.',
-  PAIRING_REQUIRED: 'Connect your platform account in companion settings before fetching jobs.',
-  LOCAL_LOCKED: 'Unlock companion storage before continuing. Completed pre-scan results were kept.',
-  IDENTITY_CHANGED: 'The local device connection changed. Open the current companion account before starting again.',
-  RANKINGS_CHANGED: 'Rankings were reset. Pre-scan stopped without restoring deleted results.',
-  INVALID_CATALOGUE: 'The platform returned an incomplete job catalogue. No new pre-scan was started.',
-  INVALID_BATCH: 'The platform returned incomplete job availability. Pre-scan stopped; completed results were kept.',
-  OUTSIDE_PUBLICATION_WINDOW: 'The selected jobs are no longer in the seven-day catalogue. Start again to fetch current jobs.',
-  PRESCAN_FAILED: 'Pre-scan stopped. Completed results were kept; open companion settings before starting again.',
+  PRESCAN_KEY_REQUIRED: 'Add your OpenAI API key in Settings.',
+  PRESCAN_NOT_AUTHORIZED: 'Pre-filtering canceled.',
+  PRESCAN_CANCELLED: 'Pre-filtering canceled.',
+  PRESCAN_CONTEXT_CHANGED: 'Your profile or setup changed. Start pre-filtering again.',
+  PRESCAN_AUTH: 'OpenAI rejected the API key. Update it in Settings.',
+  PRESCAN_RATE_LIMIT: 'Check your OpenAI quota and billing, then try again.',
+  PRESCAN_TIMEOUT: 'OpenAI timed out. Try again.',
+  PRESCAN_NETWORK: 'Could not reach OpenAI. Check your connection.',
+  PRESCAN_PROVIDER_ERROR: 'OpenAI could not complete the request. Try again.',
+  PRESCAN_INVALID_RESPONSE: 'OpenAI returned an invalid result. Try again.',
+  PRESCAN_INPUT_TOO_LARGE: 'The CV and job advert exceed the provider input limit.',
+  PRESCAN_INVALID_INPUT: 'Could not prepare this job for pre-filtering.',
+  PRESCAN_UNSUPPORTED_PROVIDER: 'This provider is not supported.',
+  PROFILE_INCOMPLETE: 'Add your CV and career profile to start pre-filtering.',
+  PAIRING_REQUIRED: 'Connect your account in Settings.',
+  LOCAL_LOCKED: 'Unlock local storage to continue.',
+  IDENTITY_CHANGED: 'Your account connection changed. Reconnect in Settings.',
+  RANKINGS_CHANGED: 'Job assessments were cleared. Start pre-filtering again.',
+  INVALID_CATALOGUE: 'Could not load the job catalogue. Try again.',
+  INVALID_BATCH: 'Could not load these job adverts. Try again.',
+  OUTSIDE_PUBLICATION_WINDOW: 'These jobs are outside the current catalogue. Refresh your jobs.',
+  PRESCAN_FAILED: 'Pre-filtering stopped. Check your API setup in Settings.',
 };
 const safeError = error => {
   const code = Object.hasOwn(messages, error?.code) ? error.code : 'PRESCAN_FAILED';
@@ -114,7 +114,7 @@ export function createPrescanController({ store, makeScope, credentials, authori
     current(run);
     providerCalls++;
   }
-  function release() { providerCalls--; for (const ready of [...slots]) ready(); }
+  function release() { providerCalls--; for (const ready of [...slots]) ready(); notify(); }
   function metadata(run, id) {
     const state = current(run, { id }), job = state.career.matching.jobs[id];
     return Object.fromEntries(rowFields.filter(field => job[field] !== undefined).map(field => [field, job[field]]));
@@ -132,12 +132,12 @@ export function createPrescanController({ store, makeScope, credentials, authori
   }
   async function assess(run, job) {
     if (typeof job.ad !== 'string' || !job.ad.trim()) {
-      await unavailable(run, job.id, 'The full original advertisement is unavailable. This job still needs final review.');
+      await unavailable(run, job.id, 'Original job advert unavailable.');
       return;
     }
     const details = metadata(run, job.id);
     if (!recentPublication(details.publishedAt)) {
-      await unavailable(run, job.id, 'This job is outside the current seven-day catalogue. No provider request was sent.');
+      await unavailable(run, job.id, 'Job outside the current catalogue.');
       return;
     }
     const input = jobInput({ ...details, ...job });
@@ -162,9 +162,9 @@ export function createPrescanController({ store, makeScope, credentials, authori
       const ids = queue.splice(0, 10);
       const batch = await run.tools.get('career_match_batch').invoke({ ids });
       current(run);
-      for (const id of batch.unavailableIds) await unavailable(run, id, 'The platform could not provide the original advertisement. This job still needs final review.');
+      for (const id of batch.unavailableIds) await unavailable(run, id, 'Original job advert unavailable.');
       if (batch.remainingIds.length === ids.length) {
-        for (const id of batch.remainingIds) await unavailable(run, id, 'The platform returned no original advertisements for this batch. No provider request was sent.');
+        for (const id of batch.remainingIds) await unavailable(run, id, 'Original job advert unavailable.');
       } else queue.push(...batch.remainingIds);
       for (const job of batch.jobs) await assess(run, job);
     }
@@ -250,5 +250,5 @@ export function createPrescanController({ store, makeScope, credentials, authori
     if (run) { active = null; run.abort.abort(); await finish(run, 'cancelled'); }
     try { return status(); } catch { return { status: 'interrupted', requestsMayBeBilled: true }; }
   }
-  return { start, cancel, status, results };
+  return { start, cancel, status, results, isActive: () => active !== null || providerCalls > 0 };
 }

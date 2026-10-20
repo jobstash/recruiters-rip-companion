@@ -16,3 +16,4 @@ userdata/
 coverage/
 eval/runs/
 build/
+browser-extension/dist/

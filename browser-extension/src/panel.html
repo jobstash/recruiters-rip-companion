@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Recruiters.rip</title><link rel="stylesheet" href="design-tokens.css"><link rel="stylesheet" href="panel.css"></head>
+<body>
+<header><img src="brand/recruiters-rip-lockup-reversed.svg" alt="Recruiters.rip" width="180" height="32"><button id="settings" class="quiet">Settings</button></header>
+<main>
+<nav aria-label="Page tools"><button id="capture">Capture jobs</button><button id="inspect">Inspect form</button></nav>
+<p id="status" role="status" aria-live="polite"></p><p id="error" role="alert" hidden></p><button id="cancel" hidden>Cancel preparation</button>
+<section id="page" hidden><h1 id="title"></h1><p id="url" class="meta"></p></section>
+<section id="jobs" hidden><h2>Detected jobs</h2><div id="job-list"></div><button id="save">Save selected jobs</button></section>
+<section id="form" hidden><h2>Application form</h2><p class="meta">Populated and protected controls are not filled. Custom controls and embedded forms remain manual.</p><label class="check"><input id="api" type="checkbox">Use optional Decisions API for known values (may incur provider charges)</label><button id="prepare">Prepare values</button><div id="form-id" class="meta"></div><button id="prompt" class="quiet" hidden>Copy agent prompt for unanswered text</button><div id="field-list"></div><div id="unresolved"></div><div id="review-actions" hidden><button id="copy">Copy selected values</button><button id="fill">Fill selected empty controls</button><p class="meta">Review the page yourself. This never submits, clicks Next or uploads files.</p></div></section>
+</main><script type="module" src="panel.mjs"></script>
+</body></html>

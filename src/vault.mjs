@@ -49,6 +49,7 @@ export function createVault(directory) {
       });
       writes = pending.catch(() => {}); return pending;
     },
+    async flush() { await writes; },
     async resetIdentity() {
       let result;
       await this.update(next => {

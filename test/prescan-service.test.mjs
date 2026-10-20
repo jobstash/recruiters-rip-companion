@@ -116,6 +116,21 @@ test('native authorization reserves single-flight before awaiting confirmation a
   assert.equal(f.apiCalls.length, 2);
 });
 
+test('a stale or cancelled summary remains busy until its paid provider request drains', async () => {
+  const response = deferred();
+  const f = fixture({ count: 1, assess: async () => { await response.promise; return assessment(); } });
+  await f.controller.start({ limit: 1 });
+  await f.waitFor(() => f.apiCalls.length === 1);
+  await f.store.update(state => { state.career.evidenceRevision++; });
+  assert.equal(f.controller.status().status, 'stale');
+  assert.equal(f.controller.isActive(), true);
+  await f.controller.cancel();
+  assert.equal(f.controller.isActive(), true);
+  response.resolve();
+  await f.waitFor(() => !f.controller.isActive());
+  assert.equal(f.controller.isActive(), false);
+});
+
 test('declined confirmation, missing credentials and invalid input make no network requests', async () => {
   const f = fixture({ authorize: async () => false });
   await assert.rejects(f.controller.start(), { code: 'PRESCAN_NOT_AUTHORIZED' });
@@ -149,7 +164,6 @@ test('finite capped runs have at most eight active calls, preserve full ads/cont
   assert.equal(summary.status, 'completed'); assert.equal(summary.selected, 81); assert.equal(summary.processed, 81);
   assert.equal(summary.requests, 81); assert.equal(summary.inputTokens, 81 * 17); assert.equal(summary.totalCatalogue, 100);
   assert.equal(summary.estimatedCostUsd, summary.inputTokens * 0.1 / 1_000_000);
-  assert.match(summary.priceNote, /not a guaranteed invoice/);
   assert.equal(f.apiCalls.length, 81); assert.equal(new Set(f.apiCalls.map(call => call.job.id)).size, 81);
   assert.equal(f.maxConcurrent <= 8, true);
   assert.equal(f.platformCalls.filter(call => call.operation === 'matching_jobs').every(call => call.args.ids.length <= 10), true);

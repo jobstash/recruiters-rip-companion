@@ -12,10 +12,15 @@ const electron = createRequire(import.meta.url)('electron');
 const args = ['.', ...process.argv.slice(2)];
 let child, restarting = false, pending, rebuild = false, stopping = false;
 
-const runtimeBuild = () => new Promise((resolve, reject) => {
-  const build = spawn(process.execPath, [path.join(root, 'scripts', 'runtime.mjs')], { cwd: root, stdio: 'inherit' });
-  build.on('exit', code => code === 0 ? resolve() : reject(new Error(`Runtime build exited with ${code}`)));
-});
+async function runtimeBuild() {
+  for (const args of [['scripts/runtime.mjs'], ['browser-extension/build.mjs', 'production'], ['browser-extension/build.mjs', 'local']]) {
+    await new Promise((resolve, reject) => {
+      const build = spawn(process.execPath, args, { cwd: root, stdio: 'inherit' });
+      build.once('error', reject);
+      build.once('exit', code => code === 0 ? resolve() : reject(new Error(`Build exited with ${code}`)));
+    });
+  }
+}
 
 function start() {
   child = spawn(electron, args, { cwd: root, stdio: 'inherit', env: { ...process.env, RECRUITERS_COMPANION_DEV: '1' } });
@@ -49,6 +54,7 @@ watch(path.join(root, 'src'), { recursive: true }, (_event, file) => {
 });
 watch(path.join(root, 'scripts'), { recursive: true }, (_event, file) => { if (file && file !== 'dev.mjs') queue(true); });
 watch(path.join(root, 'skills'), { recursive: true }, (_event, file) => { if (file) queue(true); });
+watch(path.join(root, 'browser-extension'), { recursive: true }, (_event, file) => { if (file && file !== 'dist' && !file.startsWith(`dist${path.sep}`)) queue(true); });
 
 for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => { stopping = true; clearTimeout(pending); child?.kill('SIGTERM'); process.exit(0); });
 

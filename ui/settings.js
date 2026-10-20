@@ -15,6 +15,8 @@ for (const button of document.querySelectorAll('[data-view]')) button.addEventLi
 function openSettings(target) {
   showView('setup');
   const section = $(target);
+  const optional = section.querySelector('details.optional-prefilter');
+  if (optional) optional.open = true;
   section.scrollIntoView({ block: 'start' });
   section.querySelector('input:not(:disabled), button:not(:disabled)')?.focus({ preventScroll: true });
 }
@@ -40,6 +42,7 @@ async function refresh() {
       $('mcp-command').textContent = ''; $('mcp-config').textContent = '';
       window.careerBrowser?.clear(); careerViewVersion = undefined;
       window.prescanUI?.clear();
+      window.updatesUI?.clear();
       return;
     }
     $('connect-account').textContent = state.paired ? 'Open account' : 'Connect account';
@@ -55,18 +58,20 @@ async function refresh() {
     }
     $('mcp-command').textContent = state.setup.command; $('mcp-config').textContent = state.setup.claudeConfig;
     window.prescanUI?.refresh(state.prescan, state.paired);
+    window.updatesUI?.refresh(state.updates);
     if (state.failure) notice(state.failure);
   } catch {
     if (request !== stateRequest) return;
     window.careerBrowser?.clear(); careerViewVersion = undefined;
     window.prescanUI?.clear();
-    notice('Local settings could not be read. Close and reopen the companion. Saved data has not been replaced.');
+    window.updatesUI?.clear();
+    notice('Could not load settings. Reopen the companion.');
   }
 }
 async function action(op, success) {
   if (busy) return;
   busy = true;
-  const controls = [...document.querySelectorAll('button')].filter(button => !button.closest('#career-browser, #views, #prescan, #prescan-controls') && !['approval-cancel', 'approval-allow'].includes(button.id));
+  const controls = [...document.querySelectorAll('button')].filter(button => !button.closest('#career-browser, #views, #prescan, #prescan-controls, #update-settings') && !['approval-cancel', 'approval-allow'].includes(button.id));
   const disabled = controls.map(control => control.disabled); controls.forEach(control => { control.disabled = true; });
   try {
     const result = await invoke(op);
@@ -80,16 +85,17 @@ async function action(op, success) {
   finally { busy = false; controls.forEach((control, index) => { control.disabled = disabled[index]; }); await refresh(); }
 }
 for (const [id, op, message] of [
-  ['connect-account', 'connect-account', result => result.pairingRequired ? 'Complete account sign-in in the browser, then confirm the connection here.' : ''],
+  ['connect-account', 'connect-account', result => result.pairingRequired ? 'Complete sign-in and device pairing in the browser, then choose “Confirm account on this computer” to return here for approval.' : ''],
   ['install-chatgpt', 'install-chatgpt', result => `Recruiters.rip plugin configuration installed. ${result.conversationRequired}`],
-  ['copy-command', 'copy-command', 'MCP command copied. Register it as recruiters-rip in a compatible local MCP host.'],
-  ['copy-config', 'copy-config', 'Configuration copied. Merge it with your existing Claude Desktop configuration.'],
+  ['copy-command', 'copy-command', 'MCP command copied.'],
+  ['copy-config', 'copy-config', 'Configuration copied.'],
   ['install-claude', 'install-claude', 'Approve the extension installation in Claude Desktop.'],
+  ['open-extension-folder', 'open-extension-folder', 'Extension folder opened. In Chrome’s Manage extensions, enable Developer mode and choose Load unpacked.'],
   ['import-cv', 'import-cv', result => result.cancelled ? 'Import canceled.' : 'CV imported.'],
-  ['copy-review-prompt', 'copy-review-prompt', 'Copied. Paste into Codex or Claude with recruiters.rip enabled. Review has not started.'],
+  ['copy-review-prompt', 'copy-review-prompt', 'Copied. Paste into Codex or Claude.'],
   ['open-exports', 'open-exports', 'Export folder opened.'],
-  ['backup', 'backup', result => result.exported ? 'Backup exported. Keep it private.' : 'Export canceled.'],
-  ['delete-rankings', 'delete-rankings', 'Job assessments cleared. CVs, facts and job applications kept.'],
+  ['backup', 'backup', result => result.exported ? 'Backup exported.' : 'Export canceled.'],
+  ['delete-rankings', 'delete-rankings', 'Job assessments cleared.'],
   ['unlock', 'unlock', 'Local storage is open.'],
 ]) $(id).addEventListener('click', () => { void action(op, message); });
 async function answerApproval(allow) {

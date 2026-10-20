@@ -6,7 +6,7 @@ const validKey = key => typeof key === 'string' && /^sk-[A-Za-z0-9_-]{16,500}$/.
 function validate(args, saving) {
   const keys = saving ? ['provider', 'apiKey'] : ['provider'];
   if (!args || typeof args !== 'object' || Array.isArray(args) || Object.keys(args).some(key => !keys.includes(key))) {
-    throw new CareerError('PRESCAN_INVALID_INPUT', 'Use the local pre-scan settings to manage provider credentials.');
+    throw new CareerError('PRESCAN_INVALID_INPUT', 'Use the local Decisions API settings to manage the optional key.');
   }
   getDecisionProvider(args.provider);
   if (saving && !validKey(args.apiKey)) throw new CareerError('PRESCAN_INVALID_KEY', 'Enter an OpenAI API key without spaces, not a ChatGPT login token.');
@@ -48,7 +48,7 @@ export function createPrescanCredentials({ store, onChange = () => {} }) {
     read(provider) {
       getDecisionProvider(provider);
       const state = store.get(), apiKey = state.prescanCredentials?.[provider]?.apiKey;
-      if (!validKey(apiKey)) throw new CareerError('PRESCAN_KEY_REQUIRED', 'Save an OpenAI API key in the companion’s local pre-scan settings first.');
+      if (!validKey(apiKey)) throw new CareerError('PRESCAN_KEY_REQUIRED', 'Save an OpenAI API key in the companion’s local Decisions API settings first.');
       return { apiKey, credentialVersion: version(state) };
     },
   };

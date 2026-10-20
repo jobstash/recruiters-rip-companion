@@ -127,15 +127,14 @@ summary::before { content: ""; flex: none; width: 6px; height: 6px; border-right
 details[open] summary::before { transform: rotate(-135deg); }
 summary:hover { color: var(--color-ink); }
 .app-details > :not(summary) { margin-top: var(--spacing-16); }
+.optional-prefilter > :not(summary) { margin-top: var(--spacing-16); }
 .command { display: block; margin: 0; padding: var(--spacing-16); background: var(--color-surface); border: 1px solid var(--color-facet); font: 400 13px/1.6 var(--font-geist-mono); color: var(--color-ink); white-space: pre-wrap; overflow-wrap: anywhere; }
 #prescan-form, .prescan-disclosure, .prescan-feedback { display: grid; gap: var(--spacing-16); min-width: 0; }
-.prescan-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--spacing-24); }
 .prescan-field { display: grid; gap: var(--spacing-8); min-width: 0; }
-.prescan-field input, .prescan-field select { width: 100%; min-width: 0; min-height: 44px; padding: 12px 0; border: 0; border-bottom: 1px solid var(--color-ink); border-radius: 0; background: transparent; color: var(--color-ink); font: 400 18px/1.4 var(--font-geist); letter-spacing: normal; text-transform: none; }
-.prescan-field select option { background: var(--color-canvas); color: var(--color-ink); }
-.prescan-field input:focus, .prescan-field select:focus { border-bottom-color: transparent; background-image: var(--rr-dispersion); background-repeat: no-repeat; background-size: 100% 2px; background-position: 0 100%; box-shadow: var(--shadow-input-focus); }
-.prescan-field input:focus-visible, .prescan-field select:focus-visible { box-shadow: var(--shadow-focus-ring), var(--shadow-input-focus); }
-.prescan-field input:disabled, .prescan-field select:disabled { border-color: var(--color-facet); color: var(--color-dust); cursor: not-allowed; }
+.prescan-field input { width: 100%; min-width: 0; min-height: 44px; padding: 12px 0; border: 0; border-bottom: 1px solid var(--color-ink); border-radius: 0; background: transparent; color: var(--color-ink); font: 400 18px/1.4 var(--font-geist); letter-spacing: normal; text-transform: none; }
+.prescan-field input:focus { border-bottom-color: transparent; background-image: var(--rr-dispersion); background-repeat: no-repeat; background-size: 100% 2px; background-position: 0 100%; box-shadow: var(--shadow-input-focus); }
+.prescan-field input:focus-visible { box-shadow: var(--shadow-focus-ring), var(--shadow-input-focus); }
+.prescan-field input:disabled { border-color: var(--color-facet); color: var(--color-dust); cursor: not-allowed; }
 .prescan-limit { width: 104px; }
 .home-actions { display: grid; gap: var(--spacing-16); padding-bottom: var(--spacing-24); }
 #prescan-controls { display: grid; gap: var(--spacing-8); }
@@ -143,6 +142,10 @@ summary:hover { color: var(--color-ink); }
 .prescan-feedback { display: grid; gap: var(--spacing-8); font-variant-numeric: tabular-nums; }
 #prescan-progress { font: 400 13px/1.6 var(--font-geist-mono); }
 #prescan-usage:empty, #prescan-recovery:empty, #prescan-message:empty, #prescan-key-message:empty { display: none; }
+
+.update-content { gap: var(--spacing-16); }
+#update-progress { width: 100%; max-width: var(--reading); accent-color: var(--color-ink); }
+#update-status, #update-error { white-space: pre-wrap; }
 
 /* Native modal semantics and focus management are retained. */
 dialog { width: min(600px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); padding: 0; border: 1px solid var(--color-facet); border-radius: 0; background: var(--color-canvas); color: var(--color-ink); overflow: auto; }
@@ -161,7 +164,6 @@ dialog::backdrop { background: color-mix(in oklab, var(--color-void) 80%, transp
   .career-reader { border-left: 1px solid var(--color-facet); padding: var(--spacing-16); }
   .career-reader .back { display: inline-flex; }
   .app-row { grid-template-columns: minmax(0, 1fr); grid-template-areas: "name" "action" "details"; }
-  .prescan-fields { grid-template-columns: minmax(0, 1fr); }
   .setup-section { grid-template-columns: minmax(0, 1fr); gap: var(--spacing-24); }
   .home-actions button { padding-inline: var(--spacing-8); }
   .home-actions .actions { gap: var(--spacing-8); }

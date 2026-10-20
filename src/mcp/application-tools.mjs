@@ -6,6 +6,7 @@ import { currentAssessment, normalizeQuote } from './matching-tools.mjs';
 import { matchingProfileVersion } from './assessment-policy.mjs';
 import { policyIdFor } from './matching-contract.mjs';
 import { SKILL_DIGEST } from '../generated/skill-digest.mjs';
+import { localJobOriginal } from './job-tools.mjs';
 
 export const CV_WRITING_GUIDE = [
   'Write to win the interview. The saved CV is the base career record: employers, roles, dates and achievements come from it. Facts are what the candidate has told you since; use them to tailor truthfully.',
@@ -126,6 +127,10 @@ function catalogueJob(job, jobId) {
   return { id: job.id, title: job.title, company, description: job.description,
     ...(typeof url === 'string' && url ? { url } : {}), ...(typeof job.location === 'string' && job.location ? { location: job.location } : {}) };
 }
+function capturedApplicationJob(career, jobId) {
+  const { id, title, company, description, applyUrl, location } = localJobOriginal(career, jobId, true);
+  return { id, title, company, description, url: applyUrl, ...(location ? { location } : {}) };
+}
 function summary(app) {
   return { id: app.id, job: { ...(app.job.id ? { id: app.job.id } : {}), title: app.job.title, company: app.job.company, ...(app.job.url ? { url: app.job.url } : {}) },
     cvVersion: app.cv?.version ?? null, coverLetterVersion: app.coverLetter?.version ?? null,
@@ -156,13 +161,17 @@ export function createApplicationTools({ store, platform, documents, exportDocum
     object({ ...mutationSchema, ...properties }, ['requestId', 'revision', ...required]), false,
     args => mutateCareer(store, args, name, args, career => change(career, args)));
 
-  add('career_job_read', 'Read the complete real catalogue job before creating an application.', object({ id: text(100) }), true, args => platform('job_read', args));
-  add('career_application_create', 'Create an application for a catalogue job (jobId) or any advert the user pasted (job). Then read career_application_context and save the tailored CV and cover letter.',
+  add('career_job_read', 'Read a complete catalogue job or a local capture (including listing text marked complete:false).', object({ id: text(100) }), true, args =>
+    typeof args.id === 'string' && args.id.startsWith('local:') ? localJobOriginal(readCareer(store), args.id) : platform('job_read', args));
+  add('career_application_create', 'Create an application for a catalogue or complete locally captured job (jobId), or an advert the user pasted (job). Then read career_application_context and save the tailored CV and cover letter.',
     object({ ...mutationSchema, jobId: text(100), job: jobSchema }, ['requestId', 'revision']), false, async args => {
       if ((args.jobId === undefined) === (args.job === undefined)) fail('INVALID_INPUT', 'Provide either jobId for a catalogue job or job for a pasted advert.');
       const replay = replayCareer(store, args, 'career_application_create', args);
       if (replay) return replay;
-      const job = args.jobId !== undefined ? catalogueJob(await platform('job_read', { id: args.jobId }), args.jobId) : args.job;
+      let job = args.job;
+      if (args.jobId !== undefined) job = typeof args.jobId === 'string' && args.jobId.startsWith('local:')
+        ? capturedApplicationJob(readCareer(store), args.jobId)
+        : catalogueJob(await platform('job_read', { id: args.jobId }), args.jobId);
       return mutateCareer(store, args, 'career_application_create', args, career => {
         const app = { id: randomUUID(), job, createdAt: now(), updatedAt: now(),
           cv: null, coverLetter: null, cvHistory: [], coverLetterHistory: [], exports: [] };
@@ -248,7 +257,7 @@ export function createApplicationTools({ store, platform, documents, exportDocum
           bytes = await documents.renderCareerCvPdf(input);
         }
       } else {
-        const title = `Cover letter — ${app.job.title} — ${app.job.company}`;
+        const title = ['Cover letter', app.job.title, app.job.company].filter(Boolean).join(' — ');
         expectedText = [title, ...draft.paragraphs].join('\n\n') + '\n';
         if (format === 'pdf') bytes = await documents.renderCareerPdf(title, draft.paragraphs);
       }

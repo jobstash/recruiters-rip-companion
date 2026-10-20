@@ -3,8 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const net = require('node:net');
 const { spawn } = require('node:child_process');
-const EXPECTED_ORIGIN = 'chrome-extension://jknkgmnnlnadolphagkhdmdmbgbfiplb/';
-const MAX_INPUT = 32 * 1024 * 1024;
+const MAX_INPUT = 1024 * 1024 + 65536;
 const MAX_OUTPUT = 1024 * 1024 - 1024;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 function privateFile(file) {
@@ -19,8 +18,11 @@ function frame(value) {
 }
 (async () => {
   const configPath = process.argv[2];
-  if (process.argv[3] !== EXPECTED_ORIGIN) process.exit(1);
   const config = privateFile(configPath);
+  const { BROWSER_IDENTITIES } = await import('./browser-identity.mjs');
+  const identity = config.localOnly === true ? BROWSER_IDENTITIES.local : BROWSER_IDENTITIES.production;
+  const expectedOrigin = `chrome-extension://${identity.extensionId}/`;
+  if (process.argv[3] !== expectedOrigin) process.exit(1);
   const dir = fs.lstatSync(config.directory);
   if (!dir.isDirectory() || dir.isSymbolicLink() || (dir.mode & 0o077) || (process.getuid && dir.uid !== process.getuid())) process.exit(1);
   let socket;
@@ -30,12 +32,14 @@ function frame(value) {
       socket = await new Promise((resolve, reject) => {
         const candidate = net.connect(bridge.socket);
         candidate.once('error', reject);
-        candidate.once('connect', () => { candidate.removeListener('error', reject); candidate.write(frame({ auth: bridge.token, origin: EXPECTED_ORIGIN })); resolve(candidate); });
+        candidate.once('connect', () => { candidate.removeListener('error', reject); candidate.write(frame({ auth: bridge.token, origin: expectedOrigin })); resolve(candidate); });
       });
       break;
     } catch {
       if (attempt === 0) {
-        const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+        // The harness owns model authentication; do not inherit its API/session keys.
+        const env = Object.fromEntries(['PATH', 'HOME', 'TMPDIR', 'CODEX_HOME', 'XDG_CONFIG_HOME', 'DISPLAY', 'WAYLAND_DISPLAY', 'DBUS_SESSION_BUS_ADDRESS', 'XDG_RUNTIME_DIR']
+          .filter(key => process.env[key]).map(key => [key, process.env[key]]));
         if (config.localOnly && typeof config.localOrigin === 'string') env.BROWSER_APPLICATION_LOCAL_ORIGIN = config.localOrigin;
         const args = [...(config.packaged ? [] : [config.appPath]), '--bridge', ...(config.localOnly ? ['--local-product'] : [])];
         const child = spawn(config.executable, args, { detached: true, stdio: 'ignore', env }); child.on('error', () => {}); child.unref();

@@ -22,12 +22,12 @@ export function createDeviceClient(store, localOnly) {
     let response;
     try {
       response = await fetch(`${origin}/api${backendPath}`, { method, redirect: 'error', headers: { 'Content-Type': 'application/json', 'X-Device-Id': state.deviceId, 'X-Device-Time': time, 'X-Device-Nonce': nonce, 'X-Device-Signature': signature }, ...(method === 'POST' ? { body: raw } : {}), signal: options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000) });
-    } catch { const error = new Error('The product is unreachable. Completed local results remain saved.'); error.code = 'DEVICE_OFFLINE'; throw error; }
+    } catch { const error = new Error('Could not reach the platform. Check your connection.'); error.code = 'DEVICE_OFFLINE'; throw error; }
     if (!response.ok) {
       await response.body?.cancel();
       const error = new Error(response.status === 403
-        ? 'New platform data is unavailable. Check your paid membership or device connection. Your local profile and saved matches remain available.'
-        : response.status === 401 ? 'Device authorization is unavailable. Check your pairing. Your local data remains available.'
+        ? 'Check your membership and account connection.'
+        : response.status === 401 ? 'Reconnect your account in companion settings.'
         : 'The product could not accept this device operation.');
       error.status = response.status; error.code = response.status === 401 || response.status === 403 ? 'DEVICE_UNAUTHORIZED' : 'DEVICE_REQUEST_FAILED'; throw error;
     }

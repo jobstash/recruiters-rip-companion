@@ -8,7 +8,8 @@ import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createVault, privateDirectory } from './vault.mjs';
 import { createDeviceClient } from './client.mjs';
-import { installNative, EXTENSION_ID } from './install-native.mjs';
+import { installNative } from './install-native.mjs';
+import { BROWSER_IDENTITIES } from './browser-identity.mjs';
 import { CareerError, fail, upgradeCareer } from './mcp/state.mjs';
 import { createMcpServer, createPlatformTools } from './mcp/server.mjs';
 import { createProfileTools } from './mcp/profile-tools.mjs';
@@ -22,11 +23,17 @@ import { createCareerBrowser } from './career-browser.mjs';
 import { createPrescanCredentials } from './prescan/credentials.mjs';
 import { createPrescanController } from './prescan/service.mjs';
 import { createPrescanTools } from './mcp/prescan-tools.mjs';
+import { startPairingReturn } from './pairing-return.mjs';
+import { createJobTools, importCapturedJobs } from './mcp/job-tools.mjs';
+import { createFormTools } from './mcp/form-tools.mjs';
+import { createBrowserForms } from './browser-forms.mjs';
+import { createUpdateController } from './updates.mjs';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const packageMetadata = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
 const localOnly = packageMetadata.localProduct === true || (!app.isPackaged && process.argv.includes('--local-product'));
-const productOrigin = localOnly ? 'http://127.0.0.1:3001' : 'https://recruiters.rip';
+const browserIdentity = localOnly ? BROWSER_IDENTITIES.local : BROWSER_IDENTITIES.production;
+const productOrigin = browserIdentity.productOrigin;
 app.setName('Recruiters Companion');
 // Local data is plain private JSON; keep Chromium from creating an OS keychain item.
 app.commandLine.appendSwitch('use-mock-keychain');
@@ -36,13 +43,43 @@ const uiURL = pathToFileURL(path.join(root, 'ui', 'index.html')).href;
 const vault = createVault(directory);
 let window, client, nativeBridge, mcpBridge, documents, files, locked = true, failure = '';
 let pendingApproval, confirmation = Promise.resolve(), initializing, exiting = false, screenLocked = false, sleeping = false;
-let heartbeatTimer, heartbeatBusy = false, browserConnection = 'pending', queuedPairing;
+let heartbeatTimer, heartbeatBusy = false, browserConnection = 'pending', queuedPairing, pairingReturn;
 let sessionEpoch = 0, careerViewRevision = 0;
 let windowLoaded;
 const sockets = new Set();
-const store = { get() { assertAvailable(false); return vault.get(); }, update(change) { assertAvailable(false); return vault.update(async state => { assertAvailable(false); await change(state); assertAvailable(false); }); } };
-let prescan, prescanViewState = '';
-const prescanCredentials = createPrescanCredentials({ store, onChange: () => prescan?.cancel() });
+const mutations = new Set(), formRequests = new Set();
+let updateInstalling = false, quitReady = false, quitDraining = false, vaultOpened = false, updateApprovalAbort;
+let prescan, browserForms, updates, prescanViewState = '';
+const identityKey = state => JSON.stringify([state.deviceId, state.pairing?.origin, state.pairing?.account?.id]);
+const store = {
+  get() { assertAvailable(false); return vault.get(); },
+  update(change) {
+    assertAvailable(false);
+    return vault.update(async state => {
+      assertAvailable(false);
+      const identity = identityKey(state);
+      await change(state);
+      assertAvailable(false);
+      if (identityKey(state) !== identity) { browserForms?.cancelAll(); sessionEpoch++; }
+    });
+  },
+};
+function assertWorkAllowed() {
+  assertAvailable(false);
+  if (updateInstalling || quitDraining) fail('LOCAL_BUSY', 'An update or shutdown is in progress. Wait for the companion to reopen.');
+}
+function assertPaidWorkAllowed() {
+  assertWorkAllowed();
+  if (['checking', 'downloading', 'awaiting-approval', 'staging', 'installing', 'launched'].includes(updates.state().status))
+    fail('LOCAL_BUSY', 'Finish or cancel the update before starting pre-filtering or form preparation.');
+}
+async function mutation(action) {
+  assertWorkAllowed();
+  const pending = Promise.resolve().then(action);
+  mutations.add(pending);
+  try { return await pending; } finally { mutations.delete(pending); }
+}
+const prescanCredentials = createPrescanCredentials({ store, onChange: async () => { browserForms?.cancelAll(); await prescan?.cancel(); } });
 prescan = createPrescanController({
   store, credentials: prescanCredentials,
   makeScope() {
@@ -55,8 +92,8 @@ prescan = createPrescanController({
         return result;
       } };
   },
-  authorize: ({ label, model, limit, inputUsdPerMillion }) => confirm('Run a paid job pre-scan?',
-    `${label} (${model}) receives your CV, preferences, saved answers and complete job ads, including personal details.\n\nScan up to ${limit} jobs. OpenAI bills this separately from ChatGPT/Codex. Base rate: $${inputUsdPerMillion}/million input tokens; regional and long-context premiums may apply. The job limit is not a spending cap.\n\nResults are preliminary; Codex or Claude must review the ads. Cancel stops new requests, but sent requests may still be billed.`),
+  authorize: ({ label, model, limit, inputUsdPerMillion }) => confirm('Start pre-filtering?',
+    `${label} (${model})\n\nSend your CV, preferences, saved answers and job adverts to OpenAI.\n\nUp to ${limit} jobs · Base rate $${inputUsdPerMillion.toFixed(2)} / million input tokens.\nOpenAI bills this separately from your AI subscription.`),
   onChange() {
     if (!prescan || locked) return;
     const current = prescan.status();
@@ -65,19 +102,63 @@ prescan = createPrescanController({
     emit();
   },
 });
+browserForms = createBrowserForms({
+  store, credentials: prescanCredentials, assertAvailable,
+  authorize: ({ destination, fields, data, useApi, label, model, inputUsdPerMillion, signal }) => {
+    const classes = [...new Set(data.map(({ source }) => source?.startsWith('profile.preferences.') ? 'career preferences'
+      : source?.startsWith('profile.') ? 'saved profile details' : source?.startsWith('fact:') ? 'saved answers' : 'agent-written answers'))];
+    return confirm('Prepare application answers?',
+      `${destination}\n${fields.length} fields · ${classes.join(', ') || 'no saved answers'}\n\n${useApi
+        ? `${label} (${model}) receives field labels and known values to select answers.\nBase rate $${inputUsdPerMillion.toFixed(2)} / million input tokens · billed separately from your chat subscription.`
+        : 'No API call.'}\n\nReview values in Chrome before copying or filling. Nothing is submitted.`, signal);
+  },
+});
+updates = createUpdateController({
+  version: packageMetadata.version, platform: process.platform, arch: process.arch,
+  directory: path.join(app.getPath('userData'), localOnly ? 'local-updates' : 'updates'),
+  appPath: app.isPackaged && !localOnly && process.platform === 'darwin' ? path.resolve(process.execPath, '../../..') : null,
+  packaged: app.isPackaged && !localOnly, pid: process.pid,
+  authorize: ({ latestVersion, message }) => confirm(`Update to ${latestVersion}?`, message, updateApprovalAbort?.signal),
+  quit: () => app.quit(), onChange: () => emit(),
+});
+function paidWorkActive() { return formRequests.size > 0 || prescan.isActive(); }
+async function cancelUpdate() {
+  updateApprovalAbort?.abort();
+  if (['checking', 'downloading', 'awaiting-approval', 'staging'].includes(updates.state().status)) await updates.cancel();
+  return updates.state();
+}
+async function updateAction(op) {
+  assertAvailable(false);
+  if (op === 'update-cancel') return cancelUpdate();
+  if (updateInstalling || paidWorkActive()) fail('LOCAL_BUSY', 'Finish or cancel active pre-filtering and form preparation before updating.');
+  if (op === 'update-check') return updates.check();
+  if (op === 'update-download') return updates.download();
+  if (op !== 'update-install') fail('INVALID_INPUT', 'This update action is unavailable.');
+  updateInstalling = true; updateApprovalAbort = new AbortController(); emit();
+  try {
+    await Promise.allSettled([...mutations]);
+    assertAvailable(false);
+    const result = await updates.install();
+    if (result?.manualPath) {
+      const error = await shell.openPath(result.manualPath);
+      if (error) fail('UPDATE_MANUAL_OPEN_FAILED', 'The downloaded update could not be opened. Check the update status and try again.');
+    }
+    return updates.state();
+  } finally { updateApprovalAbort?.abort(); updateApprovalAbort = undefined; updateInstalling = false; emit(); }
+}
 function assertAvailable() {
-  if (locked || screenLocked || sleeping) fail('LOCAL_LOCKED', 'Open Recruiters.rip Companion and unlock local storage. Your saved work is unchanged.');
+  if (locked || screenLocked || sleeping) fail('LOCAL_LOCKED', 'Open the companion and unlock local storage.');
 }
 function safeFailure(error) {
-  const allowed = new Set(['DEVICE_OFFLINE', 'DEVICE_UNAUTHORIZED', 'DEVICE_REQUEST_FAILED', 'LOCAL_LOCKED', 'IDENTITY_CHANGED', 'NOT_FOUND', 'INVALID_INPUT', 'PAIRING_REQUIRED', 'CANCELLED', 'HOST_UNAVAILABLE', 'HOST_INSTALL_FAILED']);
-  const known = error instanceof CareerError || allowed.has(error?.code);
-  return { code: known ? error.code : 'LOCAL_OPERATION_FAILED', message: known ? error.message : 'This local action could not be completed. Saved career data is unchanged. Reopen the companion and try again.' };
+  const allowed = new Set(['DEVICE_OFFLINE', 'DEVICE_UNAUTHORIZED', 'DEVICE_REQUEST_FAILED', 'LOCAL_LOCKED', 'LOCAL_BUSY', 'IDENTITY_CHANGED', 'NOT_FOUND', 'INVALID_INPUT', 'PAIRING_REQUIRED', 'CANCELLED', 'HOST_UNAVAILABLE', 'HOST_INSTALL_FAILED', 'UPDATE_MANUAL_OPEN_FAILED']);
+  const known = error instanceof CareerError || error?.publicUpdateError === true || allowed.has(error?.code);
+  return { code: known ? error.code : 'LOCAL_OPERATION_FAILED', message: known ? error.message : 'This action could not be completed. Reopen the companion and try again.' };
 }
 function status() {
-  if (locked) return { installed: true, mode: 'local_mcp', paired: false, connections: [], execution: { state: 'locked' } };
+  if (locked) return { installed: true, mode: 'local_mcp', paired: false, decisionApiConfigured: false, connections: [], execution: { state: 'locked' } };
   const state = vault.get();
   return { installed: true, mode: 'local_mcp', deviceId: state.deviceId, publicKey: state.publicKey, label: state.label,
-    paired: Boolean(state.pairing), connections: [], execution: { state: state.pairing ? 'ready' : 'needs_connection' } };
+    paired: Boolean(state.pairing), decisionApiConfigured: prescanCredentials.publicState().configured, connections: [], execution: { state: state.pairing ? 'ready' : 'needs_connection' } };
 }
 function setup() {
   const command = path.join(directory, 'recruiters-rip-mcp');
@@ -91,6 +172,7 @@ function localState() {
   return { ...publicState, account: state.pairing?.account ?? null, origin: state.pairing?.origin ?? null, browserConnection, failure,
     setup: setup(), careerViewVersion: `${state.deviceId}:${sessionEpoch}:${careerViewRevision}`,
     prescan: { credentials: prescanCredentials.publicState(), run: prescan.status() },
+    updates: { ...updates.state(), blocked: paidWorkActive() || updateInstalling },
     approval: pendingApproval ? { id: pendingApproval.id, title: pendingApproval.title, detail: pendingApproval.detail } : null };
 }
 function emit(event = 'status', payload = status()) {
@@ -121,12 +203,20 @@ function showSettings() {
   }
   return windowLoaded;
 }
-function confirm(title, detail) {
+function confirm(title, detail, signal) {
   const pending = confirmation.then(() => new Promise(resolve => {
-    if (locked) { resolve(false); return; }
-    const timer = setTimeout(() => pendingApproval?.finish(false), 120000);
-    pendingApproval = { id: randomUUID(), title, detail, finish(allow) { clearTimeout(timer); pendingApproval = undefined; emit(); resolve(allow === true && !locked); } };
-    showSettings();
+    if (locked || quitDraining || signal?.aborted) { resolve(false); return; }
+    let approval;
+    const abort = () => approval.finish(false);
+    const timer = setTimeout(() => approval.finish(false), 120000);
+    approval = { id: randomUUID(), title, detail, finish(allow) {
+      clearTimeout(timer); signal?.removeEventListener('abort', abort);
+      if (pendingApproval !== approval) return;
+      pendingApproval = undefined; emit(); resolve(allow === true && !locked && !signal?.aborted);
+    } };
+    pendingApproval = approval;
+    signal?.addEventListener('abort', abort, { once: true });
+    showSettings(); emit();
   }));
   confirmation = pending.catch(() => false); return pending;
 }
@@ -136,6 +226,7 @@ async function initialize() {
   if (initializing) return initializing;
   initializing = (async () => {
     await vault.open();
+    vaultOpened = true;
     await vault.update(state => { state.career = upgradeCareer(state.career); });
     if (screenLocked || sleeping) fail('LOCAL_LOCKED', 'Unlock this computer before opening saved career data.');
     locked = false; failure = ''; client = createDeviceClient(store, localOnly);
@@ -146,6 +237,7 @@ async function initialize() {
 function object(value) { if (!value || typeof value !== 'object' || Array.isArray(value)) fail('INVALID_INPUT', 'Use the supported operation fields.'); return value; }
 function exact(value, keys) { object(value); if (Object.keys(value).some(key => !keys.includes(key))) fail('INVALID_INPUT', 'Unsupported operation fields.'); }
 async function pair(payload) {
+  return mutation(async () => {
   assertAvailable(false); exact(payload, ['productOrigin', 'pairing']);
   const pairing = object(payload.pairing); exact(pairing, ['deviceId', 'challenge', 'expiresAt', 'account']);
   const expiry = typeof pairing.expiresAt === 'number' ? pairing.expiresAt : Date.parse(pairing.expiresAt);
@@ -153,20 +245,32 @@ async function pair(payload) {
   exact(pairing.account, ['id', 'label']);
   const existing = store.get().pairing;
   if (existing && (existing.account.id !== pairing.account.id || existing.origin !== payload.productOrigin)) fail('INVALID_INPUT', 'This computer is paired with another account. Sign in with the account shown in the companion.');
-  if (!await confirm('Connect this platform account?', `Account: ${JSON.stringify(pairing.account.label)}\nAccount ID: ${pairing.account.id}\nPlatform: ${payload.productOrigin}\n\nAn active membership permits this computer to read new job data. CVs, facts, matches and application drafts stay on this computer and remain available when membership ends. Your AI subscription remains with ChatGPT or Claude. No provider credential is requested.`)) fail('CANCELLED', 'Account connection canceled.');
+  if (!await confirm('Connect this platform account?', `Account: ${JSON.stringify(pairing.account.label)}\nAccount ID: ${pairing.account.id}\nPlatform: ${payload.productOrigin}\n\nAllow this computer to access the job feed.`)) fail('CANCELLED', 'Account connection canceled.');
   const activation = await client.request('POST', '/device/activate', { challenge: pairing.challenge, account: pairing.account }, { origin: payload.productOrigin });
   if (activation.deviceId !== pairing.deviceId || activation.account?.id !== pairing.account.id || activation.account?.label !== pairing.account.label) fail('INVALID_INPUT', 'The activated account does not match the local approval.');
   await store.update(state => { if (state.deviceId !== pairing.deviceId) fail('INVALID_INPUT', 'The device identity changed during pairing.'); state.pairing = { origin: payload.productOrigin, account: { ...pairing.account } }; });
   emit(); return status();
+  });
 }
 async function connectAccount() {
   assertAvailable(false); const state = store.get();
   const url = new URL('/settings/provider', productOrigin);
-  if (!state.pairing) url.search = new URLSearchParams({ deviceId: state.deviceId, publicKey: state.publicKey, deviceLabel: state.label }).toString();
-  await shell.openExternal(url.href);
+  pairingReturn?.close(); pairingReturn = undefined;
+  if (!state.pairing) {
+    pairingReturn = await startPairingReturn({ onPair: async payload => {
+      try { await pair(payload); }
+      catch (error) { failure = safeFailure(error).message; emit(); throw error; }
+    } });
+    const { companionReturn, companionState } = pairingReturn;
+    url.search = new URLSearchParams({ deviceId: state.deviceId, publicKey: state.publicKey, deviceLabel: state.label, companionReturn, companionState }).toString();
+  }
+  try { await shell.openExternal(url.href); }
+  catch (error) { pairingReturn?.close(); pairingReturn = undefined; throw error; }
+  failure = '';
   return { pairingRequired: !state.pairing };
 }
 function acceptPairingURL(raw) {
+  if (localOnly || !app.isPackaged) return;
   try {
     if (typeof raw !== 'string' || raw.length > 8192) throw new Error();
     const url = new URL(raw);
@@ -179,7 +283,7 @@ function acceptPairingURL(raw) {
 }
 async function platform(operation, args) {
   assertAvailable(false);
-  if (!store.get().pairing) fail('PAIRING_REQUIRED', 'Use account_connect to connect your platform account. Your local profile remains available.');
+  if (!store.get().pairing) fail('PAIRING_REQUIRED', 'Connect your account in companion settings.');
   return client.request('POST', '/device/platform', { operation, args });
 }
 async function selectSourceFile() {
@@ -211,13 +315,21 @@ function createSessionServer() {
     }, extractFile: documents.extractFile }),
     ...createApplicationTools({ store: scoped.store, platform: scopedPlatform, documents, exportDocument: localFiles.exportDocument }),
     ...createMatchingTools({ store: scoped.store, platform: scopedPlatform, exportDocument: localFiles.exportDocument }),
+    ...createJobTools({ store: scoped.store }),
+    ...createFormTools({ store: scoped.store }),
     ...createPrescanTools({ controller: Object.fromEntries(['start', 'cancel', 'status', 'results'].map(method => [method, async args => {
       scoped.assertAvailable(method === 'start' || method === 'cancel');
+      if (method === 'start') assertPaidWorkAllowed();
       const result = await prescan[method](args);
       scoped.assertAvailable(false);
       return result;
     }])) }),
   ];
+  for (const tool of tools) {
+    if (tool.readOnly) continue;
+    const invoke = tool.invoke;
+    tool.invoke = (input, context) => mutation(() => invoke(input, context));
+  }
   server = createMcpServer({ tools, assertAvailable: scoped.assertAvailable, readResource: localFiles.readResource, listResources: localFiles.listResources,
     notifyActivity: name => {
       if (tools.some(tool => tool.name === name && !tool.readOnly)) { careerViewRevision++; emit(); }
@@ -235,16 +347,33 @@ async function installConnections() {
   await writeFile(setup().command, `#!/bin/sh\nexec env ELECTRON_RUN_AS_NODE=1 ${quote(process.execPath)} ${quote(script)}${localOnly ? ' --local-product' : ''}\n`, { mode: 0o700 });
   await chmod(setup().command, 0o700);
   try { await unlink(path.join(directory, 'recruiters-mcp')); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-  app.setAsDefaultProtocolClient('recruiters-companion', process.execPath, app.isPackaged ? [] : [app.getAppPath(), ...(localOnly ? ['--local-product'] : [])]);
+  if (app.isPackaged && !localOnly) app.setAsDefaultProtocolClient('recruiters-companion');
   try { await installNative({ executable: process.execPath, appPath: app.getAppPath(), directory, packaged: app.isPackaged, localOnly }); browserConnection = 'installed'; }
   catch { browserConnection = 'unavailable'; }
 }
 async function nativeOperation(op, payload) {
-  exact(payload, op === 'pair' ? ['productOrigin', 'pairing'] : []);
+  const keys = { status: [], open_settings: [], pair: ['productOrigin', 'pairing'],
+    capture_jobs: ['requestId', 'sourceUrl', 'jobs'], forms_prepare: ['requestId', 'formId', 'url', 'title', 'fields', 'useApi'], forms_cancel: ['requestId'] };
+  if (!Object.hasOwn(keys, op)) fail('INVALID_INPUT', 'This browser operation is unavailable.');
+  exact(payload, keys[op]);
   if (op === 'status') return status();
   if (op === 'open_settings') { showSettings(); return { opened: true }; }
   if (op === 'pair') return pair(payload);
-  fail('INVALID_INPUT', 'Provider inference and browser control are not available through this connection. Continue in your connected ChatGPT or Claude app.');
+  assertAvailable(false);
+  if (op === 'forms_cancel') {
+    if (typeof payload.requestId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(payload.requestId)) fail('INVALID_INPUT', 'Use the preparation request UUID.');
+    return browserForms.cancel(payload.requestId);
+  }
+  if (op === 'capture_jobs') return mutation(async () => {
+    const scoped = createScopedAccess(store, { assertAvailable, epoch: () => sessionEpoch });
+    const result = await importCapturedJobs({ store: scoped.store, ...payload, revision: scoped.store.get().career?.revision ?? 0 });
+    scoped.assertAvailable(false); careerViewRevision++; emit(); return result;
+  });
+  assertPaidWorkAllowed();
+  if (formRequests.has(payload.requestId)) fail('REQUEST_CONFLICT', 'This form preparation is already pending.');
+  formRequests.add(payload.requestId); emit();
+  try { const result = await browserForms.prepare(payload); careerViewRevision++; emit(); return result; }
+  finally { formRequests.delete(payload.requestId); emit(); }
 }
 function encode(value) { const data = Buffer.from(JSON.stringify(value)); if (data.length > 1024 * 1024 - 1024) throw new Error('Native response too large.'); const header = Buffer.allocUnsafe(4); header.writeUInt32LE(data.length); return Buffer.concat([header, data]); }
 async function startNativeBridge() {
@@ -255,16 +384,16 @@ async function startNativeBridge() {
     const timer = setTimeout(() => { if (!authenticated) socket.destroy(); }, 5000);
     socket.on('error', () => socket.destroy()); socket.on('close', () => { clearTimeout(timer); sockets.delete(socket); });
     socket.on('data', chunk => {
-      input = Buffer.concat([input, chunk]); if (input.length > 65536) { socket.destroy(); return; }
+      input = Buffer.concat([input, chunk]); if (input.length > 2 * 1024 * 1024) { socket.destroy(); return; }
       while (input.length >= 4) {
-        const length = input.readUInt32LE(0); if (!length || length > 65532) { socket.destroy(); return; } if (input.length < length + 4) return;
+        const length = input.readUInt32LE(0); if (!length || length > 1024 * 1024 + 65536) { socket.destroy(); return; } if (input.length < length + 4) return;
         let message; try { message = JSON.parse(input.subarray(4, length + 4).toString('utf8')); } catch { socket.destroy(); return; } input = input.subarray(length + 4);
         if (!authenticated) {
           const supplied = typeof message.auth === 'string' ? Buffer.from(message.auth) : Buffer.alloc(0);
-          if (message.origin !== `chrome-extension://${EXTENSION_ID}/` || supplied.length !== token.length || !timingSafeEqual(supplied, Buffer.from(token))) { socket.destroy(); return; }
+          if (message.origin !== `chrome-extension://${browserIdentity.extensionId}/` || supplied.length !== token.length || !timingSafeEqual(supplied, Buffer.from(token))) { socket.destroy(); return; }
           authenticated = true; clearTimeout(timer); sockets.add(socket); continue;
         }
-        if (message.version !== 1 || typeof message.id !== 'string' || message.id.length > 100 || typeof message.op !== 'string' || ++pending > 8) { socket.destroy(); return; }
+        if (Object.keys(message).some(key => !['version', 'id', 'op', 'payload'].includes(key)) || message.version !== 1 || typeof message.id !== 'string' || message.id.length > 100 || typeof message.op !== 'string' || ++pending > 8) { socket.destroy(); return; }
         void nativeOperation(message.op, message.payload).then(result => ({ version: 1, id: message.id, ok: true, result }), error => ({ version: 1, id: message.id, ok: false, error: safeFailure(error) }))
           .then(reply => { if (!socket.destroyed) socket.write(encode(reply)); }).finally(() => { pending--; }).catch(() => socket.destroy());
       }
@@ -273,8 +402,7 @@ async function startNativeBridge() {
   await new Promise((resolve, reject) => { nativeBridge.once('error', reject); nativeBridge.listen(socketPath, resolve); });
   await chmod(socketPath, 0o600); await writeFile(path.join(directory, 'bridge.json'), JSON.stringify({ socket: socketPath, token }), { mode: 0o600 }); await chmod(path.join(directory, 'bridge.json'), 0o600);
 }
-ipcMain.handle('local-settings', async (event, op, input = {}) => {
-  if (event.sender !== window?.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== uiURL) throw new Error('Local settings only.');
+async function settingsOperation(op, input) {
   try {
     if (op === 'state') return { ok: true, result: localState() };
     if (op === 'career-list' || op === 'career-read') {
@@ -284,12 +412,13 @@ ipcMain.handle('local-settings', async (event, op, input = {}) => {
       scoped.assertAvailable(false);
       return { ok: true, result };
     }
+    if (op.startsWith('update-')) { exact(input, []); return { ok: true, result: await updateAction(op) }; }
     if (op.startsWith('prescan-')) {
       assertAvailable(false);
       let result;
       if (op === 'prescan-key-save') result = await prescanCredentials.save(input);
       else if (op === 'prescan-key-remove') result = await prescanCredentials.remove(input);
-      else if (op === 'prescan-start') result = await prescan.start(input);
+      else if (op === 'prescan-start') { assertPaidWorkAllowed(); result = await prescan.start(input); }
       else if (op === 'prescan-cancel') { exact(input, []); result = await prescan.cancel(); }
       else fail('INVALID_INPUT', 'This pre-scan action is unavailable.');
       emit(); return { ok: true, result };
@@ -326,6 +455,16 @@ ipcMain.handle('local-settings', async (event, op, input = {}) => {
     else if (op === 'copy-config') clipboard.writeText(setup().claudeConfig);
     else if (op === 'install-chatgpt') result = await installChatGptPlugin({ directory, root: app.isPackaged ? root.replace(/app\.asar$/, 'app.asar.unpacked') : root, localOnly, command: setup().command });
     else if (op === 'install-claude') { const error = await shell.openPath(setup().claudePackage); if (error) fail('INVALID_INPUT', 'The Claude extension could not be opened. Use the displayed local MCP configuration instead.'); }
+    else if (op === 'open-extension-folder') {
+      const folder = path.join(app.isPackaged ? root.replace(/app\.asar$/, 'app.asar.unpacked') : root, 'browser-extension', 'dist', localOnly ? 'local' : 'production');
+      let manifest;
+      try { manifest = JSON.parse(await readFile(path.join(folder, 'manifest.json'), 'utf8')); }
+      catch { fail('HOST_INSTALL_FAILED', app.isPackaged ? 'The bundled Chrome extension is missing. Reinstall the complete companion.' : 'Build the companion before opening its Chrome extension folder.'); }
+      if (manifest.version !== packageMetadata.version || manifest.key !== browserIdentity.key) fail('HOST_INSTALL_FAILED', 'The bundled Chrome extension does not match this companion. Rebuild or reinstall the complete companion.');
+      const error = await shell.openPath(folder);
+      if (error) fail('HOST_INSTALL_FAILED', 'The Chrome extension folder could not be opened. Reinstall the complete companion and try again.');
+      result = { opened: true };
+    }
     else if (op === 'open-exports') { const dir = files.exportDirectory(); await privateDirectory(dir); const error = await shell.openPath(dir); if (error) throw new Error(error); }
     else if (op === 'backup') {
       const target = await dialog.showSaveDialog(window, { title: 'Export local career backup', defaultPath: 'recruiters-career-backup.json', filters: [{ name: 'Career data', extensions: ['json'] }] });
@@ -335,13 +474,38 @@ ipcMain.handle('local-settings', async (event, op, input = {}) => {
     else fail('INVALID_INPUT', 'This settings action is unavailable.');
     emit(); return { ok: true, result };
   } catch (error) { return { ok: false, error: safeFailure(error) }; }
+}
+ipcMain.handle('local-settings', async (event, op, input = {}) => {
+  if (event.sender !== window?.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== uiURL) throw new Error('Local settings only.');
+  try {
+    if (['prescan-key-save', 'prescan-key-remove', 'prescan-start', 'import-cv', 'delete-rankings', 'connect-account', 'backup'].includes(op))
+      return await mutation(() => settingsOperation(op, input));
+    return await settingsOperation(op, input);
+  } catch (error) { return { ok: false, error: safeFailure(error) }; }
 });
 app.on('open-url', (event, url) => { event.preventDefault(); acceptPairingURL(url); });
 if (!app.requestSingleInstanceLock({ localOnly })) app.quit();
 else {
   app.on('second-instance', (_event, argv) => { const url = argv.find(value => value.startsWith('recruiters-companion:')); if (url) acceptPairingURL(url); else if (!argv.includes('--bridge') && !argv.includes('--mcp-background')) showSettings(); });
   app.on('activate', showSettings); app.on('window-all-closed', () => {});
-  app.on('before-quit', () => { exiting = true; void prescan.cancel(); clearInterval(heartbeatTimer); pendingApproval?.finish(false); mcpBridge?.close(); nativeBridge?.close(); for (const socket of sockets) socket.destroy(); });
+  app.on('before-quit', event => {
+    if (!quitReady) {
+      event.preventDefault();
+      if (quitDraining) return;
+      quitDraining = true; browserForms.cancelAll(); pendingApproval?.finish(false);
+      void (async () => {
+        await prescan.cancel();
+        await cancelUpdate();
+        await Promise.allSettled([...mutations]);
+        // Queue behind every accepted career write before allowing Electron to exit.
+        if (vaultOpened) await vault.flush();
+        quitReady = true; app.quit();
+      })().catch(() => { quitDraining = false; failure = 'The companion could not finish saving. Try quitting again.'; emit(); });
+      return;
+    }
+    exiting = true; clearInterval(heartbeatTimer); pairingReturn?.close(); mcpBridge?.close(); nativeBridge?.close();
+    for (const socket of sockets) socket.destroy();
+  });
   void app.whenReady().then(async () => {
     documents = createRequire(import.meta.url)('./generated/document-engine.cjs');
     Menu.setApplicationMenu(Menu.buildFromTemplate([{ label: 'Recruiters.rip Companion', submenu: [{ label: 'Settings', click: showSettings }, { type: 'separator' }, { role: 'quit' }] }, { role: 'editMenu' }]));
@@ -349,11 +513,12 @@ else {
     // The settings page uses an in-memory browser session, never Chromium's
     // persistent cookie key. API credentials are entered only through the local settings IPC.
     await showSettings();
+    try { await updates.initialize(); } catch { /* The updater retains its actionable error; career access must still open. */ }
     await installConnections(); await startNativeBridge();
     mcpBridge = await startMcpBroker({ directory, createServer: createSessionServer });
     try { await initialize(); } catch { failure = 'Local storage is unavailable. Check the companion data folder, then open local storage.'; }
     heartbeatTimer = setInterval(() => { if (locked || heartbeatBusy || !vault.get().pairing) return; heartbeatBusy = true; void client.request('POST', '/device/heartbeat', {}).catch(() => {}).finally(() => { heartbeatBusy = false; }); }, 30000);
-    const lock = () => { void prescan.cancel(); sessionEpoch++; locked = true; pendingApproval?.finish(false); mcpBridge.disconnect(); emit(); };
+    const lock = () => { browserForms.cancelAll(); void prescan.cancel(); void cancelUpdate().catch(error => { failure = safeFailure(error).message; }); sessionEpoch++; locked = true; pairingReturn?.close(); pendingApproval?.finish(false); mcpBridge.disconnect(); emit(); };
     const unlock = () => { if (screenLocked || sleeping) return; void initialize().then(() => emit()).catch(() => { failure = 'Local storage could not be reopened. Your saved data has not been replaced.'; }); };
     powerMonitor.on('lock-screen', () => { screenLocked = true; lock(); }); powerMonitor.on('suspend', () => { sleeping = true; lock(); });
     powerMonitor.on('unlock-screen', () => { screenLocked = false; unlock(); }); powerMonitor.on('resume', () => { sleeping = false; unlock(); });

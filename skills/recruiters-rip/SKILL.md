@@ -1,6 +1,6 @@
 ---
 name: recruiters-rip
-description: Find suitable jobs from the past week, automatically reassess roles on request, and prepare tailored CVs and cover letters using saved career data and the candidate's subscription app.
+description: Assess recent feed jobs and user-captured adverts, prepare tailored applications and stage reviewed form answers using saved career data and the candidate's subscription app.
 ---
 
 # Recruiters.rip
@@ -13,17 +13,22 @@ The product outcome is good jobs and completed applications, not an evidence aud
 
 ## Recommendations and saved assessments
 
-For best jobs or matches, use current `career_recommendations` and perform any matching needed to fulfill the request. An empty/stale cache is not a completed search: fetch the current seven-day catalogue and assess it automatically. Do not stop at one old candidate or ask the user to run a technical command. Only current suitable, salary-compatible and home-compatible results are recommendations; never pad them with unsuitable or unresolved rows.
+For best jobs or matches, use current `career_recommendations` and perform the matching needed for the request. An empty/stale cache is not a completed search: fetch the seven-day feed and include complete explicit captures, or use `career_match_jobs({localOnly:true})` for requested offline/capture-only review with no platform calls. Do not stop at one old candidate or ask for technical commands. Never pad recommendations with unsuitable or unresolved rows.
 
 Before proposing an application, reread current preferences with `career_profile_read` and the complete original with `career_job_read`, including company/project context, `locationEvidence`, role metadata, headers/cards and closing restrictions. Apply the decision protocol below before candidate CV questions. If evidence contradicts the saved decision, do not recommend it: make a bounded grounded reassessment or explain the missing evidence. A saved decision/current version records a model judgment, not proof it followed the protocol. If originals are inaccessible, state the recheck limitation rather than claim freshly confirmed suitability. Reuse a current completed ranking for best/next requests; automatically perform matching when that ranking is absent or obsolete.
 
-Use `career_matches` for explicitly requested saved rankings or progress. It is not an application queue: show decision/review status separately from location status. A new catalogue fetch retains only its current seven-day scope; obsolete cached jobs/results need not be preserved. Preference or career changes invalidate affected context, not the underlying profile facts.
+Use `career_matches` for explicitly requested saved rankings or progress. It is not an application queue: show decision/review status separately from location status. A new feed fetch replaces its seven-day cache, never durable imported jobs. Preference or career changes invalidate affected context, not profile facts or saved captures.
 
 For both views, show **Role/company, Overall fit (band), Decision/review status, Location status, Published (JobStash), Salary, City/location, Work mode, Reason** and the job link, even for short lists. Use saved `publishedAt` as `YYYY-MM-DD`, never `scoredAt`, import time or today. Explain that this is JobStash's catalogue date, possibly a first-seen fallback, not independently verified employer publication; do not infer per-row provenance. Preserve salary currency, period and supplied bounds. Use explicit role cities, otherwise the verbatim posted location or region; use `Not stated` only for absent values. Older uncached terms are unknown, not proof the advert omitted them. Do not infer worksites from employer HQ; HQ explicitly in the role's Office locations card is valid role evidence.
 
 These are local reads, with no membership gate or extra fetches merely to fill missing metadata. Show saved partial results immediately, with honest coverage. Older saved listings are not proof vacancies remain open. Label chat pages with range and `total`, following `nextOffset` until null only when every row was requested; one page is not a complete dataset.
 
 For the complete CSV call `career_matches_export({})` and return its resource link and actual `total`, `scored` and `unavailable` counts. It exports **all saved assessments**, not just recommendations or the current chat page. Preserve ID, role/company, overall fit, band, dimensions, gates, decision/review status, location status, JobStash date, salary/currency/period, city/location, work mode, relocation, reason and job link. Never trigger discovery, `refresh:true` or reassessment just to expose saved work.
+
+### Captured jobs
+
+The Chrome companion extension saves selected adverts or listing cards locally. Use `career_jobs` to read imports and `career_job_import` to save complete user-provided originals or captures. Local job IDs work with `career_job_read`, matching and `career_application_create({jobId})` without platform access. Seven-day publication filtering applies only to the platform feed, never explicit captures. Preserve unknown publication dates as unknown; do not substitute capture time. Listing-only records are durable and readable but not assessment or application evidence. On `FULL_AD_REQUIRED`, capture/import the complete original at its detail URL before proceeding; never fabricate full text from a snippet.
+
 
 ## Requested matching work
 
@@ -33,7 +38,7 @@ Recruiters.rip membership is USD 9.99/month for fresh catalogue data. On expiry 
 
 ### Optional API pre-scan
 
-The candidate may configure an OpenAI API key under **Setup → Job pre-scan**. This is separate API billing, not included in ChatGPT/Codex. The companion sends CV text, preferences, saved answers and complete adverts directly to the provider only after native approval. Never handle the key in chat or tools.
+The candidate may optionally configure one OpenAI Decisions key under **Settings → Optional Decisions API → Configure OpenAI Decisions API**. It is shared by job pre-filtering and selecting known form values, never writing new text. Without it, continue normal matching, application writing and staged form answers in the connected agent. API setup is not onboarding; the host owns model authentication. API requests are billed separately from the chat subscription and require native data-sharing approval. Never handle the key in chat or tools.
 
 For requested matching work, inspect `career_prescan_status`. If configured and a new pre-scan is wanted, the coordinator calls `career_prescan_start({limit})` once; the native approval states the data-sharing and charging boundary. The limit caps newly selected jobs/requests, not dollars. `career_prescan_status` exposes progress; `career_prescan_results` exposes preliminary order; `career_prescan_cancel` stops further requests. Respect cancellation and errors—no automatic paid retries or rescan loops. Status-only, export and profile-edit requests must not start API inference.
 
@@ -50,7 +55,7 @@ A pre-scan priority is **not** a final assessment, recommendation or hiring prob
 5. After matching coverage is complete, the coordinator calls `career_rerank_pairs`, judges every returned pair itself with `rerankPolicy`, saves them with `career_rerank_save` in batches of up to 15, repeats until `pairs` is empty, then shows `career_recommendations`.
 6. Return actual current recommendations, coverage and rerank `judged`/`total`. A status-only request never starts workers or clears results. A requested reassessment runs automatically; a cleared cache or obsolete old judgments are not a finding of no suitable jobs.
 
-The companion includes a **Delete rankings** button. It clears rankings, pairwise comparisons, cached jobs and pre-scan results, not profile, preferences, source CVs, career facts, drafts or account data. A reset invalidates active pre-scan work. It does not pause Codex or Claude. All discovery, matching selection and recommendations use the rolling past seven days of catalogue `publishedAt`; never substitute today's date or assessment time.
+The companion includes a **Clear job assessments** button. It clears rankings, comparisons, replaceable feed cache and pre-scan results, not imported jobs, profile, preferences, CVs, facts, drafts or account data. A reset invalidates active pre-scan work; it does not pause the connected agent. Only platform feed discovery and recommendations use the rolling past seven days of catalogue `publishedAt`; complete explicit imports remain eligible with their actual or unknown date.
 
 ### Assessment protocol
 
@@ -107,6 +112,15 @@ Write ordinary applications in the candidate's voice with no unnecessary AI labe
 5. For an application package, save a 220–380 word cover letter with `career_application_letter_save`: the employer's specific problem, two or three directly relevant achievements, what the candidate will do for them and a direct close. No generic enthusiasm, no restating the CV.
 6. Export both documents as PDFs with `career_application_export` (TXT only on request or when required) and hand over the files. If submission is authorized, use the actual employer application route, fill supported answers, attach the documents and submit within the authorized scope. Ask only for a mandatory answer unavailable from saved facts or a user-controlled step. Do not bypass access controls or anti-bot challenges. A saved or uploaded document is not a submitted application; report the observed confirmation or the specific blocker.
 
+### Reviewed Chrome form answers
+
+The user inspects and prepares the application form in the Chrome extension. Read `career_form_read({formId})` for captured fields and the current `revision`, `snapshot` and `evidenceRevision`. Write new answers yourself from saved career evidence; Decisions may only select existing known values. Save supported `{id,value}` answers with `career_form_answers_save`, a UUID from `request_id` and the current bindings. Read back before claiming a save. On `FORM_CONTEXT_CHANGED`, reread and genuinely reconsider the current page and evidence, never relabel stale answers.
+
+The user prepares again in Chrome to review, edit and select suggestions before copying or filling. Unknown mandatory answers remain manual. The extension does not submit, click Next/Apply, upload files, overwrite populated fields or fill protected information. Use actual host permissions for any separately authorized application submission; no copied prompt claims to have run an agent, and no profile/provenance ceremony or inference-key request belongs in chat.
+
+
 ## Connection
 
 Use a local Codex/Work conversation with the Recruiters.rip plugin, or a supported Claude connection. Ordinary ChatGPT chats do not inherit a local MCP connection. The companion must be open and its local storage accessible. If tools are unavailable, explain the connection problem; do not interview without access or fabricate saves. Voice support and native worker availability depend on the host app. Never claim a throughput measurement or concurrency that was not actually observed.
+
+For the same-version Chrome extension, use **Settings → Chat apps → Chrome extension → Open extension folder** in the companion. In Chrome’s Manage extensions, enable Developer mode and choose Load unpacked for that folder. This opens the bundled local/production extension, not an independently hosted download; it does not install automatically.

@@ -1,33 +1,80 @@
 # Recruiters.rip Companion
 
-Find suitable jobs and prepare tailored CVs, cover letters and job applications. Version 3.8.0 puts major actions on Home and combines preliminary and reviewed assessments into one Jobs list. Navigation is CVs, Facts, Jobs and Job Applications; Settings contains account, chat-app and API-key configuration.
+The companion keeps CVs, career facts, captured jobs and application drafts on your computer. Claude or Codex handles assessment and writing. The Chrome extension saves job adverts and prepares reviewed values for application forms.
 
-For current release state, repository ownership and safe cross-repository workflows, see [the agent handover](HANDOVER.md).
+See [AGENTS.md](AGENTS.md) for ownership and safety boundaries, and [design.md](design.md) for the shared interface rules.
 
-## Account and installation
+## Install and connect
 
-1. Visit https://recruiters.rip, connect your account, and complete the $9.99/month membership checkout.
-2. Download the macOS Apple Silicon installer from the website, move **Recruiters.rip Companion.app** to Applications, and open it.
-3. Choose **Connect account**. The companion opens `/settings/provider?deviceId=…&publicKey=…&deviceLabel=…` on the website. Complete website pairing, then approve the account in the companion's native confirmation.
-4. Install the local Work/Codex plugin or Claude Desktop extension from the companion's settings and start a conversation with Recruiters.rip enabled. The manual MCP command also supports compatible local Codex hosts. Ordinary ChatGPT chats do not inherit a local MCP connection.
+The desktop preview supports macOS on Apple Silicon. Use Claude Desktop or ChatGPT desktop with local Work/Codex support.
 
-Final reasoning and application writing use the user's official Codex/ChatGPT or Claude subscription app. Optional pre-scanning uses a separate API key entered in local companion settings and sends selected career/job context directly to OpenAI only after native approval. API usage is not included in the ChatGPT subscription. Host apps never receive the stored key.
+### Run from source
+
+```sh
+git clone https://github.com/jobstash/recruiters-rip-companion.git
+cd recruiters-rip-companion
+pnpm install --frozen-lockfile
+pnpm start
+```
+
+Use Node 22.12 or newer and pnpm 10.28.0. `pnpm start` builds the local tools, document engine and Chrome extension before opening Electron. For the isolated development product, run `pnpm start:local`.
+
+Packaged builds are distributed through published releases in the [official repository](https://github.com/jobstash/recruiters-rip-companion/releases). Move **Recruiters.rip Companion.app** to Applications and open it. An ad-hoc preview is unnotarized; production release packaging requires the signing and notarization credentials described below.
+
+### Connect your account and AI app
+
+1. Choose **Connect account**. Sign in in the browser window it opens, create the pairing request, and choose **Confirm account on this computer**.
+2. In the companion, approve the named account. Current membership enables the platform job feed; captured jobs and saved local records work without feed access.
+3. In **Settings → Chat apps**, choose **Install ChatGPT plugin** or **Install Claude extension**. Start a new local task or conversation with Recruiters.rip enabled.
+4. On Home, choose **Import CV**. The companion extracts PDF, DOCX or text locally; your connected agent reads the source and builds the profile.
+
+Model authentication stays in your AI app. Normal setup collects no OpenAI/Anthropic API key or chat login token. The optional Decisions key is entered only in companion settings. Scanned/image-only CVs need readable text; import does not perform model inference or OCR.
+
+## Capture jobs and prepare form values
+
+1. In **Settings → Chat apps → Chrome extension**, choose **Open extension folder**.
+2. In Chrome 125+, open **Extensions → Manage extensions**, enable **Developer mode**, choose **Load unpacked**, and select that folder.
+3. Open an advert or listing page, click the Recruiters.rip toolbar icon, choose **Capture jobs**, select the entries and choose **Save selected jobs**.
+
+Captures appear in **Jobs** before assessment. They live outside the replaceable matching cache and survive ranking resets. Detail/apply URL aliases deduplicate repeat captures; page provenance alone never merges different jobs. A listing card without the full advert remains **Needs full advert**: open the original and capture it before asking for assessment or a CV. Publication dates remain unknown unless the page provides one.
+
+For an application page, choose **Inspect form → Prepare values** and approve sharing with that destination in the companion. Review, edit and select values, then copy or fill them. Populated, protected and unsupported controls remain manual. Navigation, replaced controls or changed radio groups invalidate the inspected target; the extension never clicks Submit or uploads a file.
+
+Optional Decisions mapping chooses from known profile values, qualified saved answers and agent-staged text. It does not write new application prose. Use **Copy agent prompt for unanswered text** to let the connected agent read the form with `career_form_read` and save answers with `career_form_answers_save`, then prepare again. Staged answers are bound to the form snapshot and current career evidence.
+
+MCP job imports use `career_job_import`; `career_jobs` lists captures. `career_job_read` and `career_application_create({jobId})` resolve local originals without a platform request. Use `career_match_jobs({localOnly:true})` to assess complete captures offline; the seven-day feed window applies only to platform jobs.
+
+Build unpacked extensions with `pnpm build:browser`. Production and local builds have separate IDs/native hosts and use only `nativeMessaging`, `activeTab`, `scripting` and `sidePanel`. Source, fonts and brand assets close over this repository; no sibling checkout is needed.
+
+## Public releases and updates
+
+In **Settings → Updates**, choose **Check for updates**, then **Download update** and **Install update**. Checks use the official repository's latest stable published release without a GitHub token. No release means unavailable, not up to date.
+
+The release must contain `recruiters-rip-companion-<version>-mac-arm64.zip` with a GitHub SHA-256 digest or a matching entry in `SHA256SUMS.txt`. After packaging, `pnpm release:metadata <output-directory>` generates the checksum file from the actual root-package-version ZIP and optional DMG. Publishing is a separate operator action; build commands never publish or change repository visibility.
+
+Downloads are bounded and verified before installation. A packaged production app requests native approval, rejects installation while paid work is active, drains accepted mutations and vault writes, stages the signed bundle and replaces only its own installed app. The helper retains the previous app until the new version confirms startup and rolls back failed swaps/launch commands. An unconfirmed launch is not reported as installed.
+
+Source runs and local-product builds use verified manual installer handoff rather than replacing a checkout or changing product channels. Unwritable installation directories also use the manual path. Neither flow migrates or deletes career data, changes the app/storage identity, or accesses signing credentials. Update state is separate from career storage; local and production receipts are isolated.
 
 ## Repository boundary and privacy
 
-This repository owns the Electron app, local career vault, MCP server and launcher, conversation skill, scoring/decision storage, candidate enrichment and structured CV tools, and CareerCup-style PDF rendering. `recruiters-rip-frontend` owns website authentication, checkout, installer delivery, pairing, and the signed-device proxy. Middleware owns account/device authorization and the paid job feed. There is no server database, backend inference service, website runtime, or sibling-checkout dependency here.
+This repository owns the Electron app, Chrome extension, local career/job/form storage, MCP tools, document engine and updater. `recruiters-rip-frontend` owns website authentication, checkout, preview hosting, pairing UI and the signed-device proxy. Middleware authorizes accounts/devices and current paid feed access. Builds and runtime never import a sibling checkout.
 
-Career data and drafts are stored in the local vault: plain JSON (`vault.json`, mode 0600, in a 0700 directory) with no OS keychain and no at-rest encryption. Anything running as the same macOS user, and any backup of the folder, can read it, including a saved pre-scan API key. Optional approved pre-scans transmit CV text, preferences, saved answers and original job adverts to the selected provider; the text may contain personal details and is not anonymous. Neither provider keys nor private career content are sent to the recruiters.rip server. Fresh job data requires current paid membership; saved local data remains available without payment. Exported PDFs, CSVs and career backups are ordinary files; API keys are excluded. Do not commit vaults, exports, credentials, certificates or user data.
+Local records use plain `vault.json` (0600) in a private directory (0700), without keychain storage or at-rest encryption. The connected agent reads career context through MCP. Approved API requests send their stated context directly to OpenAI; approved form preparation releases selected values to the extension. The recruiters.rip server receives neither career content nor API keys. Membership gates the platform feed, not captured jobs or saved records. Backups and exported documents are ordinary files; API keys are excluded. Keep vaults, exports, credentials, certificates and user data out of source control.
 
 Current installed identity: app ID `rip.recruiters.companion`, displayed app **Recruiters.rip Companion**, Electron storage name **Recruiters Companion**, protocol `recruiters-companion://`, and macOS vault `~/Library/Application Support/Recruiters Companion/device/vault.json`. The app passes `--use-mock-keychain`, so Chromium creates no keychain item. This is not a legacy-compatibility guarantee: obsolete POC state can be discarded when a breaking change requires it. Keep tests isolated from the real vault.
 
+Account connection returns through a short-lived HTTP listener bound only to `127.0.0.1` on a random port, so source runs and installed apps do not depend on macOS selecting the right custom-protocol handler. The return carries its one-time state and pairing payload in the URL fragment, which the local page removes from browser history before sending a same-origin POST. Foreign origins, rebound hosts, invalid state and replayed requests are rejected. Only native account approval and successful signed platform activation produce success; the browser receives no career data or API key. The listener closes after five minutes, when starting another connection, on OS lock or on quit. Existing `recruiters-companion://` entrypoints remain supported.
+
 ## Optional Decisions pre-scan
 
-1. On **Home**, choose **Set up pre-scan** if no key is saved. Enter an **OpenAI API key** in Settings and choose **Save key**. The key is stored in the local vault outside career data, never returned to UI/MCP or included in backups. Saving a key sends no API request.
-2. On **Home**, set the job limit (1–2,000, default 100), choose **Start pre-scan**, then approve sharing and billing. The limit caps jobs/requests, not dollars.
+1. On Home, expand **Optional job pre-filtering**. To configure its shared key, open **Settings → Optional Decisions API → Configure OpenAI Decisions API**, enter your OpenAI key and choose **Save Decisions key**. This same optional key supports known-value form mapping; normal agent work needs none. Unsaved input clears on save, collapse or navigation. Saving a key sends no API request.
+2. Set the job limit (1–2,000, default 100), choose **Start pre-filtering**, then approve sharing and billing. The limit caps jobs/requests, not dollars. Running scans expand their controls so cancellation remains visible.
 3. Results appear under **Jobs**, one row per job. A job can contain a preliminary pre-scan and a reviewed assessment; their scores remain distinct. Shared role information appears once. Missing originals, oversized inputs and refusals remain unresolved.
 4. Cancel stops further dispatch; already-sent requests may still be billed. Completed partial results remain saved and readable after removing the key. An explicit restart reuses current successful results instead of rebilling them; no automatic retry loop runs. Key changes, locks, ranking resets and career-context changes invalidate or stop active work.
 5. Choose **Copy review prompt** and paste it into Codex or Claude with recruiters.rip enabled. Copying does not launch a review. The prompt preserves existing pre-scan results, asks for full-ad review before saving structured assessments, then a pairwise rerank of the top recommendations. Pre-scan priorities never overwrite final assessments. For a deliberately fresh reassessment, reset before pre-scanning, not after paying for it.
+
+The UI keeps pre-filter controls free of explanatory subtitles. Approval shows the provider/model, data being shared, job limit, base rate and separate billing; native consent is still required. Statuses and errors report the current state and next action without repeating billing, scoring or data-retention disclaimers. This copy reduction does not change the dispatch, cancellation, pricing or storage behavior described above.
 
 MCP operations: `career_prescan_start({limit,refresh?})`, `career_prescan_status({})`, `career_prescan_results({offset?,limit?})`, `career_prescan_cancel({})`. Credential management is local UI-only. Start requires native approval even from MCP. Reads never run inference or require a key.
 
@@ -136,7 +183,7 @@ This creates signed, notarized macOS ARM64 ZIP and DMG artifacts under `dist/rel
 
 If signing credentials are unavailable, explicitly use `pnpm package:adhoc`. It builds production-origin ZIP and DMG artifacts under `dist/adhoc/` with ad-hoc signing and **no notarization**; Gatekeeper may block them. Do not describe these as notarized releases or silently disable OS protections.
 
-Artifact basenames are `recruiters-rip-companion-3.8.0-mac-arm64.zip` and `.dmg`. The website operator mounts the actual ZIP on its private host volume and sets `COMPANION_INSTALLER_PATH`; `/api/companion/download` serves that file. A private GitHub repository is not a public installer URL.
+Artifact basenames are `recruiters-rip-companion-3.8.1-mac-arm64.zip` and `.dmg`. The website operator mounts the actual ZIP on its private host volume and sets `COMPANION_INSTALLER_PATH`; `/api/companion/download` serves that file. A private GitHub repository is not a public installer URL.
 
 ## Document source and asset notices
 

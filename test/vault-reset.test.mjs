@@ -102,3 +102,21 @@ test('concurrent writes cannot both commit against the same career revision', as
   assert.equal(results.find(value => value.status === 'rejected').reason.code, 'REVISION_CONFLICT');
   assert.equal(readCareer(vault).revision, 1);
 });
+
+test('flush waits for accepted writes without changing career data or identity', async t => {
+  const { vault, directory } = await fixture(t);
+  const before = vault.get();
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const pending = vault.update(async state => { await gate; state.career.profile.name = 'Saved before exit'; });
+  let finished = false;
+  const flushed = vault.flush().then(() => { finished = true; });
+  await Promise.resolve();
+  assert.equal(finished, false);
+  release();
+  await flushed; await pending;
+  const saved = JSON.parse(await readFile(path.join(directory, 'vault.json'), 'utf8'));
+  assert.equal(saved.career.profile.name, 'Saved before exit');
+  assert.equal(saved.career.revision, before.career.revision);
+  assert.equal(saved.deviceId, before.deviceId);
+});

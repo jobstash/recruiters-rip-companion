@@ -8,7 +8,7 @@ const VALUES = ['aligned', 'uncertain', 'conflict'];
 const LABELS = ['Poor', 'Weak', 'Partial', 'Strong', 'Excellent'];
 const safeErrors = new WeakSet();
 const error = (code, message) => { const result = new CareerError(code, message); safeErrors.add(result); return result; };
-const malformed = () => error('PRESCAN_INVALID_RESPONSE', 'OpenAI returned an invalid pre-scan response. Saved results are unchanged.');
+const malformed = () => error('PRESCAN_INVALID_RESPONSE', 'OpenAI returned an invalid result.');
 const unit = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1;
 const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const LOCATION_POLICY = 'Respect mandatory location, work mode, home compatibility, residency and work-authorisation restrictions. Remote does not imply worldwide eligibility. Missing or ambiguous evidence is uncertain, not proof of compatibility or conflict.';
@@ -126,7 +126,7 @@ async function assess({ apiKey, candidate, job, signal, fetchImpl = globalThis.f
   let body;
   try { body = JSON.stringify({ model: MODEL, input: [{ role: 'developer', content: POLICY }, { role: 'user', content: JSON.stringify({ candidate, job }) }], questions: questions() }); }
   catch { throw error('PRESCAN_INVALID_INPUT', 'The pre-scan input could not be prepared.'); }
-  if (Buffer.byteLength(body) > MAX_INPUT_BYTES) throw error('PRESCAN_INPUT_TOO_LARGE', 'This job and candidate context exceed the pre-scan input limit. No request was sent.');
+  if (Buffer.byteLength(body) > MAX_INPUT_BYTES) throw error('PRESCAN_INPUT_TOO_LARGE', 'The CV and job advert exceed the provider input limit.');
   const timeout = AbortSignal.timeout(30000);
   const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
   try {
@@ -142,10 +142,10 @@ async function assess({ apiKey, candidate, job, signal, fetchImpl = globalThis.f
     }
     return normalizeResponse(await readResponse(response, combined));
   } catch (cause) {
-    if (signal?.aborted) throw error('PRESCAN_CANCELLED', 'The pre-scan was cancelled. Already dispatched requests may still be billed.');
-    if (timeout.aborted || cause?.name === 'TimeoutError') throw error('PRESCAN_TIMEOUT', 'The OpenAI pre-scan request timed out. Already dispatched requests may still be billed.');
+    if (signal?.aborted) throw error('PRESCAN_CANCELLED', 'Pre-filtering canceled.');
+    if (timeout.aborted || cause?.name === 'TimeoutError') throw error('PRESCAN_TIMEOUT', 'OpenAI timed out. Try again.');
     if (safeErrors.has(cause)) throw cause;
-    throw error('PRESCAN_NETWORK', 'The OpenAI pre-scan request could not be completed securely. Check your connection before restarting.');
+    throw error('PRESCAN_NETWORK', 'Could not reach OpenAI. Check your connection.');
   }
 }
 

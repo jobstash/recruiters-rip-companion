@@ -102,3 +102,23 @@ test('employer search relays queries and GitHub onboarding records the opened pa
   await f.call('career_introductions_update', { githubSkipped: true });
   assert.equal((await f.call('career_employment_status')).github, 'skipped');
 });
+
+test('withdrawn consent or changed CV/roles during approval prevents dispatch', async () => {
+  for (const [change, code] of [
+    [career => { career.introductions.consent.granted = false; }, 'CONSENT_REQUIRED'],
+    [career => { career.sources.cv.originalBase64 = Buffer.from('different CV').toString('base64'); }, 'CV_CHANGED'],
+    [career => { career.introductions.documents.cv.employment[0].title = 'Different title'; }, 'CV_CHANGED'],
+  ]) {
+    let approve;
+    const f = fixture({ approve: new Promise(resolve => { approve = resolve; }) });
+    const { contentHash } = (await f.call('career_employment_status')).sources[0];
+    await f.call('career_employment_save', { sourceId: 'cv', contentHash, employment: [role()] });
+    await f.call('career_introductions_update', { consent: true });
+    const sharing = f.call('career_cv_share', { sourceId: 'cv' });
+    assert.equal(f.calls.confirm.length, 1);
+    f.set(change);
+    approve(true);
+    await assert.rejects(sharing, { code });
+    assert.deepEqual(f.calls.share, []);
+  }
+});

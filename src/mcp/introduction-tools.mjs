@@ -159,6 +159,14 @@ export function createIntroductionTools({ store, platform, shareCv, confirm, ope
         const allowed = await confirm('Share your CV with JobStash?',
           `${source.name ?? 'Your CV'} and ${saved.employment.length} matched ${saved.employment.length === 1 ? 'role' : 'roles'}${employers.length ? ` (${employers.slice(0, 6).join(', ')}${employers.length > 6 ? ', …' : ''})` : ''} go to JobStash. ${SHARING_PURPOSE}`);
         if (!allowed) fail('NOT_APPROVED', 'The candidate did not approve this upload. Nothing was sent.');
+        const latest = readCareer(store), latestIntro = state(latest);
+        if (latestIntro.consent?.granted !== true || latestIntro.consent.at !== intro.consent.at)
+          fail('CONSENT_REQUIRED', 'Sharing consent changed while approval was open. Nothing was sent.');
+        const latestSource = currentSource(latest, source.id), latestRoles = latestIntro.documents?.[source.id];
+        if (latestSource.contentHash !== source.contentHash ||
+            JSON.stringify(uploadDocument(latestSource)) !== JSON.stringify(document) ||
+            !latestRoles || employmentHash(latestRoles.employment) !== employmentHash(saved.employment))
+          fail('CV_CHANGED', 'The CV or matched work history changed while approval was open. Review it and approve again.');
         const sharedAt = new Date().toISOString();
         const result = await shareCv({ document,
           employment: saved.employment.map(({ ref, title, startDate, endDate, current }) => ({ ref, title, startDate, endDate, current })),

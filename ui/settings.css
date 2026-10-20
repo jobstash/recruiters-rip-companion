@@ -148,7 +148,7 @@ summary:hover { color: var(--color-ink); }
 .scan-actions { align-items: end; }
 .prescan-feedback { display: grid; gap: var(--spacing-8); font-variant-numeric: tabular-nums; }
 #prescan-progress { font: 400 13px/1.6 var(--font-geist-mono); }
-#prescan-preview:empty, #prescan-usage:empty, #prescan-recovery:empty, #prescan-message:empty, #prescan-key-message:empty { display: none; }
+#prescan-preview:empty, #prescan-progress:empty, #prescan-recovery:empty, #prescan-message:empty, #prescan-key-message:empty { display: none; }
 
 .update-content { gap: var(--spacing-16); }
 #update-progress { width: 100%; max-width: var(--reading); accent-color: var(--color-ink); }

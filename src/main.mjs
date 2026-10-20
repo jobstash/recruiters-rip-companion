@@ -97,7 +97,7 @@ prescan = createPrescanController({
     const scope = totalCatalogue === jobCount ? `${jobCount.toLocaleString()} jobs`
       : `${totalCatalogue.toLocaleString()} jobs in scope · ${jobCount.toLocaleString()} to pre-filter`;
     return confirm('Start pre-filtering?',
-      `${label} (${model})\n${scope} · Cost ESTIMATE US$${estimatedCostUsd.toFixed(6).replace(/0+$/, '').replace(/\.$/, '')}\n\nSend your CV, preferences, saved answers and these job adverts to OpenAI.\n\nOpenAI API usage is billed separately from your AI subscription.`, signal);
+      `${label} (${model})\n${scope} · ~US$${estimatedCostUsd.toFixed(2)}\n\nSend your CV, preferences, saved answers and these job adverts to OpenAI.\n\nOpenAI API usage is billed separately from your AI subscription.`, signal);
   },
   onChange() {
     if (!prescan || locked) return;

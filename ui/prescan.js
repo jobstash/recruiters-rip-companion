@@ -23,7 +23,7 @@
   let rangeDraft = null;
 
   const count = value => Number.isSafeInteger(value) && value >= 0 ? value.toLocaleString() : '—';
-  const cost = value => `Cost ESTIMATE US$${value.toFixed(6).replace(/0+$/, '').replace(/\.$/, '')}`;
+  const cost = value => `US$${value.toFixed(2)}`;
   const recovery = code => {
     switch (code) {
       case 'CANCELLED': return 'Pre-filtering canceled.';
@@ -67,54 +67,36 @@
     element('start').disabled = !available || pending || running || (!needsSetup && previewState !== 'ready');
     element('start').textContent = available && !credentials.configured ? 'Set up optional pre-filtering'
       : available && !paired ? 'Connect account' : 'Start pre-filtering';
-    element('cancel').disabled = !available || cancelling || (!starting && !running);
+    element('cancel').hidden = !available || (!starting && !running);
+    element('cancel').disabled = cancelling;
     element('form').setAttribute('aria-busy', String(pending));
     element('controls').setAttribute('aria-busy', String(pending));
-    element('preview').textContent = !available ? 'Open local storage to load the job count and Cost ESTIMATE.'
+    const scopeLine = () => preview.jobCount === 0 ? `${count(preview.totalCatalogue)} jobs in scope · all pre-filtered`
+      : `${count(preview.totalCatalogue)} jobs in scope · ${count(preview.jobCount)} to pre-filter · ~${cost(preview.estimatedCostUsd)}`;
+    element('preview').textContent = !available ? 'Open local storage to load the job count.'
       : running || starting ? ''
-        : rangeDraft !== null ? pending ? 'Saving publication time…' : 'Job count and Cost ESTIMATE need updating.'
-        : previewState === 'ready' ? `${preview.totalCatalogue === preview.jobCount
-          ? `${count(preview.jobCount)} jobs`
-          : `${count(preview.totalCatalogue)} jobs in scope · ${count(preview.jobCount)} to pre-filter`} · ${cost(preview.estimatedCostUsd)}`
-          : previewState === 'failed' ? 'Job count and Cost ESTIMATE unavailable. Reopen pre-filtering to try again.'
-            : 'Loading job count and Cost ESTIMATE…';
+        : rangeDraft !== null ? pending ? 'Saving publication time…' : 'Job count needs updating.'
+        : previewState === 'ready' ? scopeLine()
+          : previewState === 'failed' ? 'Job count unavailable. Reopen pre-filtering to try again.'
+            : 'Loading job count…';
     element('preview').setAttribute('aria-busy', String(previewState === 'loading'));
     element('key-status').textContent = !available ? 'Open local storage to configure the optional Decisions API.'
       : credentials.configured ? 'API key saved.'
         : 'No API key saved.';
 
-    if (!available) {
-      element('progress').textContent = '';
-      element('usage').textContent = '';
-      element('recovery').textContent = '';
-      return;
-    }
-    const labels = {
-      idle: '', running: 'Pre-filtering…', completed: 'Pre-filtering complete.',
-      cancelled: 'Scan canceled.', failed: 'Scan stopped.',
-      stale: 'Results need updating.', interrupted: 'Scan interrupted.',
-    };
+    if (!available) { element('progress').textContent = ''; element('recovery').textContent = ''; return; }
     const fullScope = Number.isSafeInteger(run.totalCatalogue) && Number.isSafeInteger(run.reused) &&
       run.reused >= 0 && run.totalCatalogue === run.selected + run.reused;
     const checked = run.processed + (fullScope ? run.reused : 0);
-    const progress = run.status === 'idle' ? '' : ` ${count(checked)}/${count(fullScope ? run.totalCatalogue : run.selected)} jobs checked` +
-      (fullScope && run.reused ? ` · ${count(run.reused)} reused` : '') +
-      (run.unavailable ? ` · ${count(run.unavailable)} without a score` : '') + '.';
-    element('progress').textContent = `${labels[run.status] ?? 'Status unavailable.'}${progress}`;
-    const usage = [];
-    if (Number.isSafeInteger(run.requests)) usage.push(`${count(run.requests)} requests`);
-    if (Number.isSafeInteger(run.inputTokens)) usage.push(`${count(run.inputTokens)} input tokens`);
-    if (Number.isFinite(run.estimatedCostUsd) && run.estimatedCostUsd >= 0) {
-      usage.unshift(cost(run.estimatedCostUsd));
-    }
-    element('usage').textContent = run.status !== 'idle' && usage.length
-      ? usage.join(' · ') : '';
+    const spent = Number.isFinite(run.estimatedCostUsd) && run.estimatedCostUsd > 0 ? ` · ${cost(run.estimatedCostUsd)}` : '';
+    // Live progress only; a finished run is summarized by the scope line above.
+    element('progress').textContent = running || starting
+      ? `Pre-filtering ${count(checked)}/${count(fullScope ? run.totalCatalogue : run.selected)}${spent}` : '';
     let advice = '';
     if (run.status === 'failed') advice = recovery(run.lastError?.code);
-    if (run.status === 'cancelled' || run.status === 'interrupted') advice = 'Start pre-filtering to continue.';
-    if (run.status === 'stale') advice = 'Start pre-filtering with your updated profile.';
-    if (run.status === 'completed' && !fullScope)
-      advice = 'This run does not record whole-range coverage. Start pre-filtering to cover the selected period.';
+    if (run.status === 'cancelled' || run.status === 'interrupted') advice = `Scan stopped at ${count(checked)}/${count(fullScope ? run.totalCatalogue : run.selected)}${spent}. Start again to continue.`;
+    if (run.status === 'stale') advice = 'Profile changed. Start pre-filtering again.';
+    if (run.status === 'completed' && run.unavailable) advice = `${count(run.unavailable)} jobs could not be scored.`;
     element('recovery').textContent = advice;
   }
 

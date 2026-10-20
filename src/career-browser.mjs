@@ -173,10 +173,14 @@ function reviewedSections(row) {
   ];
 }
 
-function prescanSection(row) {
-  // The Decisions number never surfaces to the user; only whether the job was scored and by what.
+function prescanSection(row, minimumScore) {
+  // The priority appears only here, beside the minimum it is measured against, so the list's divider is checkable;
+  // it is a review-priority index on its own scale, never shown on a card or mixed with an agent's fit score.
+  const priority = prescanScore(row);
   return fields('Pre-filter', [
-    ['Status', prescanStatus(row)], ['Freshness', row.current ? 'Current' : 'Out of date'],
+    ['Status', prescanStatus(row)],
+    ['Priority', priority >= 0 ? `${priority} of 100 · ${priority >= minimumScore ? 'at or above' : 'below'} your minimum ${minimumScore}` : undefined],
+    ['Freshness', row.current ? 'Current' : 'Out of date'],
     ['Location', own(prescanLocations, row.location) ? prescanLocations[row.location] : undefined],
     ['Next run', row.status === 'incompatible_location' ? 'Location conflict predicted — include anyway with the switch above' : undefined],
     ['Provider', row.provider === 'openai' ? 'OpenAI Decisions' : row.provider], ['Model', row.model],
@@ -208,7 +212,7 @@ function jobItem({ id, reviewed, prescan, imported, metadata }, inclusion) {
   const block = { company: company || null, category: text(role('classification'), '') || null };
   const review = reviewed ? reviewedSections(reviewed) : [];
   // A current review supersedes the pre-filter, so the reader never shows both; a stale review follows a current pre-filter.
-  const preliminary = prescan && !reviewCurrent ? [prescanSection(prescan)] : [];
+  const preliminary = prescan && !reviewCurrent ? [prescanSection(prescan, inclusion.minimumScore)] : [];
   return { id, title, card, block, sections: [
     ...(reviewed && !prescan?.current ? [...review, ...preliminary] : [...preliminary, ...review]),
     ...(imported ? [

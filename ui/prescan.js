@@ -195,8 +195,10 @@
     context = nextContext;
     current = publicState;
     paired = accountPaired;
+    // A draft that the saved state already matches is no longer a draft; otherwise the preview would wait forever.
+    if (rangeDraft !== null && rangeDraft === publicState.run.publicationRange && !pending) rangeDraft = null;
     render();
-    if (changed) void loadPreview();
+    if (changed || previewState === 'idle') void loadPreview();
   }
 
   async function invoke(op, input) {
@@ -262,8 +264,9 @@
     render();
   });
   range.addEventListener('change', () => {
-    if (pending || !current) return;
     const publicationRange = publicationRanges[Number(range.value)][0];
+    // A change that cannot be saved right now (another action is pending) snaps back instead of leaving the count stale.
+    if (pending || !current) { rangeDraft = null; render(); if (previewState === 'idle') void loadPreview(); return; }
     rangeDraft = publicationRange;
     void perform('prescan-range-set', { publicationRange }, '');
   });

@@ -6,6 +6,7 @@ import { createCareerState } from '../src/mcp/state.mjs';
 import { createCareerBrowser } from '../src/career-browser.mjs';
 import { addBlock, removeBlock } from '../src/mcp/blocklist.mjs';
 import { ASSESSMENT_POLICY_ID, deriveDecision } from '../src/mcp/matching-contract.mjs';
+import { DEFAULT_INCLUSION_MINIMUM_SCORE } from '../src/prescan/state.mjs';
 import { createMatchingTools } from '../src/mcp/matching-tools.mjs';
 import { decisionProviders } from '../src/prescan/providers.mjs';
 
@@ -320,13 +321,16 @@ test('pre-filter presentation keeps priority, freshness and operational failures
   const merged = page.items.find(item => item.id === 'merged');
   assert.deepEqual(merged.card, { ...merged.card, stage: 'prefilter', rank: 4, included: true, overridden: false, score: 99, stale: true, status: null });
   assert.equal(merged.sections[0].heading, 'Pre-filter');
-  assert.equal(JSON.stringify(merged.sections.find(section => section.heading === 'Pre-filter')).includes('82'), false);
+  // The priority is shown only in the reader, measured against the minimum, never on the card.
+  assert.equal(fieldValue(merged, 'Pre-filter', 'Priority'), `82 of 100 · at or above your minimum ${DEFAULT_INCLUSION_MINIMUM_SCORE}`);
+  assert.equal(JSON.stringify(merged.card).includes('82'), false);
   assert.equal(fieldValue(merged, 'Reviewed fit', 'Overall fit'), '99/100 (Strong)');
   assert.equal(fieldValue(merged, 'Role', 'Location'), 'London');
   assert.equal(merged.sections.filter(section => section.heading === 'Role').length, 1);
   for (const item of page.items) {
+    const scored = rows.find(row => row.id === item.id)?.status === 'scored';
     assert.deepEqual(sectionFields(item, 'Pre-filter').map(field => field.label),
-      ['Status', 'Freshness', 'Provider', 'Model']);
+      scored ? ['Status', 'Priority', 'Freshness', 'Provider', 'Model'] : ['Status', 'Freshness', 'Provider', 'Model']);
   }
   const failures = { refused: 'Provider declined assessment', unavailable: 'Original advert unavailable',
     oversize: 'Input exceeds the provider limit' };

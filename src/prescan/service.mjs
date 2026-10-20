@@ -1,12 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { CareerError, fail } from '../mcp/state.mjs';
-import { matchingProfileVersion, recentPublication } from '../mcp/assessment-policy.mjs';
+import { matchingProfileVersion } from '../mcp/assessment-policy.mjs';
 import { ASSESSMENT_POLICY_ID } from '../mcp/matching-contract.mjs';
-import { createMatchingTools } from '../mcp/matching-tools.mjs';
+import { candidateContext, createMatchingTools, loadMatchingCatalogue } from '../mcp/matching-tools.mjs';
 import { decisionProviders } from './providers.mjs';
 import { currentPrescan, currentPrescanRow, getPrescanResults } from './state.mjs';
+import { DEFAULT_PUBLICATION_RANGE, assertPublicationRange, publicationInWindow, publicationWindowForRange } from './publication-range.mjs';
 
-const PRICE_NOTE = 'Base-rate estimate from reported input tokens, not a guaranteed invoice. Regional or long-context premiums may apply. Already dispatched requests may be billed after cancellation.';
+const ASSUMED_INPUT_TOKENS_PER_JOB = 8000;
 const messages = {
   PRESCAN_KEY_REQUIRED: 'Add your OpenAI API key in Settings.',
   PRESCAN_NOT_AUTHORIZED: 'Pre-filtering canceled.',
@@ -44,11 +45,11 @@ function jobInput(value) {
   if (!value || typeof value !== 'object') return value;
   return Object.fromEntries(Object.entries(value).filter(([key]) => !rawGraphFields.has(key)).map(([key, item]) => [key, jobInput(item)]));
 }
-function assertStart(args) {
-  if (!args || typeof args !== 'object' || Array.isArray(args) || Object.keys(args).some(key => !['limit', 'refresh'].includes(key)) ||
-      (args.limit !== undefined && (!Number.isInteger(args.limit) || args.limit < 1 || args.limit > 2000)) ||
+function assertOptions(args) {
+  if (!args || typeof args !== 'object' || Array.isArray(args) || Object.keys(args).some(key => !['refresh', 'publicationRange'].includes(key)) ||
       (args.refresh !== undefined && typeof args.refresh !== 'boolean'))
-    fail('INVALID_INPUT', 'Provide a job limit from 1 to 2000 and an optional boolean refresh.');
+    fail('INVALID_INPUT', 'Provide only an optional boolean refresh and publicationRange.');
+  if (args.publicationRange !== undefined) assertPublicationRange(args.publicationRange);
 }
 
 /** One shared controller serves settings and every MCP session. Construction performs no vault reads or inference. */
@@ -58,16 +59,18 @@ export function createPrescanController({ store, makeScope, credentials, authori
   function notify() {
     try { Promise.resolve(onChange()).catch(() => {}); } catch { /* Notification failure cannot discard saved results. */ }
   }
-  function check(run, state, { stopped = false, id } = {}) {
-    run.scope.assertAvailable(true);
+  function check(run, state, { stopped = false, id, readOnly = false } = {}) {
+    run.scope.assertAvailable(!readOnly);
     if (!stopped && (active !== run || run.abort.signal.aborted)) fail('PRESCAN_CANCELLED', messages.PRESCAN_CANCELLED);
     const career = state.career;
     if (!career || state.deviceId !== run.deviceId || matchingProfileVersion(career) !== run.profileVersion ||
         (state.prescanCredentialVersion ?? 0) !== run.credentialVersion ||
+        (state.prescanPublicationRange ?? DEFAULT_PUBLICATION_RANGE) !== run.configuredPublicationRange ||
         career.prescan?.id !== run.expectedRunId || (run.persisted &&
           (career.prescan.profileVersion !== run.profileVersion || career.prescan.assessmentPolicyId !== ASSESSMENT_POLICY_ID ||
            career.prescan.prescanPolicyId !== run.provider.policyId || career.prescan.provider !== run.provider.id ||
-           career.prescan.model !== run.provider.model || career.prescan.credentialVersion !== run.credentialVersion)) ||
+           career.prescan.model !== run.provider.model || career.prescan.credentialVersion !== run.credentialVersion ||
+           career.prescan.publicationRange !== run.publicationRange)) ||
         (id && !Object.hasOwn(career.matching?.jobs ?? {}, id)))
       fail('PRESCAN_CONTEXT_CHANGED', messages.PRESCAN_CONTEXT_CHANGED);
   }
@@ -94,15 +97,68 @@ export function createPrescanController({ store, makeScope, credentials, authori
     const inputTokens = run?.inputTokens ?? 0;
     return { configured: publicState.configured, provider: run?.provider ?? publicState.provider,
       model: run?.model ?? publicState.model, ...(run ? { runId: run.id } : {}), status,
+      publicationRange: state.prescanPublicationRange ?? DEFAULT_PUBLICATION_RANGE,
       selected: run?.selectedIds.length ?? 0, processed: rows.length,
       scored: rows.filter(row => row.status === 'scored').length,
       unavailable: rows.filter(row => row.status !== 'scored').length,
       totalCatalogue: run?.totalCatalogue ?? 0, inputTokens, requests: run?.requests ?? 0,
       estimatedCostUsd: inputTokens * (provider?.inputUsdPerMillion ?? publicState.inputUsdPerMillion) / 1_000_000,
-      priceNote: PRICE_NOTE, ...(run?.lastError ? { lastError: run.lastError } : {}) };
+      ...(run?.lastError ? { lastError: run.lastError } : {}) };
   }
   function status() { return summary(store.get(), credentials.publicState()); }
   function results(args = {}) { return { ...getPrescanResults(store, args), status: status() }; }
+  function context(provider, scope, args) {
+    scope.assertAvailable(false);
+    const state = scope.store.get();
+    const configuredPublicationRange = assertPublicationRange(state.prescanPublicationRange ?? DEFAULT_PUBLICATION_RANGE);
+    const publicationRange = args.publicationRange ?? configuredPublicationRange;
+    return { provider, scope, profileVersion: matchingProfileVersion(state.career ?? {}), configuredPublicationRange, publicationRange,
+      publicationWindow: publicationWindowForRange(publicationRange),
+      credentialVersion: state.prescanCredentialVersion ?? 0, deviceId: state.deviceId,
+      expectedRunId: state.career?.prescan?.id, persisted: false };
+  }
+  async function plan(run, args, { readOnly = false } = {}) {
+    const options = readOnly ? { stopped: true, readOnly: true } : undefined;
+    current(run, options);
+    const catalogue = await loadMatchingCatalogue(async (operation, input) => {
+      current(run, options);
+      const page = await run.scope.platform(operation, input);
+      current(run, options);
+      return page;
+    }, run.publicationWindow);
+    const career = current(run, options).career;
+    const catalogueJobs = Object.fromEntries(catalogue.jobs.map(job => [job.id, job]));
+    const previous = career.prescan;
+    const reusable = !args.refresh && currentPrescan(career) &&
+      previous.provider === run.provider.id && previous.model === run.provider.model;
+    const cacheContext = { ...career, matching: { ...career.matching, jobs: catalogueJobs } };
+    const ids = [];
+    let reused = 0;
+    for (const id of Object.keys(catalogueJobs)) {
+      const row = reusable && previous.rows?.[id];
+      if (row?.status === 'scored' && currentPrescanRow(cacheContext, row, Date.now(), run.publicationWindow)) reused++;
+      else ids.push(id);
+    }
+    const averageTokens = previous?.requests > 0 && Number.isFinite(previous.inputTokens) && previous.inputTokens > 0
+      ? previous.inputTokens / previous.requests : ASSUMED_INPUT_TOKENS_PER_JOB;
+    const estimatedInputTokens = Math.ceil(ids.length * averageTokens);
+    const { id: provider, label, model, inputUsdPerMillion } = run.provider;
+    return { jobs: catalogueJobs, ids, rows: reusable ? { ...previous.rows } : {},
+      preview: { provider, label, model, inputUsdPerMillion, jobCount: ids.length,
+        totalCatalogue: catalogue.total, reused, estimatedInputTokens,
+        publicationRange: run.publicationRange, publicationWindow: run.publicationWindow,
+        estimatedCostUsd: estimatedInputTokens * inputUsdPerMillion / 1_000_000 } };
+  }
+  async function preview(args = {}) {
+    assertOptions(args);
+    const provider = providers.openai;
+    if (!provider) fail('PRESCAN_UNSUPPORTED_PROVIDER', messages.PRESCAN_UNSUPPORTED_PROVIDER);
+    try { return (await plan(context(provider, makeScope(), args), args, { readOnly: true })).preview; }
+    catch (error) {
+      const safe = safeError(error);
+      throw new CareerError(safe.code, safe.message);
+    }
+  }
   async function acquire(run) {
     while (providerCalls >= 8) {
       current(run);
@@ -136,7 +192,7 @@ export function createPrescanController({ store, makeScope, credentials, authori
       return;
     }
     const details = metadata(run, job.id);
-    if (!recentPublication(details.publishedAt)) {
+    if (!publicationInWindow(details.publishedAt, run.publicationWindow)) {
       await unavailable(run, job.id, 'Job outside the current catalogue.');
       return;
     }
@@ -157,15 +213,16 @@ export function createPrescanController({ store, makeScope, credentials, authori
     } finally { release(); }
   }
   async function worker(run, queue) {
-    while (queue.length) {
+    while (queue.next < queue.ids.length) {
       current(run);
-      const ids = queue.splice(0, 10);
+      const ids = queue.ids.slice(queue.next, queue.next + 10);
+      queue.next += ids.length;
       const batch = await run.tools.get('career_match_batch').invoke({ ids });
       current(run);
       for (const id of batch.unavailableIds) await unavailable(run, id, 'Original job advert unavailable.');
       if (batch.remainingIds.length === ids.length) {
         for (const id of batch.remainingIds) await unavailable(run, id, 'Original job advert unavailable.');
-      } else queue.push(...batch.remainingIds);
+      } else queue.ids.push(...batch.remainingIds);
       for (const job of batch.jobs) await assess(run, job);
     }
   }
@@ -182,58 +239,56 @@ export function createPrescanController({ store, makeScope, credentials, authori
   }
   async function execute(run) {
     try {
-      const queue = [...run.record.selectedIds];
-      await Promise.all(Array.from({ length: Math.min(8, queue.length) }, () => worker(run, queue)));
+      const queue = { ids: [...run.record.selectedIds], next: 0 };
+      await Promise.all(Array.from({ length: Math.min(8, queue.ids.length) }, () => worker(run, queue)));
       if (active === run) await finish(run, 'completed');
     } catch (error) {
       if (active === run) await finish(run, error?.code === 'PRESCAN_CANCELLED' ? 'cancelled' : 'failed', safeError(error));
     }
   }
   async function start(args = {}) {
-    assertStart(args);
+    assertOptions(args);
     if (active) return status();
     const provider = providers.openai;
     if (!provider) fail('PRESCAN_UNSUPPORTED_PROVIDER', messages.PRESCAN_UNSUPPORTED_PROVIDER);
-    const scope = makeScope();
-    scope.assertAvailable(true);
-    const state = scope.store.get(), profileVersion = matchingProfileVersion(state.career ?? {});
-    const { credentialVersion } = credentials.read(provider.id);
-    const record = { id: randomUUID(), profileVersion, assessmentPolicyId: ASSESSMENT_POLICY_ID, prescanPolicyId: provider.policyId,
-      provider: provider.id, model: provider.model, credentialVersion, status: 'running', startedAt: now(),
-      selectedIds: [], totalCatalogue: 0, rows: {}, inputTokens: 0, requests: 0 };
-    const run = { record, provider, scope, profileVersion, credentialVersion, deviceId: state.deviceId,
-      expectedRunId: state.career?.prescan?.id, persisted: false, abort: new AbortController() };
+    const run = { ...context(provider, makeScope(), args), abort: new AbortController() };
+    credentials.read(provider.id);
+    const record = run.record = { id: randomUUID(), profileVersion: run.profileVersion,
+      assessmentPolicyId: ASSESSMENT_POLICY_ID, prescanPolicyId: provider.policyId,
+      provider: provider.id, model: provider.model, credentialVersion: run.credentialVersion,
+      publicationRange: run.publicationRange, publicationWindow: run.publicationWindow,
+      status: 'running', startedAt: now(), selectedIds: [], totalCatalogue: 0, rows: {}, inputTokens: 0, requests: 0 };
     active = run;
     notify();
     try {
-      const limit = args.limit ?? 100;
-      if (!await authorize({ provider: provider.id, label: provider.label, model: provider.model, limit,
-        inputUsdPerMillion: provider.inputUsdPerMillion })) fail('PRESCAN_NOT_AUTHORIZED', messages.PRESCAN_NOT_AUTHORIZED);
-      current(run);
+      const planned = await plan(run, args);
+      record.rows = planned.rows;
+      record.selectedIds = planned.ids;
+      record.totalCatalogue = planned.preview.totalCatalogue;
+      for (const id of record.selectedIds) delete record.rows[id];
+      if (!await authorize({ ...planned.preview, signal: run.abort.signal }))
+        fail(run.abort.signal.aborted ? 'PRESCAN_CANCELLED' : 'PRESCAN_NOT_AUTHORIZED',
+          run.abort.signal.aborted ? messages.PRESCAN_CANCELLED : messages.PRESCAN_NOT_AUTHORIZED);
+      const approved = current(run);
+      run.candidate = candidateContext(approved.career);
       const guardedStore = {
         get: () => current(run),
-        update: mutation => scope.store.update(state => { check(run, state); return mutation(state); }),
+        update: mutation => run.scope.store.update(state => { check(run, state); return mutation(state); }),
       };
       run.tools = new Map(createMatchingTools({ store: guardedStore, preserveFinalAssessments: true,
+        approvedPublicationWindow: run.publicationWindow,
         platform: async (operation, input) => {
           current(run);
-          const value = await scope.platform(operation, input);
+          const value = await run.scope.platform(operation, input);
           current(run);
           return value;
         } }).map(tool => [tool.name, tool]));
-      const catalogue = await run.tools.get('career_match_jobs').invoke({});
-      const latest = current(run), career = latest.career;
-      if (catalogue.profileVersion !== run.profileVersion || catalogue.policyId !== ASSESSMENT_POLICY_ID)
-        fail('PRESCAN_CONTEXT_CHANGED', messages.PRESCAN_CONTEXT_CHANGED);
-      const previous = career.prescan;
-      const reusable = !args.refresh && currentPrescan(career) && previous.provider === provider.id && previous.model === provider.model;
-      record.rows = reusable ? { ...previous.rows } : {};
-      record.selectedIds = catalogue.jobIds.filter(id => !(reusable && previous.rows?.[id]?.status === 'scored' &&
-        currentPrescanRow(career, previous.rows[id]))).slice(0, limit);
-      for (const id of record.selectedIds) delete record.rows[id];
-      record.totalCatalogue = catalogue.total;
-      run.candidate = catalogue.candidate;
-      await scope.store.update(state => { check(run, state); state.career.prescan = record; });
+      await run.scope.store.update(state => {
+        check(run, state);
+        const matching = state.career.matching ??= { jobs: {}, scores: {}, pairs: {} };
+        matching.jobs = { ...matching.jobs, ...planned.jobs };
+        state.career.prescan = record;
+      });
       run.persisted = true; run.expectedRunId = record.id;
       current(run);
       notify();
@@ -250,5 +305,19 @@ export function createPrescanController({ store, makeScope, credentials, authori
     if (run) { active = null; run.abort.abort(); await finish(run, 'cancelled'); }
     try { return status(); } catch { return { status: 'interrupted', requestsMayBeBilled: true }; }
   }
-  return { start, cancel, status, results, isActive: () => active !== null || providerCalls > 0 };
+  async function setPublicationRange(args) {
+    if (!args || typeof args !== 'object' || Array.isArray(args) ||
+        Object.keys(args).some(key => key !== 'publicationRange') || !Object.hasOwn(args, 'publicationRange'))
+      fail('INVALID_INPUT', 'Provide only publicationRange.');
+    const publicationRange = assertPublicationRange(args.publicationRange);
+    const scope = makeScope();
+    scope.assertAvailable(true);
+    if ((scope.store.get().prescanPublicationRange ?? DEFAULT_PUBLICATION_RANGE) === publicationRange) return status();
+    await cancel();
+    await scope.store.update(state => { state.prescanPublicationRange = publicationRange; });
+    if (active) await cancel();
+    notify();
+    return status();
+  }
+  return { preview, start, cancel, setPublicationRange, status, results, isActive: () => active !== null || providerCalls > 0 };
 }

@@ -18,6 +18,7 @@ import { startMcpBroker } from './mcp/broker.mjs';
 import { createDocumentFiles, readSelectedSource } from './mcp/files.mjs';
 import { createScopedAccess } from './mcp/scope.mjs';
 import { createMatchingTools, deleteRankings } from './mcp/matching-tools.mjs';
+import { matchingProfileVersion } from './mcp/assessment-policy.mjs';
 import { installChatGptPlugin } from './host-setup.mjs';
 import { createCareerBrowser } from './career-browser.mjs';
 import { createPrescanCredentials } from './prescan/credentials.mjs';
@@ -92,8 +93,12 @@ prescan = createPrescanController({
         return result;
       } };
   },
-  authorize: ({ label, model, limit, inputUsdPerMillion }) => confirm('Start pre-filtering?',
-    `${label} (${model})\n\nSend your CV, preferences, saved answers and job adverts to OpenAI.\n\nUp to ${limit} jobs · Base rate $${inputUsdPerMillion.toFixed(2)} / million input tokens.\nOpenAI bills this separately from your AI subscription.`),
+  authorize: ({ label, model, jobCount, totalCatalogue, estimatedCostUsd, signal }) => {
+    const scope = totalCatalogue === jobCount ? `${jobCount.toLocaleString()} jobs`
+      : `${totalCatalogue.toLocaleString()} jobs in scope · ${jobCount.toLocaleString()} to pre-filter`;
+    return confirm('Start pre-filtering?',
+      `${label} (${model})\n${scope} · Cost ESTIMATE US$${estimatedCostUsd.toFixed(6).replace(/0+$/, '').replace(/\.$/, '')}\n\nSend your CV, preferences, saved answers and these job adverts to OpenAI.\n\nOpenAI API usage is billed separately from your AI subscription.`, signal);
+  },
   onChange() {
     if (!prescan || locked) return;
     const current = prescan.status();
@@ -171,7 +176,8 @@ function localState() {
   const state = vault.get();
   return { ...publicState, account: state.pairing?.account ?? null, origin: state.pairing?.origin ?? null, browserConnection, failure,
     setup: setup(), careerViewVersion: `${state.deviceId}:${sessionEpoch}:${careerViewRevision}`,
-    prescan: { credentials: prescanCredentials.publicState(), run: prescan.status() },
+    prescan: { credentials: prescanCredentials.publicState(), run: prescan.status(),
+      contextVersion: `${sessionEpoch}:${careerViewRevision}:${matchingProfileVersion(state.career ?? {})}` },
     updates: { ...updates.state(), blocked: paidWorkActive() || updateInstalling },
     approval: pendingApproval ? { id: pendingApproval.id, title: pendingApproval.title, detail: pendingApproval.detail } : null };
 }
@@ -415,9 +421,11 @@ async function settingsOperation(op, input) {
     if (op.startsWith('update-')) { exact(input, []); return { ok: true, result: await updateAction(op) }; }
     if (op.startsWith('prescan-')) {
       assertAvailable(false);
+      if (op === 'prescan-preview') { exact(input, []); return { ok: true, result: await prescan.preview({}) }; }
       let result;
       if (op === 'prescan-key-save') result = await prescanCredentials.save(input);
       else if (op === 'prescan-key-remove') result = await prescanCredentials.remove(input);
+      else if (op === 'prescan-range-set') result = await prescan.setPublicationRange(input);
       else if (op === 'prescan-start') { assertPaidWorkAllowed(); result = await prescan.start(input); }
       else if (op === 'prescan-cancel') { exact(input, []); result = await prescan.cancel(); }
       else fail('INVALID_INPUT', 'This pre-scan action is unavailable.');
@@ -478,7 +486,7 @@ async function settingsOperation(op, input) {
 ipcMain.handle('local-settings', async (event, op, input = {}) => {
   if (event.sender !== window?.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== uiURL) throw new Error('Local settings only.');
   try {
-    if (['prescan-key-save', 'prescan-key-remove', 'prescan-start', 'import-cv', 'delete-rankings', 'connect-account', 'backup'].includes(op))
+    if (['prescan-key-save', 'prescan-key-remove', 'prescan-range-set', 'prescan-start', 'import-cv', 'delete-rankings', 'connect-account', 'backup'].includes(op))
       return await mutation(() => settingsOperation(op, input));
     return await settingsOperation(op, input);
   } catch (error) { return { ok: false, error: safeFailure(error) }; }

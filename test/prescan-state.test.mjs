@@ -5,6 +5,7 @@ import { matchingProfileVersion } from '../src/mcp/assessment-policy.mjs';
 import { ASSESSMENT_POLICY_ID } from '../src/mcp/matching-contract.mjs';
 import { decisionProviders } from '../src/prescan/providers.mjs';
 import { getPrescanResults, prioritizePrescanIds } from '../src/prescan/state.mjs';
+import { publicationWindowForRange } from '../src/prescan/publication-range.mjs';
 
 const date = new Date(Date.now() - 86400000).toISOString();
 const row = (id, priority, direction = 'aligned', constraints = 'aligned', publishedAt = date, eligibility = 'aligned') => ({
@@ -89,4 +90,16 @@ test('local result reads work without matching catalogue, credentials or network
     assert.throws(() => getPrescanResults(f.store, args), { code: 'INVALID_INPUT' });
   assert.equal(getPrescanResults(f.store, { offset: 100 }).items.length, 0);
   assert.deepEqual(prioritizePrescanIds(createCareerState(), ['a', 'b']), ['a', 'b']);
+});
+
+test('whole-catalogue selection reuses current older successes while preserving narrower-range visibility', () => {
+  const older = new Date(Date.now() - 20 * 86400000).toISOString();
+  const f = fixture([row('older', 95, 'aligned', 'aligned', older), row('recent', 70)]);
+  const ids = ['recent', 'older'];
+  assert.deepEqual(prioritizePrescanIds(f.career, ids), ['recent', 'older']);
+  assert.deepEqual(prioritizePrescanIds(f.career, ids, publicationWindowForRange('all')), ['older', 'recent']);
+  const allStore = { get: () => ({ ...f.store.get(), prescanPublicationRange: 'all' }) };
+  assert.equal(getPrescanResults(allStore).items.find(item => item.id === 'older').current, true);
+  assert.equal(getPrescanResults(f.store).items.find(item => item.id === 'older').current, false);
+  assert.equal(getPrescanResults(f.store).total, 2);
 });

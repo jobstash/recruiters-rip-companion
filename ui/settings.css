@@ -135,13 +135,16 @@ summary:hover { color: var(--color-ink); }
 .prescan-field input:focus { border-bottom-color: transparent; background-image: var(--rr-dispersion); background-repeat: no-repeat; background-size: 100% 2px; background-position: 0 100%; box-shadow: var(--shadow-input-focus); }
 .prescan-field input:focus-visible { box-shadow: var(--shadow-focus-ring), var(--shadow-input-focus); }
 .prescan-field input:disabled { border-color: var(--color-facet); color: var(--color-dust); cursor: not-allowed; }
-.prescan-limit { width: 104px; }
 .home-actions { display: grid; gap: var(--spacing-16); padding-bottom: var(--spacing-24); }
 #prescan-controls { display: grid; gap: var(--spacing-8); }
+.prescan-publication { display: grid; gap: var(--spacing-8); min-width: 0; max-width: var(--reading); }
+#prescan-range { width: 100%; min-width: 0; min-height: 44px; margin: 0; accent-color: var(--color-ink); cursor: pointer; }
+#prescan-range:focus-visible { outline: 2px solid var(--color-ink); outline-offset: 2px; box-shadow: var(--shadow-focus-ring); }
+#prescan-range:disabled { cursor: not-allowed; }
 .scan-actions { align-items: end; }
 .prescan-feedback { display: grid; gap: var(--spacing-8); font-variant-numeric: tabular-nums; }
 #prescan-progress { font: 400 13px/1.6 var(--font-geist-mono); }
-#prescan-usage:empty, #prescan-recovery:empty, #prescan-message:empty, #prescan-key-message:empty { display: none; }
+#prescan-preview:empty, #prescan-usage:empty, #prescan-recovery:empty, #prescan-message:empty, #prescan-key-message:empty { display: none; }
 
 .update-content { gap: var(--spacing-16); }
 #update-progress { width: 100%; max-width: var(--reading); accent-color: var(--color-ink); }

@@ -1,4 +1,5 @@
 import { fail } from './state.mjs';
+import { PUBLICATION_RANGES } from '../prescan/publication-range.mjs';
 
 const object = properties => ({ type: 'object', properties, additionalProperties: false });
 function exact(args, fields) {
@@ -10,14 +11,26 @@ function exact(args, fields) {
 export function createPrescanTools({ controller }) {
   return [
     {
+      name: 'career_prescan_range_set', readOnly: false,
+      description: 'Save the Companion publication slider selection: today, yesterday, past 3 days, past week, past 2 weeks, past month or whole catalogue. Changes stop active pre-filtering without starting another scan or imposing a job-count cap.',
+      inputSchema: { ...object({ publicationRange: { type: 'string', enum: PUBLICATION_RANGES } }), required: ['publicationRange'] },
+      async invoke(args = {}) { exact(args, ['publicationRange']); return controller.setPublicationRange(args); },
+    },
+    {
+      name: 'career_prescan_preview', readOnly: true,
+      description: 'Read the middleware-backed publication scope count, jobs needing Decisions, reusable results and rough Cost ESTIMATE for the selected slider range. Fetches catalogue metadata only, with no provider calls, authorization or persistent career changes. No job-count cap. Use before asking to start a scan.',
+      inputSchema: object({ publicationRange: { type: 'string', enum: PUBLICATION_RANGES }, refresh: { type: 'boolean', default: false } }),
+      async invoke(args = {}) { exact(args, ['publicationRange', 'refresh']); return controller.preview(args); },
+    },
+    {
       name: 'career_prescan_start', readOnly: false,
-      description: 'Request a finite, separately API-billed OpenAI job pre-scan. A native companion confirmation is required before career context and original advertisements are sent. This produces pre-scan priority only, never final subscription assessments. Enter API keys only in companion settings. Existing current scored pre-scan results are reused unless refresh is true; no automatic retries.',
-      inputSchema: object({ limit: { type: 'integer', minimum: 1, maximum: 2000, default: 100 }, refresh: { type: 'boolean', default: false } }),
-      async invoke(args = {}) { exact(args, ['limit', 'refresh']); return controller.start(args); },
+      description: 'Pre-filter every eligible pending job in the selected publication range with OpenAI Decisions, without a job-count limit. Show career_prescan_preview totalCatalogue, jobCount and Cost ESTIMATE before requesting sharing and separate API billing approval. Native approval confirms the actual scope snapshot and estimate. Reuse current successful results unless refresh is true. No automatic paid retries or bulk LLM-review fallback after denial; keys stay in companion settings.',
+      inputSchema: object({ publicationRange: { type: 'string', enum: PUBLICATION_RANGES }, refresh: { type: 'boolean', default: false } }),
+      async invoke(args = {}) { exact(args, ['publicationRange', 'refresh']); return controller.start(args); },
     },
     {
       name: 'career_prescan_status', readOnly: true,
-      description: 'Read local pre-scan progress and base-rate usage estimate without fetching jobs or making provider calls. Interrupted runs do not restart automatically.',
+      description: 'First check for job discovery: read Decisions key availability, local pre-scan progress and usage cost estimate without fetching jobs or making provider calls. Recommend companion Settings → Optional Decisions API when setup is missing; use career_prescan_preview for the full pending job count and Cost ESTIMATE before new scan approval. Reuse current results; interrupted runs do not restart automatically.',
       inputSchema: object({}),
       async invoke(args = {}) { exact(args, []); return controller.status(); },
     },

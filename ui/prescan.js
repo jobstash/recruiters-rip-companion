@@ -3,13 +3,27 @@
 (() => {
   const element = name => document.getElementById(`prescan-${name}`);
   const key = element('key');
-  const limit = element('limit');
+  const disclosure = document.getElementById('prefilter-controls');
+  const range = element('range');
+  const publicationRanges = [
+    ['today', 'Today'], ['yesterday', 'Yesterday'], ['past_3_days', 'Past 3 days'],
+    ['past_week', 'Past week'], ['past_2_weeks', 'Past 2 weeks'],
+    ['past_month', 'Past month'], ['all', 'Whole catalogue'],
+  ];
   let current = null;
   let paired = false;
   let pending = false;
   let generation = 0;
+  let starting = false;
+  let cancelling = false;
+  let context = '';
+  let preview = null;
+  let previewState = 'idle';
+  let previewRequest = 0;
+  let rangeDraft = null;
 
   const count = value => Number.isSafeInteger(value) && value >= 0 ? value.toLocaleString() : '—';
+  const cost = value => `Cost ESTIMATE US$${value.toFixed(6).replace(/0+$/, '').replace(/\.$/, '')}`;
   const recovery = code => {
     switch (code) {
       case 'CANCELLED': return 'Pre-filtering canceled.';
@@ -17,8 +31,10 @@
       case 'PROFILE_INCOMPLETE': return 'Add your CV and career profile to start pre-filtering.';
       case 'PAIRING_REQUIRED':
       case 'DEVICE_UNAUTHORIZED': return 'Check the account connection and job-feed membership.';
+      case 'PRESCAN_CONTEXT_CHANGED':
+      case 'IDENTITY_CHANGED':
       case 'PROFILE_CHANGED':
-      case 'RANKINGS_CHANGED': return 'Your profile or rankings changed. Start pre-filtering again.';
+      case 'RANKINGS_CHANGED': return 'Your profile or account changed. Start pre-filtering again.';
       case 'PRESCAN_KEY_REQUIRED': return 'Save an OpenAI API key before starting.';
       case 'PRESCAN_INVALID_KEY':
       case 'PRESCAN_AUTH': return 'Replace the API key and check its OpenAI API permissions, then start again.';
@@ -38,15 +54,31 @@
     const available = Boolean(credentials && run);
     const running = run?.status === 'running';
     key.disabled = !available || pending;
-    limit.disabled = !available || pending || running;
+    const needsSetup = available && (!credentials.configured || !paired);
+    const selectedRange = rangeDraft ?? run?.publicationRange ?? 'past_3_days';
+    const rangeIndex = publicationRanges.findIndex(([value]) => value === selectedRange);
+    const rangeLabel = publicationRanges[rangeIndex < 0 ? 2 : rangeIndex][1];
+    range.value = String(rangeIndex < 0 ? 2 : rangeIndex);
+    range.disabled = !available || pending;
+    range.setAttribute('aria-valuetext', rangeLabel);
+    element('range-label').textContent = rangeLabel;
     element('save').disabled = !available || pending || !key.value;
     element('remove').disabled = !available || pending || !credentials.configured;
-    element('start').disabled = !available || pending || running;
+    element('start').disabled = !available || pending || running || (!needsSetup && previewState !== 'ready');
     element('start').textContent = available && !credentials.configured ? 'Set up optional pre-filtering'
       : available && !paired ? 'Connect account' : 'Start pre-filtering';
-    element('cancel').disabled = !available || pending || !running;
+    element('cancel').disabled = !available || cancelling || (!starting && !running);
     element('form').setAttribute('aria-busy', String(pending));
     element('controls').setAttribute('aria-busy', String(pending));
+    element('preview').textContent = !available ? 'Open local storage to load the job count and Cost ESTIMATE.'
+      : running || starting ? ''
+        : rangeDraft !== null ? pending ? 'Saving publication time…' : 'Job count and Cost ESTIMATE need updating.'
+        : previewState === 'ready' ? `${preview.totalCatalogue === preview.jobCount
+          ? `${count(preview.jobCount)} jobs`
+          : `${count(preview.totalCatalogue)} jobs in scope · ${count(preview.jobCount)} to pre-filter`} · ${cost(preview.estimatedCostUsd)}`
+          : previewState === 'failed' ? 'Job count and Cost ESTIMATE unavailable. Reopen pre-filtering to try again.'
+            : 'Loading job count and Cost ESTIMATE…';
+    element('preview').setAttribute('aria-busy', String(previewState === 'loading'));
     element('key-status').textContent = !available ? 'Open local storage to configure the optional Decisions API.'
       : credentials.configured ? 'API key saved.'
         : 'No API key saved.';
@@ -69,7 +101,7 @@
     if (Number.isSafeInteger(run.requests)) usage.push(`${count(run.requests)} requests`);
     if (Number.isSafeInteger(run.inputTokens)) usage.push(`${count(run.inputTokens)} input tokens`);
     if (Number.isFinite(run.estimatedCostUsd) && run.estimatedCostUsd >= 0) {
-      usage.unshift(`Est. US$${run.estimatedCostUsd.toFixed(6).replace(/0+$/, '').replace(/\.$/, '')}`);
+      usage.unshift(cost(run.estimatedCostUsd));
     }
     element('usage').textContent = run.status !== 'idle' && usage.length
       ? usage.join(' · ') : '';
@@ -84,10 +116,41 @@
     key.value = '';
     render();
   }
+  function invalidatePreview() {
+    previewRequest += 1;
+    preview = null;
+    previewState = 'idle';
+  }
+
+  async function loadPreview() {
+    if (!current || pending || rangeDraft !== null || current.run.status === 'running' || !disclosure.open) return;
+    const request = ++previewRequest;
+    const token = generation;
+    const expectedContext = context;
+    preview = null;
+    previewState = 'loading';
+    render();
+    try {
+      const result = await invoke('prescan-preview', {});
+      if (request !== previewRequest || token !== generation || expectedContext !== context) return;
+      if (!Number.isSafeInteger(result?.jobCount) || result.jobCount < 0 ||
+          !Number.isSafeInteger(result.totalCatalogue) || result.totalCatalogue < result.jobCount ||
+          !Number.isFinite(result.estimatedCostUsd) || result.estimatedCostUsd < 0) throw new Error('Preview unavailable.');
+      preview = result;
+      previewState = 'ready';
+    } catch {
+      if (request !== previewRequest || token !== generation || expectedContext !== context) return;
+      previewState = 'failed';
+    }
+    render();
+  }
 
   function clear() {
     generation += 1;
     current = null;
+    context = '';
+    rangeDraft = null;
+    invalidatePreview();
     key.value = '';
     element('message').textContent = '';
     element('key-message').textContent = '';
@@ -97,10 +160,16 @@
   function refresh(publicState, accountPaired = paired) {
     if (!publicState?.credentials || !publicState?.run) { clear(); return; }
     const previousStatus = current?.run?.status;
+    const nextContext = JSON.stringify([publicState.contextVersion, publicState.credentials.credentialVersion,
+      publicState.run.runId, publicState.run.status, publicState.run.publicationRange, accountPaired]);
+    const changed = nextContext !== context;
+    if (changed) invalidatePreview();
+    context = nextContext;
     current = publicState;
     paired = accountPaired;
-    if (publicState.run.status === 'running' && previousStatus !== 'running') document.getElementById('prefilter-controls').open = true;
+    if (publicState.run.status === 'running' && previousStatus !== 'running') disclosure.open = true;
     render();
+    if (changed) void loadPreview();
   }
 
   async function invoke(op, input) {
@@ -130,7 +199,9 @@
     const token = generation;
     const message = element(op.startsWith('prescan-key-') ? 'key-message' : 'message');
     pending = true;
-    message.textContent = op === 'prescan-start' ? 'Approve pre-filtering in the dialog.' : 'Saving…';
+    starting = op === 'prescan-start';
+    if (starting || op === 'prescan-range-set') invalidatePreview();
+    message.textContent = starting ? 'Loading pre-filtering for approval…' : 'Saving…';
     render();
     try {
       await invoke(op, input);
@@ -150,11 +221,25 @@
         }
       }
       pending = false;
+      starting = false;
+      if (op === 'prescan-range-set') rangeDraft = null;
       render();
+      if (previewState === 'idle') void loadPreview();
     }
   }
 
   element('form').addEventListener('submit', event => event.preventDefault());
+  range.addEventListener('input', () => {
+    rangeDraft = publicationRanges[Number(range.value)][0];
+    invalidatePreview();
+    render();
+  });
+  range.addEventListener('change', () => {
+    if (pending || !current) return;
+    const publicationRange = publicationRanges[Number(range.value)][0];
+    rangeDraft = publicationRange;
+    void perform('prescan-range-set', { publicationRange }, '');
+  });
   key.addEventListener('input', render);
   element('save').addEventListener('click', () => {
     if (pending || !current || !key.value) return;
@@ -176,15 +261,34 @@
       window.openCompanionSettings?.('account-settings');
       return;
     }
-    if (!limit.reportValidity()) return;
-    const value = Number(limit.value);
-    if (!Number.isInteger(value) || value < 1 || value > 2000) return;
+    if (previewState !== 'ready') return;
     key.value = '';
     document.querySelector('[data-career-kind="jobs"]')?.click();
-    void perform('prescan-start', { limit: value }, '');
+    void perform('prescan-start', {}, '');
   });
-  element('cancel').addEventListener('click', () => {
-    void perform('prescan-cancel', {}, 'Cancellation requested.');
+  element('cancel').addEventListener('click', async () => {
+    if (cancelling || !current || (!starting && current.run.status !== 'running')) return;
+    const token = generation;
+    cancelling = true;
+    render();
+    try {
+      await invoke('prescan-cancel', {});
+      if (token === generation) element('message').textContent = 'Cancellation requested.';
+    } catch (error) {
+      if (token === generation) element('message').textContent = error.message;
+    } finally {
+      cancelling = false;
+      if (token === generation) {
+        try { await readState(token); } catch { clear(); }
+      }
+      render();
+    }
+  });
+
+  disclosure.addEventListener('toggle', () => {
+    invalidatePreview();
+    render();
+    if (disclosure.open) void loadPreview();
   });
 
   document.getElementById('prescan-options').addEventListener('toggle', event => {

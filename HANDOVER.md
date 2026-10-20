@@ -36,7 +36,7 @@ The current career schema remains 2. Captured jobs and form drafts are lazy addi
 
 `career.jobs` is durable and independent of the replaceable matching cache. Import uses runtime validation, request/revision receipts and detail/apply URL aliases. Source-page provenance alone is not job identity. A snippet never overwrites a complete original. Changing an original advances ranking context so an in-flight old assessment cannot become current.
 
-Register `createJobTools({store})`. Native capture calls `importCapturedJobs({store,requestId,revision,sourceUrl,jobs})`. `career_job_read` and application creation resolve local IDs without platform access. `career_match_jobs({localOnly:true})` is offline; normal feed calls retain membership enforcement. Explicit imports are not subject to the platform's seven-day publication window, and unknown publication dates stay unknown.
+Register `createJobTools({store})`. Native capture calls `importCapturedJobs({store,requestId,revision,sourceUrl,jobs})`. `career_job_read` and application creation resolve local IDs without platform access. `career_match_jobs({localOnly:true})` is offline; normal feed calls retain membership enforcement and follow `prescanPublicationRange` (default Past 3 days). Explicit imports are not publication-filtered, and unknown publication dates stay unknown. The publication slider spans Today through Whole catalogue; middleware returns exact range counts and paged metadata, and every in-scope pending job is selected without a job-count cap.
 
 Incomplete listing cards are visible but require the full original before assessment/application use (`FULL_AD_REQUIRED`). Ranking resets do not delete captures.
 

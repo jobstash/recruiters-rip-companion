@@ -1,4 +1,4 @@
 interface:
   display_name: "Recruiters.rip"
   short_description: "Structured job assessments and pairwise-ranked matches"
-  default_prompt: "Use Recruiters.rip. Show saved matches now. Read my candidate brief once, assign new job IDs to native workers, assess complete original ads in batches with the provided rubric, save each batch, then rerank the top recommendations pairwise. Apply my current preferences without starting over. Do not search the web or request inference credentials."
+  default_prompt: "Use the recruiters.rip skill to find me a job."

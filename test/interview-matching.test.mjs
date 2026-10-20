@@ -11,7 +11,7 @@ function fixture() {
   state.career.profile.preferences = { willingToRelocate: false };
   state.career.sources.cv = { purpose: 'cv', text: 'Led product delivery at Acme.' };
   const applicationId = randomUUID();
-  const job = { id: 'node:role', title: 'Engineering Manager', company: 'Example Employer', description: 'Lead product engineers and develop engineering managers.', publishedAt: new Date().toISOString() };
+  const job = { id: 'node:role', title: 'Engineering Manager', company: 'Example Employer', description: 'Lead product engineers and develop engineering managers.', publishedAt: new Date(Date.now() - 60000).toISOString() };
   state.career.applications[applicationId] = { id: applicationId, job };
   const store = {
     get: () => structuredClone(state),
@@ -22,8 +22,9 @@ function fixture() {
   };
   const tools = new Map([
     ...createProfileTools({ store }),
-    ...createMatchingTools({ store, platform: async operation => {
-      assert.equal(operation, 'matching_catalogue'); return { jobs: [job], total: 1 };
+    ...createMatchingTools({ store, platform: async (operation, args) => {
+      assert.equal(operation, 'matching_catalogue');
+      return { jobs: [job], total: 1, nextOffset: null, publicationWindow: { range: args.publicationRange, since: args.since, until: args.until } };
     } }),
   ].map(tool => [tool.name, tool]));
   return { store, applicationId, call: (name, args = {}) => tools.get(name).invoke(args) };

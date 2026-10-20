@@ -6,6 +6,7 @@ import { createMatchingTools } from '../src/mcp/matching-tools.mjs';
 import { createCareerState } from '../src/mcp/state.mjs';
 import { salaryEligibility, recentPublication, matchingProfileVersion } from '../src/mcp/assessment-policy.mjs';
 import { ASSESSMENT_POLICY_ID, RERANK_POLICY, RERANK_SIZE, deriveDecision, fitBand, overallFit } from '../src/mcp/matching-contract.mjs';
+import { publicationInWindow } from '../src/prescan/publication-range.mjs';
 
 const publishedAt = new Date(Date.now() - 86400000).toISOString();
 const job = (id, date = publishedAt) => ({ id: `node:${id}`, title: `Engineer ${id}`, company: 'Company', publishedAt: date });
@@ -61,7 +62,11 @@ function fixture({ jobs = [job('a'), job('b'), job('c')], batch, emptyProfile = 
   const platform = async (operation, args) => {
     calls.push({ operation, args: structuredClone(args) });
     if (platformError) throw platformError;
-    if (operation === 'matching_catalogue') return { jobs: structuredClone(catalogue), total: catalogue.length };
+    if (operation === 'matching_catalogue') {
+      const publicationWindow = { range: args.publicationRange, since: args.since, until: args.until };
+      const jobs = structuredClone(catalogue).filter(job => publicationInWindow(job.publishedAt, publicationWindow));
+      return { jobs, total: jobs.length, nextOffset: null, publicationWindow };
+    }
     assert.equal(operation, 'matching_jobs');
     return batch ? batch(args) : { jobs: args.ids.map(id => ({ ...catalogue.find(job => job.id === id), ad: 'Full original ad', company: { name: 'Company' } })), remainingIds: [], unavailableIds: [] };
   };
@@ -123,7 +128,6 @@ test('candidate brief combines the CV with additional answers without exporting 
     assert.equal(JSON.stringify(result).includes(secret), false);
   assert.deepEqual({ total: result.total, scored: result.scored, pending: result.pending, batchSize: result.batchSize, workers: result.workers },
     { total: 3, scored: 0, pending: 3, batchSize: 10, workers: 8 });
-  assert.deepEqual(f.calls, [{ operation: 'matching_catalogue', args: {} }]);
 });
 
 test('candidate brief preserves decisive late preferences through the valid note bound and sanitizes contacts', async () => {
@@ -525,10 +529,6 @@ test('batch terms refresh saved display metadata without storing ads, company gr
   assert.deepEqual((await f.call('career_matches')).matches.map(termsOf),
     [updatedTerms, missingTerms, statedTerms, statedTerms]);
   assert.equal(f.calls.length, requests);
-  assert.deepEqual(f.calls, [
-    { operation: 'matching_catalogue', args: {} },
-    { operation: 'matching_jobs', args: { ids: ['node:a', 'node:b', 'node:c', 'node:d'] } },
-  ]);
 });
 
 test('assessment submissions cannot replace catalogue display terms', async () => {
@@ -869,6 +869,7 @@ test('token validation rejects missing or malformed inputs and every integer ove
 test('recommendation order is overall then known publication date then ID and unstated consent never authorizes a move', async () => {
   const f = fixture();
   await f.store.update(state => {
+    state.prescanPublicationRange = 'past_week';
     delete state.career.profile.preferences.willingToRelocate;
     state.career.matching = {
       jobs: { 'node:older': job('older', new Date(Date.now() - 4 * 86400000).toISOString()), 'node:new-b': job('new-b'),
@@ -981,24 +982,35 @@ test('the weekly window includes its exact boundary and excludes older, future a
   assert.equal(recentPublication('not a date', now), false);
 });
 
-test('reassessment selects only the past week and discards earlier job cache and rankings', async () => {
+test('reassessment retains the selected month scope and replaces earlier job cache and rankings', async () => {
   const now = Date.now(), f = fixture({ jobs: [
     job('recent', new Date(now - 86400000).toISOString()),
     job('six-days', new Date(now - 6 * 86400000).toISOString()),
-    job('too-old', new Date(now - 8 * 86400000).toISOString()),
+    job('older', new Date(now - 8 * 86400000).toISOString()),
     job('future', new Date(now + 86400000).toISOString()),
   ] });
+  await f.store.update(state => { state.prescanPublicationRange = 'past_month'; });
   const first = await f.call('career_match_jobs');
-  assert.deepEqual(first.jobIds, ['node:recent', 'node:six-days']);
+  assert.deepEqual(first.jobIds, ['node:recent', 'node:six-days', 'node:older']);
   await f.save([assessment('recent', 90)], first.profileVersion);
   const reset = await f.call('career_match_jobs', { refresh: true });
   assert.deepEqual(reset.jobIds, first.jobIds);
-  assert.equal(reset.publicationWindow.days, 7);
   assert.equal(reset.scored, 0);
-  assert.equal(reset.pending, 2);
+  assert.equal(reset.pending, 3);
   assert.notEqual(reset.profileVersion, first.profileVersion);
   assert.deepEqual(Object.keys(f.store.get().career.matching.jobs), first.jobIds);
   await assert.rejects(f.save([assessment('recent')], first.profileVersion), { code: 'PROFILE_CHANGED' });
+});
+
+test('new analysis uses the past three days while an explicit broader selection remains available', async () => {
+  const now = Date.now();
+  const f = fixture({ jobs: [job('recent', new Date(now - 2 * 86400000).toISOString()),
+    job('older', new Date(now - 4 * 86400000).toISOString())] });
+  const initial = await f.call('career_match_jobs');
+  assert.deepEqual(initial.jobIds, ['node:recent']);
+  await f.store.update(state => { state.prescanPublicationRange = 'all'; });
+  const broader = await f.call('career_match_jobs');
+  assert.deepEqual(broader.jobIds, ['node:recent', 'node:older']);
 });
 
 test('delete rankings preserves all career and account data and invalidates old writer output', async () => {

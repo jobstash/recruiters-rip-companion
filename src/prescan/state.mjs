@@ -1,7 +1,8 @@
-import { matchingProfileVersion, recentPublication } from '../mcp/assessment-policy.mjs';
+import { matchingProfileVersion } from '../mcp/assessment-policy.mjs';
 import { ASSESSMENT_POLICY_ID } from '../mcp/matching-contract.mjs';
 import { fail, readCareer } from '../mcp/state.mjs';
 import { decisionProviders } from './providers.mjs';
+import { DEFAULT_PUBLICATION_RANGE, publicationInWindow, publicationWindowForRange } from './publication-range.mjs';
 
 const compareText = (a, b) => a < b ? -1 : a > b ? 1 : 0;
 
@@ -11,9 +12,9 @@ export function currentPrescan(career) {
     run.prescanPolicyId === decisionProviders[run.provider].policyId && run.profileVersion === matchingProfileVersion(career));
 }
 
-export function currentPrescanRow(career, row, now = Date.now()) {
+export function currentPrescanRow(career, row, now = Date.now(), window = publicationWindowForRange(career.prescan?.publicationRange ?? DEFAULT_PUBLICATION_RANGE, now)) {
   const job = career.matching?.jobs?.[row.id];
-  return currentPrescan(career) && recentPublication(row.publishedAt, now) &&
+  return currentPrescan(career) && publicationInWindow(row.publishedAt, window) &&
     Boolean(job && job.publishedAt === row.publishedAt);
 }
 
@@ -33,20 +34,21 @@ export function getPrescanResults(store, args = {}) {
   const { offset = 0, limit = 25 } = args;
   if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 100)
     fail('INVALID_INPUT', 'Use a non-negative offset and a result limit from 1 to 100.');
-  const career = readCareer(store), run = career.prescan, now = Date.now();
+  const state = store.get(), career = readCareer({ get: () => state }), run = career.prescan, now = Date.now();
+  const window = publicationWindowForRange(state.prescanPublicationRange ?? DEFAULT_PUBLICATION_RANGE, now);
   const rows = Object.values(run?.rows ?? {}).sort(comparePrescanRows);
   return { view: 'prescan', items: rows.slice(offset, offset + limit).map(row => ({ ...row,
-    provider: run.provider, model: run.model, current: currentPrescanRow(career, row, now) })),
+    provider: run.provider, model: run.model, current: currentPrescanRow(career, row, now, window) })),
   total: rows.length, nextOffset: offset + limit < rows.length ? offset + limit : null, current: currentPrescan(career) };
 }
 
 /** Reorder, never filter: current scored matches first, untouched IDs next, current conflicts last. */
-export function prioritizePrescanIds(career, ids) {
+export function prioritizePrescanIds(career, ids, window) {
   if (!currentPrescan(career)) return [...ids];
   const first = [], untouched = [], last = [], now = Date.now();
   for (const id of ids) {
     const row = career.prescan.rows?.[id];
-    if (!row || !scored(row) || !currentPrescanRow(career, row, now)) untouched.push(id);
+    if (!row || !scored(row) || !currentPrescanRow(career, row, now, window)) untouched.push(id);
     else (conflict(row) ? last : first).push(id);
   }
   const compare = (a, b) => comparePrescanRows(career.prescan.rows[a], career.prescan.rows[b]);

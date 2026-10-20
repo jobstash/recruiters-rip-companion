@@ -7,6 +7,7 @@ import { createMatchingTools } from '../src/mcp/matching-tools.mjs';
 import { createCareerBrowser } from '../src/career-browser.mjs';
 import { createCareerState } from '../src/mcp/state.mjs';
 import { ASSESSMENT_POLICY_ID } from '../src/mcp/matching-contract.mjs';
+import { publicationInWindow } from '../src/prescan/publication-range.mjs';
 
 const sourceUrl = 'https://jobs.example.test/search';
 const full = (suffix = 'a', overrides = {}) => ({ title: 'Reporting engineer', company: 'Example',
@@ -192,10 +193,14 @@ test('complete imports work offline end to end before assessment, without invent
 });
 
 test('default matching discovery includes imports, but platform jobs retain feed publication restrictions', async () => {
-  const platformJob = { id: 'node:recent', title: 'Recent role', company: 'Platform employer', publishedAt: new Date().toISOString() };
+  const platformJob = { id: 'node:recent', title: 'Recent role', company: 'Platform employer', publishedAt: new Date(Date.now() - 60000).toISOString() };
   const staleJob = { ...platformJob, id: 'node:old', publishedAt: '2020-01-01' };
   const f = fixture(async (operation, args) => {
-    if (operation === 'matching_catalogue') return { jobs: [platformJob, staleJob], total: 2 };
+    if (operation === 'matching_catalogue') {
+      const publicationWindow = { range: args.publicationRange, since: args.since, until: args.until };
+      const jobs = [platformJob, staleJob].filter(job => publicationInWindow(job.publishedAt, publicationWindow));
+      return { jobs, total: jobs.length, nextOffset: null, publicationWindow };
+    }
     assert.equal(operation, 'matching_jobs');
     assert.deepEqual(args.ids, ['node:recent']);
     return { jobs: [{ ...platformJob, ad: 'Complete platform original' }], remainingIds: [], unavailableIds: [] };

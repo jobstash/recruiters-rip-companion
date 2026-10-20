@@ -13,7 +13,7 @@ function fixture() {
   return { state, store, browser: createCareerBrowser({ store }) };
 }
 
-const currentDate = () => new Date().toISOString();
+const currentDate = () => new Date(Date.now() - 60000).toISOString();
 const scoredAt = '2026-10-14T12:00:00.000Z';
 const passing = { direction: 'pass', constraints: 'pass', eligibility: 'pass' };
 // Equal dimensions make overall fit equal that value; the decision is always the companion's derivation.

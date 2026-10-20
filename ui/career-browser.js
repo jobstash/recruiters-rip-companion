@@ -529,8 +529,7 @@
     root: document.getElementById('career-browser'), prefix: 'career', kind: 'jobs', persistentReader: true,
     sortControl: document.getElementById('career-sort-control'), surfaceControl: document.getElementById('career-surface'),
     deleteRankings: document.getElementById('delete-rankings'),
-    jobControls: [document.getElementById('prefilter-controls'), document.getElementById('career-surface'),
-      document.getElementById('career-sort-control'), document.getElementById('delete-rankings')],
+    jobControls: [document.getElementById('run-rail'), document.getElementById('career-sort-control'), document.getElementById('delete-rankings')],
   });
   window.careerBrowser = {
     refresh() { return Promise.all([me.refresh(), jobs.refresh()]); },

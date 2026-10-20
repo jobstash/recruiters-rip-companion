@@ -81,10 +81,22 @@ main { flex: 1; min-height: 0; overflow: auto; padding: var(--spacing-32) var(--
 .career-view { display: grid; grid-template-rows: auto minmax(0, 1fr); height: 100%; min-height: 0; }
 .jobs-view { grid-template-rows: minmax(0, 1fr); }
 .career-browser { display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; }
+#career-browser { grid-template-rows: auto auto minmax(0, 1fr); }
 .career-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--spacing-8) var(--spacing-16); padding-bottom: var(--spacing-16); }
-.jobs-toolbar { align-items: start; }
-.jobs-toolbar .optional-prefilter { flex: 1 1 320px; min-width: 0; }
 .jobs-toolbar .career-job-actions { min-height: 44px; }
+/* The run rail is the Jobs tab's sequence: four ruled steps on one line. The current step carries the dispersion rule and the primary action;
+   the others keep their facts and controls but no emphasis. */
+.run-rail { display: grid; gap: var(--spacing-16); padding-bottom: var(--spacing-24); }
+.run-rail-caption { font: 500 12px/1.33 var(--font-geist-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--color-smoke); }
+.run-steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--spacing-24); margin: 0; padding: 0; list-style: none; }
+.run-step { position: relative; display: grid; align-content: start; gap: var(--spacing-8); min-width: 0; padding-top: var(--spacing-16); border-top: 1px solid var(--color-facet); }
+.run-step[aria-current="step"]::before { content: ""; position: absolute; top: -1px; left: 0; right: 0; height: 2px; background: var(--rr-dispersion); box-shadow: var(--shadow-edge-glow); }
+.run-step-name { display: flex; gap: var(--spacing-8); font: 500 14px/1.5 var(--font-geist-mono); color: var(--color-ink); }
+.run-step-number { color: var(--color-smoke); font-variant-numeric: tabular-nums; }
+.run-step-state { font: 400 14px/1.5 var(--font-geist); color: var(--color-ink); font-variant-numeric: tabular-nums; }
+.run-step-help { font: 400 13px/1.6 var(--font-geist); color: var(--color-smoke); }
+.run-step .actions { margin-top: var(--spacing-8); }
+.run-step-state:empty, .run-step-help:empty { display: none; }
 .career-categories { display: flex; flex-wrap: wrap; gap: var(--spacing-8); }
 .career-categories button { border-color: var(--color-facet); padding-inline: var(--spacing-16); color: var(--color-smoke); }
 .career-categories button[aria-pressed="true"] { color: var(--color-ink); border-color: var(--color-ink); }
@@ -102,7 +114,6 @@ main { flex: 1; min-height: 0; overflow: auto; padding: var(--spacing-32) var(--
    placed on explicit rows because `hidden` children (retry, empty records) leave the grid, so implicit placement would hand the
    records the `auto` row and push the pagination bar below the clipped column. */
 .career-list { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto minmax(0, 1fr) auto; min-height: 0; overflow: hidden; }
-.career-surface { grid-row: 1; }
 .career-list .panel-head { grid-row: 2; }
 .career-list > .ghost { grid-row: 3; align-self: start; }
 .career-records { grid-row: 3; }
@@ -138,10 +149,8 @@ main { flex: 1; min-height: 0; overflow: auto; padding: var(--spacing-32) var(--
 .career-include:checked { background-color: var(--color-ink); }
 .career-include:focus-visible { box-shadow: var(--shadow-focus-ring); }
 .career-include:disabled { border-color: var(--color-facet); cursor: not-allowed; }
-/* Surfaced to your agent: the one control that decides which unreviewed jobs the MCP exposes. A ruled block at the head
-   of the list column: caption, slider + large mono value, and the resulting count as a sentence. */
-.career-surface { display: grid; gap: var(--spacing-8); padding: var(--spacing-16) var(--spacing-24); border-bottom: 1px solid var(--color-ink); }
-.career-surface-caption { font: 500 12px/1.33 var(--font-geist-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--color-smoke); }
+/* Hand over: the slider sets the score bound and the sentence states the resulting count. */
+.career-surface { display: grid; gap: var(--spacing-8); }
 .career-surface-control { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "label value" "slider value"; align-items: center; column-gap: var(--spacing-16); }
 .career-surface-control label { grid-area: label; }
 .career-surface-value { grid-area: value; font: 500 32px/1 var(--font-geist-mono); font-variant-numeric: tabular-nums; letter-spacing: -.02em; color: var(--color-ink); min-width: 3ch; text-align: right; }
@@ -197,9 +206,8 @@ summary::before { content: ""; flex: none; width: 6px; height: 6px; border-right
 details[open] summary::before { transform: rotate(-135deg); }
 summary:hover { color: var(--color-ink); }
 .app-details > :not(summary) { margin-top: var(--spacing-16); }
-.optional-prefilter > :not(summary) { margin-top: var(--spacing-16); }
 .command { display: block; margin: 0; padding: var(--spacing-16); background: var(--color-surface); border: 1px solid var(--color-facet); font: 400 13px/1.6 var(--font-geist-mono); color: var(--color-ink); white-space: pre-wrap; overflow-wrap: anywhere; }
-#prescan-form, .prescan-disclosure, .prescan-feedback, .prescan-key-entry { display: grid; gap: var(--spacing-16); min-width: 0; }
+#prescan-form, .prescan-key-entry { display: grid; gap: var(--spacing-16); min-width: 0; }
 /* The key state reads as body copy, not a caption: it is the section's primary fact. */
 .prescan-key-status { max-width: var(--reading); line-height: 1.6; }
 .key-hint { text-transform: none; }
@@ -209,12 +217,9 @@ summary:hover { color: var(--color-ink); }
 .prescan-field input:focus-visible { box-shadow: var(--shadow-focus-ring), var(--shadow-input-focus); }
 .prescan-field input:disabled { border-color: var(--color-facet); color: var(--color-dust); cursor: not-allowed; }
 .me-actions { display: grid; gap: var(--spacing-16); padding-bottom: var(--spacing-24); }
-#prescan-controls { display: grid; gap: var(--spacing-8); }
-.prescan-publication { display: grid; gap: var(--spacing-8); min-width: 0; max-width: var(--reading); }
-.scan-actions { align-items: end; }
-.prescan-feedback { display: grid; gap: var(--spacing-8); font-variant-numeric: tabular-nums; }
+.prescan-publication { display: grid; gap: var(--spacing-8); min-width: 0; }
 #prescan-progress { font: 400 13px/1.6 var(--font-geist-mono); }
-#prescan-preview:empty, #prescan-progress:empty, #prescan-recovery:empty, #prescan-message:empty, #prescan-key-message:empty { display: none; }
+#prescan-preview:empty, #prescan-progress:empty, #prescan-key-message:empty { display: none; }
 
 .update-content { gap: var(--spacing-16); }
 #update-progress { width: 100%; max-width: var(--reading); accent-color: var(--color-ink); }
@@ -249,7 +254,8 @@ dialog::backdrop { background: color-mix(in oklab, var(--color-void) 80%, transp
   .career-reader-content dd + dt { margin-top: var(--spacing-8); }
   .career-card .career-record { padding: var(--spacing-16); }
   .career-card-side { width: 112px; padding: var(--spacing-16) var(--spacing-16) var(--spacing-16) 0; }
-  .career-cutoff, .career-surface { padding-inline: var(--spacing-16); }
+  .career-cutoff { padding-inline: var(--spacing-16); }
+  .run-steps { grid-template-columns: minmax(0, 1fr); gap: var(--spacing-16); }
   .career-chart-row { grid-template-columns: minmax(80px, 96px) minmax(0, 1fr) 3ch; gap: var(--spacing-8); }
   .dialog-body { padding: var(--spacing-24); }
   .dialog-actions { flex-direction: column-reverse; align-items: stretch; }
@@ -257,7 +263,7 @@ dialog::backdrop { background: color-mix(in oklab, var(--color-void) 80%, transp
 }
 @media (max-width: 479px), (max-height: 639px) {
   .career-view { height: auto; min-height: 100%; grid-template-rows: auto auto; }
-  .career-browser { grid-template-rows: auto auto; }
+  .career-browser, #career-browser { grid-template-rows: none; grid-auto-rows: auto; }
   .career-list { grid-template-rows: auto auto auto auto; }
   .career-list, .career-records, .career-reader { overflow: visible; }
 }

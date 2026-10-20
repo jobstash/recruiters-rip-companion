@@ -75,46 +75,59 @@
 </section>
 <section id="view-jobs" class="career-view jobs-view" aria-label="Jobs" hidden>
 <div id="career-browser" class="career-browser">
+<section id="run-rail" class="run-rail" aria-labelledby="run-rail-title">
+<p id="run-rail-title" class="run-rail-caption">Next agent run</p>
+<ol class="run-steps">
+<li id="run-step-key" class="run-step">
+<p class="run-step-name"><span class="run-step-number">1</span>API key</p>
+<p id="prescan-key-state" class="run-step-state" role="status">Open local storage.</p>
+<div class="actions"><button id="jobs-prescan-settings" class="ghost" type="button">Add key</button></div>
+</li>
+<li id="run-step-recency" class="run-step">
+<p class="run-step-name"><span class="run-step-number">2</span>Recency</p>
+<div class="prescan-publication">
+<label for="prescan-range" class="run-step-state">Published <span id="prescan-range-label">Past 3 days</span></label>
+<input id="prescan-range" type="range" min="0" max="6" step="1" value="2" aria-valuetext="Past 3 days" aria-describedby="prescan-range-help" disabled>
+<p id="prescan-range-help" class="run-step-help">Today or the past 3 days work best: older listings already have many applicants.</p>
+</div>
+</li>
+<li id="run-step-prefilter" class="run-step">
+<p class="run-step-name"><span class="run-step-number">3</span>Pre-filter</p>
+<p id="prescan-preview" class="run-step-state" role="status" aria-live="polite" aria-atomic="true">Loading job count…</p>
+<p id="prescan-progress" class="run-step-state" role="status" aria-live="polite" aria-atomic="true"></p>
+<div class="actions"><button id="prescan-start" class="ghost" type="button" aria-describedby="prescan-preview" disabled>Start pre-filtering</button><button id="prescan-cancel" class="ghost" type="button" hidden>Cancel</button></div>
+<p id="prescan-recovery" class="run-step-help" role="status" aria-live="polite"></p>
+<p id="prescan-message" class="run-step-help" role="status" aria-live="polite"></p>
+</li>
+<li id="run-step-handover" class="run-step">
+<p class="run-step-name"><span class="run-step-number">4</span>Hand over</p>
+<div id="career-surface" class="career-surface">
+<div class="career-surface-control">
+<label for="career-minimum-score" class="run-step-state">Minimum pre-filter score</label>
+<input id="career-minimum-score" type="range" min="0" max="100" step="1" value="60" aria-valuetext="Minimum score 60" aria-describedby="career-surface-sentence" disabled>
+<span id="career-minimum-score-value" class="career-surface-value" aria-hidden="true">60</span>
+</div>
+<p id="career-surface-sentence" class="run-step-help" role="status"></p>
+</div>
+<div class="actions"><button id="copy-review-prompt" class="ghost" type="button">Copy review prompt</button></div>
+</li>
+</ol>
+</section>
 <div class="career-toolbar jobs-toolbar">
 <div class="career-categories" role="group" aria-label="Job lists">
 <button id="career-category-ranked" type="button" class="ghost" data-career-kind="jobs" aria-pressed="true" disabled>Ranked</button>
 <button id="career-category-applications" type="button" class="ghost" data-career-kind="applications" aria-pressed="false" disabled>Applications</button>
 <button id="career-category-blocks" type="button" class="ghost" data-career-kind="blocks" aria-pressed="false" disabled>Blocked</button>
 </div>
-<details id="prefilter-controls" class="optional-prefilter">
-<summary>Optional job pre-filtering</summary>
-<div id="prescan-controls">
-<div class="prescan-publication">
-<label for="prescan-range" class="caption">Publication time: <span id="prescan-range-label">Past 3 days</span></label>
-<input id="prescan-range" type="range" min="0" max="6" step="1" value="2" aria-valuetext="Past 3 days" aria-describedby="prescan-range-help" disabled>
-<p id="prescan-range-help">Recent listings offer better interview prospects; older listings are more likely to be stale or zombie jobs.</p>
-</div>
-<p id="prescan-preview" class="caption" role="status" aria-live="polite" aria-atomic="true">Loading job count…</p>
-<div class="actions scan-actions"><button id="prescan-start" class="primary" type="button" aria-describedby="prescan-preview" disabled>Start pre-filtering</button><button id="prescan-cancel" class="ghost" type="button" hidden>Cancel scan</button></div>
-<div class="prescan-feedback" role="status" aria-live="polite" aria-atomic="true"><p id="prescan-progress"></p><p id="prescan-recovery"></p></div>
-<p id="prescan-message" role="status" aria-live="polite"></p>
-<div class="actions"><button id="jobs-prescan-settings" class="text" type="button">Configure Decisions API</button></div>
-</div>
-</details>
 <div class="career-job-actions">
 <label id="career-sort-control" class="career-sort caption" for="career-sort">Sort jobs
 <select id="career-sort" disabled><option value="rank" selected>Rank</option><option value="recent">Newest first</option></select>
 </label>
 <button id="delete-rankings" class="text" type="button" disabled>Clear job assessments</button>
-<button id="copy-review-prompt" class="text" type="button">Copy review prompt</button>
 </div>
 </div>
 <div class="career-panes jobs-panes">
 <section class="career-list panel" aria-label="Saved jobs">
-<div id="career-surface" class="career-surface">
-<p class="career-surface-caption">Surfaced to your agent</p>
-<div class="career-surface-control">
-<label for="career-minimum-score" class="caption">Minimum pre-filter score</label>
-<input id="career-minimum-score" type="range" min="0" max="100" step="1" value="60" aria-valuetext="Minimum score 60" aria-describedby="career-surface-sentence" disabled>
-<span id="career-minimum-score-value" class="career-surface-value" aria-hidden="true">60</span>
-</div>
-<p id="career-surface-sentence" class="career-surface-sentence" role="status"></p>
-</div>
 <div class="panel-head"><p id="career-list-status" role="status">Open local storage to read saved jobs.</p></div>
 <button id="career-list-retry" class="ghost" type="button" hidden>Retry loading jobs</button>
 <ul id="career-records" class="career-records career-cards" aria-label="Saved jobs" hidden></ul>

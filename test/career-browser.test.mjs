@@ -598,7 +598,7 @@ async function rendererFixture(browser, wide, operations = {}) {
   const names = ['records', 'list-status', 'list-retry', 'pagination', 'previous', 'next', 'reader', 'reader-title',
     'reader-status', 'reader-retry', 'reader-content', 'close'];
   const ids = [...names.flatMap(name => [`career-${name}`, `me-${name}`]), 'career-browser', 'me-browser', 'delete-rankings',
-    'career-sort-control', 'career-sort', 'career-surface', 'career-minimum-score', 'career-minimum-score-value', 'career-surface-sentence', 'prefilter-controls'];
+    'career-sort-control', 'career-sort', 'career-surface', 'career-minimum-score', 'career-minimum-score-value', 'career-surface-sentence', 'run-rail'];
   const nodes = Object.fromEntries(ids.map(id => [id, new Node()]));
   nodes['career-sort'].value = 'rank';
   nodes['career-minimum-score'].value = '60';
@@ -683,7 +683,7 @@ for (const wide of [false, true]) test(`Jobs paging and sorting keep the reader 
   assert.deepEqual(ui.titles(), ['Applied Role — Employer']);
   assert.equal(ui.jobCategories.applications.attributes.get('aria-pressed'), 'true');
   assert.equal(ui.jobCategories.jobs.attributes.get('aria-pressed'), 'false');
-  for (const id of ['prefilter-controls', 'career-surface', 'career-sort-control', 'delete-rankings']) assert.equal(ui.nodes[id].hidden, true, id);
+  for (const id of ['run-rail', 'career-sort-control', 'delete-rankings']) assert.equal(ui.nodes[id].hidden, true, id);
   assert.equal(ui.nodes['career-sort'].disabled, true);
   assert.equal(ui.nodes['delete-rankings'].disabled, true);
   assert.equal(ui.nodes['career-reader'].hidden, !wide);
@@ -693,7 +693,7 @@ for (const wide of [false, true]) test(`Jobs paging and sorting keep the reader 
   assert.equal(ui.calls.at(-1).args.kind, 'jobs');
   assert.equal(ui.calls.at(-1).args.sort, 'recent');
   assert.equal(ui.titles()[0], '00');
-  for (const id of ['prefilter-controls', 'career-surface', 'career-sort-control', 'delete-rankings']) assert.equal(ui.nodes[id].hidden, false, id);
+  for (const id of ['run-rail', 'career-sort-control', 'delete-rankings']) assert.equal(ui.nodes[id].hidden, false, id);
   assert.equal(ui.nodes['career-sort'].disabled, false);
   assert.equal(ui.nodes['delete-rankings'].disabled, false);
 
@@ -847,7 +847,7 @@ test('job cards show a fit number only after review, a next-run switch otherwise
   assert.equal(ui.nodes['career-records'].children.some(li => li.className === 'career-cutoff'), false);
   ui.jobCategories.applications.fire('click');
   await ui.settle();
-  assert.equal(ui.nodes['career-surface'].hidden, true);
+  assert.equal(ui.nodes['run-rail'].hidden, true);
   assert.equal(ui.nodes['career-minimum-score'].disabled, true);
 });
 
@@ -880,14 +880,17 @@ test('the Jobs list column keeps Previous/Next on its own last grid row regardle
   const css = await readFile(new URL('../ui/settings.css', import.meta.url), 'utf8');
   const list = html.match(/<section class="career-list panel" aria-label="Saved jobs">([\s\S]*?)<\/section>/)[1];
   const ids = [...list.matchAll(/ id="([\w-]+)"/g)].map(match => match[1]);
-  const order = ['career-surface', 'career-minimum-score', 'career-surface-sentence', 'career-list-status', 'career-list-retry', 'career-records', 'career-pagination', 'career-next'];
+  const order = ['career-list-status', 'career-list-retry', 'career-records', 'career-pagination', 'career-next'];
   assert.deepEqual(ids.filter(id => order.includes(id)), order);
   assert.match(list.trim(), /<nav id="career-pagination"[\s\S]*<\/nav>$/);
-  assert.match(html, /<div id="career-surface" class="career-surface">\n<p class="career-surface-caption">Surfaced to your agent<\/p>/);
-  assert.match(html, /<input id="career-minimum-score" type="range" min="0" max="100" step="1" value="60" aria-valuetext="Minimum score 60"/);
+  // The minimum-score control lives in the run rail's Hand over step, above the list, not in the list column.
+  const rail = html.match(/<section id="run-rail"[\s\S]*?<\/section>/)[0];
+  assert.match(rail, /<li id="run-step-handover" class="run-step">[\s\S]*<div id="career-surface" class="career-surface">/);
+  assert.match(rail, /<input id="career-minimum-score" type="range" min="0" max="100" step="1" value="60" aria-valuetext="Minimum score 60"/);
+  assert.match(css, /^#career-browser \{ grid-template-rows: auto auto minmax\(0, 1fr\); \}$/m);
   // Four explicit rows, each child pinned to one, so hidden children never let the records take the `auto` row.
   assert.match(css, /^\.career-list \{[^}]*grid-template-rows: auto auto minmax\(0, 1fr\) auto;[^}]*overflow: hidden; \}$/m);
-  for (const [selector, row] of [['.career-surface', 1], ['.career-list .panel-head', 2], ['.career-list > .ghost', 3], ['.career-records', 3], ['.career-list .pagination', 4]])
+  for (const [selector, row] of [['.career-list .panel-head', 2], ['.career-list > .ghost', 3], ['.career-records', 3], ['.career-list .pagination', 4]])
     assert.match(css, new RegExp(`^${selector.replaceAll('.', '\\.')} \\{ grid-row: ${row};`, 'm'), selector);
   assert.match(css, /^\.career-records \{[^}]*overflow: auto;/m);
   assert.match(css, /^\.career-card-side \{[^}]*width: 128px;/m);
@@ -933,7 +936,7 @@ test('blocking from the reader hides matching jobs; Blocked lists each block and
   ui.jobCategories.blocks.fire('click');
   await ui.settle();
   assert.deepEqual(ui.calls.at(-2).args, { kind: 'blocks', offset: 0, limit: 25 });
-  assert.equal(ui.nodes['career-surface'].hidden, true);
+  assert.equal(ui.nodes['run-rail'].hidden, true);
   const summaries = () => ui.rows('career').map(button => ui.byClass(button, 'career-record-summary').textContent);
   assert.deepEqual(ui.titles().sort(), ['Example Labs', 'Smart Contracts']);
   assert.deepEqual(summaries().sort(), ['Category · 1 saved job', 'Company · 2 saved jobs']);

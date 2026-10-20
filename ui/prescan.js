@@ -3,12 +3,15 @@
 (() => {
   const element = name => document.getElementById(`prescan-${name}`);
   const key = element('key');
-  const disclosure = document.getElementById('prefilter-controls');
+  const jobsView = document.getElementById('view-jobs');
+  const steps = { key: document.getElementById('run-step-key'), prefilter: document.getElementById('run-step-prefilter'), handover: document.getElementById('run-step-handover') };
+  const keyAction = document.getElementById('jobs-prescan-settings');
+  const handover = document.getElementById('copy-review-prompt');
   const range = element('range');
   const publicationRanges = [
-    ['today', 'Today'], ['yesterday', 'Yesterday'], ['past_3_days', 'Past 3 days'],
-    ['past_week', 'Past week'], ['past_2_weeks', 'Past 2 weeks'],
-    ['past_month', 'Past month'], ['all', 'Whole catalogue'],
+    ['today', 'Today', 'today'], ['yesterday', 'Yesterday', 'since yesterday'], ['past_3_days', 'Past 3 days', 'in the past 3 days'],
+    ['past_week', 'Past week', 'in the past week'], ['past_2_weeks', 'Past 2 weeks', 'in the past 2 weeks'],
+    ['past_month', 'Past month', 'in the past month'], ['all', 'Whole catalogue', 'any time'],
   ];
   let current = null;
   let paired = false;
@@ -68,7 +71,7 @@
     range.value = String(rangeIndex < 0 ? 2 : rangeIndex);
     range.disabled = !available || pending;
     range.setAttribute('aria-valuetext', rangeLabel);
-    element('range-label').textContent = rangeLabel;
+    element('range-label').textContent = publicationRanges[rangeIndex < 0 ? 2 : rangeIndex][2];
     element('save').disabled = !entering || pending || !key.value;
     element('save').textContent = configured ? 'Save new key' : 'Save key';
     element('key-label').textContent = configured ? 'New OpenAI API key' : 'OpenAI API key';
@@ -84,12 +87,21 @@
     element('replace').disabled = !configured || pending;
     element('remove').disabled = !configured || pending;
     element('start').disabled = !available || pending || running || (!needsSetup && previewState !== 'ready');
-    element('start').textContent = available && !credentials.configured ? 'Set up optional pre-filtering'
-      : available && !paired ? 'Connect account' : 'Start pre-filtering';
+    element('start').textContent = available && !paired ? 'Connect account' : 'Start pre-filtering';
     element('cancel').hidden = !available || (!starting && !running);
     element('cancel').disabled = cancelling;
     element('form').setAttribute('aria-busy', String(pending));
-    element('controls').setAttribute('aria-busy', String(pending));
+    // The rail: one step is current and carries the primary action. Pre-filtering itself is either running or it is not.
+    const currentStep = !available || !configured ? 'key' : run.status === 'completed' ? 'handover' : 'prefilter';
+    for (const [name, step] of Object.entries(steps)) {
+      if (name === currentStep) step.setAttribute('aria-current', 'step'); else step.removeAttribute('aria-current');
+    }
+    element('key-state').textContent = !available ? 'Open local storage.' : configured ? `Key …${credentials.keyHint} saved.` : 'No OpenAI key saved.';
+    keyAction.textContent = configured ? 'Change key' : 'Add key';
+    keyAction.classList.toggle('primary', currentStep === 'key'); keyAction.classList.toggle('ghost', currentStep !== 'key');
+    keyAction.disabled = !available;
+    element('start').classList.toggle('primary', currentStep === 'prefilter' && !running); element('start').classList.toggle('ghost', currentStep !== 'prefilter' || running);
+    handover.classList.toggle('primary', currentStep === 'handover'); handover.classList.toggle('ghost', currentStep !== 'handover');
     // Blocked jobs stay in the scope total but are never pre-filtered.
     const blockedPart = () => Number.isSafeInteger(preview.blocked) && preview.blocked > 0 ? ` · ${count(preview.blocked)} blocked` : '';
     const scopeLine = () => preview.jobCount === 0 ? `${count(preview.totalCatalogue)} jobs in scope${blockedPart()} · all pre-filtered`
@@ -98,7 +110,7 @@
       : running || starting ? ''
         : rangeDraft !== null ? pending ? 'Saving publication time…' : 'Job count needs updating.'
         : previewState === 'ready' ? scopeLine()
-          : previewState === 'failed' ? previewFailure ?? 'Job count unavailable. Reopen pre-filtering to try again.'
+          : previewState === 'failed' ? previewFailure ?? 'Job count unavailable. Reopen Jobs to try again.'
             : 'Loading job count…';
     element('preview').setAttribute('aria-busy', String(previewState === 'loading'));
     // The state line is the first thing in the section: it says whether pre-filtering can run and which key does it.
@@ -138,7 +150,7 @@
   }
 
   async function loadPreview() {
-    if (!current || pending || rangeDraft !== null || current.run.status === 'running' || !disclosure.open) return;
+    if (!current || pending || rangeDraft !== null || current.run.status === 'running' || jobsView.hidden) return;
     const request = ++previewRequest;
     const token = generation;
     const expectedContext = context;
@@ -176,7 +188,6 @@
 
   function refresh(publicState, accountPaired = paired) {
     if (!publicState?.credentials || !publicState?.run) { clear(); return; }
-    const previousStatus = current?.run?.status;
     const nextContext = JSON.stringify([publicState.contextVersion, publicState.credentials.credentialVersion,
       publicState.run.runId, publicState.run.status, publicState.run.publicationRange, accountPaired]);
     const changed = nextContext !== context;
@@ -184,7 +195,6 @@
     context = nextContext;
     current = publicState;
     paired = accountPaired;
-    if (publicState.run.status === 'running' && previousStatus !== 'running') disclosure.open = true;
     render();
     if (changed) void loadPreview();
   }
@@ -314,11 +324,12 @@
     }
   });
 
-  disclosure.addEventListener('toggle', () => {
+  // The scope count is a middleware call, so it loads only while Jobs is on screen.
+  new MutationObserver(() => {
     invalidatePreview();
     render();
-    if (disclosure.open) void loadPreview();
-  });
+    if (!jobsView.hidden) void loadPreview();
+  }).observe(jobsView, { attributes: true, attributeFilter: ['hidden'] });
 
   // Leaving Settings drops any unsaved key text and a pending replacement; the saved key is unaffected.
   const navigation = new MutationObserver(() => {

@@ -22,9 +22,9 @@ addFormats(ajv);
 const validAssessments = ajv.compile({ type: 'array', items: assessmentSchema, minItems: 1, maxItems: 10 });
 const validComparisons = ajv.compile({ type: 'array', items: comparisonSchema, minItems: 1, maxItems: 15 });
 const profileFields = ['headline', 'location', 'roleCapabilities', 'seniority', 'skills'];
-const preferenceFields = ['roles', 'locations', 'workModes', 'employmentTypes', 'salaryMinimum', 'salaryCurrency',
-  'salaryPeriod', 'requiresSponsorship', 'willingToRelocate', 'companySizes', 'companyStages', 'responsibilityModes',
-  'directReports', 'travel', 'availability', 'emphasis', 'technologies', 'domains', 'notes'];
+const preferenceFields = ['roles', 'acceptedAlternatives', 'excludedRoles', 'locations', 'workModes', 'employmentTypes',
+  'salaryMinimum', 'salaryCurrency', 'salaryPeriod', 'requiresSponsorship', 'willingToRelocate', 'companySizes', 'companyStages',
+  'responsibilityModes', 'directReports', 'travel', 'availability', 'emphasis', 'technologies', 'domains', 'notes'];
 const compareText = (a, b) => a < b ? -1 : a > b ? 1 : 0;
 const date = value => Number.isFinite(Date.parse(value)) ? Date.parse(value) : -Infinity;
 const newerFirst = (a, b) => date(a.publishedAt) === date(b.publishedAt) ? 0 : date(a.publishedAt) > date(b.publishedAt) ? -1 : 1;

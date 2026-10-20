@@ -13,6 +13,7 @@ import { BROWSER_IDENTITIES } from './browser-identity.mjs';
 import { claimInstance } from './instance-lock.mjs';
 import { createIntroductionTools, introductionsStatus, setSharingConsent } from './mcp/introduction-tools.mjs';
 import { openEmploymentProfile } from './employment-browser.mjs';
+import { openJobPage, requirementContextPrompt } from './career-browser.mjs';
 import { CareerError, createCareerState, fail, upgradeCareer } from './mcp/state.mjs';
 import { createMcpServer, createPlatformTools } from './mcp/server.mjs';
 import { createProfileTools } from './mcp/profile-tools.mjs';
@@ -453,6 +454,21 @@ async function settingsOperation(op, input) {
       const result = await openEmploymentProfile({ store: scoped.store, platform, openExternal: url => shell.openExternal(url) }, input);
       scoped.assertAvailable(false);
       return { ok: true, result };
+    }
+    if (op === 'career-open-job') {
+      assertAvailable(false); exact(input, ['id']);
+      const scoped = createScopedAccess(store, { assertAvailable, epoch: () => sessionEpoch });
+      const result = await openJobPage({ store: scoped.store, openExternal: url => shell.openExternal(url) }, input);
+      scoped.assertAvailable(false);
+      return { ok: true, result };
+    }
+    if (op === 'copy-requirement-prompt') {
+      assertAvailable(false); exact(input, ['id', 'requirement']);
+      const scoped = createScopedAccess(store, { assertAvailable, epoch: () => sessionEpoch });
+      const prompt = requirementContextPrompt({ store: scoped.store }, input);
+      scoped.assertAvailable(false);
+      clipboard.writeText(prompt);
+      return { ok: true, result: { copied: true } };
     }
     if (op === 'sharing-allow' || op === 'sharing-stop') {
       assertAvailable(false); exact(input, []);

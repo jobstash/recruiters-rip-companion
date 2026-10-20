@@ -21,7 +21,8 @@ const profileFields = {
   skills: nullable(list(string(200), 100)),
 };
 const preferenceFields = {
-  roles: nullable(list(string(200), 30)), locations: nullable(list(string(200), 30)),
+  roles: nullable(list(string(200), 30)), acceptedAlternatives: nullable(list(string(300), 30)),
+  excludedRoles: nullable(list(string(300), 30)), locations: nullable(list(string(200), 30)),
   workModes: nullable(list({ enum: ['remote', 'hybrid', 'onsite'] }, 3)),
   employmentTypes: nullable(list({ enum: ['permanent', 'contract', 'temporary', 'internship', 'part_time', 'other'] }, 6)),
   salaryMinimum: nullable({ type: 'number', minimum: 0, maximum: 1_000_000_000 }),
@@ -247,7 +248,7 @@ export function createProfileTools({ store, selectSourceFile, extractFile, inter
     return { profile: profileView(career.profile), saved };
   }));
 
-  tool('career_preferences_update', 'Save explicit future preferences using {requestId,revision,patch}. Obtain a UUID from request_id and the current integer revision from career_profile_read; requestId is not a descriptive label. Put supported preference fields inside patch; use notes for intent that has no dedicated field. Omitted values stay unchanged. Save actual candidate intent, not CV-inferred preferences. Read career_profile_read afterward to confirm persistence; never report a rejected mutation as saved.', mutation({ patch: preferencePatch }, ['patch']), false, async args => edit('career_preferences_update', args, career => {
+  tool('career_preferences_update', 'Save explicit future preferences using {requestId,revision,patch}. Obtain a UUID from request_id and the current integer revision from career_profile_read; requestId is not a descriptive label. Use roles for the intended direction, acceptedAlternatives for directions the candidate would also take, excludedRoles for role families they do not want, and notes only for nuance without a dedicated field. Put supported preference fields inside patch; omitted values stay unchanged. Save actual candidate intent, not CV-inferred preferences. Read career_profile_read afterward to confirm persistence; never report a rejected mutation as saved.', mutation({ patch: preferencePatch }, ['patch']), false, async args => edit('career_preferences_update', args, career => {
     const saved = patchPreferences(career, args.patch);
     career.evidenceRevision++;
     return { preferences: career.profile.preferences, saved };

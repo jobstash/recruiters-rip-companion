@@ -8,8 +8,9 @@ import { DEFAULT_PUBLICATION_RANGE, publicationWindowForRange } from './prescan/
 import { localJobMetadata } from './mcp/job-tools.mjs';
 import { blockedIds, listBlocks } from './mcp/blocklist.mjs';
 import { employmentHistory } from './employment-browser.mjs';
+import { preferenceItems } from './preferences-browser.mjs';
 
-const kinds = ['sources', 'facts', 'career', 'jobs', 'applications', 'blocks'];
+const kinds = ['sources', 'facts', 'preferences', 'career', 'jobs', 'applications', 'blocks'];
 const forbidden = new Set(['__proto__', 'prototype', 'constructor']);
 const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const own = (value, key) => record(value) && Object.hasOwn(value, key);
@@ -111,7 +112,7 @@ const assessmentLabel = value => own(assessmentLabels, value) ? assessmentLabels
 const blockKinds = { job: 'Job', company: 'Company', category: 'Category' };
 const prescanStatuses = {
   unavailable: 'Original advert unavailable', oversize: 'Input exceeds the provider limit', refused: 'Provider declined assessment',
-  incompatible_location: 'Location conflict predicted', below_minimum: 'Below your minimum',
+  incompatible_location: 'Location conflict predicted', below_minimum: 'Salary below your minimum',
 };
 const prescanScore = row => row?.status === 'scored' && Number.isInteger(row.priority) && row.priority >= 0 && row.priority <= 100
   ? row.priority : -1;
@@ -141,53 +142,83 @@ function cardStage({ id, reviewed, prescan }, inclusion) {
   };
 }
 const bandLabel = band => typeof band === 'string' && band ? band.replace(/^./, letter => letter.toUpperCase()) : undefined;
-const overallLabel = row => Number.isInteger(row.overall) ? `${row.overall}/100 (${bandLabel(row.band)})` : 'Unavailable';
 const gateLabels = { pass: 'Passes', flag: 'Needs confirmation', fail: 'Fails' };
 // Ineligible reviews keep their dimension chart, but the heading says what the number cannot: the job is out.
 const fitHeadings = { incompatible_location: 'Fit excluding location — not eligible', excluded: 'Fit — excluded by a gate' };
-const outOf100 = value => Number.isInteger(value) ? `${value}/100` : undefined;
 const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
 
+const decisionLabels = { recommend: 'Recommended', clarify: 'Needs clarification', skip: 'Not recommended' };
+const joinFacts = parts => parts.filter(part => typeof part === 'string' && part).join(' · ');
+
+/** The verdict is the reader's first block: the number that placed the job in the list, the rule it was measured against,
+ *  and the agent's reason when one exists. Everything else in the reader is evidence for it. */
+function jobVerdict({ reviewed, prescan }, card, minimumScore) {
+  const reviewDate = displayDate(reviewed?.scoredAt);
+  const staleReview = reviewed && card.stage !== 'reviewed' && Number.isInteger(reviewed.overall)
+    ? `Reviewed at ${reviewed.overall} before your profile changed` : null;
+  const reason = typeof reviewed?.reason === 'string' && reviewed.reason.trim() ? reviewed.reason : null;
+  if (card.stage === 'reviewed') {
+    return { kind: 'reviewed', number: card.score, numberLabel: 'Fit',
+      headline: decisionLabels[reviewed.decision] ?? 'No saved decision',
+      detail: joinFacts([bandLabel(reviewed.band) && `${bandLabel(reviewed.band)} fit`,
+        Number.isFinite(reviewed.pairwiseWins) ? `${plural(reviewed.pairwiseWins, 'win')} of ${plural(reviewed.pairwiseCompared, 'comparison')}` : null,
+        reviewDate && `Reviewed ${reviewDate}`]),
+      reason };
+  }
+  if (card.stage === 'ineligible') {
+    // The label is the whole actionable decision; repeating location, relocation and the saved review prose below it is noise.
+    return { kind: 'ineligible', number: null, numberLabel: null, headline: card.label, detail: null, reason: null };
+  }
+  const included = card.included ? 'In next run' : 'Not in next run';
+  const manual = card.overridden ? ' · manual' : '';
+  if (card.stage === 'prefilter') {
+    const priority = prescanScore(prescan);
+    return { kind: 'prefilter', number: priority, numberLabel: 'Priority', headline: included,
+      detail: joinFacts([`${priority} is ${priority >= minimumScore ? 'at or above' : 'below'} your minimum ${minimumScore}${manual}`,
+        card.stale ? 'ranked before your profile changed' : null]),
+      reason: staleReview ? joinFacts([staleReview, reason]) : reason };
+  }
+  return { kind: 'unscored', number: null, numberLabel: null, headline: `${included}${manual}`,
+    detail: prescan ? prescanStatuses[prescan.status] ?? 'Not pre-filtered' : 'Not pre-filtered yet',
+    reason: staleReview ? joinFacts([staleReview, reason]) : reason };
+}
+
+// Requirements are actionable evidence rows rather than generic labelled fields. Gaps come first, and mandatory
+// requirements precede preferred ones within the same evidence state.
+const evidenceOrder = { contradicted: 0, missing: 1, transferable: 2, demonstrated: 3 };
+const importanceOrder = { essential: 0, preferred: 1 };
 function reviewedSections(row) {
-  const requirements = Array.isArray(row.requirements) ? row.requirements.filter(record) : [];
+  const requirements = Array.isArray(row.requirements)
+    ? row.requirements.filter(item => record(item) && typeof item.requirement === 'string' && item.requirement.length) : [];
+  const ordered = [...requirements].sort((a, b) => (evidenceOrder[a.evidence] ?? 9) - (evidenceOrder[b.evidence] ?? 9) ||
+    (importanceOrder[a.importance] ?? 9) - (importanceOrder[b.importance] ?? 9));
   return [
-    fields('Reviewed fit', [
-      ['Status', assessmentLabel(row.reviewStatus)],
-      ['Overall fit', overallLabel(row), Number.isInteger(row.overall) ? 'numeric' : undefined],
-      ['Saved decision', assessmentLabel(row.decision) || 'No saved decision'],
-      ['Location match', assessmentLabel(row.matchStatus)],
-      ['Pairwise rank', Number.isFinite(row.pairwiseWins) ? `${plural(row.pairwiseWins, 'win')} of ${plural(row.pairwiseCompared, 'comparison')}` : undefined],
-    ], 'No assessment saved.'),
     ...(record(row.dimensions) || Number.isInteger(row.overall) ? [chart(fitHeadings[row.matchStatus] ?? 'Fit', [
       ['Overall', row.overall], ['Direction', row.dimensions?.direction], ['Capability', row.dimensions?.capability],
       ['Scope', row.dimensions?.scope], ['Preferences', row.dimensions?.preferences],
     ], 'No breakdown saved.')] : []),
-    ...(record(row.gates) ? [fields('Gates', [
-      ['Career direction', gateLabels[row.gates.direction]], ['Mandatory conditions', gateLabels[row.gates.constraints]],
-      ['Eligibility', gateLabels[row.gates.eligibility]],
-    ], 'No gates saved.')] : []),
-    ...(requirements.length ? [fields('Requirements', requirements.map(item =>
-      [text(item.requirement, 'Unnamed requirement'), [readable(item.importance), readable(item.evidence)].filter(Boolean).join(' · ')]),
-    'No requirements saved.')] : []),
-    section('Review reason', text(row.reason, 'No reason is saved.')),
+    ...(ordered.length ? [{ heading: 'Requirements', requirements: ordered.map(item => ({
+      requirement: item.requirement,
+      evidence: readable(item.evidence) ?? 'Unrated',
+      importance: item.importance === 'essential' ? 'essential' : readable(item.importance)?.toLowerCase() ?? 'unrated',
+    })) }] : []),
   ];
 }
 
-function prescanSection(row, minimumScore) {
-  // The priority appears only here, beside the minimum it is measured against, so the list's divider is checkable;
-  // it is a review-priority index on its own scale, never shown on a card or mixed with an agent's fit score.
-  const priority = prescanScore(row);
-  return fields('Pre-filter', [
-    ['Status', prescanStatus(row)],
-    ['Priority', priority >= 0 ? `${priority} of 100 · ${priority >= minimumScore ? 'at or above' : 'below'} your minimum ${minimumScore}` : undefined],
-    ['Freshness', row.current ? 'Current' : 'Out of date'],
-    ['Location', own(prescanLocations, row.location) ? prescanLocations[row.location] : undefined],
-    ['Next run', row.status === 'incompatible_location' ? 'Location conflict predicted — include anyway with the switch above' : undefined],
-    ['Provider', row.provider === 'openai' ? 'OpenAI Decisions' : row.provider], ['Model', row.model],
-  ], 'No pre-filter result saved.');
+/** What the user has already done about this job: prepared documents and interview answers, never a claimed submission. */
+function applicationSection(career, id) {
+  const app = entries(career.applications).map(([, item]) => item).find(item => item.job?.id === id);
+  if (!app) return [];
+  const answers = entries(career.facts).filter(([, fact]) => fact.applicationId === app.id).length;
+  const draft = value => record(value) ? displayDate(value.createdAt) ?? 'Saved' : 'Not drafted';
+  return [fields('Your application', [
+    ['Prepared', displayDate(app.createdAt)], ['CV draft', draft(app.cv)], ['Cover letter', draft(app.coverLetter)],
+    ['Exports', Array.isArray(app.exports) && app.exports.length ? plural(app.exports.length, 'export') : undefined],
+    ['Interview answers', answers ? plural(answers, 'answer') : undefined],
+  ], 'No application details saved.')];
 }
 
-function jobItem({ id, reviewed, prescan, imported, metadata }, inclusion) {
+function jobItem({ id, reviewed, prescan, imported, metadata }, inclusion, career) {
   const role = key => imported?.[key] ?? metadata?.[key] ?? reviewed?.[key] ?? prescan?.[key];
   const roleTitle = text(role('title'), '');
   const company = text(role('company'), '');
@@ -201,33 +232,46 @@ function jobItem({ id, reviewed, prescan, imported, metadata }, inclusion) {
   // "Remote" as the posted location and "remote" as the work mode are one fact, not two.
   const locationFact = (place, mode) => [place, mode && place?.toLowerCase() !== mode.toLowerCase() ? mode : null]
     .filter(value => typeof value === 'string' && value).join(' · ');
+  const facts = [...fact(role('seniority')), ...fact(pay), ...fact(locationFact(role('city') || role('location'), role('workMode'))),
+    ...fact(role('commitment')), ...fact(role('classification'))];
   const card = {
     title: roleTitle || title, company: company || null,
     publishedAt: typeof publishedAt === 'string' && Number.isFinite(Date.parse(publishedAt)) ? publishedAt : null,
-    facts: [...fact(role('seniority')), ...fact(pay), ...fact(locationFact(role('city') || role('location'), role('workMode'))),
-      ...fact(role('commitment')), ...fact(role('classification'))],
-    ...cardStage({ id, reviewed, prescan }, inclusion),
+    facts, ...cardStage({ id, reviewed, prescan }, inclusion),
   };
   // What the reader can offer to block besides the job itself.
   const block = { company: company || null, category: text(role('classification'), '') || null };
-  const review = reviewed ? reviewedSections(reviewed) : [];
-  // A current review supersedes the pre-filter, so the reader never shows both; a stale review follows a current pre-filter.
-  const preliminary = prescan && !reviewCurrent ? [prescanSection(prescan, inclusion.minimumScore)] : [];
-  return { id, title, card, block, sections: [
-    ...(reviewed && !prescan?.current ? [...review, ...preliminary] : [...preliminary, ...review]),
+  const applyUrl = typeof role('applyUrl') === 'string' && /^https?:\/\//.test(role('applyUrl')) ? role('applyUrl') : null;
+  const header = { company: company || null, published: displayDate(publishedAt) ? `Published ${displayDate(publishedAt)}` : null, facts, applyUrl };
+  const verdict = jobVerdict({ reviewed, prescan }, card, inclusion.minimumScore);
+  const salaryCheck = reviewed?.salaryEligibility?.status && reviewed.salaryEligibility.status !== 'not_required'
+    ? assessmentLabel(reviewed.salaryEligibility.status) : prescan?.status === 'below_minimum' ? 'Below your minimum' : null;
+  // Checks contains only independent decision facts. An ineligible verdict already names the decisive gate, so location and
+  // relocation are not repeated beneath it.
+  const ineligible = card.stage === 'ineligible';
+  const checks = fields('Checks', [
+    ['Location', ineligible ? undefined : reviewed ? assessmentLabel(reviewed.matchStatus) : own(prescanLocations, prescan?.location) ? prescanLocations[prescan.location] : undefined],
+    ['Relocation', ineligible ? undefined : assessmentLabel(reviewed?.relocation)],
+    ['Salary', joinFacts([pay, salaryCheck]) || undefined],
+    ...(record(reviewed?.gates) ? [['Career direction', gateLabels[reviewed.gates.direction]], ['Mandatory conditions', gateLabels[reviewed.gates.constraints]],
+      ['Eligibility', gateLabels[reviewed.gates.eligibility]]] : []),
+  ], 'No additional checks saved.');
+  const sections = [
+    checks,
+    ...(reviewed ? reviewedSections(reviewed) : []),
+    ...applicationSection(career, id),
     ...(imported ? [
       fields('Capture', [['Status', imported.complete ? 'Saved' : 'Needs full advert'],
         ['Source URL', imported.sourceUrl], ['Job URL', imported.url]], 'No capture details saved.'),
       section(imported.complete ? 'Original advert' : 'Captured listing text', imported.description?.trim()
         ? imported.description : 'No advert text was captured. Open the job page and capture its full advert.'),
     ] : []),
-    fields('Role', [
-      ['City', role('city')], ['Location', role('location')], ['Work mode', role('workMode')],
-      ['Relocation', assessmentLabel(reviewed?.relocation)], ['Salary', pay || 'Not stated'],
-      ['Against your minimum', reviewed?.salaryEligibility?.status === 'not_required' ? undefined : assessmentLabel(reviewed?.salaryEligibility?.status)],
-      ['Published', displayDate(role('publishedAt')) || 'Not stated'], ['Apply URL', role('applyUrl')],
-    ], 'No role details saved.'),
-  ] };
+    ...(prescan ? [fields('Metadata', [
+      ['Pre-filter', joinFacts([prescanStatus(prescan), prescan.provider === 'openai' ? 'OpenAI Decisions' : prescan.provider,
+        prescan.model, prescan.current ? 'current' : 'out of date'])],
+    ], 'No pre-filter metadata saved.')] : []),
+  ];
+  return { id, title, heading: roleTitle || title, card, block, header, verdict, sections };
 }
 
 async function reviewedRows(career) {
@@ -309,6 +353,7 @@ function employmentItem(entry) {
   };
 }
 
+
 /** Read-only, allowlisted projections: never return the vault or binary source data. */
 export function createCareerBrowser({ store }) {
   // Every operation reads the store once; canonical projections share that immutable snapshot.
@@ -330,10 +375,15 @@ export function createCareerBrowser({ store }) {
         const items = entries.slice(offset, offset + limit).map(employmentItem);
         return { items, total: entries.length, nextOffset: offset + items.length < entries.length ? offset + items.length : null };
       }
+      if (kind === 'preferences') {
+        const all = preferenceItems(career);
+        const items = all.slice(offset, offset + limit);
+        return { items, total: all.length, nextOffset: offset + items.length < all.length ? offset + items.length : null };
+      }
       if (kind === 'jobs') {
         const { rows, inclusion } = await jobUnion(career);
         const sorted = sortJobs(rows, inclusion, sort);
-        const items = sorted.slice(offset, offset + limit).map(row => jobItem(row, inclusion));
+        const items = sorted.slice(offset, offset + limit).map(row => jobItem(row, inclusion, career));
         // The divider sits before the first ranked card below the minimum score, reported once on the page that holds it.
         const below = row => { const { rank } = cardStage(row, inclusion); return rank !== null && career.prescan.rows[row.id].priority < inclusion.minimumScore; };
         const divider = sort === 'rank' ? sorted.findIndex(below) - offset : -1;
@@ -368,12 +418,17 @@ export function createCareerBrowser({ store }) {
         if (!entry) fail('NOT_FOUND', 'This career entry is no longer available. Refresh Career.');
         return employmentItem(entry);
       }
+      if (kind === 'preferences') {
+        const item = preferenceItems(career).find(entry => entry.id === id);
+        if (!item) fail('NOT_FOUND', 'This preference group is no longer available. Refresh Preferences.');
+        return item;
+      }
       if (kind === 'jobs') {
         const { rows, inclusion } = await jobUnion(career);
         const row = rows.get(id);
         if (!row) fail('NOT_FOUND', 'This saved job was not found. Refresh the list.');
-        const { title, sections } = jobItem(row, inclusion);
-        return { title, sections };
+        const { title, heading, header, verdict, sections } = jobItem(row, inclusion, career);
+        return { title, heading, header, verdict, sections };
       }
       if (kind === 'blocks') {
         const entry = listBlocks(career).find(item => item.id === id);
@@ -386,4 +441,41 @@ export function createCareerBrowser({ store }) {
       return detail(kind, item, career);
     },
   };
+}
+
+/** Builds the connected-agent handoff only from a saved job and the exact requirement in its saved assessment. */
+export function requirementContextPrompt({ store }, args) {
+  if (!record(args) || ![Object.prototype, null].includes(Object.getPrototypeOf(args)) ||
+      Reflect.ownKeys(args).some(key => !['id', 'requirement'].includes(key)) ||
+      typeof args.id !== 'string' || !args.id.trim() || args.id.length > 500 || forbidden.has(args.id) ||
+      typeof args.requirement !== 'string' || !args.requirement.trim() || args.requirement.length > 2000) {
+    fail('INVALID_INPUT', 'Choose a saved job requirement.');
+  }
+  const career = readCareer(store);
+  const savedJob = lookup(career.matching?.jobs, args.id) ?? lookup(career.jobs, args.id);
+  if (!savedJob) fail('NOT_FOUND', 'This saved job was not found. Refresh the list.');
+  const assessment = lookup(career.matching?.scores, args.id);
+  if (!assessment || !Array.isArray(assessment.requirements)) {
+    fail('NOT_FOUND', 'This job has no saved assessment.');
+  }
+  const requirement = assessment.requirements.find(item => record(item) && item.requirement === args.requirement);
+  if (!requirement) fail('NOT_FOUND', 'This requirement is not in the saved assessment.');
+  const title = text(savedJob.title, text(assessment.title, '')).trim();
+  const company = text(savedJob.company, text(assessment.company, '')).trim();
+  if (!title || !company) fail('NOT_FOUND', 'This saved job does not include a title and company.');
+  return `Use the recruiters.rip skill to help me add context for this requirement in ${title} at ${company}: “${args.requirement}”. Read the saved job and my current career record. If this is a material gap, create or reuse its application, ask me one focused question, save my answer as a reusable fact, then reassess this job. Do not invent evidence or change unrelated preferences.`;
+}
+
+/** Opens the saved apply URL of a known job in the default browser; only http(s) URLs the vault already holds qualify. */
+export async function openJobPage({ store, openExternal }, args) {
+  if (!record(args) || typeof args.id !== 'string' || !args.id.trim() || forbidden.has(args.id)) fail('INVALID_INPUT', 'Choose a saved job.');
+  const career = readCareer(store);
+  const { rows } = await jobUnion(career);
+  const row = rows.get(args.id);
+  if (!row) fail('NOT_FOUND', 'This saved job was not found. Refresh the list.');
+  const url = [row.imported?.applyUrl, row.metadata?.applyUrl, row.reviewed?.applyUrl, row.prescan?.applyUrl]
+    .find(value => typeof value === 'string' && /^https?:\/\//.test(value));
+  if (!url) fail('NOT_FOUND', 'This job has no saved job page.');
+  await openExternal(url);
+  return { opened: true, url };
 }

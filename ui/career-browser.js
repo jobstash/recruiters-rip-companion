@@ -3,6 +3,7 @@
   const categories = {
     sources: { title: 'CVs', empty: 'No saved CVs or supporting documents. Use Import CV to add one.', locked: 'Open local storage to read saved records.', select: 'Select a record' },
     facts: { title: 'Facts', empty: 'No saved career facts.', locked: 'Open local storage to read saved records.', select: 'Select a record' },
+    preferences: { title: 'Preferences', empty: 'No preferences saved. Tell your connected agent what you want and what you want to avoid.', locked: 'Open local storage to read saved preferences.', select: 'Select a preference group' },
     career: { title: 'Career', empty: 'No work history yet. Your agent extracts employers from your CV and links the ones it confidently matches to JobStash.', locked: 'Open local storage to read your work history.', select: 'Select an employer' },
     jobs: { title: 'Jobs', empty: 'No saved jobs. Copy the review prompt into your connected agent to start matching.', locked: 'Open local storage to read saved jobs.', select: 'Select a job' },
     applications: { title: 'Job Applications', empty: 'No saved applications.', locked: 'Open local storage to read saved applications.', select: 'Select an application' },
@@ -12,7 +13,6 @@
   const statusWords = { unavailable: 'Advert unavailable', refused: 'Declined', oversize: 'Too large',
     incompatible_location: 'Location conflict predicted', below_minimum: 'Below your minimum' };
   const statusWord = card => statusWords[card.status] ?? 'Not pre-filtered';
-  const notEligible = 'Not eligible for review: change your location or relocation preference to reconsider';
   const dateFormat = new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium', timeZone: 'UTC' });
   const displayDate = value => typeof value === 'string' && Number.isFinite(Date.parse(value)) ? dateFormat.format(new Date(value)) : null;
   const integer = value => value.toLocaleString('en-GB');
@@ -206,28 +206,70 @@
       return button;
     }
 
-    function renderInclusion(item) {
-      const card = item?.card;
+    // The verdict block: the number that placed the job in the list, the rule it was measured against, the agent's reason,
+    // and — for jobs the agent has not reviewed — the next-run control itself.
+    function renderVerdict(detail, item) {
+      const verdict = detail?.verdict, card = item?.card;
+      if (!verdict || typeof verdict !== 'object') return null;
+      const block = node('section', `career-verdict is-${verdict.kind}`);
+      const row = node('div', 'career-verdict-row');
+      if (Number.isInteger(verdict.number)) {
+        const figure = node('div', 'career-verdict-figure');
+        figure.append(node('span', 'career-verdict-number', String(verdict.number)), node('span', 'career-card-caption', verdict.numberLabel));
+        row.append(figure);
+      }
+      const words = node('div', 'career-verdict-words');
+      words.append(node('h3', 'career-verdict-headline', verdict.headline));
+      if (typeof verdict.detail === 'string' && verdict.detail) words.append(node('p', 'career-verdict-detail', verdict.detail));
+      row.append(words);
+      block.append(row);
+      if (typeof verdict.reason === 'string' && verdict.reason) block.append(node('p', 'career-verdict-reason', verdict.reason));
+      const actions = renderInclusionControl(item, card);
+      if (actions?.childElementCount) block.append(actions);
+      return block;
+    }
+    function renderInclusionControl(item, card) {
       if (!card || card.stage === 'reviewed' || (card.stage === 'ineligible' && !card.established)) return null;
-      const block = document.createElement('section');
-      block.className = 'career-next-run';
-      const heading = document.createElement('h3');
-      heading.textContent = 'Next run';
-      const list = document.createElement('dl');
-      const term = document.createElement('dt');
-      term.textContent = 'Agent evaluation';
-      const value = document.createElement('dd');
-      value.textContent = card.established ? notEligible : `${card.included ? 'Included' : 'Excluded'}${card.overridden ? ' (manual)' : ''}`;
-      list.append(term, value);
-      block.append(heading, list);
+      if (card.established) return null;
+      const actions = node('div', 'actions');
+      const label = node('label', 'career-verdict-switch');
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.className = 'career-include';
+      checkbox.checked = card.included === true;
+      checkbox.addEventListener('change', () => { void setInclusion(item, checkbox.checked, checkbox); });
+      label.append(checkbox, node('span', '', card.status === 'incompatible_location' ? 'Include anyway' : 'Include in next run'));
+      actions.append(label);
       if (card.overridden) {
         const reset = node('button', 'text', 'Reset to minimum score');
         reset.type = 'button';
         reset.id = `${prefix}-inclusion-reset`;
         reset.addEventListener('click', () => { void setInclusion(item, null); });
-        block.append(reset);
+        actions.append(reset);
       }
-      return block;
+      return actions;
+    }
+    // The job page sits with identity metadata, never inside the decision.
+    function renderHeader(detail, item) {
+      const header = detail?.header;
+      if (!header || typeof header !== 'object') return null;
+      const block = node('div', 'career-reader-meta');
+      const top = node('div', 'career-reader-meta-top');
+      const line = [header.company, header.published].filter(value => typeof value === 'string' && value).join(' · ');
+      if (line) top.append(node('p', 'career-reader-line', line));
+      if (typeof header.applyUrl === 'string' && header.applyUrl) {
+        const open = blockButton('Open job page', null, async () => {
+          if (!enabled) return;
+          open.disabled = true;
+          try { await request('career-open-job', { id: item.id }); }
+          catch (error) { listStatus.textContent = `Could not open the job page. ${error.message}`; }
+          finally { open.disabled = false; }
+        }, 'text');
+        top.append(open);
+      }
+      if (top.childElementCount) block.append(top);
+      if (Array.isArray(header.facts) && header.facts.length) block.append(node('p', 'career-reader-facts', header.facts.join(' · ')));
+      return block.childElementCount ? block : null;
     }
 
     // Fit chart: one filled bar per dimension on a muted track; Overall first and heavier. Values are whole 0–100 scores.
@@ -247,18 +289,45 @@
       });
       return chart;
     }
+    function renderRequirements(requirements, item) {
+      const list = node('div', 'career-requirements');
+      for (const entry of requirements) {
+        if (typeof entry?.requirement !== 'string' || !entry.requirement) continue;
+        const row = node('div', 'career-requirement');
+        const label = [entry.evidence, entry.importance].filter(value => typeof value === 'string' && value).join(' · ');
+        const status = node('p', 'career-requirement-status');
+        status.setAttribute('role', 'status');
+        status.setAttribute('aria-live', 'polite');
+        const button = node('button', 'text', 'Add context');
+        button.type = 'button';
+        button.addEventListener('click', () => {
+          if (!enabled) return;
+          button.disabled = true;
+          status.textContent = '';
+          void request('copy-requirement-prompt', { id: item.id, requirement: entry.requirement })
+            .then(() => { status.textContent = 'Prompt copied. Paste it into your connected agent.'; })
+            .catch(error => { status.textContent = error.message; })
+            .finally(() => { button.disabled = false; });
+        });
+        button.className = 'career-requirement-action text';
+        row.append(node('p', 'career-requirement-label', label), node('p', 'career-requirement-body', entry.requirement), button, status);
+        list.append(row);
+      }
+      return list;
+    }
     function renderDetail(detail, item) {
-      readerTitle.textContent = typeof detail?.title === 'string' ? detail.title : selected.title;
+      readerTitle.textContent = typeof detail?.heading === 'string' ? detail.heading : typeof detail?.title === 'string' ? detail.title : selected.title;
       const sections = Array.isArray(detail?.sections) ? detail.sections : [];
       content.replaceChildren();
-      const inclusion = renderInclusion(item);
-      if (inclusion) content.append(inclusion);
-      const blockActions = kind === 'jobs' ? renderBlockActions(item) : null;
-      if (blockActions) content.append(blockActions);
+      const header = renderHeader(detail, item);
+      if (header) content.append(header);
+      const verdict = renderVerdict(detail, item);
+      if (verdict) content.append(verdict);
       for (const section of sections) {
         const hasFields = Array.isArray(section?.fields) && section.fields.length;
         const hasChart = Array.isArray(section?.chart) && section.chart.length;
-        if (!hasFields && !hasChart && typeof section?.text !== 'string') continue;
+        const hasRequirements = Array.isArray(section?.requirements) && section.requirements.length;
+        if (!hasFields && !hasChart && !hasRequirements && typeof section?.text !== 'string') continue;
         const block = document.createElement('section');
         if (typeof section.heading === 'string' && section.heading) {
           const heading = document.createElement('h3');
@@ -267,6 +336,8 @@
         }
         if (hasChart) {
           block.append(renderChart(section.chart));
+        } else if (hasRequirements) {
+          block.append(renderRequirements(section.requirements, item));
         } else if (hasFields) {
           const list = document.createElement('dl');
           for (const field of section.fields) {
@@ -288,6 +359,8 @@
       }
       const removal = kind === 'blocks' ? renderBlockActions(item) : null;
       if (removal) content.append(removal);
+      const blockActions = kind === 'jobs' ? renderBlockActions(item) : null;
+      if (blockActions) content.append(blockActions);
       const profile = kind === 'career' ? renderProfileAction(item) : null;
       if (profile) { const section = node('section', 'career-block'); section.append(profile); content.append(section); }
       readerStatus.textContent = content.childElementCount ? '' : 'No saved content is available for this record.';
@@ -301,7 +374,7 @@
       button.setAttribute('aria-current', 'true');
       reader.hidden = false;
       root.classList.add('is-reading');
-      readerTitle.textContent = item.title;
+      readerTitle.textContent = item.heading ?? item.title;
       if (focus) readerTitle.focus();
       const currentGeneration = generation;
       const currentRead = ++readGeneration;

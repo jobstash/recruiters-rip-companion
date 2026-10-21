@@ -14,7 +14,7 @@ import { claimInstance } from './instance-lock.mjs';
 import { createIntroductionTools, introductionsStatus, setSharingConsent } from './mcp/introduction-tools.mjs';
 import { openEmploymentProfile } from './employment-browser.mjs';
 import { openJobPage, requirementContextPrompt } from './career-browser.mjs';
-import { CareerError, createCareerState, fail, upgradeCareer } from './mcp/state.mjs';
+import { CareerError, createCareerState, fail, hash, upgradeCareer } from './mcp/state.mjs';
 import { createMcpServer, createPlatformTools } from './mcp/server.mjs';
 import { createProfileTools } from './mcp/profile-tools.mjs';
 import { createApplicationTools } from './mcp/application-tools.mjs';
@@ -32,7 +32,7 @@ import { createPrescanController } from './prescan/service.mjs';
 import { createPrescanTools } from './mcp/prescan-tools.mjs';
 import { startPairingReturn } from './pairing-return.mjs';
 import { createJobTools, importCapturedJobs } from './mcp/job-tools.mjs';
-import { createFormTools } from './mcp/form-tools.mjs';
+import { createFormTools, currentForm, formEvidence } from './mcp/form-tools.mjs';
 import { createBrowserForms } from './browser-forms.mjs';
 import { createUpdateController } from './updates.mjs';
 
@@ -121,7 +121,7 @@ browserForms = createBrowserForms({
     return confirm('Prepare application answers?',
       `${destination}\n${fields.length} fields · ${classes.join(', ') || 'no saved answers'}\n\n${useApi
         ? `${label} (${model}) receives field labels and known values to select answers.\nBase rate $${inputUsdPerMillion.toFixed(2)} / million input tokens · billed separately from your chat subscription.`
-        : 'No API call.'}\n\nReview values in Chrome before copying or filling. Nothing is submitted.`, signal);
+        : 'No API call.'}\n\nValues go to Chrome for review, ⌘V paste or filling. Nothing is submitted.`, signal);
   },
 });
 updates = createUpdateController({
@@ -329,7 +329,7 @@ function createSessionServer() {
     ...createApplicationTools({ store: scoped.store, platform: scopedPlatform, documents, exportDocument: localFiles.exportDocument }),
     ...createMatchingTools({ store: scoped.store, platform: scopedPlatform, exportDocument: localFiles.exportDocument }),
     ...createJobTools({ store: scoped.store }),
-    ...createFormTools({ store: scoped.store }),
+    ...createFormTools({ store: scoped.store, browser: browserBridge }),
     ...createPrescanTools({ controller: Object.fromEntries(['start', 'cancel', 'status', 'results'].map(method => [method, async args => {
       scoped.assertAvailable(method === 'start' || method === 'cancel');
       if (method === 'start') assertPaidWorkAllowed();
@@ -373,15 +373,31 @@ async function installConnections() {
   try { await installNative({ executable: process.execPath, appPath: app.getAppPath(), directory, packaged: app.isPackaged, localOnly }); browserConnection = 'installed'; }
   catch { browserConnection = 'unavailable'; }
 }
-async function nativeOperation(op, payload) {
+async function nativeOperation(op, payload, socket = null) {
   const keys = { status: [], open_settings: [], pair: ['productOrigin', 'pairing'],
-    capture_jobs: ['requestId', 'sourceUrl', 'jobs'], forms_prepare: ['requestId', 'formId', 'url', 'title', 'fields', 'useApi'], forms_cancel: ['requestId'] };
+    capture_jobs: ['requestId', 'sourceUrl', 'jobs'], forms_prepare: ['requestId', 'formId', 'url', 'title', 'fields', 'actions', 'useApi'], forms_cancel: ['requestId'],
+    forms_validate: ['formId', 'fields'] };
   if (!Object.hasOwn(keys, op)) fail('INVALID_INPUT', 'This browser operation is unavailable.');
   exact(payload, keys[op]);
   if (op === 'status') return status();
   if (op === 'open_settings') { showSettings(); return { opened: true }; }
   if (op === 'pair') return pair(payload);
   assertAvailable(false);
+  if (op === 'forms_validate') {
+    if (typeof payload.formId !== 'string' || payload.formId.length > 100 || !Array.isArray(payload.fields) || payload.fields.length > 64)
+      fail('INVALID_INPUT', 'Provide the prepared form and its inspected field signatures.');
+    const session = browserSession(payload.formId);
+    if (session.socket !== socket) fail('FORM_CONTEXT_CHANGED', 'This Chrome connection did not prepare the form.');
+    const draft = currentForm(store.get().career ?? createCareerState(), payload.formId);
+    if (session.answersHash !== hash(draft.answers ?? {}) || payload.fields.length !== draft.fields.length)
+      fail('FORM_CONTEXT_CHANGED', 'Prepared answers changed. Prepare values again before pasting.');
+    for (let index = 0; index < payload.fields.length; index++) {
+      const field = payload.fields[index]; exact(field, ['id', 'signature']);
+      if (field.id !== draft.fields[index].id || field.signature !== draft.fields[index].signature)
+        fail('FORM_CONTEXT_CHANGED', 'The inspected form changed. Prepare values again before pasting.');
+    }
+    return { valid: true };
+  }
   if (op === 'forms_cancel') {
     if (typeof payload.requestId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(payload.requestId)) fail('INVALID_INPUT', 'Use the preparation request UUID.');
     return browserForms.cancel(payload.requestId);
@@ -392,11 +408,80 @@ async function nativeOperation(op, payload) {
     scoped.assertAvailable(false); careerViewRevision++; emit(); return result;
   });
   assertPaidWorkAllowed();
+  const scoped = createScopedAccess(store, { assertAvailable, epoch: () => sessionEpoch });
+  const preparedState = scoped.store.get(), identity = identityKey(preparedState);
+  const evidence = formEvidence(preparedState.career ?? createCareerState()), credentialVersion = preparedState.prescanCredentialVersion ?? 0;
   if (formRequests.has(payload.requestId)) fail('REQUEST_CONFLICT', 'This form preparation is already pending.');
   formRequests.add(payload.requestId); emit();
-  try { const result = await browserForms.prepare(payload); careerViewRevision++; emit(); return result; }
+  try {
+    const result = await browserForms.prepare(payload);
+    const current = scoped.store.get(), draft = currentForm(current.career ?? createCareerState(), result.formId);
+    const previous = preparedState.career?.formDrafts?.[result.formId];
+    const answersHash = hash(previous?.evidence === evidence && previous.evidenceRevision === (preparedState.career?.evidenceRevision ?? 0) ? previous.answers ?? {} : {});
+    if (draft.evidence !== evidence || (current.prescanCredentialVersion ?? 0) !== credentialVersion || hash(draft.answers ?? {}) !== answersHash)
+      fail('FORM_CONTEXT_CHANGED', 'Preparation context changed. Prepare the form again before using its values.');
+    if (socket && !socket.destroyed) browserSessions.set(result.formId, { socket, epoch: sessionEpoch, identity, evidence, credentialVersion, answersHash });
+    careerViewRevision++; emit(); return result;
+  }
   finally { formRequests.delete(payload.requestId); emit(); }
 }
+// The extension that prepared a form keeps its socket; the user's AI fills or submits through it.
+const browserSessions = new Map(), browserReplies = new Map();
+function browserSession(formId, expected) {
+  assertWorkAllowed();
+  const session = browserSessions.get(formId);
+  if (!session || session.socket.destroyed || !session.socket.writable)
+    fail('UNAVAILABLE', 'Chrome is not attached to this form. Open the Recruiters.rip panel on the application tab and prepare values before a new action.');
+  const state = store.get();
+  if (session.epoch !== sessionEpoch || session.identity !== identityKey(state) || (expected && session !== expected))
+    fail('FORM_CONTEXT_CHANGED', 'The Chrome preparation or local session changed. Prepare the form again before acting.');
+  const draft = currentForm(state.career ?? createCareerState(), formId);
+  if (session.evidence !== draft.evidence || session.credentialVersion !== (state.prescanCredentialVersion ?? 0))
+    fail('FORM_CONTEXT_CHANGED', 'Career evidence or the API credential changed. Prepare values again before acting.');
+  return session;
+}
+const browserOutcomeUnknown = detail => new CareerError('FORM_ACTION_UNKNOWN', `${detail} The action may already have happened. Check Chrome yourself; do not automatically repeat it.`);
+function browserCommand(session, formId, op, payload, timeoutMs = 45000) {
+  browserSession(formId, session);
+  const { socket } = session, id = randomUUID(), bytes = encode({ version: 1, id, op, payload });
+  return new Promise((resolve, reject) => {
+    const finish = (callback, value) => {
+      if (browserReplies.get(id) !== waiting) return;
+      browserReplies.delete(id); clearTimeout(waiting.timer); callback(value);
+    };
+    const waiting = { socket, resolve: value => finish(resolve, value), reject: error => finish(reject, error), timer: null,
+      failure: detail => op === 'forms_status' ? new CareerError('UNAVAILABLE', detail) : browserOutcomeUnknown(detail) };
+    waiting.timer = setTimeout(() => waiting.reject(waiting.failure('Chrome did not confirm the operation in time.')), timeoutMs);
+    browserReplies.set(id, waiting);
+    try { socket.write(bytes, error => { if (error) waiting.reject(waiting.failure('The Chrome connection failed before confirmation.')); }); }
+    catch { waiting.reject(waiting.failure('The command could not be confirmed by Chrome.')); }
+  });
+}
+const browserBridge = {
+  async status(formId) {
+    const session = browserSession(formId);
+    const result = await browserCommand(session, formId, 'forms_status', { formId }, 5000);
+    browserSession(formId, session);
+    return result?.attached === true;
+  },
+  async fill(draft, answers, { requestId, revalidate }) {
+    const session = browserSession(draft.formId);
+    const destination = new URL(draft.url).origin;
+    if (!await confirm('Let your AI fill this application form?', `${destination}\n${draft.title}\n\nFills only empty, non-protected controls in your Chrome tab with the prepared values and staged answers. Nothing is submitted.`))
+      fail('FORM_NOT_AUTHORIZED', 'Filling was not approved. Nothing was written to the page.');
+    revalidate();
+    return browserCommand(session, draft.formId, 'forms_fill', { requestId, formId: draft.formId, answers,
+      fields: draft.fields.map(({ id, signature }) => ({ id, signature })) });
+  },
+  async submit(draft, action, { requestId, revalidate }) {
+    const session = browserSession(draft.formId);
+    const destination = new URL(draft.url).origin;
+    if (!await confirm('Let your AI submit this application?', `${destination}\n${draft.title}\n\nPresses “${action.label}” in your Chrome tab. Check the page yourself before allowing this; the page's own result is reported back, nothing more.`))
+      fail('FORM_NOT_AUTHORIZED', 'Submission was not approved. Nothing was pressed.');
+    revalidate();
+    return browserCommand(session, draft.formId, 'forms_submit', { requestId, formId: draft.formId, actionId: action.id, actionSignature: action.signature }, 30000);
+  },
+};
 function encode(value) { const data = Buffer.from(JSON.stringify(value)); if (data.length > 1024 * 1024 - 1024) throw new Error('Native response too large.'); const header = Buffer.allocUnsafe(4); header.writeUInt32LE(data.length); return Buffer.concat([header, data]); }
 async function startNativeBridge() {
   const token = randomBytes(32).toString('hex'), socketPath = path.join(directory, 'native.sock');
@@ -404,19 +489,34 @@ async function startNativeBridge() {
   nativeBridge = net.createServer(socket => {
     let authenticated = false, input = Buffer.alloc(0), pending = 0;
     const timer = setTimeout(() => { if (!authenticated) socket.destroy(); }, 5000);
-    socket.on('error', () => socket.destroy()); socket.on('close', () => { clearTimeout(timer); sockets.delete(socket); });
+    socket.on('error', () => socket.destroy());
+    socket.on('close', () => {
+      clearTimeout(timer); sockets.delete(socket);
+      for (const [formId, session] of browserSessions) if (session.socket === socket) browserSessions.delete(formId);
+      for (const waiting of browserReplies.values()) if (waiting.socket === socket)
+        waiting.reject(waiting.failure('Chrome disconnected before confirming the operation.'));
+    });
     socket.on('data', chunk => {
       input = Buffer.concat([input, chunk]); if (input.length > 2 * 1024 * 1024) { socket.destroy(); return; }
       while (input.length >= 4) {
         const length = input.readUInt32LE(0); if (!length || length > 1024 * 1024 + 65536) { socket.destroy(); return; } if (input.length < length + 4) return;
         let message; try { message = JSON.parse(input.subarray(4, length + 4).toString('utf8')); } catch { socket.destroy(); return; } input = input.subarray(length + 4);
+        if (!message || typeof message !== 'object' || Array.isArray(message)) { socket.destroy(); return; }
         if (!authenticated) {
           const supplied = typeof message.auth === 'string' ? Buffer.from(message.auth) : Buffer.alloc(0);
           if (message.origin !== `chrome-extension://${browserIdentity.extensionId}/` || supplied.length !== token.length || !timingSafeEqual(supplied, Buffer.from(token))) { socket.destroy(); return; }
           authenticated = true; clearTimeout(timer); sockets.add(socket); continue;
         }
+        if (authenticated && message && typeof message === 'object' && Object.hasOwn(message, 'ok')) {
+          const waiting = typeof message.id === 'string' ? browserReplies.get(message.id) : undefined;
+          if (!waiting || waiting.socket !== socket || message.version !== 1 || typeof message.ok !== 'boolean') continue;
+          if (message.ok === true && message.result && typeof message.result === 'object' && !Array.isArray(message.result)) waiting.resolve(message.result);
+          else if (message.ok === true) waiting.reject(waiting.failure('Chrome returned no usable result for this operation.'));
+          else waiting.reject(waiting.failure(typeof message.error?.message === 'string' ? message.error.message.slice(0, 400) : 'Chrome could not confirm this operation.'));
+          continue;
+        }
         if (Object.keys(message).some(key => !['version', 'id', 'op', 'payload'].includes(key)) || message.version !== 1 || typeof message.id !== 'string' || message.id.length > 100 || typeof message.op !== 'string' || ++pending > 8) { socket.destroy(); return; }
-        void nativeOperation(message.op, message.payload).then(result => ({ version: 1, id: message.id, ok: true, result }), error => ({ version: 1, id: message.id, ok: false, error: safeFailure(error) }))
+        void nativeOperation(message.op, message.payload, socket).then(result => ({ version: 1, id: message.id, ok: true, result }), error => ({ version: 1, id: message.id, ok: false, error: safeFailure(error) }))
           .then(reply => { if (!socket.destroyed) socket.write(encode(reply)); }).finally(() => { pending--; }).catch(() => socket.destroy());
       }
     });

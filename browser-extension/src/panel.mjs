@@ -3,7 +3,15 @@ let state, port, reconnect;
 const send = (action, payload = {}) => { if (!port) { $('error').hidden = false; $('error').textContent = 'The panel disconnected. Reopen it to continue; nothing was submitted.'; return; } port.postMessage({ action, payload }); };
 function connect() {
   port = chrome.runtime.connect({ name: 'recruiters-panel' });
-  port.onMessage.addListener(value => { state = value; render(); });
+  let first = true;
+  port.onMessage.addListener(value => {
+    state = value; render();
+    // Opening the panel reads the current tab once; later reads are explicit.
+    if (first && !state.busy) void chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
+      if (tab?.id !== state.tabId || !state.page) send('detect', { tabId: tab?.id });
+    }).catch(() => {});
+    first = false;
+  });
   port.onDisconnect.addListener(() => { void chrome.runtime.lastError; port = null; clearTimeout(reconnect); reconnect = setTimeout(connect, 500); });
 }
 // Keep unsaved, memory-only review state alive while this panel is open.
@@ -13,8 +21,7 @@ async function pageAction(action) {
   try { const [tab] = await chrome.tabs.query({ active: true, currentWindow: true }); send(action, { tabId: tab?.id }); }
   catch { $('error').hidden = false; $('error').textContent = 'Select the job page, then reopen this panel.'; }
 }
-$('capture').onclick = () => pageAction('capture');
-$('inspect').onclick = () => pageAction('inspect');
+$('detect').onclick = () => pageAction('detect');
 $('settings').onclick = () => send('settings');
 $('cancel').onclick = () => send('cancel');
 $('prepare').onclick = () => send('prepare', { useApi: $('api').checked });
@@ -57,6 +64,12 @@ function render() {
   $('prompt').hidden = !state.prepared?.formId;
   $('review-actions').hidden = !state.prepared;
   $('prepare').textContent = state.prepared ? 'Reload prepared values' : 'Prepare values';
+  const paste = $('paste');
+  paste.hidden = !state.prepared;
+  paste.textContent = !state.prepared ? '' : !state.paste ? 'Click a field on the page, then press ⌘V to paste its prepared value.'
+    : state.paste.ok === false ? `Chrome refused clipboard access for ${state.paste.label}. Copy it from the list below.`
+    : state.paste.ok === true ? `Clipboard holds the value for ${state.paste.label}. Press ⌘V in that field.`
+    : `Preparing the clipboard for ${state.paste.label}…`;
   const list = $('field-list'); list.replaceChildren();
   const fields = state.prepared?.fields || state.form?.fields || [];
   for (const field of fields) {

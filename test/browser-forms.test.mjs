@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { createBrowserForms } from '../src/browser-forms.mjs';
 import { createFormTools } from '../src/mcp/form-tools.mjs';
+import { createScopedAccess } from '../src/mcp/scope.mjs';
 import { CareerError, createCareerState } from '../src/mcp/state.mjs';
 
 const field = (id, label, type = 'text', extra = {}) => ({ id, label, type, signature: `signature:${id}`, empty: true, ...extra });
@@ -286,7 +287,7 @@ test('blank select placeholders preserve the snapshot and do not block unrelated
   assert.deepEqual(result.fields.map(({ id, value }) => ({ id, value })), [
     { id: 'city', value: 'toronto-code' }, { id: 'email', value: 'candidate@example.test' },
   ]);
-  const read = f.tools.get('career_form_read').invoke({ formId: result.formId });
+  const read = await f.tools.get('career_form_read').invoke({ formId: result.formId });
   assert.deepEqual(read.fields[0].options[0], { value: '', label: '' });
   await assert.rejects(f.tools.get('career_form_answers_save').invoke({
     requestId: randomUUID(), revision: read.revision, formId: read.formId, snapshot: read.snapshot,
@@ -306,7 +307,7 @@ test('autocomplete cannot turn reference or manager contacts into applicant cont
   assert.deepEqual(result.fields.map(({ id, value }) => ({ id, value })), [{ id: 'applicant', value: 'candidate@example.test' }]);
   assert.deepEqual(result.unresolved.map(({ id }) => id), ['reference', 'manager', 'emergency']);
   assert.equal(f.calls.length, 0);
-  const read = f.tools.get('career_form_read').invoke({ formId: result.formId });
+  const read = await f.tools.get('career_form_read').invoke({ formId: result.formId });
   await f.tools.get('career_form_answers_save').invoke({
     requestId: randomUUID(), revision: read.revision, formId: read.formId, snapshot: read.snapshot,
     evidenceRevision: read.evidenceRevision, answers: [{ id: 'reference', value: 'explicit-reference@example.test' }],
@@ -358,7 +359,7 @@ test('preferred contact method is available for explicit staging while Contact m
     field('contact-permission', 'Contact me about other opportunities', 'radio', { options: [{ value: 'yes', label: 'Yes' }, { value: 'no', label: 'No' }] }),
   ]);
   const prepared = await f.service.prepare(args);
-  const read = f.tools.get('career_form_read').invoke({ formId: prepared.formId });
+  const read = await f.tools.get('career_form_read').invoke({ formId: prepared.formId });
   const save = { requestId: randomUUID(), revision: read.revision, formId: read.formId, snapshot: read.snapshot,
     evidenceRevision: read.evidenceRevision, answers: [{ id: 'method', value: 'email' }] };
   const saved = await f.tools.get('career_form_answers_save').invoke(save);
@@ -368,4 +369,195 @@ test('preferred contact method is available for explicit staging while Contact m
   const result = await f.service.prepare({ ...args, requestId: randomUUID() });
   assert.deepEqual(result.fields.map(({ id, value }) => ({ id, value })), [{ id: 'method', value: 'email' }]);
   assert.equal(result.unresolved.find(item => item.id === 'contact-permission').reason, 'Protected or unsupported field; complete manually.');
+});
+
+test('fill and submit reach Chrome only through the attached form, after approval, with inspected actions', async () => {
+  const f = fixture();
+  const calls = [];
+  const browser = {
+    status: formId => calls.push(['status', formId]) && true,
+    fill: async (draft, answers, { revalidate }) => { revalidate(); calls.push(['fill', draft.formId, answers]); return { filled: ['name'], skipped: [], url: draft.url }; },
+    submit: async (draft, action, { revalidate }) => { revalidate(); calls.push(['submit', draft.formId, action.id, action.signature]); return { pressed: action.label, url: draft.url, title: draft.title, sameDocument: false, navigated: true, observedText: 'Thank you', confirmationCandidates: [{ text: 'Thank you', newSinceObservation: true }], outcome: 'unknown', alerts: [], accessible: true }; },
+  };
+  const tools = new Map(createFormTools({ store: f.store, browser }).map(tool => [tool.name, tool]));
+  const args = { ...snapshot([field('name', 'Full name'), field('why', 'Why do you want this role?', 'textarea')]),
+    actions: [{ id: 'action-4', label: 'Submit application', kind: 'submit', signature: 'signature:action-4' }, { id: 'action-7', label: 'Next', kind: 'next', signature: 'signature:action-7' }] };
+  const prepared = await f.service.prepare(args);
+  const read = await tools.get('career_form_read').invoke({ formId: prepared.formId });
+  assert.deepEqual(read.actions.map(({ id, kind }) => ({ id, kind })), [{ id: 'action-4', kind: 'submit' }, { id: 'action-7', kind: 'next' }]);
+  assert.deepEqual(read.browser, { attached: true });
+  await tools.get('career_form_answers_save').invoke({ requestId: randomUUID(), revision: read.revision, formId: read.formId, snapshot: read.snapshot, evidenceRevision: read.evidenceRevision, answers: [{ id: 'why', value: 'Because the role matches my saved experience.' }] });
+  const filled = await tools.get('career_form_fill').invoke({ requestId: randomUUID(), formId: read.formId });
+  assert.deepEqual(filled, { filled: ['name'], skipped: [], url: read.url });
+  assert.deepEqual(calls.at(-1), ['fill', read.formId, [{ id: 'why', value: 'Because the role matches my saved experience.', signature: 'signature:why' }]]);
+  await assert.rejects(tools.get('career_form_submit').invoke({ requestId: randomUUID(), formId: read.formId, actionId: 'action-99' }), byCode('NOT_FOUND'));
+  const submitted = await tools.get('career_form_submit').invoke({ requestId: randomUUID(), formId: read.formId, actionId: 'action-4' });
+  assert.equal(submitted.pressed, 'Submit application');
+  assert.equal(submitted.outcome, 'unknown');
+  assert.deepEqual(submitted.confirmationCandidates, [{ text: 'Thank you', newSinceObservation: true }]);
+  assert.deepEqual(calls.at(-1), ['submit', read.formId, 'action-4', 'signature:action-4']);
+  // Without Chrome attached the tools refuse rather than pretend.
+  const detached = new Map(createFormTools({ store: f.store }).map(tool => [tool.name, tool]));
+  assert.deepEqual((await detached.get('career_form_read').invoke({ formId: read.formId })).browser.attached, false);
+  await assert.rejects(detached.get('career_form_fill').invoke({ requestId: randomUUID(), formId: read.formId }), byCode('UNAVAILABLE'));
+  await assert.rejects(detached.get('career_form_submit').invoke({ requestId: randomUUID(), formId: read.formId, actionId: 'action-4' }), byCode('UNAVAILABLE'));
+  // Inspected actions are validated like fields: unknown kinds or missing signatures are rejected before any approval.
+  await assert.rejects(f.service.prepare({ ...snapshot([field('name', 'Full name')]), actions: [{ id: 'a', label: 'Submit', kind: 'delete', signature: 's' }] }), byCode('INVALID_INPUT'));
+});
+
+const submitAction = { id: 'send', label: 'Send application', kind: 'submit', signature: 'signature:send' };
+const actionTools = (store, browser) => new Map(createFormTools({ store, browser }).map(tool => [tool.name, tool]));
+const prepareActionForm = f => f.service.prepare({ ...snapshot([field('email', 'Email', 'email'), field('answer', 'Why this role?', 'textarea')]), actions: [submitAction] });
+
+test('fill and submit reject missing or malformed request UUIDs before browser access', async () => {
+  const f = fixture(), prepared = await prepareActionForm(f);
+  let calls = 0;
+  const tools = actionTools(f.store, { fill: () => { calls++; }, submit: () => { calls++; } });
+  for (const name of ['career_form_fill', 'career_form_submit']) {
+    for (const requestId of [undefined, null, 12, 'submit-this', '00000000-0000-0000-0000-000000000000']) {
+      await assert.rejects(tools.get(name).invoke({ requestId, formId: prepared.formId, ...(name.endsWith('submit') ? { actionId: 'send' } : {}) }), byCode('INVALID_INPUT'));
+    }
+  }
+  assert.equal(calls, 0);
+  assert.deepEqual(f.state().career.receipts, {});
+});
+
+test('fill passes signed staged answers for fields missing from prepared values', async () => {
+  const f = fixture(), prepared = await prepareActionForm(f);
+  assert.deepEqual(prepared.fields.map(item => item.id), ['email']);
+  const read = await f.tools.get('career_form_read').invoke({ formId: prepared.formId });
+  await f.tools.get('career_form_answers_save').invoke({ requestId: randomUUID(), revision: read.revision, formId: read.formId,
+    snapshot: read.snapshot, evidenceRevision: read.evidenceRevision, answers: [{ id: 'answer', value: 'My demonstrated data analysis experience.' }] });
+  const requestId = randomUUID();
+  let calls = 0;
+  const tools = actionTools(f.store, { async fill(draft, answers, context) {
+    calls++; context.revalidate();
+    assert.equal(context.requestId, requestId);
+    assert.deepEqual(draft.fields.map(item => item.id), ['email', 'answer']);
+    assert.deepEqual(answers, [{ id: 'answer', value: 'My demonstrated data analysis experience.', signature: 'signature:answer' }]);
+    return { filled: ['email', 'answer'], skipped: [] };
+  } });
+  const args = { requestId, formId: prepared.formId }, result = await tools.get('career_form_fill').invoke(args);
+  const reopened = actionTools(f.store, { fill: () => assert.fail('A completed fill must not be repeated') });
+  assert.deepEqual(await reopened.get('career_form_fill').invoke(args), result);
+  assert.equal(calls, 1);
+});
+
+test('submit receipts survive tool recreation and reject request ID reuse for other content', async () => {
+  const f = fixture(), prepared = await prepareActionForm(f);
+  let calls = 0;
+  const browser = { async submit(draft, action, context) {
+    calls++; context.revalidate();
+    assert.equal(draft.formId, prepared.formId);
+    assert.deepEqual(action, submitAction);
+    return { pressed: action.label, observedText: 'Synthetic confirmation', confirmationCandidates: [{ text: 'Synthetic confirmation', newSinceObservation: true }], outcome: 'unknown' };
+  } };
+  const args = { requestId: randomUUID(), formId: prepared.formId, actionId: 'send' };
+  const result = await actionTools(f.store, browser).get('career_form_submit').invoke(args);
+  const reopened = actionTools(f.store, browser);
+  assert.deepEqual(await reopened.get('career_form_submit').invoke({ ...args, requestId: args.requestId.toUpperCase() }), result);
+  await assert.rejects(reopened.get('career_form_submit').invoke({ ...args, actionId: 'other' }), byCode('REQUEST_CONFLICT'));
+  await assert.rejects(reopened.get('career_form_fill').invoke({ requestId: args.requestId, formId: prepared.formId }), byCode('REQUEST_CONFLICT'));
+  assert.equal(calls, 1);
+});
+
+test('an in-flight submit reserves its UUID before approval and cannot dispatch through another tool instance', async () => {
+  const f = fixture(), prepared = await prepareActionForm(f), gate = deferred(), entered = deferred();
+  let approvals = 0, dispatches = 0;
+  const browser = { async submit(_draft, _action, { revalidate }) {
+    approvals++; entered.resolve(); await gate.promise; revalidate(); dispatches++;
+    return { observed: 'Synthetic confirmation' };
+  } };
+  const args = { requestId: randomUUID(), formId: prepared.formId, actionId: 'send' };
+  const pending = actionTools(f.store, browser).get('career_form_submit').invoke(args);
+  await entered.promise;
+  assert.equal(f.state().career.receipts[args.requestId].status, 'pending');
+  await assert.rejects(actionTools(f.store, browser).get('career_form_submit').invoke(args), byCode('FORM_ACTION_UNKNOWN'));
+  assert.equal(approvals, 1);
+  assert.equal(dispatches, 0);
+  gate.resolve(true);
+  const result = await pending;
+  assert.deepEqual(await actionTools(f.store, browser).get('career_form_submit').invoke(args), result);
+  assert.equal(dispatches, 1);
+});
+
+for (const error of [new CareerError('FORM_NOT_AUTHORIZED', 'Synthetic refusal'), new CareerError('FORM_ACTION_UNKNOWN', 'Synthetic disconnect'), new Error('Private unexpected error')]) {
+  test(`${error.code ?? 'unexpected failure'} remains consumed across submit replays`, async () => {
+    const f = fixture(), prepared = await prepareActionForm(f);
+    let calls = 0;
+    const browser = { async submit(_draft, _action, { revalidate }) { calls++; revalidate(); throw error; } };
+    const args = { requestId: randomUUID(), formId: prepared.formId, actionId: 'send' };
+    const code = error.code ?? 'FORM_ACTION_UNKNOWN';
+    await assert.rejects(actionTools(f.store, browser).get('career_form_submit').invoke(args), byCode(code));
+    await assert.rejects(actionTools(f.store, browser).get('career_form_submit').invoke(args), failure => {
+      assert.equal(failure.code, code);
+      assert.ok(!failure.message.includes('Private unexpected error'));
+      return true;
+    });
+    assert.equal(calls, 1);
+  });
+}
+
+test('a lost result save retains the durable pending marker and never repeats a submit', async () => {
+  const f = fixture(), prepared = await prepareActionForm(f);
+  let writes = 0, dispatches = 0;
+  const failingStore = { get: f.store.get, update(change) {
+    if (++writes > 1) return Promise.reject(new Error('Synthetic storage interruption'));
+    return f.store.update(change);
+  } };
+  const browser = { async submit(_draft, _action, { revalidate }) { revalidate(); dispatches++; return { observed: 'Synthetic confirmation' }; } };
+  const args = { requestId: randomUUID(), formId: prepared.formId, actionId: 'send' };
+  await assert.rejects(actionTools(failingStore, browser).get('career_form_submit').invoke(args), byCode('FORM_ACTION_UNKNOWN'));
+  assert.equal(f.state().career.receipts[args.requestId].status, 'pending');
+  await assert.rejects(actionTools(f.store, browser).get('career_form_submit').invoke(args), byCode('FORM_ACTION_UNKNOWN'));
+  assert.equal(dispatches, 1);
+});
+
+for (const operation of ['fill', 'submit']) for (const change of ['evidence', 'answers', 'action', 'identity', 'pairing', 'session', 'lock']) {
+  test(`${change} during ${operation} approval prevents browser dispatch`, async () => {
+    const f = fixture(), prepared = await prepareActionForm(f), entered = deferred(), gate = deferred();
+    let epoch = 0, dispatches = 0;
+    const scoped = createScopedAccess(f.store, { assertAvailable: () => f.store.get(), epoch: () => epoch });
+    const browser = { async [operation](_draft, _values, { revalidate }) {
+      entered.resolve(); await gate.promise; revalidate(); dispatches++;
+      return { observed: 'Must not be returned' };
+    } };
+    const args = { requestId: randomUUID(), formId: prepared.formId, ...(operation === 'submit' ? { actionId: 'send' } : {}) };
+    const pending = actionTools(scoped.store, browser).get(`career_form_${operation}`).invoke(args);
+    await entered.promise;
+    if (change === 'evidence') f.alter(state => { state.career.profile.name = 'Changed after approval opened'; state.career.evidenceRevision++; });
+    if (change === 'answers') f.alter(state => { state.career.formDrafts[prepared.formId].answers.answer = { value: 'Changed answer', source: 'agent' }; });
+    if (change === 'action') f.alter(state => { state.career.formDrafts[prepared.formId].actions[0].signature = 'changed-signature'; });
+    if (change === 'identity') f.alter(state => { state.deviceId = 'different-device'; });
+    if (change === 'pairing') f.alter(state => { state.pairing = { origin: 'https://synthetic.example', account: { id: 'different-account' } }; });
+    if (change === 'session') epoch++;
+    if (change === 'lock') f.lock();
+    gate.resolve(true);
+    const code = change === 'lock' ? 'LOCAL_LOCKED' : ['identity', 'pairing', 'session'].includes(change) ? 'IDENTITY_CHANGED' : 'FORM_CONTEXT_CHANGED';
+    await assert.rejects(pending, byCode(code));
+    assert.equal(dispatches, 0);
+  });
+}
+
+test('form reads await live Chrome status rather than treating its pending promise as attached', async () => {
+  const f = fixture(), prepared = await prepareActionForm(f), entered = deferred(), gate = deferred();
+  let settled = false;
+  const tools = actionTools(f.store, { async status(formId) {
+    assert.equal(formId, prepared.formId); entered.resolve(); return gate.promise;
+  } });
+  const pending = tools.get('career_form_read').invoke({ formId: prepared.formId }).then(result => { settled = true; return result; });
+  await entered.promise;
+  assert.equal(settled, false);
+  gate.resolve(false);
+  assert.equal((await pending).browser.attached, false);
+});
+
+test('form reads discard stale career evidence while awaiting Chrome status', async () => {
+  const f = fixture(), prepared = await prepareActionForm(f), entered = deferred(), gate = deferred();
+  const tools = actionTools(f.store, { async status() { entered.resolve(); return gate.promise; } });
+  const pending = tools.get('career_form_read').invoke({ formId: prepared.formId });
+  await entered.promise;
+  f.alter(state => { state.career.evidenceRevision++; });
+  gate.resolve(true);
+  await assert.rejects(pending, byCode('FORM_CONTEXT_CHANGED'));
 });

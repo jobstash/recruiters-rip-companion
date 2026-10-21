@@ -100,7 +100,7 @@ export function inspectForm(request = null) {
   // Isolated-world memory binds the snapshot to actual control nodes, including
   // replacements that happen to have identical labels and attributes.
   const identityKey = Symbol.for('recruiters.form-controls.v1');
-  const identities = globalThis[identityKey] ||= { document: crypto.randomUUID(), nodes: new WeakMap() };
+  const identities = globalThis[identityKey] ||= { document: crypto.randomUUID(), nodes: new WeakMap(), actionBindings: new WeakMap() };
   const identity = node => { if (!identities.nodes.has(node)) identities.nodes.set(node, crypto.randomUUID()); return identities.nodes.get(node); };
   const sensitive = /password|passcode|payment|credit.?card|debit.?card|card.?number|cardholder|\bcvv\b|\bcvc\b|\bcc-|transaction|bank|routing|iban|social.?security|\bssn\b|tax.?id|national.?(?:id|insurance)|passport|government|driver.?licen[cs]e|birth|\bbday\b|\bdob\b|\bage\b|\b(?:18|21)\s*(?:or older|years old|and over)|\bsex\b|gender|pronouns?|race|ethnic|nationality|citizenship|religio|disabil|medical|health|veteran|military|marital|sexual|demograph|self.?identif|signature|sign.?here|consent|agree|certif|attest|acknowledge|terms|privacy|background.?check|opt.?in|subscribe|marketing|permission|\bi confirm\b|\bi authorize\b|may we|can we contact|contact (?:my|your|me)\b|information.*(?:accurate|true)|(?:accurate|true).*information|i have read|expiry|expiration/i;
   const visible = el => !el.closest('[hidden],[aria-hidden="true"],inert') && el.getClientRects().length > 0 && getComputedStyle(el).display !== 'none' && getComputedStyle(el).visibility !== 'hidden';
@@ -109,7 +109,13 @@ export function inspectForm(request = null) {
     const labelled = (el.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean).map(id => document.getElementById(id)?.textContent || '').join(' ');
     return clean(el.getAttribute('aria-label') || labelled || label || el.getAttribute('placeholder') || el.name || el.id);
   };
-  const controlSignature = el => JSON.stringify([identity(el), el.tagName, el.type, el.id, el.name, el.autocomplete, labelFor(el), clean(el.closest('fieldset')?.querySelector('legend')?.textContent), el.type === 'radio' ? el.value : null, el.disabled, el.readOnly, el.required, el.getAttribute('aria-disabled'), ['min','max','step','pattern','maxlength'].map(key => el.getAttribute(key)), el.form ? [identity(el.form), el.form.action, el.form.method, el.form.enctype] : null, el.tagName === 'SELECT' ? [...el.options].slice(0, 101).map(o => [o.value, o.label, o.disabled, o.parentElement?.disabled]) : null]);
+  const protectedControl = el => sensitive.test([el.name, el.id, el.autocomplete, el.getAttribute('aria-label'), el.getAttribute('placeholder'), el.getAttribute('title'),
+    ...(el.labels || [])].map(value => typeof value === 'string' ? value : value?.textContent || '').join(' ') + ' ' +
+    ['aria-labelledby', 'aria-describedby'].map(key => (el.getAttribute(key) || '').split(/\s+/).filter(Boolean).map(id => document.getElementById(id)?.textContent || '').join(' ')).join(' ') + ' ' +
+    (el.closest('fieldset')?.querySelector('legend')?.textContent || '')) || /(?:^|\s)(cc-|transaction-|bday|sex|one-time-code)/i.test(el.autocomplete || '');
+  const disabled = el => el.disabled || el.matches(':disabled') || el.readOnly || el.closest('[aria-disabled="true"]');
+  const formSignature = form => form ? [identity(form), ['action','method','enctype','target','novalidate'].map(key => form.getAttribute(key)), form.action, form.method, form.enctype, form.target, form.noValidate] : null;
+  const controlSignature = el => JSON.stringify([identity(el), el.tagName, el.type, el.id, el.name, el.autocomplete, labelFor(el), protectedControl(el), clean(el.closest('fieldset')?.querySelector('legend')?.textContent), el.type === 'radio' ? el.value : null, !!disabled(el), el.required, el.getAttribute('aria-disabled'), ['min','max','step','pattern','minlength','maxlength'].map(key => el.getAttribute(key)), formSignature(el.form), el.tagName === 'SELECT' ? [...el.options].slice(0, 101).map(o => [o.value, o.label, o.disabled, o.parentElement?.disabled]) : null]);
   const radioGroup = el => {
     const live = document.querySelectorAll('input[type="radio"]');
     if (live.length > 2000) return null;
@@ -121,14 +127,14 @@ export function inspectForm(request = null) {
   for (let index = 0; index < controls.length && schema.length < 64; index++) {
     const el = controls[index], nativeType = el.tagName === 'TEXTAREA' ? 'textarea' : el.tagName === 'SELECT' ? 'select' : el.type;
     if (!['text','email','tel','url','textarea','select','radio','number','date'].includes(nativeType) || !visible(el)) continue;
-    const label = labelFor(el), context = [label, el.name, el.id, el.autocomplete, el.closest('fieldset')?.querySelector('legend')?.textContent].join(' ');
-    if (!label || sensitive.test(context) || /(?:^|\s)(cc-|transaction-|bday|sex|one-time-code)/i.test(el.autocomplete || '')) continue;
+    const label = labelFor(el);
+    if (!label || protectedControl(el)) continue;
     let group = [el], options;
     if (nativeType === 'radio') {
       if (!el.name || radioSeen.has(el.name + ':' + [...document.forms].indexOf(el.form))) continue;
       radioSeen.add(el.name + ':' + [...document.forms].indexOf(el.form));
       group = radioGroup(el);
-      if (!group || group.length > 100 || group.some(n => !visible(n) || n.value.length > 500 || sensitive.test(labelFor(n)))) continue;
+      if (!group || group.length > 100 || group.some(n => !visible(n) || n.value.length > 500 || protectedControl(n))) continue;
       options = group.map(n => ({ value: String(n.value).slice(0, 500), label: labelFor(n) }));
     } else if (nativeType === 'select') {
       if (el.multiple || el.options.length > 100) continue;
@@ -137,18 +143,52 @@ export function inspectForm(request = null) {
     if (options) options = options.filter(option => option.label && option.value !== '');
     if (options && (!options.length || new Set(options.map(option => option.value)).size !== options.length)) continue;
     const empty = nativeType === 'radio' ? group.every(n => !n.checked) : el.value === '';
-    const field = { id: `control-${index}`, label: nativeType === 'radio' ? clean(el.closest('fieldset')?.querySelector('legend')?.textContent || label) : label, type: nativeType, signature: '', empty, required: group.some(n => n.required), manualOnly: !empty || group.some(n => n.disabled || n.readOnly || n.getAttribute('aria-disabled') === 'true') };
+    const field = { id: `control-${index}`, label: nativeType === 'radio' ? clean(el.closest('fieldset')?.querySelector('legend')?.textContent || label) : label, type: nativeType, signature: '', empty, required: group.some(n => n.required), manualOnly: !empty || group.some(disabled) };
     if (el.autocomplete) field.autocomplete = clean(el.autocomplete);
     if (options) field.options = options;
     const fieldBytes = JSON.stringify(field).length * 3;
     if (schemaBytes + fieldBytes > 200000) continue;
     schemaBytes += fieldBytes;
-    schema.push(field); nodes.set(field.id, { el, group, signatures: group.map(controlSignature) });
+    const signatures = group.map(controlSignature);
+    schema.push(field); nodes.set(field.id, { el, group, signatures, check: () => group.every((node, i) => node.isConnected && visible(node) && controlSignature(node) === signatures[i]) && (nativeType !== 'radio' || sameMembers(radioGroup(el), group)) });
+  }
+  // Submit and next controls are inspected alongside the fields so the user's AI can name the exact
+  // button later; pressing one is a separate, approved operation and never part of filling.
+  const actions = [], actionNodes = new Map();
+  const actionLabel = el => clean(el.tagName === 'INPUT' ? el.value : el.textContent) || clean(el.getAttribute('aria-label'));
+  const actionSignature = el => JSON.stringify([identities.document, location.href, document.baseURI, identity(el), el.tagName, el.type, el.id, el.name, el.value, actionLabel(el), !!disabled(el), el.getAttribute('onclick'),
+    ['form','formaction','formmethod','formenctype','formtarget','formnovalidate'].map(key => el.getAttribute(key)),
+    el.formAction, el.formMethod, el.formEnctype, el.formTarget, el.formNoValidate,
+    formSignature(el.form)]);
+  const candidates = [...document.querySelectorAll('button,input[type="submit"],input[type="button"]')].slice(0, 500);
+  for (let index = 0; index < candidates.length && actions.length < 10; index++) {
+    const el = candidates[index];
+    if (!(el.tagName === 'BUTTON' || el.tagName === 'INPUT') || !['submit', 'button'].includes(el.type) || !visible(el) || disabled(el)) continue;
+    const label = actionLabel(el);
+    if (!label || label.length > 120) continue;
+    const kind = el.type === 'submit' || /\b(?:submit|apply|send)\b/i.test(label) ? 'submit' : /\b(?:next|continue|proceed)\b/i.test(label) ? 'next' : null;
+    if (!kind) continue;
+    const signature = actionSignature(el);
+    let binding = identities.actionBindings.get(el);
+    if (!binding || binding.signature !== signature) {
+      binding = { el, signature, approvedSignature: crypto.randomUUID(), consumed: false, label, check: () => actionSignature(el), available: () => el.isConnected && visible(el) && !disabled(el) };
+      identities.actionBindings.set(el, binding);
+    }
+    const action = { id: `action-${index}`, label, kind, signature: binding.approvedSignature };
+    actions.push(action); actionNodes.set(action.id, binding);
   }
   // Bind each control to the complete current schema, URL and native constraints.
   const snapshot = hash(JSON.stringify([identities.document, location.href, schema, controls.map(controlSignature)]));
-  for (const field of schema) field.signature = `${snapshot}:${hash(JSON.stringify(field))}`;
-  if (!request) return { url: location.href, title: clean(document.title) || pageUrl.hostname, fields: schema };
+  for (const field of schema) { field.signature = `${snapshot}:${hash(JSON.stringify(field))}`; nodes.get(field.id).fieldSignature = field.signature; }
+  // Keep the live bindings for smart paste and approved submit presses; values never live here.
+  identities.url = location.href;
+  identities.controls = nodes;
+  identities.fields = new Map(schema.filter(field => !field.options).map(field => {
+    const { el, signatures } = nodes.get(field.id);
+    return [field.id, { el, signature: field.signature, check: () => identities.url === location.href && el.isConnected && visible(el) && !field.manualOnly && field.empty && !disabled(el) && el.value === '' && controlSignature(el) === signatures[0] }];
+  }));
+  identities.actions = actionNodes;
+  if (!request) return { url: location.href, title: clean(document.title) || pageUrl.hostname, fields: schema, actions };
   if (request.url !== location.href || !Array.isArray(request.fields) || request.fields.length > 64) throw new Error('The page changed. Inspect the form again.');
   const current = new Map(schema.map(f => [f.id, f]));
   const selected = new Set();
@@ -167,8 +207,13 @@ export function inspectForm(request = null) {
       if (!sameMembers(live, group) || live.some(node => node.checked)) { skipped.push(field.id); continue; }
     }
     const target = fresh.type === 'radio' ? group.find(n => n.value === value) : el;
-    if (!target || !target.isConnected || target.disabled || target.readOnly || (fresh.type === 'radio' ? group.some(n => n.checked) : target.value !== '')) { skipped.push(field.id); continue; }
-    if (fresh.type !== 'radio' && fresh.type !== 'select' && target.maxLength >= 0 && value.length > target.maxLength) { skipped.push(field.id); continue; }
+    if (!target || !target.isConnected || disabled(target) || (fresh.type === 'radio' ? group.some(n => n.checked) : target.value !== '')) { skipped.push(field.id); continue; }
+    if (fresh.type !== 'radio' && fresh.type !== 'select') {
+      if (target.validity?.customError || (target.maxLength >= 0 && value.length > target.maxLength) || (target.minLength > 0 && value.length < target.minLength)) { skipped.push(field.id); continue; }
+      const probe = target.cloneNode(false);
+      probe.value = value;
+      if (probe.value !== value || (probe.validity && !probe.validity.valid)) { skipped.push(field.id); continue; }
+    }
     const prototype = fresh.type === 'textarea' ? HTMLTextAreaElement.prototype : fresh.type === 'select' ? HTMLSelectElement.prototype : HTMLInputElement.prototype;
     const property = fresh.type === 'radio' ? 'checked' : 'value';
     const setter = Object.getOwnPropertyDescriptor(prototype, property)?.set;
@@ -189,3 +234,106 @@ export function inspectForm(request = null) {
   return { filled: retained, skipped };
 }
 export const fillForm = inspectForm;
+
+export function checkFormBindings(request) {
+  const identities = globalThis[Symbol.for('recruiters.form-controls.v1')];
+  if (!identities || request?.url !== location.href || identities.url !== location.href || request.fields?.length !== identities.controls?.size || request.actions?.length !== identities.actions?.size) return { attached: false };
+  const fieldsMatch = request.fields.every(field => {
+    const bound = identities.controls.get(field.id);
+    return bound?.fieldSignature === field.signature && bound.check();
+  });
+  const actionsMatch = request.actions.every(action => {
+    const bound = identities.actions.get(action.id);
+    return bound?.approvedSignature === action.signature && bound.available() && bound.check() === bound.signature;
+  });
+  return { attached: fieldsMatch && actionsMatch };
+}
+
+// Smart paste uses only the native clipboard API after a trusted click or Tab focus.
+// It never intercepts paste or writes a synthetic paste/input event into the page.
+export function armSmartPaste({ session } = {}) {
+  const identities = globalThis[Symbol.for('recruiters.form-controls.v1')];
+  if (!identities?.fields || typeof session !== 'string' || !session) throw new Error('Inspect and prepare the form before arming paste.');
+  const armedKey = Symbol.for('recruiters.smart-paste.v1');
+  const arm = globalThis[armedKey] ||= { active: false, listening: false, epoch: 0, selection: null };
+  arm.active = true; arm.session = session; arm.epoch++; arm.selection = null;
+  if (!arm.listening) {
+    arm.listening = true;
+    const invalidate = () => { arm.epoch++; arm.selection = null; };
+    document.addEventListener('pointerdown', event => {
+      invalidate();
+      if (!arm.active || !event.isTrusted || event.button !== 0) return;
+      const el = event.target?.closest?.('input,textarea') || event.target?.closest?.('label')?.control;
+      if (el) arm.selection = { el, at: Date.now() };
+    }, true);
+    document.addEventListener('keydown', event => {
+      if (event.key !== 'Tab') return;
+      invalidate();
+      if (arm.active && event.isTrusted && !event.altKey && !event.ctrlKey && !event.metaKey) arm.selection = { tab: true, at: Date.now() };
+    }, true);
+    document.addEventListener('focusout', () => { arm.epoch++; }, true);
+    globalThis.addEventListener('blur', invalidate, true);
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState !== 'visible') invalidate(); }, true);
+    document.addEventListener('focusin', event => {
+      const selection = arm.selection;
+      arm.selection = null;
+      if (!arm.active || !event.isTrusted || !selection || Date.now() - selection.at > 1000) return;
+      const bound = globalThis[Symbol.for('recruiters.form-controls.v1')], el = event.target;
+      if (!selection.tab && selection.el !== el) return;
+      for (const [fieldId, field] of bound?.fields ?? []) {
+        if (field.el !== el) continue;
+        const epoch = arm.epoch, session = arm.session;
+        const current = () => arm.active && arm.session === session && arm.epoch === epoch && bound === globalThis[Symbol.for('recruiters.form-controls.v1')] && bound.fields.get(fieldId) === field &&
+          document.activeElement === el && document.hasFocus() && field.check();
+        if (!current() || !navigator.clipboard?.writeText) return;
+        try {
+          chrome.runtime.sendMessage({ action: 'paste-value', fieldId, signature: field.signature, url: location.href, session }, response => {
+            if (chrome.runtime.lastError) return;
+            const value = response?.value;
+            if (typeof value !== 'string' || !value || value.length > 20000 || !current()) return;
+            const report = ok => {
+              if (!current()) return;
+              try { chrome.runtime.sendMessage({ action: 'paste-ready', fieldId, signature: field.signature, url: location.href, session, ok }, () => void chrome.runtime.lastError); } catch { /* The extension disconnected. */ }
+            };
+            try { navigator.clipboard.writeText(value).then(() => report(true), () => report(false)); } catch { report(false); }
+          });
+        } catch { /* The extension disconnected; nothing reaches the clipboard. */ }
+        return;
+      }
+    }, true);
+  }
+  return { armed: true, fields: [...identities.fields.values()].filter(field => field.check()).length };
+}
+export function disarmSmartPaste() {
+  const arm = globalThis[Symbol.for('recruiters.smart-paste.v1')];
+  if (arm) { arm.active = false; arm.session = null; arm.epoch++; arm.selection = null; }
+  return { armed: false };
+}
+
+// Consume the exact inspected action before clicking: an uncertain result must not be retried.
+export function pressAction(request) {
+  const identities = globalThis[Symbol.for('recruiters.form-controls.v1')];
+  const bound = identities?.actions?.get(request?.actionId);
+  if (!bound || identities.url !== location.href || request.url !== location.href) throw new Error('The page changed. Inspect the form again before submitting.');
+  if (request.actionSignature !== bound.approvedSignature || !bound.available() || bound.check() !== bound.signature) throw new Error('The submit control changed. Inspect the form again before submitting.');
+  if (bound.consumed) throw new Error('This approved control has already been pressed. Check the page; it will not be pressed again.');
+  bound.consumed = true;
+  bound.el.click();
+  return { clicked: true, label: bound.label, url: location.href };
+}
+
+// Page text is evidence to review, not proof that the site accepted an application.
+export function observePage() {
+  const identities = globalThis[Symbol.for('recruiters.form-controls.v1')];
+  const fields = identities?.fields ? [...identities.fields.values()] : [];
+  const clean = value => String(value ?? '').replace(/\s+/g, ' ').trim();
+  const visible = el => el.isConnected && !el.closest('[hidden],[aria-hidden="true"],inert') && el.getClientRects().length > 0 && getComputedStyle(el).display !== 'none' && getComputedStyle(el).visibility !== 'hidden';
+  const visibleFields = fields.filter(field => visible(field.el)).length;
+  const observedText = clean(document.body?.innerText).slice(0, 30000);
+  const confirmationCandidates = [...observedText.matchAll(/[^.!?]{0,80}(?:thank you|thanks for applying|application (?:has been |was |is )?(?:received|submitted|sent|complete)|we(?:'ve| have) received|successfully (?:submitted|applied))[^.!?]{0,80}/gi)]
+    .slice(0, 5).map(match => match[0].trim().slice(0, 240));
+  const alerts = [...document.querySelectorAll('[role="alert"],[aria-invalid="true"],.error,.field-error')].slice(0, 20).filter(visible)
+    .map(el => clean(el.getAttribute('aria-label') || el.textContent || el.validationMessage)).filter(Boolean).slice(0, 5).map(item => item.slice(0, 200));
+  return { url: location.href, title: clean(document.title).slice(0, 300), fieldsInspected: fields.length, fieldsVisible: visibleFields,
+    observedText, confirmationCandidates, outcome: 'unknown', alerts };
+}

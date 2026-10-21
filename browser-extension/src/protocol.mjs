@@ -20,31 +20,85 @@ export function deviceResult(op, result) {
   for (const key of ['deviceId','publicKey','label']) if (typeof result?.[key] === 'string' && result[key].length <= 4096) out[key] = result[key];
   return out;
 }
-export function createNativeClient({ connect, host, randomUUID = () => crypto.randomUUID(), timeoutMs = 180000, maxPending = 4 }) {
+export function safeNativeCommand(message) {
+  insist(exact(message, ['version','id','op','payload']) && message.version === 1 && uuid(message.id), 'Invalid browser command.');
+  insist(new TextEncoder().encode(JSON.stringify(message)).length <= 1024 * 1024 - 1024, 'Browser command exceeds its size limit.');
+  const p = message.payload;
+  const text = (value, max) => typeof value === 'string' && value.length > 0 && value.length <= max;
+  const signedField = field => exact(field, ['id','signature']) && text(field.id, 200) && text(field.signature, 1000);
+  let valid = message.op === 'forms_status' && exact(p, ['formId']) && text(p.formId, 100);
+  if (message.op === 'forms_fill') valid = exact(p, ['requestId','formId','fields','answers']) && uuid(p.requestId) && text(p.formId, 100) &&
+    Array.isArray(p.fields) && p.fields.length <= 64 && p.fields.every(signedField) && new Set(p.fields.map(field => field.id)).size === p.fields.length &&
+    Array.isArray(p.answers) && p.answers.length <= 64 && p.answers.every(answer => exact(answer, ['id','value','signature']) && text(answer.id, 200) && text(answer.signature, 1000) && text(answer.value, 10000)) &&
+    new Set(p.answers.map(answer => answer.id)).size === p.answers.length;
+  if (message.op === 'forms_submit') valid = exact(p, ['requestId','formId','actionId','actionSignature']) && uuid(p.requestId) &&
+    text(p.formId, 100) && text(p.actionId, 200) && text(p.actionSignature, 1000);
+  insist(valid, 'This browser command is invalid or unavailable.');
+  return { op: message.op, payload: p };
+}
+
+// Companion-initiated commands (fill or submit on the user's own tab) arrive on the same port as
+// `{version, id, op, payload}` and are answered with `{version, id, ok, result|error}`.
+export function createNativeClient({ connect, host, onCommand = null, onDisconnect = null, randomUUID = () => crypto.randomUUID(), timeoutMs = 180000, maxPending = 4 }) {
   let port; const pending = new Map();
-  const failAll = () => { port = null; for (const task of pending.values()) { clearTimeout(task.timer); task.reject(new Error('Open Recruiters.rip Companion, then try again.')); } pending.clear(); };
+  const failAll = () => {
+    const wasConnected = Boolean(port); port = null;
+    for (const task of pending.values()) { clearTimeout(task.timer); task.reject(new Error('Open Recruiters.rip Companion, then try again.')); }
+    pending.clear();
+    if (wasConnected) { try { onDisconnect?.(); } catch { /* Disconnect cleanup must not strand requests. */ } }
+  };
+  function open() {
+    if (port) return port;
+    port = connect(host);
+    const active = port, commands = new Set(), seenCommands = new Set();
+    const send = reply => {
+      if (port !== active) return;
+      try { active.postMessage(reply); }
+      catch { failAll(); try { active.disconnect(); } catch { /* Already disconnected. */ } }
+    };
+    const failed = (id, error) => ({ version: 1, id, ok: false, error: { message: String(error?.message || 'The browser could not complete this operation.').slice(0, 400) } });
+    active.onMessage.addListener(message => {
+      if (port !== active) return;
+      if (message && Object.hasOwn(message, 'op')) {
+        let command;
+        try {
+          command = safeNativeCommand(message);
+          insist(onCommand && commands.size < maxPending, 'The browser is busy or unavailable.');
+          insist(!seenCommands.has(message.id), 'This browser command was already received.');
+        } catch (error) { if (uuid(message.id)) send(failed(message.id, error)); return; }
+        commands.add(message.id); seenCommands.add(message.id);
+        if (seenCommands.size > 256) seenCommands.delete(seenCommands.values().next().value);
+        Promise.resolve().then(() => {
+          insist(port === active, 'The companion disconnected before the operation.');
+          return onCommand(command.op, command.payload);
+        }).then(
+          result => send({ version: 1, id: message.id, ok: true, result }),
+          error => send(failed(message.id, error)),
+        ).finally(() => commands.delete(message.id));
+        return;
+      }
+      const task = pending.get(message?.id); if (!task) return;
+      pending.delete(message.id); clearTimeout(task.timer);
+      if (message.version === 1 && message.ok === true) task.resolve(message.result);
+      else task.reject(new Error(typeof message?.error?.message === 'string' ? message.error.message.slice(0, 400) : 'The companion did not authorize this operation. Try again.'));
+    });
+    active.onDisconnect.addListener(() => { if (port === active) failAll(); });
+    return active;
+  }
   function request(op, payload) {
-    insist(['status','pair','open_settings','capture_jobs','forms_prepare','forms_cancel'].includes(op), 'This native operation is unavailable.');
+    insist(['status','pair','open_settings','capture_jobs','forms_prepare','forms_cancel','forms_validate'].includes(op), 'This native operation is unavailable.');
     insist(pending.size < maxPending, 'The companion is busy. Cancel or finish the current request.');
     const id = randomUUID(), message = { version: 1, id, op, payload };
     insist(new TextEncoder().encode(JSON.stringify(message)).length <= 1024 * 1024, 'This page exceeds the capture limit. Select fewer jobs.');
-    if (!port) {
-      port = connect(host);
-      const active = port;
-      active.onMessage.addListener(message => {
-        if (port !== active) return;
-        const task = pending.get(message?.id); if (!task) return;
-        pending.delete(message.id); clearTimeout(task.timer);
-        if (message.version === 1 && message.ok === true) task.resolve(message.result);
-        else task.reject(new Error(typeof message?.error?.message === 'string' ? message.error.message.slice(0, 400) : 'The companion did not authorize this operation. Try again.'));
-      });
-      active.onDisconnect.addListener(() => { if (port === active) failAll(); });
-    }
+    open();
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { pending.delete(id); reject(new Error('The companion request expired. Review the companion and try again.')); }, timeoutMs);
+      const timer = setTimeout(() => { pending.delete(id); reject(new Error('The companion request expired. Review the companion and try again.')); }, op === 'forms_validate' ? Math.min(timeoutMs, 5000) : timeoutMs);
       pending.set(id, { resolve, reject, timer });
-      try { port.postMessage(message); } catch (error) { pending.delete(id); clearTimeout(timer); reject(error); }
+      try { port.postMessage(message); } catch (error) {
+        pending.delete(id); clearTimeout(timer); reject(error);
+        const active = port; failAll(); try { active?.disconnect(); } catch { /* Already disconnected. */ }
+      }
     });
   }
-  return { request, disconnect() { const active = port; failAll(); active?.disconnect(); } };
+  return { request, connected: () => Boolean(port), disconnect() { const active = port; failAll(); try { active?.disconnect(); } catch { /* Already disconnected. */ } } };
 }

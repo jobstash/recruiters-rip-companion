@@ -87,7 +87,7 @@ export function createBrowserForms({ store, credentials, authorize, assertAvaila
   }
   function current(run) { const state = store.get(); check(run, state); return state; }
   async function prepare(args) {
-    if (!args || typeof args !== 'object' || Array.isArray(args) || Object.keys(args).some(key => !['requestId', 'formId', 'url', 'title', 'fields', 'useApi'].includes(key)) ||
+    if (!args || typeof args !== 'object' || Array.isArray(args) || Object.keys(args).some(key => !['requestId', 'formId', 'url', 'title', 'fields', 'actions', 'useApi'].includes(key)) ||
         !UUID.test(args.requestId) || typeof args.useApi !== 'boolean') fail('INVALID_INPUT', 'Provide a request UUID, inspected form and explicit useApi flag.');
     const snapshot = validateFormSnapshot(args), fingerprint = formFingerprint(snapshot), formId = `form:${fingerprint}`;
     if (args.formId !== undefined && args.formId !== formId) fail('FORM_CONTEXT_CHANGED', 'The page snapshot changed. Inspect and prepare it again.');

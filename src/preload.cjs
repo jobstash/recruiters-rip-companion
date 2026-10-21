@@ -12,4 +12,10 @@ contextBridge.exposeInMainWorld('companion', Object.freeze({
     ipcRenderer.on('state-changed', listener);
     return () => ipcRenderer.removeListener('state-changed', listener);
   },
+  onSettingsSection(callback) {
+    if (typeof callback !== 'function') return;
+    const listener = (_event, section) => { if (section === 'prescan') callback(section); };
+    ipcRenderer.on('settings-section', listener);
+    return () => ipcRenderer.removeListener('settings-section', listener);
+  },
 }));

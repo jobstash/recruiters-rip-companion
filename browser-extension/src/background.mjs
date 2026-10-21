@@ -160,6 +160,8 @@ async function act(message) {
       if (result.skipped.length) { state.selected = result.skipped; state.notice += ' Skipped values remain here to review or copy.'; }
     } else if (action === 'settings') {
       await native.request('open_settings', {}); state.notice = 'Companion settings opened.';
+    } else if (action === 'configure') {
+      await native.request('open_decisions_settings', {}); state.notice = 'Decisions API settings opened in Companion.';
     } else throw new Error('Unknown panel action.');
   } catch (error) {
     if (generation === token) state.error = error.message || 'The request failed. Try again.';

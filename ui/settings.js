@@ -1,6 +1,7 @@
 'use strict';
 const $ = id => document.getElementById(id);
 let state, busy = false, noticeKind = '', noticeTimer, careerViewVersion, stateRequest = 0, view = null;
+let requestedSection = null;
 // Confirmations leave on their own after a few seconds; errors and in-progress instructions stay until something replaces them.
 const notice = (text, kind = '', sticky = false) => {
   clearTimeout(noticeTimer);
@@ -74,6 +75,7 @@ async function refresh() {
     window.prescanUI?.refresh(state.prescan, state.paired);
     window.updatesUI?.refresh(state.updates);
     window.helpUI.refresh(state);
+    if (requestedSection) { const section = requestedSection; requestedSection = null; openSettings(section); }
     if (state.failure) notice(state.failure, 'error', true);
   } catch {
     if (request !== stateRequest) return;
@@ -188,5 +190,6 @@ $('approval-cancel').addEventListener('click', () => { void answerApproval(false
 $('approval-allow').addEventListener('click', () => { void answerApproval(true); });
 $('approval-dialog').addEventListener('cancel', event => { event.preventDefault(); void answerApproval(false); });
 window.companion.onState(() => { void refresh(); });
+window.companion.onSettingsSection(section => { requestedSection = section; void refresh(); });
 void refresh();
 setInterval(() => { if (!busy && !document.hidden) void refresh(); }, 5000);

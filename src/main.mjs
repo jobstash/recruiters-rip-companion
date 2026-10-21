@@ -216,6 +216,10 @@ function showSettings() {
   }
   return windowLoaded;
 }
+async function showDecisionsSettings() {
+  await showSettings();
+  window.webContents.send('settings-section', 'prescan');
+}
 function confirm(title, detail, signal) {
   const pending = confirmation.then(() => new Promise(resolve => {
     if (locked || quitDraining || signal?.aborted) { resolve(false); return; }
@@ -374,13 +378,14 @@ async function installConnections() {
   catch { browserConnection = 'unavailable'; }
 }
 async function nativeOperation(op, payload, socket = null) {
-  const keys = { status: [], open_settings: [], pair: ['productOrigin', 'pairing'],
+  const keys = { status: [], open_settings: [], open_decisions_settings: [], pair: ['productOrigin', 'pairing'],
     capture_jobs: ['requestId', 'sourceUrl', 'jobs'], forms_prepare: ['requestId', 'formId', 'url', 'title', 'fields', 'actions'], forms_cancel: ['requestId'],
     forms_validate: ['formId', 'fields'], forms_profile_save: ['requestId', 'formId', 'snapshot', 'values'] };
   if (!Object.hasOwn(keys, op)) fail('INVALID_INPUT', 'This browser operation is unavailable.');
   exact(payload, keys[op]);
   if (op === 'status') return status();
   if (op === 'open_settings') { showSettings(); return { opened: true }; }
+  if (op === 'open_decisions_settings') { await showDecisionsSettings(); return { opened: true }; }
   if (op === 'pair') return pair(payload);
   assertAvailable(false);
   if (op === 'forms_profile_save') {
@@ -415,6 +420,10 @@ async function nativeOperation(op, payload, socket = null) {
     scoped.assertAvailable(false); careerViewRevision++; emit(); return result;
   });
   assertPaidWorkAllowed();
+  if (!prescanCredentials.publicState().configured) {
+    await showDecisionsSettings();
+    fail('PRESCAN_KEY_REQUIRED', 'Add your OpenAI key in Companion’s Optional Decisions API settings, then choose Read page again.');
+  }
   const scoped = createScopedAccess(store, { assertAvailable, epoch: () => sessionEpoch });
   const preparedState = scoped.store.get(), identity = identityKey(preparedState);
   const evidence = formEvidence(preparedState.career ?? createCareerState()), credentialVersion = preparedState.prescanCredentialVersion ?? 0;

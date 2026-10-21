@@ -32,7 +32,8 @@ $('detect').onclick = () => {
   if (state.buildId !== BUILD_ID) { chrome.runtime.reload(); return; }
   return pageAction('detect');
 };
-$('settings').onclick = $('configure').onclick = () => send('settings');
+$('settings').onclick = () => send('settings');
+$('configure').onclick = () => send('configure');
 $('cancel').onclick = () => send('cancel');
 $('save').onclick = () => send('save', { indexes: [...document.querySelectorAll('[data-job]:checked')].map(n => Number(n.dataset.job)) });
 $('fill').onclick = () => send('fill');

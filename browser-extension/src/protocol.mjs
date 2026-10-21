@@ -86,7 +86,7 @@ export function createNativeClient({ connect, host, onCommand = null, onDisconne
     return active;
   }
   function request(op, payload) {
-    insist(['status','pair','open_settings','capture_jobs','forms_prepare','forms_profile_save','forms_cancel','forms_validate'].includes(op), 'This native operation is unavailable.');
+    insist(['status','pair','open_settings','open_decisions_settings','capture_jobs','forms_prepare','forms_profile_save','forms_cancel','forms_validate'].includes(op), 'This native operation is unavailable.');
     insist(pending.size < maxPending, 'The companion is busy. Cancel or finish the current request.');
     const id = randomUUID(), message = { version: 1, id, op, payload };
     insist(new TextEncoder().encode(JSON.stringify(message)).length <= 1024 * 1024, 'This page exceeds the capture limit. Select fewer jobs.');

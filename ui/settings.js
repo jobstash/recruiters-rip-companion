@@ -138,8 +138,8 @@ function renderGithub() {
   if (!github.paired) return;
   const text = {
     loading: 'Checking your GitHub link…',
-    linked: `Linked as @${github.login}. JobStash can match your open-source work to you.`,
-    unlinked: 'Not linked. Optional: developers with open-source work can link GitHub so JobStash can confirm those contributions are theirs.',
+    linked: `Linked as @${github.login}. Your AI can find people you know at hiring companies for warm introductions.`,
+    unlinked: 'Not linked. Optional: developers with open-source work can link GitHub so your AI can find people you already know at hiring companies and ask them for an introduction instead of a recruiter.',
     offline: 'Could not reach the platform to check your GitHub link. Check your connection.',
     reconnect: 'Reconnect your account to check your GitHub link.',
     unknown: '',

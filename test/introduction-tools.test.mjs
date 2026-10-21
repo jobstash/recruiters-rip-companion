@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createCareerState, hash } from '../src/mcp/state.mjs';
-import { createIntroductionTools } from '../src/mcp/introduction-tools.mjs';
+import { createIntroductionTools, SHARING_PURPOSE } from '../src/mcp/introduction-tools.mjs';
 
 const pdf = Buffer.from('%PDF-1.7 synthetic cv bytes').toString('base64');
 function fixture({ approve = true, share = async () => ({ documentId: 'doc-1', attached: true, employment: 2 }) } = {}) {
@@ -35,7 +35,7 @@ test('a CV moves from needs_extraction to shared only after consent and approval
   assert.deepEqual([result.shared, result.documentId, result.roles], [true, 'doc-1', 2]);
   // The approval names the destination, the CV and the matched employers; the upload carries no display names.
   assert.match(f.calls.confirm[0].detail, /^Jane Doe CV\.pdf and 2 matched roles \(Example Labs, Second Co\) go to JobStash\./);
-  assert.match(f.calls.confirm[0].detail, /launches direct introductions/);
+  assert.ok(f.calls.confirm[0].detail.endsWith(SHARING_PURPOSE));
   const sent = f.calls.share[0];
   assert.deepEqual(sent.document, { filename: 'Jane Doe CV.pdf', mediaType: 'application/pdf', contentBase64: pdf });
   assert.deepEqual(sent.employment.map(item => Object.keys(item).sort()), [['current', 'endDate', 'ref', 'startDate', 'title'], ['current', 'endDate', 'ref', 'startDate', 'title']]);
@@ -90,11 +90,17 @@ test('a pasted text CV is shared as text without control characters or path sepa
   assert.deepEqual(f.calls.share[0].document, { filename: 'cv-pasted', mediaType: 'text/plain', text: 'Engineer at Example Labs\nLine two' });
 });
 
-test('employer search relays queries and GitHub onboarding records the opened page or a skip', async () => {
+test('employer search and intro paths relay through the platform; GitHub onboarding records the opened page or a skip', async () => {
   const f = fixture();
   await f.call('career_employer_search', { queries: [{ name: 'Example Labs', website: 'example.com' }] });
   assert.deepEqual(f.calls.platform, [{ operation: 'employer_search', args: { queries: [{ name: 'Example Labs', website: 'example.com' }] } }]);
   await assert.rejects(f.call('career_employer_search', { queries: [] }), { code: 'INVALID_INPUT' });
+  assert.deepEqual(await f.call('career_intro_paths', { jobIds: ['node:1'] }), { results: [] });
+  assert.deepEqual(f.calls.platform[1], { operation: 'intro_paths', args: { jobIds: ['node:1'] } });
+  await assert.rejects(f.call('career_intro_paths', { jobIds: ['local:abc'] }), { code: 'INVALID_INPUT' });
+  await assert.rejects(f.call('career_intro_paths', { jobIds: Array.from({ length: 11 }, (_, i) => `node:${i + 1}`) }), { code: 'INVALID_INPUT' });
+  await assert.rejects(f.call('career_intro_paths', {}), { code: 'INVALID_INPUT' });
+  assert.equal(f.calls.platform.length, 2);
   assert.equal((await f.call('career_employment_status')).github, null);
   await f.call('account_github_connect');
   assert.equal(f.calls.github, 1);

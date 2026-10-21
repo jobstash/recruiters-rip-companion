@@ -6,7 +6,7 @@ import { createCareerState, fail, readCareer } from './state.mjs';
 // with standing consent plus a native approval for each upload, the companion sends the CV and matched roles to JobStash.
 // Withdrawing consent stops future uploads only; it can be granted again at any time.
 export const CONSENT_VERSION = 1;
-export const SHARING_PURPOSE = 'JobStash attaches your CV and matched work history to your JobStash profile, so you are included when it launches direct introductions to people at companies, without recruiters.';
+export const SHARING_PURPOSE = 'JobStash attaches your CV and matched work history to your JobStash profile, so you are included in direct introductions to people at companies, without recruiters.';
 const SHAREABLE_TYPES = new Set(['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document']);
 const MAX_ORIGINAL_BYTES = 5 * 1024 * 1024;
 const MAX_TEXT = 100_000;
@@ -21,6 +21,8 @@ const roleSchema = object({
   startDate: partialDate, endDate: { anyOf: [partialDate, { type: 'null' }] }, current: { type: 'boolean' },
 }, ['ref', 'name', 'title', 'startDate', 'endDate', 'current']);
 const searchSchema = object({ queries: { type: 'array', minItems: 1, maxItems: 20, items: object({ name: text(200), website: text(300) }, ['name']) } }, ['queries']);
+const PLATFORM_JOB_ID = /^node:[1-9][0-9]{0,18}$/;
+const introPathsSchema = object({ jobIds: { type: 'array', minItems: 1, maxItems: 10, uniqueItems: true, items: { type: 'string', pattern: PLATFORM_JOB_ID.source } } }, ['jobIds']);
 
 const state = career => record(career.introductions) ? career.introductions : {};
 const cvSources = career => Object.values(career.sources ?? {}).filter(source => record(source) && source.purpose === 'cv' && !source.archived && typeof source.id === 'string');
@@ -108,6 +110,17 @@ export function createIntroductionTools({ store, platform, shareCv, confirm, ope
         if (!record(args) || !Array.isArray(args.queries) || !args.queries.length || args.queries.length > 20)
           fail('INVALID_INPUT', 'Provide 1–20 employer queries.');
         return platform('employer_search', { queries: args.queries });
+      },
+    },
+    {
+      name: 'career_intro_paths', readOnly: true, inputSchema: introPathsSchema,
+      description: 'Who the candidate already knows at the employers of up to 10 platform jobs, from the GitHub collaboration graph: direct coworkers (hops 1) and people reachable through one shared contact (hops 2). Each path names real GitHub identities (login, name, avatar, profile URL) and up to three verified commit emails per person, with the shared organizations, repositories and overlap dates as evidence. Requires current paid membership and a linked GitHub account (github null → call account_github_connect). Relationships are inferred from overlapping contributions, not confirmed; local job IDs are not supported.',
+      async invoke(args = {}) {
+        if (!record(args) || !Array.isArray(args.jobIds) || !args.jobIds.length || args.jobIds.length > 10)
+          fail('INVALID_INPUT', 'Provide 1–10 platform job IDs.');
+        if (args.jobIds.some(id => typeof id !== 'string' || !PLATFORM_JOB_ID.test(id)))
+          fail('INVALID_INPUT', 'Intro paths exist only for platform jobs (node:<id>).');
+        return platform('intro_paths', { jobIds: args.jobIds });
       },
     },
     {

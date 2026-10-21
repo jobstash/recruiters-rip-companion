@@ -4,7 +4,9 @@
   const element = name => document.getElementById(`prescan-${name}`);
   const key = element('key');
   const jobsView = document.getElementById('view-jobs');
-  const steps = { key: document.getElementById('run-step-key'), prefilter: document.getElementById('run-step-prefilter'), handover: document.getElementById('run-step-handover') };
+  const steps = { key: document.getElementById('run-step-key'), recency: document.getElementById('run-step-recency'),
+    prefilter: document.getElementById('run-step-prefilter'), handover: document.getElementById('run-step-handover') };
+  const runSteps = document.querySelector('.run-steps');
   const keyAction = document.getElementById('jobs-prescan-settings');
   const handover = document.getElementById('copy-review-prompt');
   const range = element('range');
@@ -62,9 +64,11 @@
     const available = Boolean(credentials && run);
     const running = run?.status === 'running';
     const configured = Boolean(available && credentials.configured);
+    const keyError = configured && ['PRESCAN_INVALID_KEY', 'PRESCAN_AUTH', 'PRESCAN_KEY_REQUIRED'].includes(run?.lastError?.code);
+    const showKeyStep = !configured || keyError;
     const entering = available && (!configured || replacing);
     key.disabled = !entering || pending;
-    const needsSetup = available && (!credentials.configured || !paired);
+    const needsSetup = available && (!configured || !paired || keyError);
     const selectedRange = rangeDraft ?? run?.publicationRange ?? 'past_3_days';
     const rangeIndex = publicationRanges.findIndex(([value]) => value === selectedRange);
     const rangeLabel = publicationRanges[rangeIndex < 0 ? 2 : rangeIndex][1];
@@ -86,18 +90,23 @@
     }
     element('replace').disabled = !configured || pending;
     element('remove').disabled = !configured || pending;
-    element('start').disabled = !available || pending || running || (!needsSetup && previewState !== 'ready');
+    element('start').disabled = !available || pending || running || keyError || (!needsSetup && previewState !== 'ready');
     element('start').textContent = available && !paired ? 'Connect account' : 'Start pre-filtering';
     element('cancel').hidden = !available || (!starting && !running);
     element('cancel').disabled = cancelling;
     element('form').setAttribute('aria-busy', String(pending));
-    // The rail: one step is current and carries the primary action. Pre-filtering itself is either running or it is not.
-    const currentStep = !available || !configured ? 'key' : run.status === 'completed' ? 'handover' : 'prefilter';
+    // The key is setup, not recurring workflow: remove it after a successful save and restore it only when missing or rejected.
+    steps.key.hidden = !showKeyStep;
+    runSteps.classList.toggle('has-key-step', showKeyStep);
+    const order = showKeyStep ? ['key', 'recency', 'prefilter', 'handover'] : ['recency', 'prefilter', 'handover'];
+    order.forEach((name, index) => { steps[name].querySelector('.run-step-number').textContent = String(index + 1); });
+    const currentStep = showKeyStep ? 'key' : run.status === 'completed' ? 'handover' : 'prefilter';
     for (const [name, step] of Object.entries(steps)) {
       if (name === currentStep) step.setAttribute('aria-current', 'step'); else step.removeAttribute('aria-current');
     }
-    element('key-state').textContent = !available ? 'Open local storage.' : configured ? `Key …${credentials.keyHint} saved.` : 'No OpenAI key saved.';
-    keyAction.textContent = configured ? 'Change key' : 'Add key';
+    element('key-state').textContent = !available ? 'Open local storage.' : keyError ? `Key …${credentials.keyHint} was rejected by OpenAI.`
+      : configured ? `Key …${credentials.keyHint} saved.` : 'No OpenAI key saved.';
+    keyAction.textContent = configured ? 'Replace key' : 'Add key';
     keyAction.classList.toggle('primary', currentStep === 'key'); keyAction.classList.toggle('ghost', currentStep !== 'key');
     keyAction.disabled = !available;
     element('start').classList.toggle('primary', currentStep === 'prefilter' && !running); element('start').classList.toggle('ghost', currentStep !== 'prefilter' || running);

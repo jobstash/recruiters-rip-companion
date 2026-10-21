@@ -272,7 +272,9 @@ export function armSmartPaste({ session } = {}) {
       if (arm.active && event.isTrusted && !event.altKey && !event.ctrlKey && !event.metaKey) arm.selection = { tab: true, at: Date.now() };
     }, true);
     document.addEventListener('focusout', () => { arm.epoch++; }, true);
-    globalThis.addEventListener('blur', invalidate, true);
+    // Element blur precedes the next field's focusin. Do not capture it as a
+    // window blur: that would erase the trusted click/Tab selection mid-switch.
+    globalThis.addEventListener('blur', invalidate);
     document.addEventListener('visibilitychange', () => { if (document.visibilityState !== 'visible') invalidate(); }, true);
     document.addEventListener('focusin', event => {
       const selection = arm.selection;

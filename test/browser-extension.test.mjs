@@ -352,11 +352,14 @@ function pastePage() {
     click() { this.clicks++; }
   }
   const buttons = [new Button('Submit application'), new Button('Cancel', 'button'), new Button('Next step', 'button')];
-  const listeners = {}, messages = [], clipboard = [];
+  const listeners = {}, windowCapture = {}, messages = [], clipboard = [];
   let responder = () => ({ value: null });
   page.context.document.querySelectorAll = selector => selector.startsWith('button') ? buttons : selector.includes('alert') ? [] : page.controls;
   page.context.document.addEventListener = (type, fn) => { listeners[type] = fn; };
-  page.context.addEventListener = (type, fn) => { listeners[`window:${type}`] = fn; };
+  page.context.addEventListener = (type, fn, options) => {
+    listeners[`window:${type}`] = fn;
+    windowCapture[type] = options === true || options?.capture === true;
+  };
   page.context.document.body = { innerText: 'Apply for this role. Full name. Email address.' };
   page.context.document.visibilityState = 'visible';
   page.context.document.hasFocus = () => true;
@@ -369,12 +372,38 @@ function pastePage() {
   const focus = (el, { tab = false, trusted = true } = {}) => {
     if (tab) listeners.keydown({ key: 'Tab', isTrusted: trusted });
     else listeners.pointerdown({ target: el, button: 0, isTrusted: trusted });
-    if (page.context.document.activeElement) listeners.focusout({});
+    if (page.context.document.activeElement) {
+      // Native element blur travels through window's capture phase before
+      // focusout and the next control's focusin.
+      if (windowCapture.blur) listeners['window:blur']({ target: page.context.document.activeElement });
+      listeners.focusout({});
+    }
     page.context.document.activeElement = el;
     listeners.focusin({ target: el, isTrusted: trusted });
   };
   return { ...page, buttons, listeners, messages, clipboard, focus, respond: fn => { responder = fn; } };
 }
+
+test('switching through seven fields replaces the clipboard after earlier fields are pasted', async () => {
+  for (const tab of [false, true]) {
+    const page = pastePage(), Input = page.context.HTMLInputElement;
+    const values = ['Synthetic Candidate', 'candidate@example.test', 'San Francisco, CA',
+      'https://x.com/synthetic_candidate', 'Synthetic Studio', 'Co-founder & CEO', 'First line.\nSecond line.'];
+    const labels = ['Full name', 'Email', 'Location', 'X profile', 'Current company', 'Current role', 'Professional summary'];
+    page.controls.splice(0, page.controls.length, ...labels.map((label, i) => new Input(label, i === 1 ? 'email' : i === 3 ? 'url' : 'text')));
+    const snapshot = page.invoke(inspectForm);
+    page.invoke(armSmartPaste, { session: randomUUID() });
+    page.respond(({ fieldId }) => ({ value: values[snapshot.fields.findIndex(field => field.id === fieldId)] }));
+    for (let i = 0; i < values.length; i++) {
+      page.focus(page.controls[i], { tab });
+      await tick();
+      assert.equal(page.clipboard.at(-1), values[i], `${labels[i]} must replace the prior field's clipboard value`);
+      page.controls[i].value = page.clipboard.at(-1);
+    }
+    assert.deepEqual(page.clipboard, values);
+    assert.deepEqual(page.controls.map(control => control.value), values);
+  }
+});
 
 test('approved action signatures survive filling but prevent repeat presses and reinspection replay', () => {
   const page = pastePage(), snapshot = page.invoke(inspectForm);

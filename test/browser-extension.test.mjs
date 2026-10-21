@@ -24,13 +24,40 @@ test('page access relies on Chrome permission enforcement and retains document i
     scripting: { async executeScript(options) { calls.push(options); if (denied) throw new Error('Missing host permission'); return [{ result: { filled: [], skipped: [] }, documentId: 'snapshot-document' }]; } },
     onError: error => { throw error; },
   });
-  await assert.rejects(inject(7, fillForm), /toolbar icon/);
+  await assert.rejects(inject(7, fillForm));
   denied = false;
   await inject(7, fillForm, [{ url: 'https://jobs.example.test/apply', fields: [] }], 'snapshot-document');
   assert.deepEqual(calls.at(-1).target, { tabId: 7, documentIds: ['snapshot-document'] });
   tab.url = 'chrome://extensions';
   await assert.rejects(inject(7, captureJobs), /HTTP or HTTPS/);
   assert.equal(calls.length, 2);
+});
+
+test('toolbar invocation opens the panel in its gesture and reads the granted tab, not a previous tab', async () => {
+  let granted = false;
+  const onClicked = event(), opened = [], inspected = [];
+  const inject = createPageAccess({
+    sidePanel: { setPanelBehavior: async () => {}, open: async ({ tabId }) => { opened.push(tabId); } },
+    action: { onClicked },
+    tabs: { get: async id => ({ id }) },
+    scripting: { executeScript: async ({ target }) => {
+      if (!granted) throw new Error('Cannot access contents of the page.');
+      inspected.push(target.tabId);
+      return [{ result: { fields: [] }, documentId: 'doc' }];
+    } },
+    onAccess: tabId => inject(tabId, inspectForm),
+    onError: assert.fail,
+  });
+  await assert.rejects(inject(7, inspectForm));
+  assert.deepEqual(inspected, []);
+  granted = true; // Chrome grants activeTab before dispatching action.onClicked.
+  onClicked.emit({ id: 9 });
+  assert.deepEqual(opened, [9]); // Native panel open occurs synchronously in the gesture.
+  await tick();
+  assert.deepEqual(inspected, [9]);
+  onClicked.emit({});
+  await tick();
+  assert.deepEqual(opened, [9]);
 });
 
 test('production and local identities derive distinct IDs and minimal user-triggered permissions', () => {

@@ -32,7 +32,8 @@ let generation = 0, preparingRequest = null, pasteSession = null;
 const panels = new Set();
 const publish = () => { for (const panel of panels) { try { panel.postMessage(state); } catch { panels.delete(panel); } } };
 const inject = createPageAccess({
-  sidePanel: chrome.sidePanel, tabs: chrome.tabs, scripting: chrome.scripting,
+  sidePanel: chrome.sidePanel, tabs: chrome.tabs, scripting: chrome.scripting, action: chrome.action,
+  onAccess: tabId => act({ action: 'detect', payload: { tabId } }),
   onError: () => { state.error = 'Chrome could not open this panel. Click the Recruiters.rip toolbar icon again.'; publish(); },
 });
 const TEXT_TYPES = new Set(['text', 'email', 'tel', 'url', 'textarea', 'number', 'date']);

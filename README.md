@@ -34,7 +34,7 @@ Model authentication stays in your AI app. Normal setup collects no OpenAI/Anthr
 
 1. In **Settings → Chat apps → Chrome extension**, choose **Open extension folder**.
 2. In Chrome 125+, open **Extensions → Manage extensions**, enable **Developer mode**, choose **Load unpacked**, and select that folder.
-3. Open an advert or listing page and click the Recruiters.rip toolbar icon. The panel reads the page: detected jobs appear for selection (**Save selected jobs**); an application form appears with **Prepare values**. **Read this page again** repeats the read.
+3. Open an advert or application page and click the black **rr** extension icon beside Chrome's address bar. This grants temporary access to that tab, opens the panel and immediately reads it. Chrome's generic side-panel button does not grant access. Detected jobs appear for selection (**Save selected jobs**); an application form appears with **Prepare values**. **Read this page again** repeats the read after access is granted. No all-sites permission is requested.
 
 Captures appear in **Jobs** before assessment. They live outside the replaceable matching cache and survive ranking resets. Detail/apply URL aliases deduplicate repeat captures; page provenance alone never merges different jobs. A listing card without the full advert remains **Needs full advert**: open the original and capture it before asking for assessment or a CV. Publication dates remain unknown unless the page provides one.
 

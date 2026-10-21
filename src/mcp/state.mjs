@@ -14,7 +14,9 @@ export function fail(code, message) { throw new CareerError(code, message); }
 export const CAREER_SCHEMA = 2;
 export function createCareerState() {
   return { version: CAREER_SCHEMA, revision: 0, evidenceRevision: 0,
-    profile: { name: null, headline: null, email: null, phone: null, location: null, links: [], roleCapabilities: [], seniority: null, skills: [], preferences: {} },
+    profile: { name: null, firstName: null, lastName: null, preferredName: null, headline: null, email: null, phone: null,
+      location: null, country: null, addressLine1: null, addressLine2: null, city: null, postalCode: null, linkedinUrl: null, personalSummary: null,
+      links: [], roleCapabilities: [], seniority: null, skills: [], preferences: {} },
     sources: {}, facts: {}, applications: {}, receipts: {} };
 }
 /** Schema cutover without migration: keeps CV sources and profile, discards everything else and invalidates evidence and rankings. */
@@ -47,7 +49,7 @@ export async function mutateCareer(store, mutation, operation, input, change) {
     const career = state.career ??= createCareerState();
     const checked = preflight(career, mutation, operation, input);
     if (checked.receipt) { result = checked.receipt.result; return; }
-    const data = await change(career);
+    const data = await change(career, state);
     career.revision++;
     result = structuredClone({ ...data, revision: career.revision });
     if (Buffer.byteLength(JSON.stringify(result)) > 2 * 1024 * 1024) fail('RESULT_LIMIT', 'This result is too large. Request a smaller set of records.');

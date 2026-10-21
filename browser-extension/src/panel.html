@@ -4,10 +4,15 @@
 <body>
 <header><img src="brand/recruiters-rip-lockup-reversed.svg" alt="Recruiters.rip" width="180" height="32"><button id="settings" class="quiet">Settings</button></header>
 <main>
-<nav aria-label="Page tools"><button id="detect">Read this page again</button></nav>
-<p id="status" role="status" aria-live="polite"></p><p id="error" role="alert" hidden></p><button id="cancel" hidden>Cancel preparation</button>
-<section id="page" hidden><h1 id="title"></h1><p id="url" class="meta"></p></section>
-<section id="jobs" hidden><h2>Detected jobs</h2><div id="job-list"></div><button id="save">Save selected jobs</button></section>
-<section id="form" hidden><h2>Application form</h2><p class="meta">Populated and protected controls are not filled. Custom controls and embedded forms remain manual.</p><label class="check"><input id="api" type="checkbox">Use optional Decisions API for known values (may incur provider charges)</label><button id="prepare">Prepare values</button><div id="form-id" class="meta"></div><p id="paste" class="meta" role="status" aria-live="polite" hidden></p><button id="prompt" class="quiet" hidden>Copy agent prompt for unanswered text</button><div id="field-list"></div><div id="unresolved"></div><div id="review-actions" hidden><button id="copy">Copy selected values</button><button id="fill">Fill selected empty controls</button><p class="meta">Click a field on the page and press ⌘V to paste its value. Submitting is your decision: press the page's button yourself, or ask your AI to fill and submit, which the companion asks you to approve. Uploads stay manual.</p></div></section>
+<nav aria-label="Page tools"><button id="detect">Read page</button></nav>
+<p id="status" role="status" aria-live="polite"></p><p id="error" role="alert" hidden></p><button id="cancel" class="quiet" hidden>Cancel preparation</button>
+<section id="page" hidden><h1 id="title"></h1></section>
+<section id="form" hidden>
+<p id="ready" role="status" hidden></p><p id="paste" role="status" aria-live="polite" hidden></p>
+<button id="configure" class="quiet" hidden>Configure in Companion</button>
+<form id="details-form" hidden><h2>Missing details</h2><p>Save on this computer for your next application.</p><div id="question-list"></div><button id="save-details" type="submit">Save details</button></form>
+<details id="review" hidden><summary>Review answers</summary><div id="field-list"></div><div id="unresolved"></div><button id="prompt" class="quiet" hidden>Copy agent prompt</button><div id="review-actions" hidden><button id="copy" class="quiet">Copy selected values</button><button id="fill" class="quiet">Fill selected empty controls</button></div></details>
+</section>
+<details id="jobs" hidden><summary>Detected jobs</summary><div id="job-list"></div><button id="save" class="quiet">Save selected jobs</button></details>
 </main><script type="module" src="panel.mjs"></script>
 </body></html>

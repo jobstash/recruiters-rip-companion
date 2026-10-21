@@ -20,7 +20,7 @@ export function createPageAccess({ sidePanel, tabs, scripting, action, onAccess 
       const denied = /cannot access|missing host permission|must request permission|not allowed to access/i.test(cause?.message ?? '');
       throw new Error(documentId ? 'The page changed or Chrome access expired. Inspect the form again.'
         : denied ? 'Page access is not granted. Click the black rr extension icon beside Chrome’s address bar—not Chrome’s side-panel button. It will read this tab automatically.'
-          : 'The page could not be inspected. Reload it, then choose Read this page again.');
+          : 'The page could not be inspected. Reload it, then choose Read page.');
     }
     if (!results[0]?.result) throw new Error('Chrome could not read this page. Reload it and open this panel again.');
     return { page: results[0].result, documentId: results[0].documentId };

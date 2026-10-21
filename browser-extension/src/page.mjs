@@ -107,7 +107,10 @@ export function inspectForm(request = null) {
   const labelFor = el => {
     const label = [...(el.labels || [])].map(l => { const copy = l.cloneNode(true); copy.querySelectorAll('input,select,textarea,button,script,style').forEach(n => n.remove()); return copy.textContent; }).join(' ');
     const labelled = (el.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean).map(id => document.getElementById(id)?.textContent || '').join(' ');
-    return clean(el.getAttribute('aria-label') || labelled || label || el.getAttribute('placeholder') || el.name || el.id);
+    const identifier = el.name || el.id || '';
+    const parts = [...identifier.matchAll(/\[([^\]]+)\]/g)];
+    const fallback = (parts.at(-1)?.[1] || identifier).replace(/[_-]+/g, ' ');
+    return clean(el.getAttribute('aria-label') || labelled || label || el.getAttribute('placeholder') || fallback);
   };
   const protectedControl = el => sensitive.test([el.name, el.id, el.autocomplete, el.getAttribute('aria-label'), el.getAttribute('placeholder'), el.getAttribute('title'),
     ...(el.labels || [])].map(value => typeof value === 'string' ? value : value?.textContent || '').join(' ') + ' ' +
@@ -115,7 +118,7 @@ export function inspectForm(request = null) {
     (el.closest('fieldset')?.querySelector('legend')?.textContent || '')) || /(?:^|\s)(cc-|transaction-|bday|sex|one-time-code)/i.test(el.autocomplete || '');
   const disabled = el => el.disabled || el.matches(':disabled') || el.readOnly || el.closest('[aria-disabled="true"]');
   const formSignature = form => form ? [identity(form), ['action','method','enctype','target','novalidate'].map(key => form.getAttribute(key)), form.action, form.method, form.enctype, form.target, form.noValidate] : null;
-  const controlSignature = el => JSON.stringify([identity(el), el.tagName, el.type, el.id, el.name, el.autocomplete, labelFor(el), protectedControl(el), clean(el.closest('fieldset')?.querySelector('legend')?.textContent), el.type === 'radio' ? el.value : null, !!disabled(el), el.required, el.getAttribute('aria-disabled'), ['min','max','step','pattern','minlength','maxlength'].map(key => el.getAttribute(key)), formSignature(el.form), el.tagName === 'SELECT' ? [...el.options].slice(0, 101).map(o => [o.value, o.label, o.disabled, o.parentElement?.disabled]) : null]);
+  const controlSignature = el => JSON.stringify([identity(el), el.tagName, el.type, el.id, el.name, el.autocomplete, labelFor(el), protectedControl(el), clean(el.closest('fieldset')?.querySelector('legend')?.textContent), el.type === 'radio' ? el.value : null, !!disabled(el), el.required, el.getAttribute('aria-disabled'), ['min','max','step','pattern','minlength','maxlength','role','aria-autocomplete'].map(key => el.getAttribute(key)), formSignature(el.form), el.tagName === 'SELECT' ? [...el.options].slice(0, 101).map(o => [o.value, o.label, o.disabled, o.parentElement?.disabled]) : null]);
   const radioGroup = el => {
     const live = document.querySelectorAll('input[type="radio"]');
     if (live.length > 2000) return null;
@@ -143,7 +146,8 @@ export function inspectForm(request = null) {
     if (options) options = options.filter(option => option.label && option.value !== '');
     if (options && (!options.length || new Set(options.map(option => option.value)).size !== options.length)) continue;
     const empty = nativeType === 'radio' ? group.every(n => !n.checked) : el.value === '';
-    const field = { id: `control-${index}`, label: nativeType === 'radio' ? clean(el.closest('fieldset')?.querySelector('legend')?.textContent || label) : label, type: nativeType, signature: '', empty, required: group.some(n => n.required), manualOnly: !empty || group.some(disabled) };
+    const customChoice = nativeType !== 'select' && (el.getAttribute('role') === 'combobox' || ['list', 'both'].includes(el.getAttribute('aria-autocomplete')));
+    const field = { id: `control-${index}`, label: nativeType === 'radio' ? clean(el.closest('fieldset')?.querySelector('legend')?.textContent || label) : label, type: nativeType, signature: '', empty, required: group.some(n => n.required), manualOnly: !empty || customChoice || group.some(disabled) };
     if (el.autocomplete) field.autocomplete = clean(el.autocomplete);
     if (options) field.options = options;
     const fieldBytes = JSON.stringify(field).length * 3;

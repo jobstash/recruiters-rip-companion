@@ -117,7 +117,7 @@ browserForms = createBrowserForms({
   store, credentials: prescanCredentials, assertAvailable,
   authorize: ({ destination, fields, data, useApi, label, model, inputUsdPerMillion, signal }) => {
     const classes = [...new Set(data.map(({ source }) => source?.startsWith('profile.preferences.') ? 'career preferences'
-      : source?.startsWith('profile.') ? 'saved profile details' : source?.startsWith('fact:') ? 'saved answers' : 'agent-written answers'))];
+      : source?.startsWith('profile.') ? 'saved profile details' : source?.startsWith('cv:') ? 'CV contact details' : source?.startsWith('fact:') ? 'saved answers' : 'agent-written answers'))];
     return confirm('Prepare application answers?',
       `${destination}\n${fields.length} fields · ${classes.join(', ') || 'no saved answers'}\n\n${useApi
         ? `${label} (${model}) receives field labels and known values to select answers.\nBase rate $${inputUsdPerMillion.toFixed(2)} / million input tokens · billed separately from your chat subscription.`
@@ -375,14 +375,21 @@ async function installConnections() {
 }
 async function nativeOperation(op, payload, socket = null) {
   const keys = { status: [], open_settings: [], pair: ['productOrigin', 'pairing'],
-    capture_jobs: ['requestId', 'sourceUrl', 'jobs'], forms_prepare: ['requestId', 'formId', 'url', 'title', 'fields', 'actions', 'useApi'], forms_cancel: ['requestId'],
-    forms_validate: ['formId', 'fields'] };
+    capture_jobs: ['requestId', 'sourceUrl', 'jobs'], forms_prepare: ['requestId', 'formId', 'url', 'title', 'fields', 'actions'], forms_cancel: ['requestId'],
+    forms_validate: ['formId', 'fields'], forms_profile_save: ['requestId', 'formId', 'snapshot', 'values'] };
   if (!Object.hasOwn(keys, op)) fail('INVALID_INPUT', 'This browser operation is unavailable.');
   exact(payload, keys[op]);
   if (op === 'status') return status();
   if (op === 'open_settings') { showSettings(); return { opened: true }; }
   if (op === 'pair') return pair(payload);
   assertAvailable(false);
+  if (op === 'forms_profile_save') {
+    const session = browserSessions.get(payload.formId);
+    if (!session || session.socket !== socket || session.epoch !== sessionEpoch || session.identity !== identityKey(store.get()))
+      fail('FORM_CONTEXT_CHANGED', 'Read this application page before saving details.');
+    const result = await browserForms.saveDetails(payload);
+    careerViewRevision++; emit(); return result;
+  }
   if (op === 'forms_validate') {
     if (typeof payload.formId !== 'string' || payload.formId.length > 100 || !Array.isArray(payload.fields) || payload.fields.length > 64)
       fail('INVALID_INPUT', 'Provide the prepared form and its inspected field signatures.');
@@ -390,11 +397,11 @@ async function nativeOperation(op, payload, socket = null) {
     if (session.socket !== socket) fail('FORM_CONTEXT_CHANGED', 'This Chrome connection did not prepare the form.');
     const draft = currentForm(store.get().career ?? createCareerState(), payload.formId);
     if (session.answersHash !== hash(draft.answers ?? {}) || payload.fields.length !== draft.fields.length)
-      fail('FORM_CONTEXT_CHANGED', 'Prepared answers changed. Prepare values again before pasting.');
+      fail('FORM_CONTEXT_CHANGED', 'Prepared answers changed. Choose Read page before pasting.');
     for (let index = 0; index < payload.fields.length; index++) {
       const field = payload.fields[index]; exact(field, ['id', 'signature']);
       if (field.id !== draft.fields[index].id || field.signature !== draft.fields[index].signature)
-        fail('FORM_CONTEXT_CHANGED', 'The inspected form changed. Prepare values again before pasting.');
+        fail('FORM_CONTEXT_CHANGED', 'The inspected form changed. Choose Read page before pasting.');
     }
     return { valid: true };
   }
@@ -414,7 +421,7 @@ async function nativeOperation(op, payload, socket = null) {
   if (formRequests.has(payload.requestId)) fail('REQUEST_CONFLICT', 'This form preparation is already pending.');
   formRequests.add(payload.requestId); emit();
   try {
-    const result = await browserForms.prepare(payload);
+    const result = await browserForms.prepare({ ...payload, useApi: true });
     const current = scoped.store.get(), draft = currentForm(current.career ?? createCareerState(), result.formId);
     const previous = preparedState.career?.formDrafts?.[result.formId];
     const answersHash = hash(previous?.evidence === evidence && previous.evidenceRevision === (preparedState.career?.evidenceRevision ?? 0) ? previous.answers ?? {} : {});
@@ -437,7 +444,7 @@ function browserSession(formId, expected) {
     fail('FORM_CONTEXT_CHANGED', 'The Chrome preparation or local session changed. Prepare the form again before acting.');
   const draft = currentForm(state.career ?? createCareerState(), formId);
   if (session.evidence !== draft.evidence || session.credentialVersion !== (state.prescanCredentialVersion ?? 0))
-    fail('FORM_CONTEXT_CHANGED', 'Career evidence or the API credential changed. Prepare values again before acting.');
+    fail('FORM_CONTEXT_CHANGED', 'Career evidence or the API credential changed. Choose Read page before acting.');
   return session;
 }
 const browserOutcomeUnknown = detail => new CareerError('FORM_ACTION_UNKNOWN', `${detail} The action may already have happened. Check Chrome yourself; do not automatically repeat it.`);

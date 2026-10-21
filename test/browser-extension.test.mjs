@@ -80,7 +80,7 @@ test('external websites can only pair, read account connection status or open se
   for (const op of ['status','open_settings']) assert.equal(safeDeviceRequest(request(op), origin).op, op);
   const pairing = { productOrigin: origin, pairing: { deviceId: randomUUID(), challenge: 'one-time', expiresAt: new Date(Date.now() + 60000).toISOString(), account: { id: 'synthetic', label: 'Synthetic' } } };
   assert.equal(safeDeviceRequest(request('pair', pairing), origin).op, 'pair');
-  for (const op of ['capture_jobs','forms_prepare','forms_cancel','career_facts','credential_read','connect_provider']) assert.throws(() => safeDeviceRequest(request(op), origin));
+  for (const op of ['capture_jobs','forms_prepare','forms_profile_save','forms_cancel','career_facts','credential_read','connect_provider']) assert.throws(() => safeDeviceRequest(request(op), origin));
   assert.throws(() => safeDeviceRequest(request('status', { apiKey: 'secret' }), origin));
   assert.throws(() => safeDeviceRequest(request('pair', { ...pairing, productOrigin: 'https://other.test' }), origin));
   const port = { name: 'recruiters-device', sender: { url: `${origin}/account`, origin, tab: { id: 1 }, frameId: 0 } };
@@ -595,7 +595,9 @@ test('fill retains inspected native length and validity constraints', () => {
 
 async function backgroundFixture(page = pastePage()) {
   const calls = [];
-  let nativeOptions, messageHandler, documentId = 'document-1', permission = true, validate = async () => ({ valid: true });
+  let nativeOptions, messageHandler, access, documentId = 'document-1', permission = true, validate = async () => ({ valid: true });
+  let saveDetails = async payload => ({ saved: Object.keys(payload.values) });
+  let prepareResult = payload => ({ formId: 'form:synthetic', snapshot: 'snapshot:synthetic', questions: [{ key: 'phone', label: 'Phone', type: 'tel' }], fields: payload.fields.filter(field => field.empty && !field.manualOnly).slice(0, 1).map(field => ({ ...field, value: 'Synthetic Candidate' })) });
   const chrome = {
     runtime: { id: 'extension', onConnectExternal: event(), onConnect: event(), onMessage: { addListener(fn) { messageHandler = fn; } }, getURL: path => `chrome-extension://extension/${path}` },
     permissions: { contains: async () => permission },
@@ -603,20 +605,25 @@ async function backgroundFixture(page = pastePage()) {
     sidePanel: {}, scripting: {},
   };
   const context = vm.createContext({
-    chrome, crypto: { randomUUID }, PRODUCT_ORIGIN: origin, NATIVE_HOST: 'synthetic',
+    chrome, crypto: { randomUUID }, PRODUCT_ORIGIN: origin, NATIVE_HOST: 'synthetic', BUILD_ID: 'test-build',
     captureJobs, inspectForm, fillForm, checkFormBindings, armSmartPaste, disarmSmartPaste, pressAction, observePage,
     safeDeviceRequest, externalSenderAllowed, deviceResult,
     setTimeout: fn => setTimeout(fn, 0),
-    createPageAccess: () => async (tabId, fn, args = [], expectedDocument = null) => {
-      if (expectedDocument && expectedDocument !== documentId) throw new Error('The page changed.');
-      return { page: fn === captureJobs ? { jobs: [] } : page.invoke(fn, args[0] ?? null), documentId };
+    createPageAccess: options => {
+      access = options.onAccess;
+      return async (tabId, fn, args = [], expectedDocument = null) => {
+        if (expectedDocument && expectedDocument !== documentId) throw new Error('The page changed.');
+        return { page: fn === captureJobs ? { jobs: [] } : page.invoke(fn, args[0] ?? null), documentId };
+      };
     },
     createNativeClient: options => {
       nativeOptions = options;
       return { request: async (op, payload) => {
         calls.push([op, plain(payload)]);
         if (op === 'forms_validate') return validate(payload);
-        if (op === 'forms_prepare') return { formId: 'form:synthetic', fields: payload.fields.filter(field => field.empty && !field.manualOnly).slice(0, 1).map(field => ({ ...field, value: 'Synthetic Candidate' })) };
+        if (op === 'forms_prepare') return prepareResult(payload);
+        if (op === 'forms_profile_save') return saveDetails(payload);
+        if (op === 'forms_cancel') return { cancelled: true };
         throw new Error(`Unexpected request: ${op}`);
       } };
     },
@@ -625,7 +632,6 @@ async function backgroundFixture(page = pastePage()) {
   vm.runInContext(source.replace(/^import .*;\r?\n/gm, ''), context);
   const act = async message => { context.message = message; await vm.runInContext('act(message)', context); };
   await act({ action: 'detect', payload: { tabId: 7 } });
-  await act({ action: 'prepare' });
   const state = () => vm.runInContext('state', context);
   assert.equal(state().error, '');
   page.context.chrome.runtime.sendMessage = (message, callback) => {
@@ -640,6 +646,9 @@ async function backgroundFixture(page = pastePage()) {
     validate: fn => { validate = fn; },
     permission: value => { permission = value; },
     navigate: value => { documentId = value; },
+    saveDetails: fn => { saveDetails = fn; },
+    prepare: fn => { prepareResult = fn; },
+    toolbar: tabId => access(tabId),
   };
 }
 
@@ -763,4 +772,116 @@ test('form destination attributes stay bound even when a named control shadows f
   attrs.action = '/replaced';
   assert.throws(() => page.invoke(pressAction, { url: snapshot.url, actionId: action.id, actionSignature: action.signature }), /control changed/);
   assert.equal(page.buttons[0].clicks, 0);
+});
+
+test('reading an application and toolbar access each prepare once without an API switch', async () => {
+  const fixture = await backgroundFixture();
+  assert.equal(fixture.calls.filter(([op]) => op === 'forms_prepare').length, 1);
+  assert.equal(Object.hasOwn(fixture.calls[0][1], 'useApi'), false);
+  await fixture.toolbar(7);
+  assert.equal(fixture.calls.filter(([op]) => op === 'forms_prepare').length, 2);
+  assert.equal(fixture.state().error, '');
+});
+
+test('login and newsletter forms are inspected without dispatching paid preparation', async () => {
+  for (const title of ['Sign in to Careers', 'Newsletter signup', 'Create an account', 'Contact us']) {
+    const page = pastePage(); page.context.document.title = title;
+    const fixture = await backgroundFixture(page);
+    assert.equal(fixture.calls.length, 0, title);
+    assert.ok(fixture.state().form);
+    assert.equal(fixture.state().prepared, null);
+  }
+});
+
+test('one pending automatic preparation blocks duplicate work and cancellation discards late values', async () => {
+  const fixture = await backgroundFixture();
+  let release;
+  fixture.prepare(() => new Promise(resolve => { release = resolve; }));
+  const pending = fixture.act({ action: 'detect', payload: { tabId: 7 } });
+  await tick();
+  assert.equal(fixture.state().busy, 'prepare');
+  await fixture.toolbar(7);
+  assert.equal(fixture.calls.filter(([op]) => op === 'forms_prepare').length, 2);
+  await fixture.act({ action: 'cancel' });
+  release({ formId: 'late', snapshot: 'late', fields: [] });
+  await pending;
+  assert.equal(fixture.state().prepared, null);
+  assert.match(fixture.state().notice, /cancelled/);
+  assert.equal(fixture.calls.filter(([op]) => op === 'forms_cancel').length, 1);
+});
+
+test('explicit detail save binds the snapshot and re-inspects only after confirmed persistence', async () => {
+  const fixture = await backgroundFixture();
+  await fixture.act({ action: 'profile-save', payload: { values: { phone: '+44 1234567890' } } });
+  const payload = fixture.calls.find(([op]) => op === 'forms_profile_save')[1];
+  assert.deepEqual(Object.keys(payload).sort(), ['formId','requestId','snapshot','values']);
+  assert.equal(payload.formId, 'form:synthetic');
+  assert.equal(payload.snapshot, 'snapshot:synthetic');
+  assert.deepEqual(payload.values, { phone: '+44 1234567890' });
+  assert.match(payload.requestId, /^[0-9a-f-]{36}$/);
+  assert.equal(fixture.calls.filter(([op]) => op === 'forms_prepare').length, 2);
+  assert.deepEqual(plain(fixture.state().saveReceipt.keys), ['phone']);
+  assert.match(fixture.state().notice, /saved on this computer/);
+});
+
+test('failed and false-success detail saves do not clear drafts or announce persistence', async () => {
+  for (const save of [async () => { throw new Error('Storage is locked. Unlock Companion and try again.'); }, async () => ({ saved: [] }), async () => ({ ok: true })]) {
+    const fixture = await backgroundFixture(); fixture.saveDetails(save);
+    await fixture.act({ action: 'profile-save', payload: { values: { phone: '+44 1234567890' } } });
+    assert.ok(fixture.state().error);
+    assert.equal(fixture.state().saveReceipt, undefined);
+    assert.equal(fixture.state().notice, '');
+    assert.equal(fixture.calls.filter(([op]) => op === 'forms_prepare').length, 1);
+  }
+});
+
+test('profile save rejects non-question values before native dispatch', async () => {
+  const fixture = await backgroundFixture();
+  await fixture.act({ action: 'profile-save', payload: { values: { gender: 'private' } } });
+  assert.match(fixture.state().error, /requested details/);
+  assert.equal(fixture.calls.some(([op]) => op === 'forms_profile_save'), false);
+});
+
+test('machine-name fallback labels use friendly final path segments', () => {
+  const page = pageContext(), control = page.controls[0];
+  control.name = 'application_form[application][preferred_name]';
+  control.getAttribute = key => key === 'aria-label' ? null : control.attrs[key] ?? null;
+  assert.equal(page.invoke(inspectForm).fields[0].label, 'preferred name');
+});
+
+test('custom comboboxes remain manual and role changes invalidate native fill', () => {
+  for (const attrs of [{ role: 'combobox' }, { 'aria-autocomplete': 'list' }, { 'aria-autocomplete': 'both' }]) {
+    const page = pageContext(), control = page.controls[0];
+    Object.assign(control.attrs, attrs);
+    const snapshot = page.invoke(inspectForm), field = snapshot.fields[0];
+    assert.equal(field.manualOnly, true);
+    const result = page.invoke(fillForm, { url: snapshot.url, fields: [{ ...field, value: 'London' }] });
+    assert.equal(result.filled.length, 0);
+    assert.equal(control.value, '');
+  }
+  const changed = pageContext(), snapshot = changed.invoke(inspectForm);
+  changed.controls[0].attrs.role = 'combobox';
+  assert.throws(() => changed.invoke(fillForm, { url: snapshot.url, fields: [{ ...snapshot.fields[0], value: 'London' }] }), /changed/);
+});
+
+test('custom combobox focus never replaces the clipboard with a prepared value', async () => {
+  const page = pastePage();
+  page.controls[0].attrs.role = 'combobox';
+  page.invoke(inspectForm);
+  page.invoke(armSmartPaste, { session: randomUUID() });
+  page.respond(() => ({ value: 'London' }));
+  page.focus(page.controls[0]);
+  await tick();
+  assert.deepEqual(page.clipboard, []);
+  assert.equal(page.messages.some(message => message.action === 'paste-value'), false);
+});
+
+test('sponsorship saves an explicit boolean and rejects string coercion', async () => {
+  const fixture = await backgroundFixture();
+  fixture.state().prepared.questions = [{ key: 'requiresSponsorship', label: 'Do you require visa sponsorship?', type: 'boolean', options: [{ value: true, label: 'Yes' }, { value: false, label: 'No' }] }];
+  await fixture.act({ action: 'profile-save', payload: { values: { requiresSponsorship: 'false' } } });
+  assert.equal(fixture.calls.some(([op]) => op === 'forms_profile_save'), false);
+  await fixture.act({ action: 'profile-save', payload: { values: { requiresSponsorship: false } } });
+  assert.deepEqual(fixture.calls.find(([op]) => op === 'forms_profile_save')[1].values, { requiresSponsorship: false });
+  assert.deepEqual(plain(fixture.state().saveReceipt.keys), ['requiresSponsorship']);
 });

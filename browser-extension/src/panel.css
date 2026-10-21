@@ -4,25 +4,29 @@ header { display: flex; align-items: center; justify-content: space-between; gap
 header img { width: 160px; height: auto; }
 main { padding: var(--spacing-16); }
 nav { display: flex; gap: var(--spacing-8); flex-wrap: wrap; }
-h1 { font: var(--text-heading-sm); overflow-wrap: anywhere; margin: var(--spacing-16) 0 var(--spacing-8); }
+h1 { font: var(--text-subheading); overflow-wrap: anywhere; margin: var(--spacing-16) 0; }
 h2 { font: var(--text-subheading); margin: var(--spacing-24) 0 var(--spacing-16); }
 p { margin: var(--spacing-8) 0 var(--spacing-16); }
 .meta, small { color: var(--color-smoke); font: var(--text-meta); overflow-wrap: anywhere; }
 button, input, textarea, select { font: inherit; }
 button { min-height: 44px; padding: var(--spacing-8) var(--spacing-16); background: var(--color-ink); color: var(--color-canvas); border: 1px solid var(--color-ink); border-radius: var(--radius-buttons); cursor: pointer; margin-bottom: var(--spacing-8); font: var(--text-label); letter-spacing: var(--tracking-label); text-transform: uppercase; }
 button.quiet { background: transparent; color: var(--color-ink); border-color: var(--color-ink); }
-button:disabled { opacity: .5; cursor: default; }
+button:disabled { background: transparent; color: var(--color-dust); cursor: not-allowed; }
 :focus-visible { outline: 2px solid var(--color-ink); outline-offset: 3px; }
-input:not([type=checkbox]), textarea, select { display: block; width: 100%; min-height: 44px; padding: var(--spacing-8); margin-top: var(--spacing-8); border: 1px solid var(--color-dust); border-radius: 0; color: var(--color-ink); background: var(--color-surface); }
+input:not([type=checkbox]), textarea, select { display: block; width: 100%; min-height: 44px; padding: var(--spacing-8); margin-top: var(--spacing-8); border: 0; border-bottom: 1px solid var(--color-ink); border-radius: 0; color: var(--color-ink); background: transparent; }
 textarea { min-height: 80px; resize: vertical; }
 .check { display: flex; align-items: flex-start; min-height: 44px; gap: var(--spacing-8); margin: var(--spacing-16) 0; }
 input[type=checkbox] { flex: 0 0 auto; margin-top: 4px; accent-color: var(--color-ink); }
 .row { padding: var(--spacing-16) 0; border-top: 1px solid var(--color-facet); overflow-wrap: anywhere; }
 .row .check { margin: 0 0 var(--spacing-8); }
 .row small { display: block; margin-top: var(--spacing-8); }
-summary { min-height: 44px; padding-block: var(--spacing-8); cursor: pointer; color: var(--color-smoke); }
+summary { min-height: 44px; padding-block: var(--spacing-8); cursor: pointer; color: var(--color-ink); font: var(--text-meta); }
 details p { white-space: pre-wrap; }
 #error { color: var(--color-ink); border-top: 1px solid var(--color-facet); padding-top: var(--spacing-16); }
-#url { max-height: 5em; overflow: auto; }
+#review, #jobs { margin-top: var(--spacing-16); border-top: 1px solid var(--color-facet); }
 #review-actions { border-top: 1px solid var(--color-facet); padding-top: var(--spacing-16); }
+label { display: block; }
+select option { background: var(--color-surface); color: var(--color-ink); }
+#save-details { margin-top: var(--spacing-16); }
+#paste { color: var(--color-smoke); }
 [hidden] { display: none !important; }

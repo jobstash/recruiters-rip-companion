@@ -131,6 +131,39 @@ test('answers enforce proficiency and depth while rejecting uncertain or narrate
 });
 
 
+test('canonical contact details share MCP validation and preserve partial updates without guessing names', async () => {
+  const f = fixture();
+  await f.edit('career_profile_update', { patch: { name: 'River Alex' } });
+  let read = await f.call('career_profile_read');
+  assert.equal(read.profile.firstName, null);
+  assert.equal(read.profile.lastName, null);
+  const patch = { firstName: 'Alex', lastName: 'River', preferredName: 'Al', email: 'alex@example.test',
+    phone: '+1 555 0100', location: 'Toronto, Canada', country: 'Canada', addressLine1: '10 Example Road',
+    addressLine2: 'Apartment 2', city: 'Toronto', postalCode: 'M5V 1A1', linkedinUrl: 'https://www.linkedin.com/in/synthetic-alex',
+    personalSummary: 'I build accessible software.' };
+  const input = { ...f.mutation(), patch };
+  const result = await f.call('career_profile_update', input);
+  assert.deepEqual(await f.call('career_profile_update', input), result);
+  assert.equal(result.profile.name, 'Alex River');
+  assert.ok(result.saved.includes('name'));
+  for (const [key, value] of Object.entries(patch)) assert.equal(result.profile[key], value);
+  const evidenceRevision = f.store.get().career.evidenceRevision;
+  await f.edit('career_profile_update', { patch: { firstName: 'Alexis', addressLine2: null } });
+  read = await f.call('career_profile_read');
+  assert.equal(read.profile.firstName, 'Alexis');
+  assert.equal(read.profile.lastName, 'River');
+  assert.equal(read.profile.name, 'Alex River');
+  assert.equal(read.profile.addressLine2, null);
+  assert.equal(read.profile.addressLine1, patch.addressLine1);
+  assert.equal(f.store.get().career.evidenceRevision, evidenceRevision + 1);
+  for (const invalid of [{ firstName: ' ' }, { email: 'not-an-email' }, { country: 42 },
+    { nationality: 'Canadian' }, { linkedinUrl: 'https://evil.example/in/alex' }, { linkedinUrl: 'https://user:secret@linkedin.com/in/alex' }]) {
+    const before = f.store.get();
+    await assert.rejects(f.edit('career_profile_update', { patch: invalid }), { code: 'INVALID_INPUT' });
+    assert.deepEqual(f.store.get(), before);
+  }
+});
+
 test('profile and preference updates set and clear values; preferences survive deleting all facts', async () => {
   const f = fixture();
   const { facts } = await f.edit('career_facts_save', { facts: [teamSize(), fact('language', 'Italian', 'Native')] });

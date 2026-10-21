@@ -1,4 +1,4 @@
-import { PRODUCT_ORIGIN, NATIVE_HOST } from './config.mjs';
+import { PRODUCT_ORIGIN, NATIVE_HOST, BUILD_ID } from './config.mjs';
 import { createNativeClient, safeDeviceRequest, externalSenderAllowed, deviceResult } from './protocol.mjs';
 import { captureJobs, inspectForm, fillForm, checkFormBindings, armSmartPaste, disarmSmartPaste, pressAction, observePage } from './page.mjs';
 import { createPageAccess } from './page-access.mjs';
@@ -27,7 +27,7 @@ chrome.runtime.onConnectExternal.addListener(port => {
 
 // Memory only: a native port keeps the worker alive, and panel reconnection can
 // recover a completed request. No candidate values are persisted to Chrome disk.
-let state = { busy: null, error: '', notice: '', tabId: null, documentId: null, page: null, jobs: [], form: null, prepared: null, edits: {}, selected: [], paste: null };
+let state = { buildId: BUILD_ID, busy: null, error: '', notice: '', tabId: null, documentId: null, page: null, jobs: [], form: null, prepared: null, edits: {}, selected: [], paste: null };
 let generation = 0, preparingRequest = null, pasteSession = null;
 const panels = new Set();
 const publish = () => { for (const panel of panels) { try { panel.postMessage(state); } catch { panels.delete(panel); } } };
@@ -59,13 +59,38 @@ async function expirePrepared(notice) {
 
 const validationPayload = () => ({ formId: state.prepared.formId, fields: state.form.fields.map(({ id, signature }) => ({ id, signature })) });
 
-// One click on the toolbar icon reads the current tab: an application form and any job postings on it.
-async function detect(tabId) {
+// Require application context, not merely a form: login and newsletter controls are not paid work.
+function isApplication(form) {
+  if (!form.fields.length) return false;
+  const title = form.title || '';
+  if (/\b(log[ -]?in|sign[ -]?in|newsletter|subscribe|sign[ -]?up|create (?:an? )?account)\b/i.test(title)) return false;
+  const labels = form.fields.map(field => field.label || '').join(' ');
+  const careerFields = /\b(resume|résumé|curriculum vitae|cover letter|work experience|employment history|why (?:this|the) (?:role|company)|salary|sponsorship|linkedin)\b/i.test(labels);
+  const namedApplication = /\b(job application|apply(?:ing)? (?:for|to)|application (?:form|for))\b/i.test(title) || /^(?:application|apply)\b/i.test(title);
+  const contactFields = /\b(name|e-?mail|phone)\b/i.test(labels);
+  return (namedApplication && (careerFields || (contactFields && form.fields.length >= 2))) ||
+    (careerFields && (form.fields.length >= 3 || /\b(job|position|role|apply|careers?)\b/i.test(title)));
+}
+async function detect(tabId, token) {
   const { page: form, documentId } = await inject(tabId, inspectForm);
   let jobs = [];
   try { jobs = (await inject(tabId, captureJobs, [], documentId)).page.jobs; } catch { /* Not every application page carries a posting. */ }
+  if (generation !== token) return;
   state = { ...state, tabId, documentId, page: { url: form.url, title: form.title }, jobs, form: form.fields.length ? form : null, prepared: null, edits: {}, selected: [], paste: null,
-    notice: form.fields.length ? `Application form detected: ${form.fields.length} controls. Prepare values, then click a field and press ⌘V.` : jobs.length ? `${jobs.length} jobs detected. Select the jobs to save.` : 'No application form or job posting detected on this page.' };
+    notice: form.fields.length ? 'This page is not recognized as a job application. Answer its fields on the page.' : jobs.length ? `${jobs.length} jobs detected.` : 'No application form or job posting found.' };
+  if (isApplication(form)) await prepare(token);
+}
+async function prepare(token) {
+  if (!state.form || !isApplication(state.form)) throw new Error('Read a job application page to prepare answers.');
+  state.busy = 'prepare'; publish();
+  await arm(false);
+  if (generation !== token) return;
+  preparingRequest = crypto.randomUUID();
+  const result = await native.request('forms_prepare', { requestId: preparingRequest, ...state.form });
+  if (generation !== token) return;
+  state.prepared = result; state.edits = Object.fromEntries(result.fields.map(f => [f.id, f.value ?? ''])); state.selected = []; state.paste = null;
+  await arm(true);
+  if (generation === token) state.notice = '';
 }
 
 async function act(message) {
@@ -81,7 +106,7 @@ async function act(message) {
   if (action === 'cancel') {
     if (!preparingRequest) return;
     const requestId = preparingRequest; preparingRequest = null; const cancelledGeneration = ++generation;
-    state = { ...state, busy: null, error: '', notice: 'Preparation cancelled. You can prepare again.' }; publish();
+    state = { ...state, busy: null, error: '', notice: 'Preparation cancelled. Read page to try again.' }; publish();
     try { await native.request('forms_cancel', { requestId }); } catch (error) { if (generation === cancelledGeneration) { state.error = error.message; publish(); } }
     return;
   }
@@ -91,21 +116,33 @@ async function act(message) {
   try {
     if (action === 'detect' || action === 'capture' || action === 'inspect') {
       await arm(false);
-      await detect(payload.tabId);
+      if (generation !== token) return;
+      await detect(payload.tabId, token);
     } else if (action === 'save') {
       const indexes = [...new Set(payload.indexes || [])].filter(i => Number.isInteger(i) && i >= 0 && i < state.jobs.length);
       if (!indexes.length) throw new Error('Select at least one detected job.');
       const result = await native.request('capture_jobs', { requestId: crypto.randomUUID(), sourceUrl: state.page.url, jobs: indexes.map(i => state.jobs[i]) });
       state.notice = `Saved ${result.added} new jobs; updated ${result.updated}. Open Jobs in the companion to review.`;
-    } else if (action === 'prepare') {
-      if (!state.form) throw new Error('Inspect the form first.');
-      await arm(false);
-      preparingRequest = crypto.randomUUID();
-      const result = await native.request('forms_prepare', { requestId: preparingRequest, ...state.form, useApi: payload.useApi === true, ...(state.prepared?.formId ? { formId: state.prepared.formId } : {}) });
+    } else if (action === 'profile-save') {
+      if (!state.prepared?.snapshot || !state.form) throw new Error('Read page before saving details.');
+      const allowed = new Map((state.prepared.questions || []).map(question => [question.key, question]));
+      const values = payload.values;
+      if (!values || typeof values !== 'object' || Array.isArray(values) || !Object.keys(values).length ||
+        Object.entries(values).some(([key, value]) => !allowed.has(key) ||
+          (allowed.get(key).type === 'boolean' ? typeof value !== 'boolean' : typeof value !== 'string' || !value.trim() || value.length > 10000) ||
+          (allowed.get(key).options && !allowed.get(key).options.some(option => option.value === value))))
+        throw new Error('Enter the requested details before saving.');
+      const result = await native.request('forms_profile_save', { requestId: crypto.randomUUID(), formId: state.prepared.formId, snapshot: state.prepared.snapshot, values });
       if (generation !== token) return;
-      state.prepared = result; state.edits = Object.fromEntries(result.fields.map(f => [f.id, f.value ?? ''])); state.selected = []; state.paste = null;
-      await arm(true);
-      state.notice = `${result.fields.length} values ready. Click a field on the page and press ⌘V to paste its value, or select values here to fill. Unknown answers remain manual.`;
+      const keys = Object.keys(values);
+      if (!Array.isArray(result?.saved) || keys.some(key => !result.saved.includes(key)))
+        throw new Error('Companion did not confirm saving these details. Your edits are still here; try again.');
+      state.saveReceipt = { id: crypto.randomUUID(), keys };
+      state.notice = 'Details saved on this computer.'; publish();
+      await arm(false);
+      if (generation !== token) return;
+      await detect(state.tabId, token);
+      if (generation === token) state.notice = 'Details saved on this computer.';
     } else if (action === 'fill') {
       if (!state.prepared || !state.form) throw new Error('Prepare and review the form first.');
       const fields = state.prepared.fields.filter(f => state.selected.includes(f.id)).map(f => ({ ...f, value: state.edits[f.id] ?? '' }));

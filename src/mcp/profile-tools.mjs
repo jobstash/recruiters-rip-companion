@@ -4,6 +4,7 @@ import { ESSENTIAL_PREFERENCES, matchingProfileVersion, missingPreferences } fro
 import { introductionsStatus } from './introduction-tools.mjs';
 import { FACT_KINDS, compareFacts, factInputSchema, factKey, needsDetail, normalizeFact } from './facts.mjs';
 import { chatText, formAnswers, formRequest, parseReply, prepareQuestions, questionSchema } from './interview.mjs';
+import { patchProfile, profileFields } from './profile-fields.mjs';
 
 const MAX_TEXT = 100_000;
 const MAX_FILE = 5 * 1024 * 1024;
@@ -14,12 +15,6 @@ const object = (properties, required = []) => ({ type: 'object', additionalPrope
 const list = (items, maxItems = 50, minItems = 0) => ({ type: 'array', items, maxItems, minItems, uniqueItems: true });
 const paging = { offset: { type: 'integer', minimum: 0, maximum: 100000 }, limit: { type: 'integer', minimum: 1, maximum: 100 } };
 const sourcePurpose = { enum: ['cv', 'supporting', 'interview'] };
-const profileFields = {
-  name: nullable(string(300)), headline: nullable(string(500)), email: nullable(string(320)),
-  phone: nullable(string(100)), location: nullable(string(300)), links: list(string(2048), 20),
-  roleCapabilities: nullable(list(string(200), 30)), seniority: nullable(string(200)),
-  skills: nullable(list(string(200), 100)),
-};
 const preferenceFields = {
   roles: nullable(list(string(200), 30)), acceptedAlternatives: nullable(list(string(300), 30)),
   excludedRoles: nullable(list(string(300), 30)), locations: nullable(list(string(200), 30)),
@@ -139,10 +134,6 @@ function pendingResult(interview) {
     ...(interview.applicationId ? { applicationId: interview.applicationId, job: interview.job } : {}),
     ...(interview.questions.length ? { interviewId: interview.id, text: chatText(interview.title, interview.questions),
       followUps: interview.questions.filter(question => question.stage === 'detail') } : {}) };
-}
-function patchProfile(career, patch) {
-  for (const [field, value] of Object.entries(patch)) career.profile[field] = structuredClone(value);
-  return Object.keys(patch);
 }
 function patchPreferences(career, patch) {
   career.profile.preferences ??= {};

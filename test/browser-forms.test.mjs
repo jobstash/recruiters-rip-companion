@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { createBrowserForms } from '../src/browser-forms.mjs';
 import { createFormTools } from '../src/mcp/form-tools.mjs';
+import { createProfileTools } from '../src/mcp/profile-tools.mjs';
 import { createScopedAccess } from '../src/mcp/scope.mjs';
 import { CareerError, createCareerState } from '../src/mcp/state.mjs';
 
@@ -560,4 +561,387 @@ test('form reads discard stale career evidence while awaiting Chrome status', as
   f.alter(state => { state.career.evidenceRevision++; });
   gate.resolve(true);
   await assert.rejects(pending, byCode('FORM_CONTEXT_CHANGED'));
+});
+
+test('explicit missing basics save once and reuse across differently labelled forms without splitting names', async () => {
+  const f = fixture();
+  const first = await f.service.prepare({ ...snapshot([
+    field('given', 'First name', 'text', { autocomplete: 'given-name', required: true }),
+    field('family', 'Last name', 'text', { autocomplete: 'family-name' }), field('preferred', 'Preferred name'),
+    field('street', 'Address line 1'), field('town', 'Town'), field('post', 'Postcode'),
+    field('country', 'Country', 'select', { options: [{ value: '', label: 'Choose' }, { value: 'CA', label: 'Canada' }] }),
+  ]), useApi: true });
+  assert.deepEqual(first.api, { configured: false, used: false });
+  assert.equal(first.fields.length, 0);
+  assert.deepEqual(first.questions.map(question => question.key), ['firstName', 'lastName', 'preferredName', 'addressLine1', 'city', 'postalCode', 'country']);
+  assert.equal(first.questions[0].label, 'First name');
+  assert.equal(first.questions[0].required, true);
+  assert.deepEqual(first.questions.at(-1).options, [{ value: 'Canada', label: 'Canada' }]);
+  const values = { firstName: 'Alex', lastName: 'River', preferredName: 'Al', addressLine1: '10 Example Road', city: 'Toronto', postalCode: 'M5V 1A1', country: 'Canada' };
+  const input = { requestId: randomUUID(), formId: first.formId, snapshot: first.snapshot, values };
+  const before = f.state().career, saved = await f.service.saveDetails(input);
+  assert.ok(Object.keys(values).every(key => saved.saved.includes(key)));
+  assert.deepEqual(await f.service.saveDetails(input), saved);
+  assert.equal(f.state().career.evidenceRevision, before.evidenceRevision + 1);
+  assert.equal(f.state().career.profile.name, 'Alex River');
+  assert.equal(f.state().career.profile.email, before.profile.email);
+  assert.deepEqual(f.state().career.facts, before.facts);
+  const second = await f.service.prepare({ ...snapshot([
+    field('first', 'Given name'), field('last', 'Surname'), field('nick', 'Name you go by'),
+    field('address', 'Street address'), field('city', 'City'), field('zip', 'ZIP code'),
+    field('residence', 'Country of residence', 'select', { options: [{ value: 'canada-other-code', label: 'Canada' }] }),
+  ]), url: 'https://second.synthetic.example/careers/apply' });
+  assert.deepEqual(second.fields.map(item => item.value), ['Alex', 'River', 'Al', '10 Example Road', 'Toronto', 'M5V 1A1', 'canada-other-code']);
+  assert.deepEqual(second.questions, []);
+});
+
+test('partial explicit details preserve unrelated fields and full name ambiguity', async () => {
+  const f = fixture();
+  const prepared = await f.service.prepare(snapshot([field('given', 'First name'), field('family', 'Last name'), field('phone', 'Phone number')]));
+  const before = f.state().career.profile;
+  await f.service.saveDetails({ requestId: randomUUID(), formId: prepared.formId, snapshot: prepared.snapshot, values: { firstName: 'Alex' } });
+  const profile = f.state().career.profile;
+  assert.equal(profile.firstName, 'Alex');
+  assert.equal(profile.lastName, null);
+  assert.equal(profile.name, before.name);
+  assert.equal(profile.phone, before.phone);
+  const next = await f.service.prepare(snapshot([field('first', 'First name'), field('last', 'Last name')]));
+  assert.deepEqual(next.questions.map(question => question.key), ['lastName']);
+  assert.equal(next.fields[0].value, 'Alex');
+});
+
+test('missing credentials still require approval before known values or questions are released', async () => {
+  const f = fixture();
+  const result = await f.service.prepare({ ...snapshot([field('email', 'Email'), field('first', 'First name'), field('q', 'French level')]), useApi: true });
+  assert.equal(f.approvals.length, 1);
+  assert.equal(f.approvals[0].useApi, false);
+  assert.equal(result.fields[0].value, 'candidate@example.test');
+  assert.deepEqual(result.questions.map(question => question.key), ['firstName']);
+  assert.deepEqual(result.api, { configured: false, used: false });
+  assert.equal(f.calls.length, 0);
+  const denied = fixture({ authorize: async () => false });
+  await assert.rejects(denied.service.prepare({ ...snapshot([field('first', 'First name')]), useApi: true }), byCode('FORM_NOT_AUTHORIZED'));
+  assert.equal(denied.state().career.formDrafts, undefined);
+});
+
+test('profile saving rejects unrequested, already known, protected and malformed values atomically', async () => {
+  const f = fixture(), prepared = await f.service.prepare(snapshot([
+    field('first', 'First name'), field('gender', 'Gender'), field('birth', 'Date of birth'), field('email', 'Email'),
+    field('sponsor', 'Will you need sponsorship in the United States?'), field('consent', 'Consent'),
+  ]));
+  assert.deepEqual(prepared.questions.map(question => question.key), ['firstName']);
+  const before = f.state();
+  for (const values of [{ gender: 'Other' }, { name: 'Changed' }, { email: 'new@example.test' }, { firstName: '' },
+    { firstName: null }, { firstName: 'Alex', postalCode: '12345' }, { requiresSponsorship: 'Yes' }, { firstName: 'x'.repeat(151) }]) {
+    await assert.rejects(f.service.saveDetails({ requestId: randomUUID(), formId: prepared.formId, snapshot: prepared.snapshot, values }), byCode('INVALID_INPUT'));
+    assert.deepEqual(f.state(), before);
+  }
+});
+
+for (const change of ['profile', 'revision', 'identity', 'answers', 'snapshot', 'reprepare']) test(`profile saving rejects stale ${change} binding`, async () => {
+  const f = fixture(), args = snapshot([field('first', 'First name')]), prepared = await f.service.prepare(args);
+  const input = { requestId: randomUUID(), formId: prepared.formId, snapshot: prepared.snapshot, values: { firstName: 'Alex' } };
+  if (change === 'profile') f.alter(state => { state.career.profile.email = 'changed@example.test'; });
+  if (change === 'revision') f.alter(state => { state.career.evidenceRevision++; });
+  if (change === 'identity') f.alter(state => { state.deviceId = 'another-device'; });
+  if (change === 'answers') f.alter(state => { state.career.formDrafts[prepared.formId].answers.first = { value: 'Other' }; });
+  if (change === 'snapshot') input.snapshot = '0'.repeat(64);
+  if (change === 'reprepare') await f.service.prepare({ ...args, requestId: randomUUID() });
+  await assert.rejects(f.service.saveDetails(input), byCode('FORM_CONTEXT_CHANGED'));
+  assert.equal(f.state().career.profile.firstName, null);
+});
+
+test('profile receipt survives service recreation and refuses changed-content replay', async () => {
+  const f = fixture(), prepared = await f.service.prepare(snapshot([field('first', 'First name')]));
+  const input = { requestId: randomUUID(), formId: prepared.formId, snapshot: prepared.snapshot, values: { firstName: 'Alex' } };
+  const result = await f.service.saveDetails(input), state = f.state();
+  const restarted = createBrowserForms({ store: f.store, assertAvailable() {}, credentials: {}, authorize() { throw new Error('No release on replay'); } });
+  assert.deepEqual(await restarted.saveDetails(input), result);
+  assert.deepEqual(f.state(), state);
+  await assert.rejects(restarted.saveDetails({ ...input, values: { firstName: 'Different' } }), byCode('REQUEST_CONFLICT'));
+  await assert.rejects(restarted.saveDetails({ ...input, requestId: randomUUID() }), byCode('FORM_CONTEXT_CHANGED'));
+});
+
+test('API leaves ambiguous name parts explicit and unsupported controls manual', async () => {
+  const f = fixture({ configured: true, fetchImpl: async (_url, init) => {
+    const body = JSON.parse(init.body);
+    assert.ok(body.questions.every(question => !question.choices.some(choice => choice.description.includes('"value":"Synthetic Candidate"'))));
+    return chosenResponse(body, () => 'unknown');
+  } });
+  const result = await f.service.prepare({ ...snapshot([
+    field('first', 'First name'), field('last', 'Last name'), field('nick', 'Preferred name'),
+    field('country', 'Country', 'text', { manualOnly: true }), field('protected', 'Nationality'),
+  ]), useApi: true });
+  assert.equal(f.calls.length, 1);
+  assert.equal(result.fields.length, 0);
+  assert.deepEqual(result.questions.map(question => question.key), ['firstName', 'lastName', 'preferredName', 'country']);
+  assert.deepEqual(result.api, { configured: true, used: true });
+});
+
+test('credential failures other than missing configuration are not suppressed', async () => {
+  const f = fixture();
+  const service = createBrowserForms({ store: f.store, assertAvailable() {}, authorize: async () => true,
+    credentials: { read() { throw new CareerError('CREDENTIAL_CORRUPT', 'Cannot read credential'); } } });
+  await assert.rejects(service.prepare({ ...snapshot([field('first', 'First name')]), useApi: true }), byCode('CREDENTIAL_CORRUPT'));
+});
+
+test('explicit personal summary reuses only a general summary field, not an employer-specific answer', async () => {
+  const f = fixture(), prepared = await f.service.prepare(snapshot([
+    field('summary', 'Personal Summary This section is optional. Use it to tell us a little more about yourself.', 'textarea'),
+    field('motivation', 'Why do you want to work for this company?', 'textarea'),
+  ]));
+  assert.deepEqual(prepared.questions.map(({ key, type }) => ({ key, type })), [{ key: 'personalSummary', type: 'textarea' }]);
+  await f.service.saveDetails({ requestId: randomUUID(), formId: prepared.formId, snapshot: prepared.snapshot,
+    values: { personalSummary: 'I build accessible software.' } });
+  const next = await f.service.prepare(snapshot([field('about', 'Professional summary', 'textarea'), field('why', 'Why this company?', 'textarea')]));
+  assert.equal(next.fields[0].value, 'I build accessible software.');
+  assert.deepEqual(next.unresolved.map(item => item.id), ['why']);
+});
+
+test('profile saving checks identity inside the atomic transaction, not only before a queued mutation', async () => {
+  const f = fixture(), prepared = await f.service.prepare(snapshot([field('first', 'First name')]));
+  const gate = deferred(), entered = deferred();
+  const change = f.store.update(async state => { entered.resolve(); await gate.promise; state.deviceId = 'new-identity'; });
+  await entered.promise;
+  const pending = f.service.saveDetails({ requestId: randomUUID(), formId: prepared.formId, snapshot: prepared.snapshot, values: { firstName: 'Alex' } });
+  gate.resolve();
+  await change;
+  await assert.rejects(pending, byCode('FORM_CONTEXT_CHANGED'));
+  assert.equal(f.state().career.profile.firstName, null);
+});
+
+for (const requiresSponsorship of [true, false]) test(`general sponsorship explicitly saves ${requiresSponsorship} and reuses the same MCP preference`, async () => {
+  const f = fixture();
+  f.alter(state => { state.career.profile.preferences.willingToRelocate = false; });
+  const prepared = await f.service.prepare(snapshot([
+    field('sponsor', 'Do you now or in the future require visa sponsorship?', 'radio',
+      { required: true, options: [{ value: 'yes-code', label: 'Yes' }, { value: 'no-code', label: 'No' }] }),
+    field('us', 'Will you require visa sponsorship in the United States?', 'radio',
+      { options: [{ value: 'yes', label: 'Yes' }, { value: 'no', label: 'No' }] }),
+  ]));
+  assert.deepEqual(prepared.questions, [{ key: 'requiresSponsorship', label: 'Do you now or in the future require visa sponsorship?',
+    type: 'boolean', required: true, options: [{ value: true, label: 'Yes' }, { value: false, label: 'No' }] }]);
+  assert.equal(prepared.fields.length, 0);
+  const input = { requestId: randomUUID(), formId: prepared.formId, snapshot: prepared.snapshot, values: { requiresSponsorship } };
+  for (const invalid of ['Yes', 'No', null, 0]) await assert.rejects(f.service.saveDetails({ ...input, values: { requiresSponsorship: invalid } }), byCode('INVALID_INPUT'));
+  const saved = await f.service.saveDetails(input);
+  assert.deepEqual(saved, { saved: ['requiresSponsorship'] });
+  assert.deepEqual(await f.service.saveDetails(input), saved);
+  const profileTools = new Map(createProfileTools({ store: f.store }).map(tool => [tool.name, tool]));
+  const read = await profileTools.get('career_profile_read').invoke();
+  assert.equal(read.preferences.requiresSponsorship, requiresSponsorship);
+  assert.equal(read.preferences.willingToRelocate, false);
+  const next = await f.service.prepare({ ...snapshot([
+    field('general', 'Requires employer sponsorship', 'select', { options: [{ value: 'y', label: 'Yes' }, { value: 'n', label: 'No' }] }),
+    field('specific', 'Do you require visa sponsorship from Acme?', 'select', { options: [{ value: 'y', label: 'Yes' }, { value: 'n', label: 'No' }] }),
+  ]), useApi: true });
+  assert.deepEqual(next.fields.map(({ id, value, source }) => ({ id, value, source })), [
+    { id: 'general', value: requiresSponsorship ? 'y' : 'n', source: 'profile.preferences.requiresSponsorship' },
+  ]);
+  assert.deepEqual(next.questions, []);
+  assert.deepEqual(next.unresolved.map(item => item.id), ['specific']);
+  assert.equal(f.calls.length, 0);
+});
+
+test('jurisdiction-specific sponsorship alone cannot save a global preference', async () => {
+  const f = fixture(), prepared = await f.service.prepare(snapshot([
+    field('specific', 'Do you require sponsorship to work in Canada?', 'select', { options: [{ value: 'yes', label: 'Yes' }, { value: 'no', label: 'No' }] }),
+  ]));
+  assert.deepEqual(prepared.questions, []);
+  await assert.rejects(f.service.saveDetails({ requestId: randomUUID(), formId: prepared.formId, snapshot: prepared.snapshot,
+    values: { requiresSponsorship: false } }), byCode('INVALID_INPUT'));
+  assert.equal(f.state().career.profile.preferences.requiresSponsorship, undefined);
+});
+
+function chosenResponse(body, choose) {
+  return response(body, data => {
+    data.answers.forEach((answer, index) => {
+      answer.choice = choose(body.questions[index], body);
+      answer.confidence = 0.99;
+      answer.probabilities.forEach(item => { item.probability = item.value === answer.choice ? 1 : 0; });
+    });
+    return data;
+  });
+}
+function chooseExact(question, value) {
+  return question.choices.find(choice => choice.value !== 'unknown' && JSON.parse(choice.description).value === value)?.value ?? 'unknown';
+}
+const syntheticCv = `Alex River
+Software engineer
+alex.river@example.test | +1 (416) 555-0199
+https://www.linkedin.com/in/alex-river
+https://github.com/alex-river
+
+Experience
+Example Systems, Senior Engineer, 2020–2025
+Built internal reporting tools and led a small engineering team.
+Education
+Example University, Computer Science
+References
+Morgan Employer, manager
+morgan.employer@example.test | +1 (212) 555-0148`;
+function cvFixture(options = {}, text = syntheticCv) {
+  const f = fixture({ configured: true, ...options });
+  f.alter(state => {
+    Object.assign(state.career.profile, { name: null, email: null, phone: null, location: null });
+    state.career.sources.cv.text = text;
+  });
+  return f;
+}
+
+test('current CV reaches Decisions before missing questions and yields exact applicant contact excerpts', async () => {
+  const selections = ['Alex', 'River', 'alex.river@example.test', '+1 (416) 555-0199', 'https://www.linkedin.com/in/alex-river'];
+  const f = cvFixture({ fetchImpl: async (_url, init) => {
+    assert.equal(f.approvals.length, 1);
+    const body = JSON.parse(init.body), bank = JSON.parse(body.input[1].content).knownAnswers;
+    assert.ok(bank.length <= 64);
+    const excerpts = bank.filter(item => item.source === 'cv:cv');
+    assert.ok(excerpts.length > 0 && excerpts.length <= 40);
+    for (const item of excerpts) {
+      assert.equal(syntheticCv.slice(item.qualifiers.start, item.qualifiers.end), item.value);
+      assert.ok(syntheticCv.includes(item.qualifiers.context));
+    }
+    assert.ok(!excerpts.some(item => item.value === 'morgan.employer@example.test'));
+    assert.ok(!excerpts.some(item => item.value === '+1 (212) 555-0148'));
+    assert.ok(!init.body.includes('PRIVATE ORIGINAL'));
+    assert.equal(body.questions.length, 5);
+    return chosenResponse(body, question => chooseExact(question, selections[Number(question.name.slice(6))]));
+  } });
+  const before = f.state().career.profile;
+  const result = await f.service.prepare({ ...snapshot([
+    field('first', 'First name'), field('last', 'Last name'), field('email', 'Email', 'email'),
+    field('phone', 'Phone', 'tel'), field('linkedin', 'LinkedIn profile', 'url'), field('nickname', 'Preferred name'),
+    field('address', 'Address line 1'), field('summary', 'Personal summary'), field('sponsor', 'Requires sponsorship'),
+  ]), useApi: true });
+  assert.deepEqual(result.fields.map(item => item.value), selections);
+  assert.ok(result.fields.every(item => item.source === 'cv:cv'));
+  assert.deepEqual(result.questions.map(item => item.key), ['preferredName', 'addressLine1', 'personalSummary', 'requiresSponsorship']);
+  assert.deepEqual(result.api, { configured: true, used: true });
+  assert.deepEqual(f.state().career.profile, before);
+  assert.ok(f.approvals[0].data.some(item => item.source === 'cv:cv' && item.value === 'Alex'));
+});
+
+test('existing full profile name offers exact contiguous parts without assigning their order', async () => {
+  const f = fixture({ configured: true, fetchImpl: async (_url, init) => {
+    const body = JSON.parse(init.body);
+    for (const question of body.questions) {
+      assert.notEqual(chooseExact(question, 'Synthetic'), 'unknown');
+      assert.notEqual(chooseExact(question, 'Candidate'), 'unknown');
+      assert.equal(chooseExact(question, 'Synthetic Candidate'), 'unknown');
+    }
+    return chosenResponse(body, question => chooseExact(question, question.name === 'field_0' ? 'Synthetic' : 'Candidate'));
+  } });
+  const result = await f.service.prepare({ ...snapshot([field('first', 'First name'), field('last', 'Last name')]), useApi: true });
+  assert.deepEqual(result.fields.map(item => item.value), ['Synthetic', 'Candidate']);
+  assert.ok(result.fields.every(item => item.source === 'profile.name'));
+  assert.ok(f.approvals[0].data.some(item => item.qualifiers?.kind === 'name-fragment'));
+});
+
+for (const bad of ['full name', 'wrong labeled part']) test(`provider cannot select ${bad} for a name-part field`, async () => {
+  const text = bad === 'full name' ? syntheticCv : 'First name: Alex\nLast name: River\nalex.river@example.test';
+  const f = cvFixture({ fetchImpl: async (_url, init) => {
+    const body = JSON.parse(init.body), bank = JSON.parse(body.input[1].content).knownAnswers;
+    const wrong = bank.find(item => item.value === (bad === 'full name' ? 'Alex River' : 'River'));
+    assert.ok(wrong);
+    assert.ok(!body.questions[0].choices.some(choice => choice.value === wrong.id));
+    return chosenResponse(body, () => wrong.id);
+  } }, text);
+  await assert.rejects(f.service.prepare({ ...snapshot([field('first', 'First name')]), useApi: true }), byCode('FORM_INVALID_RESPONSE'));
+  assert.equal(f.state().career.profile.firstName, null);
+});
+
+test('same derived fragment cannot fill both first and last name', async () => {
+  const f = cvFixture({ fetchImpl: async (_url, init) => chosenResponse(JSON.parse(init.body), question => chooseExact(question, 'Alex')) });
+  const result = await f.service.prepare({ ...snapshot([field('first', 'First name'), field('last', 'Last name')]), useApi: true });
+  assert.deepEqual(result.fields, []);
+  assert.deepEqual(result.questions.map(item => item.key), ['firstName', 'lastName']);
+});
+
+test('explicit profile contacts remain authoritative over CV candidates and are never overwritten', async () => {
+  const f = cvFixture();
+  f.alter(state => { Object.assign(state.career.profile, { firstName: 'Explicit', lastName: 'Person', email: 'saved@example.test' }); });
+  const before = f.state().career.profile;
+  const result = await f.service.prepare({ ...snapshot([field('first', 'First name'), field('last', 'Last name'), field('email', 'Email')]), useApi: true });
+  assert.deepEqual(result.fields.map(item => item.value), ['Explicit', 'Person', 'saved@example.test']);
+  assert.equal(f.calls.length, 0);
+  assert.deepEqual(f.state().career.profile, before);
+});
+
+test('CV contact extraction is never direct and uncertainty still asks for explicit details', async () => {
+  const f = cvFixture({ fetchImpl: async (_url, init) => chosenResponse(JSON.parse(init.body), () => 'unknown') });
+  const args = snapshot([field('first', 'First name'), field('email', 'Email')]);
+  const direct = await f.service.prepare(args);
+  assert.equal(f.calls.length, 0);
+  assert.deepEqual(direct.fields, []);
+  const uncertain = await f.service.prepare({ ...args, requestId: randomUUID(), useApi: true });
+  assert.equal(f.calls.length, 1);
+  assert.deepEqual(uncertain.fields, []);
+  assert.deepEqual(uncertain.questions.map(item => item.key), ['firstName', 'email']);
+});
+
+test('reference-only, archived and non-CV sources never supply applicant contacts', async () => {
+  const f = cvFixture({}, 'References\nMorgan Employer\nmorgan.employer@example.test\n+1 (212) 555-0148');
+  f.alter(state => {
+    state.career.sources.archived = { purpose: 'cv', archived: true, text: syntheticCv };
+    state.career.sources.notes = { purpose: 'notes', archived: false, text: syntheticCv };
+  });
+  const result = await f.service.prepare({ ...snapshot([field('first', 'First name'), field('email', 'Email')]), useApi: true });
+  assert.equal(f.calls.length, 0);
+  assert.deepEqual(result.fields, []);
+  assert.deepEqual(result.questions.map(item => item.key), ['firstName', 'email']);
+});
+
+test('changing CV evidence discards previous extraction and requires fresh native approval and Decisions', async () => {
+  let expected = 'alex.river@example.test';
+  const f = cvFixture({ fetchImpl: async (_url, init) => {
+    const body = JSON.parse(init.body);
+    if (expected !== 'alex.river@example.test') assert.ok(!init.body.includes('alex.river@example.test'));
+    return chosenResponse(body, question => chooseExact(question, expected));
+  } });
+  const args = { ...snapshot([field('email', 'Email')]), useApi: true };
+  const first = await f.service.prepare(args);
+  assert.equal(first.fields[0].value, expected);
+  expected = 'updated@example.test';
+  f.alter(state => { state.career.sources.cv.text = syntheticCv.replace('alex.river@example.test', expected); });
+  const second = await f.service.prepare({ ...args, requestId: randomUUID() });
+  assert.equal(second.fields[0].value, expected);
+  assert.notEqual(first.snapshot, second.snapshot);
+  assert.equal(f.calls.length, 2);
+  assert.equal(f.approvals.length, 2);
+  assert.equal(f.state().career.profile.email, null);
+});
+
+test('CV changes while Decisions is pending invalidate the response without releasing contacts', async () => {
+  const gate = deferred(), entered = deferred();
+  const f = cvFixture({ fetchImpl: async (_url, init) => {
+    entered.resolve(); await gate.promise;
+    return chosenResponse(JSON.parse(init.body), question => chooseExact(question, 'alex.river@example.test'));
+  } });
+  const pending = f.service.prepare({ ...snapshot([field('email', 'Email')]), useApi: true });
+  await entered.promise;
+  f.alter(state => { state.career.sources.cv.text = 'New CV without contact information'; });
+  gate.resolve();
+  await assert.rejects(pending, byCode('FORM_CONTEXT_CHANGED'));
+});
+
+test('saved full name constrains semantic name-part selection ahead of a conflicting CV header', async () => {
+  const f = cvFixture({ fetchImpl: async (_url, init) => {
+    const body = JSON.parse(init.body);
+    for (const question of body.questions) {
+      assert.equal(chooseExact(question, 'Alex'), 'unknown');
+      assert.equal(chooseExact(question, 'River'), 'unknown');
+    }
+    return chosenResponse(body, question => chooseExact(question, question.name === 'field_0' ? 'Saved' : 'Person'));
+  } });
+  f.alter(state => { state.career.profile.name = 'Saved Person'; });
+  const result = await f.service.prepare({ ...snapshot([field('first', 'First name'), field('last', 'Last name')]), useApi: true });
+  assert.deepEqual(result.fields.map(item => item.value), ['Saved', 'Person']);
+});
+
+test('explicit employer contact excerpts are excluded from applicant choices', async () => {
+  const f = cvFixture({}, 'Experience\nExample Systems\nEmployer contact\njobs@example.test\n+1 (212) 555-0188');
+  const result = await f.service.prepare({ ...snapshot([field('email', 'Email'), field('phone', 'Phone')]), useApi: true });
+  assert.deepEqual(result.fields, []);
+  assert.deepEqual(result.questions.map(item => item.key), ['email', 'phone']);
+  assert.equal(f.calls.length, 0);
 });

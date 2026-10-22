@@ -18,13 +18,13 @@ export function createPrescanTools({ controller }) {
     },
     {
       name: 'career_prescan_preview', readOnly: true,
-      description: 'Read the middleware-backed publication scope count, jobs needing Decisions, reusable results and rough Cost ESTIMATE for the selected slider range. Fetches catalogue metadata only, with no provider calls, authorization or persistent career changes. No job-count cap. Use before asking to start a scan.',
+      description: 'Read the middleware-backed publication scope count, jobs needing Decisions, reusable results and rough Cost ESTIMATE for the selected slider range. Fetches catalogue metadata only, with no provider calls or persistent career changes. No job-count cap. Use before starting a scan.',
       inputSchema: object({ publicationRange: { type: 'string', enum: PUBLICATION_RANGES }, refresh: { type: 'boolean', default: false } }),
       async invoke(args = {}) { exact(args, ['publicationRange', 'refresh']); return controller.preview(args); },
     },
     {
       name: 'career_prescan_start', readOnly: false,
-      description: 'Pre-filter every eligible pending job in the selected publication range with OpenAI Decisions, without a job-count limit. Show career_prescan_preview totalCatalogue, jobCount and Cost ESTIMATE before requesting sharing and separate API billing approval. Native approval confirms the actual scope snapshot and estimate. Reuse current successful results unless refresh is true. No automatic paid retries or bulk LLM-review fallback after denial; keys stay in companion settings.',
+      description: 'Pre-filter every eligible pending job in the selected publication range with OpenAI Decisions, without a job-count limit and without any approval dialog. Show career_prescan_preview totalCatalogue, jobCount and Cost ESTIMATE first; the scan starts on this call with the current scope snapshot. Reuse current successful results unless refresh is true. No automatic paid retries or bulk LLM-review fallback; keys stay in companion settings.',
       inputSchema: object({ publicationRange: { type: 'string', enum: PUBLICATION_RANGES }, refresh: { type: 'boolean', default: false } }),
       async invoke(args = {}) { exact(args, ['publicationRange', 'refresh']); return controller.start(args); },
     },

@@ -102,12 +102,6 @@ prescan = createPrescanController({
         return result;
       } };
   },
-  authorize: ({ label, model, jobCount, totalCatalogue, estimatedCostUsd, signal }) => {
-    const scope = totalCatalogue === jobCount ? `${jobCount.toLocaleString()} jobs`
-      : `${totalCatalogue.toLocaleString()} jobs in scope · ${jobCount.toLocaleString()} to pre-filter`;
-    return confirm('Start pre-filtering?',
-      `${label} (${model})\n${scope} · ~US$${estimatedCostUsd.toFixed(2)}\n\nSend your CV, preferences, saved answers and these job adverts to OpenAI.\n\nOpenAI API usage is billed separately from your AI subscription.`, signal);
-  },
   onChange() {
     if (!prescan || locked) return;
     const current = prescan.status();
@@ -116,17 +110,7 @@ prescan = createPrescanController({
     emit();
   },
 });
-browserForms = createBrowserForms({
-  store, credentials: prescanCredentials, assertAvailable,
-  authorize: ({ destination, fields, data, useApi, label, model, inputUsdPerMillion, signal }) => {
-    const classes = [...new Set(data.map(({ source }) => source?.startsWith('profile.preferences.') ? 'career preferences'
-      : source?.startsWith('profile.') ? 'saved profile details' : source?.startsWith('cv:') ? 'CV contact details' : source?.startsWith('fact:') ? 'saved answers' : 'agent-written answers'))];
-    return confirm('Prepare application answers?',
-      `${destination}\n${fields.length} fields · ${classes.join(', ') || 'no saved answers'}\n\n${useApi
-        ? `${label} (${model}) receives field labels and known values to select answers.\nBase rate $${inputUsdPerMillion.toFixed(2)} / million input tokens · billed separately from your chat subscription.`
-        : 'No API call.'}\n\nValues go to Chrome for review, ⌘V paste or filling. Nothing is submitted.`, signal);
-  },
-});
+browserForms = createBrowserForms({ store, credentials: prescanCredentials, assertAvailable });
 updates = createUpdateController({
   version: packageMetadata.version, platform: process.platform, arch: process.arch,
   directory: path.join(app.getPath('userData'), localOnly ? 'local-updates' : 'updates'),
@@ -378,7 +362,7 @@ function createSessionServer() {
       scoped.assertAvailable(false);
       return result;
     }])) }),
-    ...createIntroductionTools({ store: scoped.store, platform: scopedPlatform, confirm: (title, detail) => confirm(title, detail),
+    ...createIntroductionTools({ store: scoped.store, platform: scopedPlatform,
       shareCv: async body => {
         scoped.assertAvailable(false);
         if (!store.get().pairing) fail('PAIRING_REQUIRED', 'Connect your account in companion settings.');
@@ -562,9 +546,6 @@ const browserBridge = {
   },
   async fill(draft, answers, { requestId, revalidate }) {
     const session = browserSession(draft.formId);
-    const destination = new URL(draft.url).origin;
-    if (!await confirm('Let your AI fill this application form?', `${destination}\n${draft.title}\n\nFills only empty, non-protected controls in your Chrome tab with the prepared values and staged answers. Nothing is submitted.`))
-      fail('FORM_NOT_AUTHORIZED', 'Filling was not approved. Nothing was written to the page.');
     revalidate();
     return browserCommand(session, draft.formId, 'forms_fill', { requestId, formId: draft.formId, answers,
       fields: draft.fields.map(({ id, signature }) => ({ id, signature })) });

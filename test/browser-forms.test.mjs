@@ -11,13 +11,13 @@ import { applicationContextFingerprint, upsertApplication } from '../src/applica
 const field = (id, label, type = 'text', extra = {}) => ({ id, label, type, signature: `signature:${id}`, empty: true, ...extra });
 const snapshot = fields => ({ requestId: randomUUID(), url: 'https://synthetic.example/apply/role', title: 'Synthetic application', fields, useApi: false });
 function deferred() { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; }
-function fixture({ authorize = async () => true, fetchImpl = async () => { throw new Error('Unexpected fetch'); }, configured = false } = {}) {
+function fixture({ fetchImpl = async () => { throw new Error('Unexpected fetch'); }, configured = false } = {}) {
   let state = { deviceId: 'synthetic-device', prescanCredentialVersion: 0, career: createCareerState() };
   Object.assign(state.career.profile, { name: 'Synthetic Candidate', email: 'candidate@example.test', phone: '+1 555 0100', location: 'Toronto', skills: ['Data analysis'] });
   state.career.facts.language = { id: 'language', subject: 'French', answer: 'Professional', kind: 'capability' };
   state.career.sources.cv = { purpose: 'cv', text: 'PRIVATE CV NEVER SENT TO DECISIONS', originalBase64: 'PRIVATE ORIGINAL', archived: false };
   let locked = false, key = configured ? 'sk-synthetic-only-never-a-real-key' : null, queue = Promise.resolve();
-  const approvals = [], calls = [];
+  const calls = [];
   const assertAvailable = () => { if (locked) throw new CareerError('LOCAL_LOCKED', 'Synthetic lock'); };
   const store = {
     get() { assertAvailable(); return structuredClone(state); },
@@ -31,8 +31,7 @@ function fixture({ authorize = async () => true, fetchImpl = async () => { throw
     if (!key) throw new CareerError('PRESCAN_KEY_REQUIRED', 'Synthetic key required');
     return { apiKey: key, credentialVersion: state.prescanCredentialVersion };
   } };
-  const service = createBrowserForms({ store, credentials, assertAvailable, authorize: input => { approvals.push(input); return authorize(input); },
-    fetchImpl: (...args) => { calls.push(args); return fetchImpl(...args); } });
+  const service = createBrowserForms({ store, credentials, assertAvailable, fetchImpl: (...args) => { calls.push(args); return fetchImpl(...args); } });
   const tools = new Map(createFormTools({ store }).map(tool => [tool.name, tool]));
   const bind = formId => store.update(saved => {
     const draft = saved.career.formDrafts[formId];
@@ -41,7 +40,7 @@ function fixture({ authorize = async () => true, fetchImpl = async () => { throw
     draft.applicationContext = applicationContextFingerprint(saved.career, app);
     saved.career.revision++;
   });
-  return { store, service, approvals, calls, tools, bind, lock() { locked = true; service.cancelAll(); },
+  return { store, service, calls, tools, bind, lock() { locked = true; service.cancelAll(); },
     rotateKey() { key = 'sk-synthetic-replacement-not-a-real-key'; state.prescanCredentialVersion++; },
     alter(change) { change(state); }, state: () => structuredClone(state) };
 }
@@ -55,34 +54,18 @@ const byCode = code => error => error.code === code;
 
 test('construction is lazy even while vault and credentials are unavailable', () => {
   const forbidden = () => { throw new Error('Must not access'); };
-  createBrowserForms({ store: { get: forbidden }, credentials: { read: forbidden }, authorize: forbidden, assertAvailable: forbidden });
+  createBrowserForms({ store: { get: forbidden }, credentials: { read: forbidden }, assertAvailable: forbidden });
   createFormTools({ store: { get: forbidden } });
 });
 
-test('direct known contact answers need no key and are released only after native approval', async () => {
-  const gate = deferred(), entered = deferred();
-  const f = fixture({ authorize: input => { entered.resolve(input); return gate.promise; } });
-  const args = snapshot([field('name', 'Full name'), field('email', 'Email address', 'email'), field('phone', 'Telephone', 'tel'), field('unknown', 'Why this company?', 'textarea')]);
-  const pending = f.service.prepare(args);
-  const approval = await entered.promise;
-  assert.equal(approval.destination, 'https://synthetic.example');
-  assert.equal(approval.useApi, false);
-  assert.ok(approval.data.some(item => item.value === 'candidate@example.test'));
-  assert.equal(f.state().career.formDrafts, undefined);
+test('direct known contact answers need no key and no approval', async () => {
+  const f = fixture();
+  const result = await f.service.prepare(snapshot([field('name', 'Full name'), field('email', 'Email address', 'email'), field('phone', 'Telephone', 'tel'), field('unknown', 'Why this company?', 'textarea')]));
   assert.equal(f.calls.length, 0);
-  gate.resolve(true);
-  const result = await pending;
   assert.deepEqual(result.fields.map(item => item.value), ['Synthetic Candidate', 'candidate@example.test', '+1 555 0100']);
   assert.equal(result.unresolved[0].id, 'unknown');
   assert.equal(result.usage, undefined);
   assert.ok(!JSON.stringify(result).includes('PRIVATE CV'));
-});
-
-test('denied approval releases nothing, stores nothing and dispatches nothing', async () => {
-  const f = fixture({ configured: true, authorize: async () => false });
-  await assert.rejects(f.service.prepare({ ...snapshot([field('email', 'Email', 'email'), field('q', 'French level')]), useApi: true }), byCode('FORM_NOT_AUTHORIZED'));
-  assert.equal(f.calls.length, 0);
-  assert.equal(f.state().career.formDrafts, undefined);
 });
 
 test('protected, unsupported and populated fields stay unresolved even with a known value', async () => {
@@ -145,9 +128,8 @@ test('navigation and control-signature changes cannot reuse a supplied formId', 
   await assert.rejects(f.service.prepare({ ...args, requestId: randomUUID(), formId: first.formId, fields: [field('email', 'Email', 'email', { signature: 'changed' })] }), byCode('FORM_CONTEXT_CHANGED'));
 });
 
-test('explicit API mode approves provider, model, data and separate billing before bounded dispatch', async () => {
+test('explicit API mode dispatches bounded requests without exposing the key or CV', async () => {
   const f = fixture({ configured: true, fetchImpl: async (url, init) => {
-    assert.equal(f.approvals.length, 1);
     assert.equal(url, 'https://api.openai.com/v1/decisions');
     assert.equal(init.redirect, 'error');
     assert.ok(Buffer.byteLength(init.body) <= 240000);
@@ -161,10 +143,7 @@ test('explicit API mode approves provider, model, data and separate billing befo
   assert.equal(f.calls.length, 2);
   assert.equal(result.usage.requests, 2);
   assert.equal(result.usage.inputTokens, 40);
-  assert.equal(f.approvals[0].provider, 'openai');
-  assert.equal(f.approvals[0].model, 'gpt-6-luna');
-  assert.equal(f.approvals[0].separateBilling, true);
-  assert.equal(f.approvals[0].inputUsdPerMillion, 0.1);
+  assert.equal(result.usage.inputUsdPerMillion, 0.1);
   assert.ok(!JSON.stringify(result).includes('sk-synthetic'));
   assert.ok(!JSON.stringify(f.state().career).includes('sk-synthetic'));
 });
@@ -193,22 +172,6 @@ for (const refusal of [true, false]) test(`API ${refusal ? 'refusal' : 'uncertai
   assert.equal(result.unresolved.length, 1);
 });
 
-for (const change of ['cancel', 'cancelAll', 'profile', 'key', 'identity', 'lock']) test(`${change} during native approval stops release and future API dispatch`, async () => {
-  const gate = deferred(), entered = deferred();
-  const f = fixture({ configured: true, authorize: () => { entered.resolve(); return gate.promise; } });
-  const args = { ...snapshot([field('q', 'French level')]), useApi: true }, pending = f.service.prepare(args);
-  await entered.promise;
-  if (change === 'cancel') f.service.cancel(args.requestId);
-  if (change === 'cancelAll') f.service.cancelAll();
-  if (change === 'profile') f.alter(state => { state.career.profile.name = 'Changed'; state.career.evidenceRevision++; });
-  if (change === 'key') f.rotateKey();
-  if (change === 'identity') f.alter(state => { state.deviceId = 'different-device'; });
-  if (change === 'lock') f.lock();
-  gate.resolve(true);
-  await assert.rejects(pending);
-  assert.equal(f.calls.length, 0);
-});
-
 for (const change of ['cancel', 'profile', 'key', 'lock']) test(`${change} during fetch discards stale API results and stops later chunks`, async () => {
   const gate = deferred(), entered = deferred();
   const f = fixture({ configured: true, fetchImpl: async (_url, init) => { entered.resolve(init); await gate.promise; return response(JSON.parse(init.body)); } });
@@ -233,7 +196,6 @@ test('native validation rejects extra private values, credential URLs, duplicate
     snapshot(Array.from({ length: 65 }, (_, index) => field(`${index}`, 'Label'))),
     { ...snapshot([]), apiKey: 'sk-private' },
   ]) await assert.rejects(f.service.prepare(args), byCode('INVALID_INPUT'));
-  assert.equal(f.approvals.length, 0);
 });
 
 test('known contact choices use only actual option values while unknown eligibility has no default', async () => {
@@ -360,8 +322,6 @@ test('fact bank retains original qualifiers and excludes unbound application-spe
   })]), useApi: true });
   assert.equal(result.fields.length, 0);
   assert.equal(result.unresolved.length, 1);
-  const approvedFact = f.approvals[0].data.find(item => item.source === 'fact:relocation');
-  assert.equal(approvedFact.qualifiers.context, 'Toronto only');
 });
 
 test('preferred contact method is available for explicit staging while Contact me consent remains protected', async () => {
@@ -623,18 +583,13 @@ test('partial explicit details preserve unrelated fields and full name ambiguity
   assert.equal(next.fields[0].value, 'Alex');
 });
 
-test('missing credentials still require approval before known values or questions are released', async () => {
+test('missing credentials still release known values and questions without inference', async () => {
   const f = fixture();
   const result = await f.service.prepare({ ...snapshot([field('email', 'Email'), field('first', 'First name'), field('q', 'French level')]), useApi: true });
-  assert.equal(f.approvals.length, 1);
-  assert.equal(f.approvals[0].useApi, false);
   assert.equal(result.fields[0].value, 'candidate@example.test');
   assert.deepEqual(result.questions.map(question => question.key), ['firstName']);
   assert.deepEqual(result.api, { configured: false, used: false });
   assert.equal(f.calls.length, 0);
-  const denied = fixture({ authorize: async () => false });
-  await assert.rejects(denied.service.prepare({ ...snapshot([field('first', 'First name')]), useApi: true }), byCode('FORM_NOT_AUTHORIZED'));
-  assert.equal(denied.state().career.formDrafts, undefined);
 });
 
 test('profile saving rejects unrequested, already known, protected and malformed values atomically', async () => {
@@ -668,7 +623,7 @@ test('profile receipt survives service recreation and refuses changed-content re
   const f = fixture(), prepared = await f.service.prepare(snapshot([field('first', 'First name')]));
   const input = { requestId: randomUUID(), formId: prepared.formId, snapshot: prepared.snapshot, values: { firstName: 'Alex' } };
   const result = await f.service.saveDetails(input), state = f.state();
-  const restarted = createBrowserForms({ store: f.store, assertAvailable() {}, credentials: {}, authorize() { throw new Error('No release on replay'); } });
+  const restarted = createBrowserForms({ store: f.store, assertAvailable() {}, credentials: {} });
   assert.deepEqual(await restarted.saveDetails(input), result);
   assert.deepEqual(f.state(), state);
   await assert.rejects(restarted.saveDetails({ ...input, values: { firstName: 'Different' } }), byCode('REQUEST_CONFLICT'));
@@ -693,7 +648,7 @@ test('API leaves ambiguous name parts explicit and unsupported controls manual',
 
 test('credential failures other than missing configuration are not suppressed', async () => {
   const f = fixture();
-  const service = createBrowserForms({ store: f.store, assertAvailable() {}, authorize: async () => true,
+  const service = createBrowserForms({ store: f.store, assertAvailable() {},
     credentials: { read() { throw new CareerError('CREDENTIAL_CORRUPT', 'Cannot read credential'); } } });
   await assert.rejects(service.prepare({ ...snapshot([field('first', 'First name')]), useApi: true }), byCode('CREDENTIAL_CORRUPT'));
 });
@@ -708,7 +663,7 @@ test('personal summary is application writing, never a reusable profile question
   assert.deepEqual(prepared.questions, []);
   assert.deepEqual(prepared.fields, []);
   assert.equal(f.calls.length, 0);
-  assert.ok(!JSON.stringify(f.approvals).includes('Legacy generic summary'));
+  assert.ok(!JSON.stringify(prepared).includes('Legacy generic summary'));
   await assert.rejects(f.service.saveDetails({ requestId: randomUUID(), formId: prepared.formId, snapshot: prepared.snapshot,
     values: { personalSummary: 'I build accessible software.' } }), byCode('INVALID_INPUT'));
 });
@@ -807,7 +762,6 @@ function cvFixture(options = {}, text = syntheticCv) {
 test('current CV reaches Decisions before missing questions and yields exact applicant contact excerpts', async () => {
   const selections = ['Alex', 'River', 'alex.river@example.test', '+1 (416) 555-0199', 'https://www.linkedin.com/in/alex-river'];
   const f = cvFixture({ fetchImpl: async (_url, init) => {
-    assert.equal(f.approvals.length, 1);
     const body = JSON.parse(init.body), bank = JSON.parse(body.input[1].content).knownAnswers;
     assert.ok(bank.length <= 64);
     const excerpts = bank.filter(item => item.source === 'cv:cv');
@@ -833,7 +787,6 @@ test('current CV reaches Decisions before missing questions and yields exact app
   assert.deepEqual(result.questions.map(item => item.key), ['preferredName', 'addressLine1', 'requiresSponsorship']);
   assert.deepEqual(result.api, { configured: true, used: true });
   assert.deepEqual(f.state().career.profile, before);
-  assert.ok(f.approvals[0].data.some(item => item.source === 'cv:cv' && item.value === 'Alex'));
 });
 
 test('existing full profile name offers exact contiguous parts without assigning their order', async () => {
@@ -849,7 +802,6 @@ test('existing full profile name offers exact contiguous parts without assigning
   const result = await f.service.prepare({ ...snapshot([field('first', 'First name'), field('last', 'Last name')]), useApi: true });
   assert.deepEqual(result.fields.map(item => item.value), ['Synthetic', 'Candidate']);
   assert.ok(result.fields.every(item => item.source === 'profile.name'));
-  assert.ok(f.approvals[0].data.some(item => item.qualifiers?.kind === 'name-fragment'));
 });
 
 for (const bad of ['full name', 'wrong labeled part']) test(`provider cannot select ${bad} for a name-part field`, async () => {
@@ -906,7 +858,7 @@ test('reference-only, archived and non-CV sources never supply applicant contact
   assert.deepEqual(result.questions.map(item => item.key), ['firstName', 'email']);
 });
 
-test('changing CV evidence discards previous extraction and requires fresh native approval and Decisions', async () => {
+test('changing CV evidence discards previous extraction and requires fresh Decisions calls', async () => {
   let expected = 'alex.river@example.test';
   const f = cvFixture({ fetchImpl: async (_url, init) => {
     const body = JSON.parse(init.body);
@@ -922,7 +874,6 @@ test('changing CV evidence discards previous extraction and requires fresh nativ
   assert.equal(second.fields[0].value, expected);
   assert.notEqual(first.snapshot, second.snapshot);
   assert.equal(f.calls.length, 2);
-  assert.equal(f.approvals.length, 2);
   assert.equal(f.state().career.profile.email, null);
 });
 

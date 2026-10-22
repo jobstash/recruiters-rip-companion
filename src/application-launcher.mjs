@@ -81,7 +81,7 @@ export function createApplicationLauncher({ directory, command, openExternal, ho
       if (await hostAvailable(host) !== true)
         fail('HOST_UNAVAILABLE', `Install ${labels[host]} on this Mac, sign in, then try again, or choose another installed host.`);
       await configure(host);
-      const prompt = `Call career_application_preparation_read with {"preparationId":"${preparationId}"} using only the ${applicationConnection} MCP connection for this workspace. Follow its instructions to prepare and save this application's CV, cover letter and written answers. Use the original job description and saved career evidence; do not invent facts. Keep native approvals and leave submission to me. If that connection or its tools are unavailable, ask me to approve the workspace and enable ${applicationConnection}; do not use another Companion connection or substitute guessed content.`;
+      const prompt = `Call career_application_preparation_read with {"preparationId":"${preparationId}"} using only the ${applicationConnection} MCP connection for this workspace. Follow its instructions to prepare and save this application's CV, cover letter and written answers. Use the original job description and saved career evidence; do not invent facts. Leave submission to me. If that connection or its tools are unavailable, ask me to approve the workspace and enable ${applicationConnection}; do not use another Companion connection or substitute guessed content.`;
       const url = new URL(host === 'claude' ? 'claude://code/new' : 'codex://threads/new');
       url.searchParams.set(host === 'claude' ? 'q' : 'prompt', prompt);
       url.searchParams.set(host === 'claude' ? 'folder' : 'path', workspace);

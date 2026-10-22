@@ -123,7 +123,7 @@ const sharingDate = value => typeof value === 'string' && Number.isFinite(Date.p
 function renderSharing(introductions) {
   const granted = introductions?.consent?.granted === true;
   const since = sharingDate(introductions?.consent?.at);
-  $('sharing-status').textContent = granted ? `CV sharing is on${since ? ` since ${since}` : ''}. Each upload still asks for your approval.`
+  $('sharing-status').textContent = granted ? `CV sharing is on${since ? ` since ${since}` : ''}. Ready CVs are sent when the agent shares them.`
     : 'CV sharing is off.';
   const shared = (introductions?.sources ?? []).filter(source => source.sharedAt).sort((a, b) => b.sharedAt.localeCompare(a.sharedAt))[0];
   $('sharing-shared').hidden = !shared;

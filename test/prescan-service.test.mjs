@@ -24,7 +24,7 @@ const assessment = () => ({ status: 'scored', provider: 'openai', model: 'gpt-6-
   confidence: 0.8, answers: [], inputTokens: 17 });
 
 // Only tests inject this synthetic provider. Production uses the fixed OpenAI adapter registry.
-function fixture({ count = 3, assess = async () => assessment(), authorize = async () => true, batch, catalogueWait,
+function fixture({ count = 3, assess = async () => assessment(), batch, catalogueWait,
   cataloguePageSize = 1000, cataloguePage } = {}) {
   const career = createCareerState();
   Object.assign(career.profile, { headline: 'Software engineer', location: 'Dublin', name: 'PRIVATE NAME',
@@ -36,7 +36,7 @@ function fixture({ count = 3, assess = async () => assessment(), authorize = asy
   let state = { career, deviceId: 'synthetic-device', prescanCredentialVersion: 1,
     prescanCredentials: { openai: { apiKey: 'sk-synthetic-only-never-a-real-key' } } };
   let queue = Promise.resolve(), locked = false, epoch = 0, concurrent = 0, maxConcurrent = 0;
-  const listeners = new Set(), apiCalls = [], platformCalls = [], authorizations = [], catalogue = Array.from({ length: count }, (_, i) => job(i));
+  const listeners = new Set(), apiCalls = [], platformCalls = [], catalogue = Array.from({ length: count }, (_, i) => job(i));
   const catalogues = new Map();
   const changed = () => { for (const listener of [...listeners]) listener(); };
   const assertAvailable = () => { if (locked) throw new CareerError('LOCAL_LOCKED', 'Fixture locked'); };
@@ -85,8 +85,7 @@ function fixture({ count = 3, assess = async () => assessment(), authorize = asy
       locationEvidence: ['Work from Dublin office two days weekly'], rawGraph: { unrelated: 'RAW GRAPH' } })), remainingIds: [], unavailableIds: [] };
   };
   const controller = createPrescanController({ store, credentials, providers, onChange: changed,
-    makeScope: () => ({ ...createScopedAccess(store, { assertAvailable, epoch: () => epoch }), platform }),
-    authorize: async input => { authorizations.push(input); changed(); return authorize(input); } });
+    makeScope: () => ({ ...createScopedAccess(store, { assertAvailable, epoch: () => epoch }), platform }) });
   const waitFor = predicate => new Promise((resolve, reject) => {
     const check = () => {
       try { const result = predicate(); if (result) { clearTimeout(timer); listeners.delete(check); resolve(result); } }
@@ -95,23 +94,23 @@ function fixture({ count = 3, assess = async () => assessment(), authorize = asy
     const timer = setTimeout(() => { listeners.delete(check); reject(new Error('Synthetic pre-scan condition did not settle')); }, 3000);
     listeners.add(check); check();
   });
-  return { controller, store, credentials, catalogue, apiCalls, platformCalls, authorizations, waitFor,
+  return { controller, store, credentials, catalogue, apiCalls, platformCalls, waitFor,
     snapshot: () => structuredClone(state), setLocked(value) { locked = value; }, advanceEpoch() { epoch++; },
     get maxConcurrent() { return maxConcurrent; } };
 }
 const terminal = f => f.waitFor(() => ['completed', 'failed', 'cancelled', 'interrupted', 'stale'].includes(f.controller.status().status));
 
-test('construction and local readers never authorize, fetch or infer; constructor also works while locked', () => {
+test('construction and local readers never fetch or infer; constructor also works while locked', () => {
   const unavailable = () => { throw new Error('Constructor must not read vault'); };
   createPrescanController({ store: { get: unavailable }, makeScope: unavailable,
-    credentials: { publicState: unavailable }, authorize: unavailable });
+    credentials: { publicState: unavailable } });
   const f = fixture();
   assert.equal(f.controller.status().status, 'idle');
   assert.equal(f.controller.status().processed, 0);
-  assert.deepEqual(f.apiCalls, []); assert.deepEqual(f.platformCalls, []); assert.deepEqual(f.authorizations, []);
+  assert.deepEqual(f.apiCalls, []); assert.deepEqual(f.platformCalls, []);
 });
 
-test('preview reads complete catalogue metadata without credentials, approval, provider work or persistent writes', async () => {
+test('preview reads complete catalogue metadata without credentials, provider work or persistent writes', async () => {
   const f = fixture(), before = f.snapshot();
   f.credentials.read = () => assert.fail('Preview must not read the private API key');
   const preview = await f.controller.preview();
@@ -120,30 +119,26 @@ test('preview reads complete catalogue metadata without credentials, approval, p
   assert.equal(preview.estimatedCostUsd, preview.estimatedInputTokens * preview.inputUsdPerMillion / 1_000_000);
   assert.deepEqual(f.snapshot(), before);
   assert.deepEqual(f.platformCalls.map(call => call.operation), ['matching_catalogue']);
-  assert.equal(f.apiCalls.length, 0); assert.equal(f.authorizations.length, 0); assert.equal(f.controller.isActive(), false);
+  assert.equal(f.apiCalls.length, 0); assert.equal(f.controller.isActive(), false);
 });
 
-test('100,000 pending jobs are previewed and planned for native approval without a count cap or paid inference', async () => {
-  const f = fixture({ count: 100_000, authorize: async () => false }), before = f.snapshot();
+test('100,000 pending jobs are previewed without a count cap or paid inference', async () => {
+  const f = fixture({ count: 100_000 }), before = f.snapshot();
   const preview = await f.controller.preview();
   assert.equal(preview.jobCount, 100_000); assert.equal(preview.totalCatalogue, 100_000);
   assert.equal(preview.reused, 0); assert.equal(preview.estimatedInputTokens > 100_000, true);
   assert.deepEqual(f.platformCalls.map(call => call.args.offset ?? 0), Array.from({ length: 100 }, (_, index) => index * 1000));
-  await assert.rejects(f.controller.start(), { code: 'PRESCAN_NOT_AUTHORIZED' });
-  assert.equal(f.authorizations[0].jobCount, 100_000);
-  assert.equal(f.authorizations[0].estimatedInputTokens, preview.estimatedInputTokens);
-  assert.equal(f.authorizations[0].estimatedCostUsd, preview.estimatedCostUsd);
   assert.equal(f.apiCalls.length, 0);
   assert.equal(f.platformCalls.every(call => call.operation === 'matching_catalogue'), true);
   assert.deepEqual(f.snapshot(), before);
 });
 
-test('an approved snapshot includes every job beyond 2,000 and never expands after confirmation', async () => {
+test('a started snapshot includes every job beyond 2,000 and never expands after planning', async () => {
   const pending = deferred();
-  const f = fixture({ count: 2001, authorize: async () => { f.catalogue.push(job('new')); return true; },
-    batch: async ({ ids }) => { await pending.promise; return { jobs: [], remainingIds: [], unavailableIds: ids }; } });
+  const f = fixture({ count: 2001, batch: async ({ ids }) => { await pending.promise; return { jobs: [], remainingIds: [], unavailableIds: ids }; } });
   const started = await f.controller.start();
-  assert.equal(f.authorizations[0].jobCount, 2001); assert.equal(started.selected, 2001);
+  f.catalogue.push(job('new'));
+  assert.equal(started.selected, 2001);
   const selected = f.snapshot().career.prescan.selectedIds;
   assert.equal(selected.length, 2001); assert.equal(selected.includes('node:2000'), true);
   assert.equal(selected.includes('node:new'), false);
@@ -171,13 +166,13 @@ test('publication presets scope middleware counts and whole-catalogue runs keep 
     assert.equal(f.platformCalls.at(-1).args.publicationRange, publicationRange);
     assert.deepEqual(f.snapshot(), before);
   }
-  assert.equal(f.apiCalls.length, 0); assert.equal(f.authorizations.length, 0);
+  assert.equal(f.apiCalls.length, 0);
   await f.controller.setPublicationRange({ publicationRange: 'all' });
   assert.equal(f.controller.status().publicationRange, 'all');
-  assert.equal(f.apiCalls.length, 0); assert.equal(f.authorizations.length, 0);
+  assert.equal(f.apiCalls.length, 0);
   await f.controller.start(); await terminal(f);
-  assert.equal(f.apiCalls.length, 7); assert.equal(f.authorizations[0].jobCount, 7);
-  assert.equal(f.authorizations[0].publicationRange, 'all');
+  assert.equal(f.apiCalls.length, 7);
+  assert.equal(f.snapshot().career.prescan.selectedIds.length, 7);
   assert.equal(f.snapshot().career.prescan.publicationRange, 'all');
   assert.equal(f.snapshot().career.prescan.publicationWindow.since, null);
   const cached = await f.controller.preview();
@@ -185,23 +180,7 @@ test('publication presets scope middleware counts and whole-catalogue runs keep 
   await f.controller.setPublicationRange({ publicationRange: 'past_month' });
   const month = await f.controller.preview();
   assert.equal(month.totalCatalogue, 6); assert.equal(month.reused, 6); assert.equal(month.jobCount, 0);
-  assert.equal(f.apiCalls.length, 7); assert.equal(f.authorizations.length, 1);
-});
-
-test('range changes cancel native approval, persist the new selection and never start inference', async () => {
-  const approval = deferred(), f = fixture({ authorize: () => approval.promise });
-  const pending = f.controller.start();
-  await f.waitFor(() => f.authorizations.length === 1);
-  const changed = await f.controller.setPublicationRange({ publicationRange: 'past_month' });
-  assert.equal(changed.publicationRange, 'past_month'); assert.equal(changed.status, 'idle');
-  assert.equal(f.snapshot().prescanPublicationRange, 'past_month');
-  assert.equal(f.authorizations[0].signal.aborted, true);
-  approval.resolve(true);
-  await assert.rejects(pending, { code: 'PRESCAN_CANCELLED' });
-  assert.equal(f.apiCalls.length, 0);
-  assert.equal(f.platformCalls.every(call => call.operation === 'matching_catalogue'), true);
-  const preview = await f.controller.preview();
-  assert.equal(preview.publicationRange, 'past_month'); assert.equal(f.authorizations.length, 1);
+  assert.equal(f.apiCalls.length, 7);
 });
 
 test('changing the range cancels active work, preserves saved successes and cannot save a late paid response', async () => {
@@ -212,7 +191,7 @@ test('changing the range cancels active work, preserves saved successes and cann
   assert.equal(changed.status, 'cancelled'); assert.equal(changed.publicationRange, 'all'); assert.equal(changed.processed, 1);
   const preview = await f.controller.preview();
   assert.equal(preview.jobCount, 2); assert.equal(preview.reused, 1);
-  assert.equal(f.apiCalls.length, 2); assert.equal(f.authorizations.length, 1);
+  assert.equal(f.apiCalls.length, 2);
   pending.resolve(); await f.waitFor(() => !f.controller.isActive());
   assert.equal(Object.keys(f.snapshot().career.prescan.rows).length, 1); assert.equal(f.apiCalls.length, 2);
 });
@@ -239,10 +218,10 @@ test('invalid range selections and obsolete limits never fetch metadata, authori
   for (const args of [undefined, {}, null, [], { publicationRange: 'all', limit: 100 }])
     await assert.rejects(f.controller.setPublicationRange(args), { code: 'INVALID_INPUT' });
   assert.deepEqual(f.snapshot(), before); assert.equal(f.platformCalls.length, 0);
-  assert.equal(f.authorizations.length, 0); assert.equal(f.apiCalls.length, 0);
+  assert.equal(f.apiCalls.length, 0);
 });
 
-test('metadata pagination rejects duplicate IDs, drifting totals, gaps and incomplete scopes before approval', async () => {
+test('metadata pagination rejects duplicate IDs, drifting totals, gaps and incomplete scopes before paid work', async () => {
   for (const defect of ['duplicate', 'total', 'gap', 'incomplete', 'window']) {
     const f = fixture({ count: 2, cataloguePage: args => {
       const window = { range: args.publicationRange, since: args.since, until: args.until };
@@ -254,13 +233,13 @@ test('metadata pagination rejects duplicate IDs, drifting totals, gaps and incom
     } });
     await assert.rejects(f.controller.preview(), { code: 'INVALID_CATALOGUE' });
     await assert.rejects(f.controller.start(), { code: 'INVALID_CATALOGUE' });
-    assert.equal(f.authorizations.length, 0); assert.equal(f.apiCalls.length, 0);
+    assert.equal(f.apiCalls.length, 0);
     assert.equal(f.snapshot().career.prescan, undefined);
   }
 });
 
-test('start recomputes the current catalogue and candidate context instead of authorizing a stale preview', async () => {
-  const approval = deferred(), f = fixture({ count: 2, authorize: () => approval.promise });
+test('start recomputes the current catalogue and candidate context instead of reusing a stale preview', async () => {
+  const f = fixture({ count: 2 });
   const preview = await f.controller.preview();
   assert.equal(preview.jobCount, 2);
   await f.store.update(state => {
@@ -268,38 +247,22 @@ test('start recomputes the current catalogue and candidate context instead of au
     state.career.profile.preferences.notes = 'Updated career direction.';
   });
   f.catalogue.push(job(2));
-  const started = f.controller.start();
-  await f.waitFor(() => f.authorizations.length === 1);
-  assert.equal(f.authorizations[0].jobCount, 3); assert.equal(f.apiCalls.length, 0);
-  assert.equal(f.platformCalls.every(call => call.operation === 'matching_catalogue'), true);
-  approval.resolve(true); await started; await terminal(f);
+  const started = await f.controller.start(); await terminal(f);
+  assert.equal(started.selected, 3);
   assert.equal(f.apiCalls.length, 3);
   assert.equal(f.apiCalls.every(call => call.candidate.preferences.notes === 'Updated career direction.'), true);
 });
 
-test('native authorization reserves single-flight and receives the exact metadata-only plan before paid work', async () => {
-  const approval = deferred(), response = deferred();
-  const f = fixture({ authorize: () => approval.promise, assess: async () => { await response.promise; return assessment(); } });
-  const before = f.snapshot();
-  const first = f.controller.start();
-  await f.waitFor(() => f.authorizations.length === 1);
+test('start reserves single-flight so a concurrent start joins the running run', async () => {
+  const response = deferred();
+  const f = fixture({ assess: async () => { await response.promise; return assessment(); } });
+  const started = await f.controller.start();
+  assert.equal(started.selected, 3);
+  await f.waitFor(() => f.apiCalls.length >= 1);
   const concurrent = await f.controller.start({ refresh: true });
-  assert.equal(concurrent.status, 'running');
-  assert.equal(f.authorizations.length, 1); assert.equal(f.apiCalls.length, 0);
-  assert.deepEqual(f.platformCalls.map(call => call.operation), ['matching_catalogue']);
-  assert.deepEqual(f.snapshot(), before);
-  const authorized = f.authorizations[0];
-  assert.equal(authorized.jobCount, 3); assert.equal(authorized.totalCatalogue, 3); assert.equal(authorized.reused, 0);
-  assert.equal(authorized.provider, 'openai'); assert.equal(authorized.model, 'gpt-6-luna');
-  assert.equal(authorized.estimatedInputTokens > 0, true);
-  assert.equal(authorized.estimatedCostUsd, authorized.estimatedInputTokens * authorized.inputUsdPerMillion / 1_000_000);
-  assert.equal(authorized.signal.aborted, false);
-  approval.resolve(true); const started = await first;
-  await f.waitFor(() => f.apiCalls.length === 1);
-  assert.equal((await f.controller.start()).runId, started.runId);
-  assert.equal(f.authorizations.length, 1);
+  assert.equal(concurrent.status, 'running'); assert.equal(concurrent.runId, started.runId);
   response.resolve(); await terminal(f);
-  assert.equal(f.apiCalls.length, authorized.jobCount);
+  assert.equal(f.apiCalls.length, 3);
 });
 
 test('a stale or cancelled summary remains busy until its paid provider request drains', async () => {
@@ -317,19 +280,15 @@ test('a stale or cancelled summary remains busy until its paid provider request 
   assert.equal(f.controller.isActive(), false);
 });
 
-test('declined confirmation changes no career data and never fetches full ads or calls the provider', async () => {
-  const f = fixture({ authorize: async () => false }), before = f.snapshot();
-  await assert.rejects(f.controller.start(), { code: 'PRESCAN_NOT_AUTHORIZED' });
-  assert.equal(f.controller.status().status, 'idle');
-  assert.deepEqual(f.platformCalls.map(call => call.operation), ['matching_catalogue']);
-  assert.equal(f.apiCalls.length, 0); assert.deepEqual(f.snapshot(), before);
+test('a missing key or invalid arguments never fetch full ads or call the provider', async () => {
+  const f = fixture();
   await f.store.update(state => { delete state.prescanCredentials; state.prescanCredentialVersion++; });
   await assert.rejects(f.controller.start(), { code: 'PRESCAN_KEY_REQUIRED' });
   for (const args of [null, [], { limit: 0 }, { limit: 1 }, { limit: 2001 }, { limit: 1.5 }, { refresh: 'yes' }, { apiKey: 'never' }, { provider: 'fake' }]) {
     await assert.rejects(f.controller.start(args), { code: 'INVALID_INPUT' });
     await assert.rejects(f.controller.preview(args), { code: 'INVALID_INPUT' });
   }
-  assert.equal(f.platformCalls.length, 1); assert.equal(f.authorizations.length, 1);
+  assert.equal(f.platformCalls.length, 0);
 });
 
 test('full catalogue runs keep eight active calls, include final-assessed jobs and preserve full ads/context and final scores', async () => {
@@ -454,21 +413,19 @@ test('preview and restarts reuse every current successful result; refresh reruns
   const f = fixture({ count: 3 });
   await f.controller.start(); await terminal(f);
   f.catalogue.push(job(3), job(4));
-  const before = f.snapshot(), calls = f.apiCalls.length, authorizations = f.authorizations.length;
+  const before = f.snapshot(), calls = f.apiCalls.length;
   const preview = await f.controller.preview();
   assert.equal(preview.jobCount, 2); assert.equal(preview.totalCatalogue, 5); assert.equal(preview.reused, 3);
   assert.equal(preview.estimatedInputTokens, 2 * 17);
   assert.equal(preview.estimatedCostUsd, 34 * 0.1 / 1_000_000);
   assert.deepEqual(f.snapshot(), before);
-  assert.equal(f.apiCalls.length, calls); assert.equal(f.authorizations.length, authorizations);
+  assert.equal(f.apiCalls.length, calls);
   await f.controller.start(); await terminal(f);
   assert.equal(f.apiCalls.length, 5); assert.equal(Object.keys(f.snapshot().career.prescan.rows).length, 5);
   assert.equal(f.controller.status().requests, 2); assert.equal(f.controller.status().inputTokens, 34);
   const coverage = f.controller.status();
   assert.equal(coverage.selected, 2); assert.equal(coverage.reused, 3);
   assert.equal(coverage.processed + coverage.reused, coverage.totalCatalogue);
-  assert.equal(f.authorizations.at(-1).jobCount, preview.jobCount);
-  assert.equal(f.authorizations.at(-1).estimatedCostUsd, preview.estimatedCostUsd);
   const reused = await f.controller.preview();
   assert.equal(reused.jobCount, 0); assert.equal(reused.reused, 5); assert.equal(reused.estimatedCostUsd, 0);
   const refresh = await f.controller.preview({ refresh: true });
@@ -539,16 +496,6 @@ test('profile, ranking reset, credential and identity races discard late provide
   }
 });
 
-test('profile changes during authorization block full-ad fetching and paid dispatch', async () => {
-  const approval = deferred(), f = fixture({ authorize: () => approval.promise });
-  const pending = f.controller.start();
-  await f.waitFor(() => f.authorizations.length === 1);
-  await f.store.update(state => { state.career.evidenceRevision++; });
-  approval.resolve(true);
-  await assert.rejects(pending, { code: 'PRESCAN_CONTEXT_CHANGED' });
-  assert.deepEqual(f.platformCalls.map(call => call.operation), ['matching_catalogue']); assert.equal(f.apiCalls.length, 0);
-});
-
 test('reset while full ads load cannot restore jobs or initiate paid requests', async () => {
   const pending = deferred();
   const f = fixture({ batch: async ({ ids }) => { await pending.promise; return { jobs: ids.map(id => ({ ...job(id.slice(5)), ad: 'Original ad' })), remainingIds: [], unavailableIds: [] }; } });
@@ -574,7 +521,7 @@ test('profile, ranking, credential and publication-range changes invalidate load
     await assert.rejects(planned, { code: 'PRESCAN_CONTEXT_CHANGED' });
     assert.equal(Object.keys(f.store.get().career.matching?.jobs ?? {}).length, 0);
     assert.equal(f.store.get().career.prescan, undefined);
-    assert.equal(f.apiCalls.length, 0); assert.equal(f.authorizations.length, 0);
+    assert.equal(f.apiCalls.length, 0);
   }
 });
 
@@ -626,13 +573,13 @@ test('final-review policy changes reuse paid results while credential changes re
   assert.equal(f.apiCalls.length, 6);
 });
 
-test('MCP preview and reads keep credentials private and only start requests native approval', async () => {
+test('MCP preview and reads keep credentials private and only start dispatches paid work', async () => {
   const f = fixture(); const tools = createPrescanTools({ controller: f.controller });
   for (const tool of tools)
     await assert.rejects(tool.invoke({ apiKey: 'never' }), { code: 'INVALID_INPUT' });
   const preview = await tools.find(tool => tool.name === 'career_prescan_preview').invoke({});
   assert.equal(preview.jobCount, 3);
-  assert.equal(f.authorizations.length, 0); assert.equal(f.apiCalls.length, 0);
+  assert.equal(f.apiCalls.length, 0);
   await assert.rejects(tools.find(tool => tool.name === 'career_prescan_start').invoke({ limit: 1 }), { code: 'INVALID_INPUT' });
   await tools.find(tool => tool.name === 'career_prescan_start').invoke({}); await terminal(f);
   await f.store.update(state => {
@@ -654,23 +601,10 @@ test('MCP preview and reads keep credentials private and only start requests nat
   }
   const result = await tools.find(tool => tool.name === 'career_prescan_status').invoke({});
   assert.equal(result.processed, 3); assert.equal(JSON.stringify(result).includes('sk-synthetic'), false);
-  assert.equal(f.authorizations.length, 1);
   const reads = f.apiCalls.length, fetches = f.platformCalls.length;
   await tools.find(tool => tool.name === 'career_prescan_status').invoke({});
   await tools.find(tool => tool.name === 'career_prescan_cancel').invoke({});
   assert.equal(f.apiCalls.length, reads); assert.equal(f.platformCalls.length, fetches);
-});
-
-test('cancelling pending native authorization prevents full-ad access even if approval arrives later', async () => {
-  const approval = deferred(), f = fixture({ authorize: () => approval.promise });
-  const start = f.controller.start();
-  await f.waitFor(() => f.authorizations.length === 1);
-  await f.controller.cancel();
-  approval.resolve(true);
-  await assert.rejects(start, { code: 'PRESCAN_CANCELLED' });
-  assert.deepEqual(f.platformCalls.map(call => call.operation), ['matching_catalogue']); assert.equal(f.apiCalls.length, 0);
-  assert.equal(f.authorizations[0].signal.aborted, true);
-  assert.equal(f.controller.status().status, 'idle');
 });
 
 test('authentication, transport and malformed-provider failures stop immediately and expose only safe messages', async () => {
@@ -726,6 +660,6 @@ test('pre-filtering refuses to preview or start without the basic preferences, b
   await f.store.update(state => { delete state.career.profile.preferences.locations; });
   await assert.rejects(f.controller.preview(), { code: 'PREFERENCES_REQUIRED' });
   await assert.rejects(f.controller.start(), { code: 'PREFERENCES_REQUIRED' });
-  assert.deepEqual([f.platformCalls.length, f.authorizations.length, f.apiCalls.length], [0, 0, 0]);
+  assert.deepEqual([f.platformCalls.length, f.apiCalls.length], [0, 0]);
   assert.equal(f.controller.isActive(), false);
 });

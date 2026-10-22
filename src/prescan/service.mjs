@@ -10,7 +10,6 @@ import { DEFAULT_PUBLICATION_RANGE, assertPublicationRange, publicationInWindow,
 const ASSUMED_INPUT_TOKENS_PER_JOB = 8000;
 const messages = {
   PRESCAN_KEY_REQUIRED: 'Add your OpenAI API key in Settings.',
-  PRESCAN_NOT_AUTHORIZED: 'Pre-filtering canceled.',
   PRESCAN_CANCELLED: 'Pre-filtering canceled.',
   PRESCAN_CONTEXT_CHANGED: 'Your profile or setup changed. Start pre-filtering again.',
   PRESCAN_AUTH: 'OpenAI rejected the API key. Update it in Settings.',
@@ -59,7 +58,7 @@ function assertOptions(args) {
 }
 
 /** One shared controller serves settings and every MCP session. Construction performs no vault reads or inference. */
-export function createPrescanController({ store, makeScope, credentials, authorize, onChange = () => {}, providers = decisionProviders }) {
+export function createPrescanController({ store, makeScope, credentials, onChange = () => {}, providers = decisionProviders }) {
   let active = null, providerCalls = 0;
   const slots = new Set();
   function notify() {
@@ -300,11 +299,7 @@ export function createPrescanController({ store, makeScope, credentials, authori
       record.reused = planned.preview.reused;
       record.blocked = planned.preview.blocked;
       for (const id of record.selectedIds) delete record.rows[id];
-      if (!await authorize({ ...planned.preview, signal: run.abort.signal }))
-        fail(run.abort.signal.aborted ? 'PRESCAN_CANCELLED' : 'PRESCAN_NOT_AUTHORIZED',
-          run.abort.signal.aborted ? messages.PRESCAN_CANCELLED : messages.PRESCAN_NOT_AUTHORIZED);
-      const approved = current(run);
-      run.candidate = candidateContext(approved.career);
+      run.candidate = candidateContext(current(run).career);
       const guardedStore = {
         get: () => current(run),
         update: mutation => run.scope.store.update(state => { check(run, state); return mutation(state); }),

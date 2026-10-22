@@ -73,18 +73,18 @@ export function currentForm(career, formId) {
   return draft;
 }
 const actionIdentity = state => hash({ deviceId: state.deviceId ?? null, pairing: state.pairing ?? null });
-function approvedForm(store, formId) {
+function boundForm(store, formId) {
   const state = store.get(), identity = actionIdentity(state);
   const draft = structuredClone(currentForm(state.career ?? createCareerState(), formId)), fingerprint = hash(draft);
   return { draft, revalidate() {
     const current = store.get();
     if (actionIdentity(current) !== identity) fail('IDENTITY_CHANGED', 'The local account changed. Prepare the form again before acting.');
     if (hash(currentForm(current.career ?? createCareerState(), formId)) !== fingerprint)
-      fail('FORM_CONTEXT_CHANGED', 'The form or staged answers changed during approval. Read the form before acting.');
+      fail('FORM_CONTEXT_CHANGED', 'The form or staged answers changed before dispatch. Read the form before acting.');
   } };
 }
 
-// Persist before approval or browser dispatch. A crash, disconnect or failed result save
+// Persist before browser dispatch. A crash, disconnect or failed result save
 // leaves a consumed request, never permission to repeat a possibly completed submission.
 async function formAction(store, args, operation, invoke) {
   const requestId = args.requestId.toLowerCase();
@@ -134,7 +134,7 @@ export function createFormTools({ store, browser = null }) {
     inputSchema: object({ formId: string(100) }),
     async invoke(args) {
       if (!record(args) || Object.keys(args).some(key => key !== 'formId') || !text(args.formId, 100)) fail('INVALID_INPUT', 'Provide formId from Chrome preparation.');
-      const { draft, revalidate } = approvedForm(store, args.formId), isAttached = await attached(draft.formId);
+      const { draft, revalidate } = boundForm(store, args.formId), isAttached = await attached(draft.formId);
       revalidate();
       const career = readCareer(store);
       return structuredClone({ revision: career.revision, formId: draft.formId, snapshot: draft.snapshot, evidenceRevision: draft.evidenceRevision,
@@ -143,13 +143,13 @@ export function createFormTools({ store, browser = null }) {
     },
   }, {
     name: 'career_form_fill', readOnly: false, idempotent: true, openWorld: true,
-    description: 'Fill the inspected application form in the candidate\'s own Chrome tab with the prepared values and staged answers: only empty, non-protected controls, after the companion\'s native approval. Nothing is submitted. Returns which controls were filled or skipped; read the page result before going further. Reuse requestId only to retrieve the same attempt, never to dispatch it again. On an unknown outcome, inspect Chrome before another action.',
+    description: 'Fill the inspected application form in the candidate\'s own Chrome tab with the prepared values and staged answers: only empty, non-protected controls, without any further approval. Nothing is submitted. Returns which controls were filled or skipped; read the page result before going further. Reuse requestId only to retrieve the same attempt, never to dispatch it again. On an unknown outcome, inspect Chrome before another action.',
     inputSchema: object({ requestId: mutationSchema.requestId, formId: string(100) }),
     async invoke(args) {
       if (!record(args) || Object.keys(args).some(key => !['requestId', 'formId'].includes(key)) || typeof args.requestId !== 'string' || !UUID.test(args.requestId) || !text(args.formId, 100)) fail('INVALID_INPUT', 'Provide a request UUID and the formId from Chrome preparation.');
       return formAction(store, args, 'career_form_fill', requestId => {
         if (!browser) fail('UNAVAILABLE', 'Chrome form filling is unavailable in this companion.');
-        const { draft, revalidate } = approvedForm(store, args.formId);
+        const { draft, revalidate } = boundForm(store, args.formId);
         const answers = Object.entries(draft.answers ?? {}).map(([id, answer]) => {
           const field = draft.fields.find(field => field.id === id);
           if (!field || !validFormValue(field, answer.value)) fail('FORM_CONTEXT_CHANGED', 'A staged answer no longer matches an available field. Prepare the form again.');
@@ -167,7 +167,7 @@ export function createFormTools({ store, browser = null }) {
       if (!record(args) || Object.keys(args).some(key => !['requestId', 'formId', 'actionId'].includes(key)) || typeof args.requestId !== 'string' || !UUID.test(args.requestId) || !text(args.formId, 100) || !text(args.actionId, 200)) fail('INVALID_INPUT', 'Provide a request UUID, formId and the actionId of an inspected submit control.');
       return formAction(store, args, 'career_form_submit', requestId => {
         if (!browser) fail('UNAVAILABLE', 'Chrome submission is unavailable in this companion.');
-        const { draft, revalidate } = approvedForm(store, args.formId);
+        const { draft, revalidate } = boundForm(store, args.formId);
         const action = (draft.actions ?? []).find(item => item.id === args.actionId);
         if (!action) fail('NOT_FOUND', 'That submit control was not inspected on this form. Read the form for its actions.');
         return browser.submit(draft, action, { requestId, revalidate });

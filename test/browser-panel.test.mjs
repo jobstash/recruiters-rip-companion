@@ -85,7 +85,7 @@ test('default panel exposes missing questions and recovery, with technical answe
   panel.update({ busy: 'prepare' });
   assert.equal(panel.nodes.get('cancel').hidden, false);
   assert.equal(panel.nodes.get('cancel').disabled, false);
-  assert.match(panel.nodes.get('status').textContent, /Companion/);
+  assert.equal(panel.nodes.get('status').textContent, 'Preparing answers…');
   panel.update({ busy: null, prepared: { ...panel.state.prepared, questions: [], api: { configured: true, used: false } } });
   assert.equal(panel.nodes.get('details-form').hidden, true);
   assert.equal(panel.nodes.get('configure').hidden, true);

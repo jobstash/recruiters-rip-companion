@@ -1,6 +1,6 @@
 import { CareerError, fail, hash, mutateCareer, readCareer } from './mcp/state.mjs';
 import { formEvidence, formFingerprint, unavailableField, validFormValue, validateFormSnapshot } from './mcp/form-tools.mjs';
-import { abortable, FORM_DECISIONS, mapFormValues } from './decisions/form-mapping.mjs';
+import { FORM_DECISIONS, mapFormValues } from './decisions/form-mapping.mjs';
 import { CONTACT_FIELDS, patchProfile, validateProfilePatch } from './mcp/profile-fields.mjs';
 import { contactCandidates } from './form-contact-candidates.mjs';
 import { applicationContextFingerprint, isApplicationWritingField, reusableApplicationAnswer } from './application-workflow.mjs';
@@ -137,7 +137,7 @@ function questionFor(field, index, bank) {
 }
 
 /** Main-process only. Construction never reads credentials or the vault. */
-export function createBrowserForms({ store, credentials, authorize, assertAvailable, fetchImpl }) {
+export function createBrowserForms({ store, credentials, assertAvailable, fetchImpl }) {
   const active = new Map();
   function cancel(requestId) { const run = active.get(requestId); if (run) run.abort.abort(new CareerError('FORM_CANCELLED', 'Form preparation canceled.')); return { cancelled: Boolean(run) }; }
   function cancelAll() { for (const run of active.values()) run.abort.abort(new CareerError('FORM_CANCELLED', 'Form preparation canceled.')); }
@@ -195,15 +195,6 @@ export function createBrowserForms({ store, credentials, authorize, assertAvaila
         }
       }
       const useApi = Boolean(args.useApi && run.key && pending.length && bank.length);
-      // Approval names both possible destinations and the finite bank including bounded CV excerpts, never original files or credentials.
-      const data = [...bank.map(({ label, value, source, qualifiers }) => ({ label, value, source, ...(qualifiers ? { qualifiers } : {}) })),
-        ...snapshot.fields.filter(field => values.has(field.id)).map(field => ({ label: field.label, ...values.get(field.id) }))];
-      const approval = { requestId: args.requestId, formId, url: snapshot.url, destination: new URL(snapshot.url).origin, title: snapshot.title,
-        fields: snapshot.fields.map(({ id, label }) => ({ id, label })), data, useApi, signal: run.abort.signal,
-        ...(useApi ? { provider: FORM_DECISIONS.provider, label: FORM_DECISIONS.label, model: FORM_DECISIONS.model,
-          inputUsdPerMillion: FORM_DECISIONS.inputUsdPerMillion, separateBilling: true, priceNote: PRICE_NOTE } : {}) };
-      if (await abortable(Promise.resolve().then(() => { current(run); return authorize(approval); }), run.abort.signal) !== true)
-        fail('FORM_NOT_AUTHORIZED', 'Form preparation was not approved. No values were released.');
       current(run);
       await store.update(saved => {
         check(run, saved);

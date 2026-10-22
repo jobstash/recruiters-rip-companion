@@ -239,7 +239,7 @@
     pending = true;
     starting = op === 'prescan-start';
     if (starting || op === 'prescan-range-set') invalidatePreview();
-    message.textContent = starting ? 'Loading pre-filtering for approval…' : 'Saving…';
+    message.textContent = starting ? 'Starting pre-filtering…' : 'Saving…';
     render();
     try {
       await invoke(op, input);

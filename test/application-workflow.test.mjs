@@ -13,7 +13,7 @@ const apply = `${advert}/applications/new`;
 const job = { title: 'Platform engineer', company: 'Example', description: 'Build reliable data services.', url: advert };
 const field = (id = 'summary', extra = {}) => ({ id, label: 'Personal summary', type: 'textarea', signature: `sig:${id}`, empty: true, maxLength: 200, ...extra });
 const page = (url = apply, fields = [field()]) => ({ url, title: 'Apply for Platform engineer', fields, actions: [] });
-function fixture({ validateExport = async () => true, authorize = async () => true } = {}) {
+function fixture({ validateExport = async () => true } = {}) {
   let state = { deviceId: 'synthetic-device', career: createCareerState() }, queue = Promise.resolve();
   state.career.profile.name = 'Synthetic Candidate';
   state.career.sources.cv = { purpose: 'cv', text: 'Built reliable services at Example.', archived: false };
@@ -24,9 +24,9 @@ function fixture({ validateExport = async () => true, authorize = async () => tr
   const workflow = createApplicationWorkflow({ store, assertAvailable() {}, validateExport });
   const tools = new Map([...createApplicationTools({ store }), ...createFormTools({ store }),
     ...createApplicationPreparationTools({ workflow, openInChrome: async url => opened.push(url) })].map(tool => [tool.name, tool]));
-  const opened = [], approvals = [];
+  const opened = [];
   const forms = createBrowserForms({ store, assertAvailable() {}, credentials: { read() { assert.fail('Keyless preparation must not read credentials.'); } },
-    authorize: input => { approvals.push(input); return authorize(input); }, fetchImpl() { assert.fail('No inference is used in this test.'); } });
+    fetchImpl() { assert.fail('No inference is used in this test.'); } });
   const call = (name, args) => tools.get(name).invoke(args);
   const mutation = extra => ({ requestId: randomUUID(), revision: state.career.revision, ...extra });
   const create = input => call('career_application_create', mutation({ job: input ?? job }));
@@ -46,7 +46,7 @@ function fixture({ validateExport = async () => true, authorize = async () => tr
     return call('career_form_answers_save', mutation({ formId: read.formId, snapshot: read.snapshot, evidenceRevision: read.evidenceRevision,
       answers: [{ id: read.fields[0].id, value }] }));
   }
-  return { store, workflow, call, mutation, create, resolve, documents, answer, forms, opened, approvals };
+  return { store, workflow, call, mutation, create, resolve, documents, answer, forms, opened };
 }
 
 test('agent-led and browser-led entries converge on one application and reuse its current exports', async () => {
@@ -140,16 +140,12 @@ test('changed original or CV evidence invalidates saved documents and staged ans
   assert.equal(f.store.get().career.applications[created.applicationId].exports.length, 4);
 });
 
-test('application answers reuse exact normalized questions only and pass native approval before release', async () => {
-  let approved = true;
-  const f = fixture({ authorize: async () => approved }), created = await f.create(), view = await f.resolve();
+test('application answers reuse exact normalized questions only', async () => {
+  const f = fixture(), created = await f.create(), view = await f.resolve();
   await f.answer(view);
   const nextPage = page(apply, [field('new-dom-id', { label: '  PERSONAL   summary ' })]);
   const rebound = await f.resolve({ page: nextPage });
   assert.equal(rebound.writing[0].ready, true);
-  approved = false;
-  await assert.rejects(f.forms.prepare({ requestId: randomUUID(), ...nextPage, useApi: false }), { code: 'FORM_NOT_AUTHORIZED' });
-  approved = true;
   const prepared = await f.forms.prepare({ requestId: randomUUID(), ...nextPage, useApi: false });
   assert.equal(prepared.fields[0].value, 'I build reliable services for this team.');
   assert.equal(prepared.fields[0].id, 'new-dom-id');

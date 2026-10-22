@@ -142,7 +142,7 @@ function render() {
     return;
   }
   $('cancel').hidden = state.busy !== 'prepare'; $('cancel').disabled = false;
-  const working = { prepare: 'Preparing answers · review the request in Companion.', 'profile-save': 'Saving details…', detect: 'Reading page…', save: 'Saving jobs…', settings: 'Opening Companion…', fill: 'Filling reviewed answers…', forms_fill: 'Filling approved answers…', forms_submit: 'Checking the page after the approved action…',
+  const working = { prepare: 'Preparing answers…', 'profile-save': 'Saving details…', detect: 'Reading page…', save: 'Saving jobs…', settings: 'Opening Companion…', fill: 'Filling reviewed answers…', forms_fill: 'Filling prepared answers…', forms_submit: 'Checking the page after the submit action…',
     'application-prepare': 'Opening your agent…', 'application-document': 'Opening the saved document…', 'application-open-ad': 'Opening the job advert…' };
   $('status').textContent = busy ? working[state.busy] || 'Working…' : state.notice;
   $('status').hidden = !$('status').textContent;

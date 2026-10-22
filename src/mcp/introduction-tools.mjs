@@ -3,7 +3,7 @@ import { createCareerState, fail, readCareer } from './state.mjs';
 
 // CV sharing with JobStash. The connected agent extracts employers, titles and dates from a saved CV, matches them to
 // JobStash profiles/organizations/projects through the companion's signed relay (unmatched employers are dropped), and,
-// with standing consent plus a native approval for each upload, the companion sends the CV and matched roles to JobStash.
+// under standing consent, the companion sends the CV and matched roles to JobStash.
 // Withdrawing consent stops future uploads only; it can be granted again at any time.
 export const CONSENT_VERSION = 1;
 export const SHARING_PURPOSE = 'JobStash attaches your CV and matched work history to your JobStash profile, so you are included in direct introductions to people at companies, without recruiters.';
@@ -95,7 +95,7 @@ function uploadDocument(source) {
   return { filename: (source.name ?? 'CV.txt').replace(/[\\/]/g, '-').slice(0, 255), mediaType: 'text/plain', text: source.text.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, ' ') };
 }
 
-export function createIntroductionTools({ store, platform, shareCv, confirm, openGithub }) {
+export function createIntroductionTools({ store, platform, shareCv, openGithub }) {
   const update = change => { let result; return store.update(next => { result = change(next.career ??= createCareerState()); }).then(() => result); };
   return [
     {
@@ -159,7 +159,7 @@ export function createIntroductionTools({ store, platform, shareCv, confirm, ope
     },
     {
       name: 'career_cv_share', readOnly: false, inputSchema: object({ sourceId: text(200) }, ['sourceId']),
-      description: 'Send one CV and its saved matched roles to JobStash after standing consent. The companion asks the candidate to approve this upload natively; JobStash replaces the CV on their JobStash profile and replaces their CV-derived work history. Requires career_employment_save for the current CV first.',
+      description: 'Send one CV and its saved matched roles to JobStash under standing consent; nothing else is asked. JobStash replaces the CV on their JobStash profile and replaces their CV-derived work history. Requires career_employment_save for the current CV first.',
       async invoke(args = {}) {
         const career = readCareer(store);
         const intro = state(career);
@@ -168,18 +168,6 @@ export function createIntroductionTools({ store, platform, shareCv, confirm, ope
         const saved = intro.documents?.[source.id];
         if (!record(saved) || saved.contentHash !== source.contentHash) fail('EXTRACTION_REQUIRED', 'Extract and save this CV\'s matched roles with career_employment_save first.');
         const document = uploadDocument(source);
-        const employers = [...new Set(saved.employment.map(role => role.name))];
-        const allowed = await confirm('Share your CV with JobStash?',
-          `${source.name ?? 'Your CV'} and ${saved.employment.length} matched ${saved.employment.length === 1 ? 'role' : 'roles'}${employers.length ? ` (${employers.slice(0, 6).join(', ')}${employers.length > 6 ? ', …' : ''})` : ''} go to JobStash. ${SHARING_PURPOSE}`);
-        if (!allowed) fail('NOT_APPROVED', 'The candidate did not approve this upload. Nothing was sent.');
-        const latest = readCareer(store), latestIntro = state(latest);
-        if (latestIntro.consent?.granted !== true || latestIntro.consent.at !== intro.consent.at)
-          fail('CONSENT_REQUIRED', 'Sharing consent changed while approval was open. Nothing was sent.');
-        const latestSource = currentSource(latest, source.id), latestRoles = latestIntro.documents?.[source.id];
-        if (latestSource.contentHash !== source.contentHash ||
-            JSON.stringify(uploadDocument(latestSource)) !== JSON.stringify(document) ||
-            !latestRoles || employmentHash(latestRoles.employment) !== employmentHash(saved.employment))
-          fail('CV_CHANGED', 'The CV or matched work history changed while approval was open. Review it and approve again.');
         const sharedAt = new Date().toISOString();
         const result = await shareCv({ document,
           employment: saved.employment.map(({ ref, title, startDate, endDate, current }) => ({ ref, title, startDate, endDate, current })),

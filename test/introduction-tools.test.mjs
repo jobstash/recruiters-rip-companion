@@ -1,20 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createCareerState, hash } from '../src/mcp/state.mjs';
-import { createIntroductionTools, SHARING_PURPOSE } from '../src/mcp/introduction-tools.mjs';
+import { createIntroductionTools } from '../src/mcp/introduction-tools.mjs';
 
 const pdf = Buffer.from('%PDF-1.7 synthetic cv bytes').toString('base64');
-function fixture({ approve = true, share = async () => ({ documentId: 'doc-1', attached: true, employment: 2 }) } = {}) {
+function fixture({ share = async () => ({ documentId: 'doc-1', attached: true, employment: 2 }) } = {}) {
   const career = createCareerState();
   career.sources.cv = { id: 'cv', name: 'Jane Doe CV.pdf', purpose: 'cv', archived: false, mediaType: 'application/pdf',
     originalBase64: pdf, text: 'Senior Engineer, Example Labs, 2021–2024.', contentHash: hash('Senior Engineer, Example Labs, 2021–2024.') };
   let state = { career };
   const store = { get: () => structuredClone(state), update: async change => { const next = structuredClone(state); await change(next); state = next; } };
-  const calls = { platform: [], share: [], confirm: [], github: 0 };
+  const calls = { platform: [], share: [], github: 0 };
   const tools = new Map(createIntroductionTools({ store,
     platform: async (operation, args) => { calls.platform.push({ operation, args }); return { results: [] }; },
     shareCv: async body => { calls.share.push(body); return share(body); },
-    confirm: async (title, detail) => { calls.confirm.push({ title, detail }); return approve; },
     openGithub: async () => { calls.github++; },
   }).map(tool => [tool.name, tool]));
   const call = (name, args = {}) => tools.get(name).invoke(args);
@@ -23,7 +22,7 @@ function fixture({ approve = true, share = async () => ({ documentId: 'doc-1', a
 const role = (overrides = {}) => ({ ref: 'profile:12', name: 'Example Labs', title: 'Senior Engineer', startDate: '2021-03', endDate: '2024-01', current: false, ...overrides });
 const statusOf = async f => (await f.call('career_employment_status')).sources[0].status;
 
-test('a CV moves from needs_extraction to shared only after consent and approval, and a CV or role change asks again', async () => {
+test('a CV moves from needs_extraction to shared under standing consent alone, and a CV or role change needs a new share', async () => {
   const f = fixture();
   const { contentHash } = (await f.call('career_employment_status')).sources[0];
   assert.equal(await statusOf(f), 'needs_extraction');
@@ -33,9 +32,6 @@ test('a CV moves from needs_extraction to shared only after consent and approval
   await f.call('career_introductions_update', { consent: true });
   const result = await f.call('career_cv_share', { sourceId: 'cv' });
   assert.deepEqual([result.shared, result.documentId, result.roles], [true, 'doc-1', 2]);
-  // The approval names the destination, the CV and the matched employers; the upload carries no display names.
-  assert.match(f.calls.confirm[0].detail, /^Jane Doe CV\.pdf and 2 matched roles \(Example Labs, Second Co\) go to JobStash\./);
-  assert.ok(f.calls.confirm[0].detail.endsWith(SHARING_PURPOSE));
   const sent = f.calls.share[0];
   assert.deepEqual(sent.document, { filename: 'Jane Doe CV.pdf', mediaType: 'application/pdf', contentBase64: pdf });
   assert.deepEqual(sent.employment.map(item => Object.keys(item).sort()), [['current', 'endDate', 'ref', 'startDate', 'title'], ['current', 'endDate', 'ref', 'startDate', 'title']]);
@@ -51,21 +47,19 @@ test('a CV moves from needs_extraction to shared only after consent and approval
   await assert.rejects(f.call('career_employment_save', { sourceId: 'cv', contentHash, employment: [] }), { code: 'CV_CHANGED' });
 });
 
-test('a declined approval or withdrawn consent sends nothing; granting again re-enables sharing', async () => {
-  const f = fixture({ approve: false });
+test('withdrawn consent sends nothing; granting again re-enables sharing', async () => {
+  const f = fixture();
   const { contentHash } = (await f.call('career_employment_status')).sources[0];
   await f.call('career_employment_save', { sourceId: 'cv', contentHash, employment: [role()] });
   await f.call('career_introductions_update', { consent: true });
-  await assert.rejects(f.call('career_cv_share', { sourceId: 'cv' }), { code: 'NOT_APPROVED' });
-  assert.equal(f.calls.share.length, 0);
-  assert.equal(await statusOf(f), 'ready_to_share');
   await f.call('career_introductions_update', { consent: false });
   assert.deepEqual((await f.call('career_employment_status')).consent.granted, false);
   await assert.rejects(f.call('career_cv_share', { sourceId: 'cv' }), { code: 'CONSENT_REQUIRED' });
-  assert.equal(f.calls.confirm.length, 1);
+  assert.equal(f.calls.share.length, 0);
+  assert.equal(await statusOf(f), 'ready_to_share');
   await f.call('career_introductions_update', { consent: true });
-  await assert.rejects(f.call('career_cv_share', { sourceId: 'cv' }), { code: 'NOT_APPROVED' });
-  assert.equal(f.calls.confirm.length, 2);
+  assert.equal((await f.call('career_cv_share', { sourceId: 'cv' })).shared, true);
+  assert.equal(f.calls.share.length, 1);
 });
 
 test('saved roles must use search refs, ordered partial dates and an open end for current roles', async () => {
@@ -109,22 +103,3 @@ test('employer search and intro paths relay through the platform; GitHub onboard
   assert.equal((await f.call('career_employment_status')).github, 'skipped');
 });
 
-test('withdrawn consent or changed CV/roles during approval prevents dispatch', async () => {
-  for (const [change, code] of [
-    [career => { career.introductions.consent.granted = false; }, 'CONSENT_REQUIRED'],
-    [career => { career.sources.cv.originalBase64 = Buffer.from('different CV').toString('base64'); }, 'CV_CHANGED'],
-    [career => { career.introductions.documents.cv.employment[0].title = 'Different title'; }, 'CV_CHANGED'],
-  ]) {
-    let approve;
-    const f = fixture({ approve: new Promise(resolve => { approve = resolve; }) });
-    const { contentHash } = (await f.call('career_employment_status')).sources[0];
-    await f.call('career_employment_save', { sourceId: 'cv', contentHash, employment: [role()] });
-    await f.call('career_introductions_update', { consent: true });
-    const sharing = f.call('career_cv_share', { sourceId: 'cv' });
-    assert.equal(f.calls.confirm.length, 1);
-    f.set(change);
-    approve(true);
-    await assert.rejects(sharing, { code });
-    assert.deepEqual(f.calls.share, []);
-  }
-});

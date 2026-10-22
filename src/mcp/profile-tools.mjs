@@ -168,7 +168,7 @@ function onboarding(career, pairing) {
   if (!introductions.consent)
     sharingSteps.push(`Ask once whether JobStash may receive the CV and matched work history: ${introductions.purpose} Record the answer with career_introductions_update({consent}).`);
   else if (introductions.consent.granted && introductions.sources.some(source => source.status === 'ready_to_share'))
-    sharingSteps.push('Share each ready_to_share CV with career_cv_share; the companion asks the candidate to approve the upload.');
+    sharingSteps.push('Share each ready_to_share CV with career_cv_share; it sends immediately under the standing consent.');
   if (!introductions.github)
     sharingSteps.push('Ask whether they are a developer with open-source work. If so, open account_github_connect so they link GitHub through their sign-in, then confirm with account_status; otherwise record career_introductions_update({githubSkipped:true}).');
   return {

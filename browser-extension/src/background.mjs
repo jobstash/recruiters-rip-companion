@@ -281,8 +281,8 @@ async function fill(fields) {
   return result;
 }
 
-// Companion-initiated operations: the user's AI fills or presses submit on the tab this panel inspected,
-// each after the companion's own approval dialog. The extension never chooses what to submit.
+// Companion-initiated operations: the user's AI fills the tab this panel inspected, or presses submit after
+// the companion's own confirmation. The extension never chooses what to submit.
 async function command(op, payload = {}) {
   if (!state.prepared || !state.form || state.busy || state.answersStale) throw new Error('Open the Recruiters.rip panel on the application tab and prepare current values first.');
   if (payload.formId !== state.prepared.formId) throw new Error('That form is not the one prepared in Chrome. Prepare it again in the panel.');

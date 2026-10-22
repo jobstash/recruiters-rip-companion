@@ -5,7 +5,7 @@ export function createManifest(identity, version, local = false) {
     name: `Recruiters.rip${local ? ' (local)' : ''}`,
     version,
     minimum_chrome_version: '125',
-    description: 'Save jobs to Companion, paste prepared application answers with ⌘V, and let your own AI fill or submit only what you approve.',
+    description: 'Save jobs to Companion, paste prepared application answers with ⌘V, and let your own AI fill forms or press submit only when you ask.',
     key: identity.key,
     permissions: ['nativeMessaging', 'activeTab', 'scripting', 'sidePanel', 'clipboardWrite'],
     background: { service_worker: 'background.mjs', type: 'module' },

@@ -77,6 +77,15 @@ export function createDocumentFiles({ directory, store, assertAvailable }) {
     const bytes = await readExport(matched[1], matched[2]);
     return { uri, mimeType: exportTypes[matched[2]], ...(matched[2] !== 'pdf' ? { text: bytes.toString('utf8') } : { blob: bytes.toString('base64') }) };
   }
+  async function resolveExport(uri) {
+    const matched = /^recruiters:\/\/exports\/([a-f0-9]{64})\.pdf$/.exec(uri);
+    if (!matched) fail('NOT_FOUND', 'Choose a current PDF exported for this application.');
+    const dir = await privateRoot();
+    await readExport(matched[1], 'pdf');
+    assertAvailable(false);
+    if (root() !== dir) fail('IDENTITY_CHANGED', 'The local account changed. Open the application again.');
+    return path.join(dir, `${matched[1]}.pdf`);
+  }
   async function listResources() {
     assertAvailable(false);
     try {
@@ -87,5 +96,5 @@ export function createDocumentFiles({ directory, store, assertAvailable }) {
         description: name.endsWith('.csv') ? 'Saved complete assessment ranking CSV snapshot.' : 'Saved local document; read current application state to check whether a newer revision exists.' }));
     } catch (error) { if (error.code === 'ENOENT') return []; throw error; }
   }
-  return { exportDocument, readResource, listResources, exportDirectory: root };
+  return { exportDocument, readResource, resolveExport, listResources, exportDirectory: root };
 }

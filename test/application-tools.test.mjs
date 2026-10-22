@@ -234,6 +234,7 @@ test('a valid cited CV saves with layout and notes, keeps history, and exports P
   assert.deepEqual(saved.issues, []);
   const stored = f.state().applications[applicationId].cv;
   assert.equal(stored.policyId, CV_POLICY_ID);
+  assert.match(stored.contextFingerprint, /^[0-9a-f]{64}$/);
   assert.match(CV_POLICY_ID, /^[0-9a-f]{16}$/);
   assert.deepEqual(stored.document, tailoredCv(f.facts), 'stored drafts keep each claim\'s support');
   for (const template of ['classic', 'modern']) {
@@ -249,6 +250,7 @@ test('a valid cited CV saves with layout and notes, keeps history, and exports P
     assert.equal(bytes.subarray(0, 5).toString(), '%PDF-');
     assert.equal(exported.export.sha256, digest(bytes));
     assert.equal(exported.export.documentVersion, result.cvVersion);
+    assert.equal(exported.export.contextFingerprint, app.cv.contextFingerprint);
     assert.equal(exported.export.textValidation.passed, true);
     const expectedText = documents.renderCareerCvText({ document: renderableCv(app.cv.document), heading: { name: 'Jane Candidate', contact: 'jane@example.test · +44 20 7946 0000 · London · https://example.test/jane' } });
     assert.equal((await documents.validateCareerPdfText({ bytes, expectedText })).passed, true);
@@ -270,6 +272,8 @@ test('the CV header is rendered from the current profile and TXT export equals t
   const { applicationId } = await f.create();
   await f.saveCv(applicationId, tailoredCv(f.facts));
   await f.store.update(state => { state.career.profile.email = 'new@example.test'; state.career.profile.links = []; });
+  await assert.rejects(f.exportDraft(applicationId, 'cv', 'txt'), { code: 'APPLICATION_CONTEXT_CHANGED' });
+  await f.saveCv(applicationId, tailoredCv(f.facts));
   const { export: record } = await f.exportDraft(applicationId, 'cv', 'txt');
   const text = await readFile(record.path, 'utf8');
   assert.equal(record.mediaType, 'text/plain');
@@ -301,9 +305,11 @@ test('cover letters are checked, saved with history and exported as PDF and TXT'
   assert.equal((await f.saveLetter(applicationId, letter)).letterVersion, 2);
   const app = f.state().applications[applicationId];
   assert.deepEqual(app.coverLetter.paragraphs, letter);
+  assert.match(app.coverLetter.contextFingerprint, /^[0-9a-f]{64}$/);
   assert.equal(app.coverLetterHistory.length, 1);
   const pdf = await f.exportDraft(applicationId, 'cover_letter');
   assert.equal(pdf.export.textValidation.passed, true);
+  assert.equal(pdf.export.contextFingerprint, app.coverLetter.contextFingerprint);
   const text = (await pdfText(await readFile(pdf.export.path))).replace(/\s+/g, ' ');
   assert.ok(text.includes('Cover letter — Senior Platform Engineer — Example Employer'));
   assert.ok(text.includes('cut deployment time from 40 minutes to 8 minutes'));
@@ -313,7 +319,7 @@ test('cover letters are checked, saved with history and exported as PDF and TXT'
 
 test('applications are deleted explicitly and missing IDs are reported', async t => {
   const f = await fixture(t);
-  const first = await f.create(), second = await f.create({ job: { ...pastedJob, title: 'Staff Engineer' } });
+  const first = await f.create(), second = await f.create({ job: { ...pastedJob, title: 'Staff Engineer', url: 'https://example.test/jobs/2' } });
   await assert.rejects(f.call('applications_delete', f.mutation({ applicationIds: [first.applicationId, randomUUID()] })), { code: 'NOT_FOUND' });
   assert.equal(Object.keys(f.state().applications).length, 2);
   assert.deepEqual((await f.call('applications_delete', f.mutation({ applicationIds: [first.applicationId, second.applicationId] }))).deleted, 2);
@@ -376,4 +382,19 @@ test('CV numbers can use actual follow-up answers but not numbers suggested in q
     cv.experience[0].bullets[3].text = `Managed ${count} engineers.`;
     await assert.rejects(f.saveCv(applicationId, cv), { code: 'UNSUPPORTED_NUMBER' });
   }
+});
+
+test('creating the same exact job reuses drafts; a changed original invalidates their export', async t => {
+  const f = await fixture(t), created = await f.create();
+  await f.saveCv(created.applicationId, tailoredCv(f.facts));
+  await f.saveLetter(created.applicationId, letter);
+  const reused = await f.create({ job: { ...pastedJob, url: `${pastedJob.url}?utm_source=test` } });
+  assert.equal(reused.applicationId, created.applicationId);
+  assert.equal(f.state().applications[created.applicationId].cv.version, 1);
+  await f.exportDraft(created.applicationId, 'cv', 'txt');
+  const changed = await f.create({ job: { ...pastedJob, description: 'Lead the payments platform team.' } });
+  assert.equal(changed.applicationId, created.applicationId);
+  await assert.rejects(f.exportDraft(created.applicationId, 'cv', 'txt'), { code: 'APPLICATION_CONTEXT_CHANGED' });
+  await assert.rejects(f.exportDraft(created.applicationId, 'cover_letter', 'txt'), { code: 'APPLICATION_CONTEXT_CHANGED' });
+  assert.equal(f.state().applications[created.applicationId].cv.version, 1, 'stale history is retained rather than silently rebound');
 });

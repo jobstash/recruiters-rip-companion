@@ -1,4 +1,5 @@
 import { CareerError, createCareerState, fail, hash, mutateCareer, mutationSchema, readCareer } from './state.mjs';
+import { applicationContextFingerprint, applicationQuestionKey, isApplicationWritingField } from '../application-workflow.mjs';
 
 const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const text = (value, max) => typeof value === 'string' && value.length <= max && Boolean(value.trim());
@@ -6,7 +7,7 @@ const object = (properties, required = Object.keys(properties)) => ({ type: 'obj
 const string = maxLength => ({ type: 'string', minLength: 1, maxLength });
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const TYPES = ['text', 'email', 'tel', 'url', 'textarea', 'select', 'radio', 'number', 'date'];
-const FIELD_KEYS = ['id', 'label', 'type', 'signature', 'autocomplete', 'required', 'options', 'empty', 'manualOnly'];
+const FIELD_KEYS = ['id', 'label', 'type', 'signature', 'autocomplete', 'required', 'options', 'empty', 'manualOnly', 'maxLength'];
 // Defense in depth: page inspection is not an authority to enable sensitive controls.
 const PROTECTED = /password|passcode|payment|credit.?card|\bcc-|transaction|bank|routing|iban|social.?security|\bssn\b|tax.?id|national.?(?:id|insurance)|passport|government|driver.?licen[cs]e|birth|\bbday\b|\bdob\b|\bage\b|\b(?:18|21)\s*(?:or older|years old|and over)|\bsex\b|gender|pronouns?|race|ethnic|nationality|citizenship|religio|disabil|medical|health|veteran|marital|sexual|signature|sign.?here|consent|agree|certif|attest|acknowledge|terms|privacy|background.?check|opt.?in|subscribe|marketing|permission|\bi confirm\b|\bi authorize\b|may we|can we contact|contact (?:my|your|me)\b|information.*(?:accurate|true)|(?:accurate|true).*information|i have read/i;
 export function unavailableField(field) {
@@ -27,6 +28,7 @@ export function validateFormSnapshot(args) {
     if (!record(field) || Object.keys(field).some(key => !FIELD_KEYS.includes(key)) || !text(field.id, 200) || seen.has(field.id) ||
         !text(field.label, 500) || !text(field.signature, 1000) || !TYPES.includes(field.type) || typeof field.empty !== 'boolean' ||
         (field.autocomplete !== undefined && !text(field.autocomplete, 200)) ||
+        (field.maxLength !== undefined && (!Number.isInteger(field.maxLength) || field.maxLength < 0 || field.maxLength > 10000)) ||
         ['required', 'manualOnly'].some(key => field[key] !== undefined && typeof field[key] !== 'boolean'))
       fail('INVALID_INPUT', 'The inspected form contains invalid or duplicate fields. Inspect it again.');
     seen.add(field.id);
@@ -50,7 +52,7 @@ export function validateFormSnapshot(args) {
 export const formFingerprint = snapshot => hash(snapshot);
 export const formEvidence = career => hash({ evidenceRevision: career.evidenceRevision ?? 0, profile: career.profile ?? {}, facts: career.facts ?? {}, sources: career.sources ?? {} });
 export function validFormValue(field, value) {
-  if (!text(value, 10000) || unavailableField(field)) return false;
+  if (!text(value, Math.min(10000, field.maxLength ?? 10000)) || unavailableField(field)) return false;
   if (['select', 'radio'].includes(field.type)) return field.options.some(option => option.value === value && value !== '');
   if (field.type === 'email') return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
   if (field.type === 'url') { try { const url = new URL(value); return ['https:', 'http:'].includes(url.protocol) && !url.username && !url.password; } catch { return false; } }
@@ -63,6 +65,11 @@ export function currentForm(career, formId) {
   if (!draft) fail('NOT_FOUND', 'Form not found. Inspect and prepare the application form in Chrome first.');
   if (draft.evidenceRevision !== (career.evidenceRevision ?? 0) || draft.evidence !== formEvidence(career))
     fail('FORM_CONTEXT_CHANGED', 'Career evidence changed. Prepare the form again before staging answers.');
+  if (draft.applicationId) {
+    const app = career.applications?.[draft.applicationId];
+    if (!app || draft.applicationContext !== applicationContextFingerprint(career, app))
+      fail('FORM_CONTEXT_CHANGED', 'The application changed. Prepare this form again before staging answers.');
+  }
   return draft;
 }
 const actionIdentity = state => hash({ deviceId: state.deviceId ?? null, pairing: state.pairing ?? null });
@@ -131,7 +138,7 @@ export function createFormTools({ store, browser = null }) {
       revalidate();
       const career = readCareer(store);
       return structuredClone({ revision: career.revision, formId: draft.formId, snapshot: draft.snapshot, evidenceRevision: draft.evidenceRevision,
-        url: draft.url, title: draft.title, fields: draft.fields, actions: draft.actions ?? [], answers: draft.answers,
+        applicationId: draft.applicationId ?? null, url: draft.url, title: draft.title, fields: draft.fields, actions: draft.actions ?? [], answers: draft.answers,
         browser: isAttached ? { attached: true } : { attached: false, reason: 'Open the Recruiters.rip panel on the application tab in Chrome and prepare values; then fill or submit becomes possible.' } });
     },
   }, {
@@ -146,6 +153,7 @@ export function createFormTools({ store, browser = null }) {
         const answers = Object.entries(draft.answers ?? {}).map(([id, answer]) => {
           const field = draft.fields.find(field => field.id === id);
           if (!field || !validFormValue(field, answer.value)) fail('FORM_CONTEXT_CHANGED', 'A staged answer no longer matches an available field. Prepare the form again.');
+          if (isApplicationWritingField(field) && !draft.applicationId) fail('APPLICATION_REQUIRED', 'Bind this form to its exact saved application before releasing narrative answers.');
           return { id, value: answer.value, signature: field.signature };
         });
         return browser.fill(draft, answers, { requestId, revalidate });
@@ -182,8 +190,18 @@ export function createFormTools({ store, browser = null }) {
         for (const answer of args.answers) {
           const field = draft.fields.find(field => field.id === answer.id);
           if (!field || !validFormValue(field, answer.value)) fail('INVALID_INPUT', 'An answer targets an unavailable field or is not one of its actual options.');
+          if (isApplicationWritingField(field) && !draft.applicationId) fail('APPLICATION_REQUIRED', 'Create and bind the exact application before saving job-specific writing.');
         }
-        for (const answer of args.answers) Object.defineProperty(draft.answers, answer.id, { value: { value: answer.value, source: 'agent' }, writable: true, enumerable: true, configurable: true });
+        for (const answer of args.answers) {
+          Object.defineProperty(draft.answers, answer.id, { value: { value: answer.value, source: 'agent' }, writable: true, enumerable: true, configurable: true });
+          const app = career.applications?.[draft.applicationId];
+          if (app) {
+            app.formAnswers ??= {};
+            const field = draft.fields.find(field => field.id === answer.id);
+            app.formAnswers[applicationQuestionKey(field)] = { value: answer.value, source: 'agent',
+              contextFingerprint: applicationContextFingerprint(career, app), updatedAt: new Date().toISOString() };
+          }
+        }
         draft.updatedAt = new Date().toISOString();
         return { formId: draft.formId, snapshot: draft.snapshot, saved: args.answers.map(answer => answer.id) };
       });

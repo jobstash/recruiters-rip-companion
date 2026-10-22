@@ -6,6 +6,7 @@ import net from 'node:net';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { execFile } from 'node:child_process';
 import { createVault, privateDirectory } from './vault.mjs';
 import { createDeviceClient } from './client.mjs';
 import { installNative } from './install-native.mjs';
@@ -35,6 +36,8 @@ import { createJobTools, importCapturedJobs } from './mcp/job-tools.mjs';
 import { createFormTools, currentForm, formEvidence } from './mcp/form-tools.mjs';
 import { createBrowserForms } from './browser-forms.mjs';
 import { createUpdateController } from './updates.mjs';
+import { createApplicationWorkflow, createApplicationPreparationTools } from './application-workflow.mjs';
+import { createApplicationLauncher } from './application-launcher.mjs';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const packageMetadata = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
@@ -309,12 +312,43 @@ async function selectSourceFile() {
   assertAvailable(true);
   return result.canceled || !result.filePaths[0] ? null : readSelectedSource(result.filePaths[0]);
 }
+async function openInChrome(value) {
+  assertWorkAllowed();
+  let url;
+  try { url = new URL(value); } catch { fail('INVALID_INPUT', 'Open a saved HTTP(S) job page.'); }
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.href.length > 4096)
+    fail('INVALID_INPUT', 'Open a saved HTTP(S) job page without embedded credentials.');
+  const env = Object.fromEntries(['PATH', 'HOME', 'TMPDIR'].filter(key => process.env[key]).map(key => [key, process.env[key]]));
+  await new Promise((resolve, reject) => execFile('/usr/bin/open', ['-a', 'Google Chrome', url.href], { env, timeout: 10000 }, error =>
+    error ? reject(new CareerError('BROWSER_UNAVAILABLE', 'Open Google Chrome and install the Recruiters.rip extension, then try again.')) : resolve()));
+  return { opened: true };
+}
+function applicationAccess() {
+  const scoped = createScopedAccess(store, { assertAvailable, epoch: () => sessionEpoch });
+  const localFiles = createDocumentFiles({ directory, store: scoped.store, assertAvailable: scoped.assertAvailable });
+  const workflow = createApplicationWorkflow({
+    store: scoped.store, assertAvailable: scoped.assertAvailable,
+    validateExport: async record => {
+      try { await localFiles.resolveExport(record.uri); return true; } catch { return false; }
+    },
+  });
+  const launcher = createApplicationLauncher({ directory: path.join(directory, 'host-integration'), command: setup().command,
+    openExternal: async url => { scoped.assertAvailable(false); await shell.openExternal(url); scoped.assertAvailable(false); } });
+  const view = async result => {
+    const hosts = await launcher.available(); scoped.assertAvailable(false);
+    const saved = scoped.store.get().browserPreferences?.applicationHost;
+    return { ...result, hosts, preferredHost: ['claude', 'codex'].includes(saved) ? saved : hosts.codex ? 'codex' : 'claude' };
+  };
+  return { ...scoped, localFiles, workflow, launcher, view };
+}
 function createSessionServer() {
   const scoped = createScopedAccess(store, { assertAvailable, epoch: () => sessionEpoch });
   const localFiles = createDocumentFiles({ directory, store: scoped.store, assertAvailable: scoped.assertAvailable });
   const scopedPlatform = async (operation, args) => {
     scoped.assertAvailable(false); const result = await platform(operation, args); scoped.assertAvailable(false); return result;
   };
+  const applicationFlow = createApplicationWorkflow({ store: scoped.store, assertAvailable: scoped.assertAvailable,
+    validateExport: async record => { try { await localFiles.resolveExport(record.uri); return true; } catch { return false; } } });
   let server;
   const interaction = {
     canElicit: () => Boolean(server?.getClientCapabilities()?.elicitation?.form),
@@ -331,6 +365,9 @@ function createSessionServer() {
       scoped.assertAvailable(true); const result = await selectSourceFile(); scoped.assertAvailable(true); return result;
     }, extractFile: documents.extractFile }),
     ...createApplicationTools({ store: scoped.store, platform: scopedPlatform, documents, exportDocument: localFiles.exportDocument }),
+    ...createApplicationPreparationTools({ workflow: applicationFlow, openInChrome: async url => {
+      scoped.assertAvailable(false); const result = await openInChrome(url); scoped.assertAvailable(false); return result;
+    } }),
     ...createMatchingTools({ store: scoped.store, platform: scopedPlatform, exportDocument: localFiles.exportDocument }),
     ...createJobTools({ store: scoped.store }),
     ...createFormTools({ store: scoped.store, browser: browserBridge }),
@@ -380,7 +417,9 @@ async function installConnections() {
 async function nativeOperation(op, payload, socket = null) {
   const keys = { status: [], open_settings: [], open_decisions_settings: [], pair: ['productOrigin', 'pairing'],
     capture_jobs: ['requestId', 'sourceUrl', 'jobs'], forms_prepare: ['requestId', 'formId', 'url', 'title', 'fields', 'actions'], forms_cancel: ['requestId'],
-    forms_validate: ['formId', 'fields'], forms_profile_save: ['requestId', 'formId', 'snapshot', 'values'] };
+    forms_validate: ['formId', 'fields'], forms_profile_save: ['requestId', 'formId', 'snapshot', 'values'],
+    application_resolve: ['requestId', 'page', 'jobs', 'context'], application_status: ['bindingId'],
+    application_prepare: ['bindingId', 'host'], application_document: ['bindingId', 'kind', 'action'], application_open_ad: ['bindingId'] };
   if (!Object.hasOwn(keys, op)) fail('INVALID_INPUT', 'This browser operation is unavailable.');
   exact(payload, keys[op]);
   if (op === 'status') return status();
@@ -388,6 +427,47 @@ async function nativeOperation(op, payload, socket = null) {
   if (op === 'open_decisions_settings') { await showDecisionsSettings(); return { opened: true }; }
   if (op === 'pair') return pair(payload);
   assertAvailable(false);
+  if (op.startsWith('application_')) {
+    const access = applicationAccess();
+    if (op === 'application_resolve') return mutation(async () => {
+      const result = await access.workflow.resolve(payload);
+      access.assertAvailable(false);
+      applicationSockets.set(result.bindingId, { socket, epoch: sessionEpoch, identity: identityKey(store.get()) });
+      careerViewRevision++; emit();
+      return access.view(result);
+    });
+    const bound = applicationSockets.get(payload.bindingId);
+    if (!bound || bound.socket !== socket || bound.epoch !== sessionEpoch || bound.identity !== identityKey(store.get()))
+      fail('FORM_CONTEXT_CHANGED', 'Read this application page again before using its documents.');
+    if (op === 'application_status') return access.view(await access.workflow.status(payload));
+    if (op === 'application_prepare') return mutation(async () => {
+      const { preparationId } = await access.workflow.prepare(payload);
+      access.assertAvailable(false);
+      const opened = await access.launcher.open({ host: payload.host, preparationId });
+      access.assertAvailable(false);
+      await access.workflow.launched({ preparationId, host: payload.host });
+      await access.store.update(next => { next.browserPreferences ??= {}; next.browserPreferences.applicationHost = payload.host; });
+      careerViewRevision++; emit();
+      return { ...await access.view(await access.workflow.status({ bindingId: payload.bindingId })), ...opened, preparationId };
+    });
+    if (op === 'application_open_ad') {
+      const url = await access.workflow.jobUrl(payload);
+      access.assertAvailable(false); return openInChrome(url);
+    }
+    if (!['cv', 'cover_letter'].includes(payload.kind) || !['open', 'reveal'].includes(payload.action))
+      fail('INVALID_INPUT', 'Choose a current CV or cover-letter PDF to open or show in Finder.');
+    const record = await access.workflow.document({ bindingId: payload.bindingId, kind: payload.kind });
+    const filename = await access.localFiles.resolveExport(record.uri);
+    const current = await access.workflow.document({ bindingId: payload.bindingId, kind: payload.kind });
+    access.assertAvailable(false);
+    if (current.uri !== record.uri) fail('FORM_CONTEXT_CHANGED', 'The application document changed. Open its current version.');
+    if (payload.action === 'reveal') shell.showItemInFolder(filename);
+    else {
+      const error = await shell.openPath(filename);
+      if (error) fail('EXPORT_UNAVAILABLE', 'The PDF could not be opened. Show it in Finder instead.');
+    }
+    return { opened: true, kind: payload.kind, action: payload.action };
+  }
   if (op === 'forms_profile_save') {
     const session = browserSessions.get(payload.formId);
     if (!session || session.socket !== socket || session.epoch !== sessionEpoch || session.identity !== identityKey(store.get()))
@@ -442,7 +522,7 @@ async function nativeOperation(op, payload, socket = null) {
   finally { formRequests.delete(payload.requestId); emit(); }
 }
 // The extension that prepared a form keeps its socket; the user's AI fills or submits through it.
-const browserSessions = new Map(), browserReplies = new Map();
+const browserSessions = new Map(), browserReplies = new Map(), applicationSockets = new Map();
 function browserSession(formId, expected) {
   assertWorkAllowed();
   const session = browserSessions.get(formId);
@@ -509,6 +589,7 @@ async function startNativeBridge() {
     socket.on('close', () => {
       clearTimeout(timer); sockets.delete(socket);
       for (const [formId, session] of browserSessions) if (session.socket === socket) browserSessions.delete(formId);
+      for (const [bindingId, session] of applicationSockets) if (session.socket === socket) applicationSockets.delete(bindingId);
       for (const waiting of browserReplies.values()) if (waiting.socket === socket)
         waiting.reject(waiting.failure('Chrome disconnected before confirming the operation.'));
     });

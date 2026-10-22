@@ -15,12 +15,14 @@ export const CAREER_SCHEMA = 2;
 export function createCareerState() {
   return { version: CAREER_SCHEMA, revision: 0, evidenceRevision: 0,
     profile: { name: null, firstName: null, lastName: null, preferredName: null, headline: null, email: null, phone: null,
-      location: null, country: null, addressLine1: null, addressLine2: null, city: null, postalCode: null, linkedinUrl: null, personalSummary: null,
+      location: null, country: null, addressLine1: null, addressLine2: null, city: null, postalCode: null, linkedinUrl: null,
       links: [], roleCapabilities: [], seniority: null, skills: [], preferences: {} },
     sources: {}, facts: {}, applications: {}, receipts: {} };
 }
 /** Schema cutover without migration: keeps CV sources and profile, discards everything else and invalidates evidence and rankings. */
 export function upgradeCareer(old) {
+  // Application prose is no longer a reusable profile fact.
+  if (old?.profile && Object.hasOwn(old.profile, 'personalSummary')) delete old.profile.personalSummary;
   if (old?.version === CAREER_SCHEMA) return old;
   const fresh = createCareerState();
   return { ...fresh, profile: old?.profile ?? fresh.profile, sources: old?.sources ?? {},

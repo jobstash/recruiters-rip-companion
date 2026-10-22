@@ -37,6 +37,25 @@ export function safeNativeCommand(message) {
   return { op: message.op, payload: p };
 }
 
+// Keep application metadata separate from approved field values and native files.
+export function applicationView(result) {
+  const text = (value, max = 240) => typeof value === 'string' && value.length <= max ? value : null;
+  const states = ['needs_job', 'needs_documents', 'needs_refresh', 'drafts', 'ready'];
+  insist(text(result?.bindingId, 200) && states.includes(result?.state), 'Companion could not identify this application. Read page to try again.');
+  const host = value => ['claude', 'codex'].includes(value) ? value : null;
+  let jobUrl = null;
+  try { const url = new URL(result.jobUrl); if (['https:', 'http:'].includes(url.protocol) && !url.username && !url.password) jobUrl = url.href; } catch { /* No known advert. */ }
+  return {
+    bindingId: result.bindingId, formId: text(result.formId, 200), applicationId: text(result.applicationId, 200),
+    title: text(result.title) || 'This application', company: text(result.company), state: result.state,
+    documents: ['cv', 'cover_letter'].map(kind => ({ kind, ready: result.documents?.some(doc => doc.kind === kind && doc.ready === true) === true, label: kind === 'cv' ? 'CV' : 'Cover letter' })),
+    writing: (Array.isArray(result.writing) ? result.writing : []).slice(0, 64).map(field => ({ fieldId: text(field.fieldId, 200), label: text(field.label) || 'Written answer', ready: field.ready === true })),
+    handoff: host(result.handoff?.host) && ['awaiting_agent', 'agent_read'].includes(result.handoff?.state)
+      ? { host: result.handoff.host, state: result.handoff.state, requiresSend: result.handoff.requiresSend === true } : null,
+    answerVersion: text(result.answerVersion, 200), jobUrl, preferredHost: host(result.preferredHost),
+  };
+}
+
 // Companion-initiated commands (fill or submit on the user's own tab) arrive on the same port as
 // `{version, id, op, payload}` and are answered with `{version, id, ok, result|error}`.
 export function createNativeClient({ connect, host, onCommand = null, onDisconnect = null, randomUUID = () => crypto.randomUUID(), timeoutMs = 180000, maxPending = 4 }) {
@@ -86,13 +105,15 @@ export function createNativeClient({ connect, host, onCommand = null, onDisconne
     return active;
   }
   function request(op, payload) {
-    insist(['status','pair','open_settings','open_decisions_settings','capture_jobs','forms_prepare','forms_profile_save','forms_cancel','forms_validate'].includes(op), 'This native operation is unavailable.');
+    insist(['status','pair','open_settings','open_decisions_settings','capture_jobs','forms_prepare','forms_profile_save','forms_cancel','forms_validate',
+      'application_resolve','application_status','application_prepare','application_document','application_open_ad'].includes(op), 'This native operation is unavailable.');
     insist(pending.size < maxPending, 'The companion is busy. Cancel or finish the current request.');
     const id = randomUUID(), message = { version: 1, id, op, payload };
     insist(new TextEncoder().encode(JSON.stringify(message)).length <= 1024 * 1024, 'This page exceeds the capture limit. Select fewer jobs.');
     open();
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { pending.delete(id); reject(new Error('The companion request expired. Review the companion and try again.')); }, op === 'forms_validate' ? Math.min(timeoutMs, 5000) : timeoutMs);
+      const timer = setTimeout(() => { pending.delete(id); reject(new Error('The companion request expired. Review the companion and try again.')); },
+        op === 'forms_validate' ? Math.min(timeoutMs, 5000) : op === 'application_status' ? Math.min(timeoutMs, 10000) : timeoutMs);
       pending.set(id, { resolve, reject, timer });
       try { port.postMessage(message); } catch (error) {
         pending.delete(id); clearTimeout(timer); reject(error);

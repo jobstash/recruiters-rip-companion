@@ -3,13 +3,18 @@ import { formEvidence, formFingerprint, unavailableField, validFormValue, valida
 import { abortable, FORM_DECISIONS, mapFormValues } from './decisions/form-mapping.mjs';
 import { CONTACT_FIELDS, patchProfile, validateProfilePatch } from './mcp/profile-fields.mjs';
 import { contactCandidates } from './form-contact-candidates.mjs';
+import { applicationContextFingerprint, isApplicationWritingField, reusableApplicationAnswer } from './application-workflow.mjs';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const PRICE_NOTE = 'Separate OpenAI API billing, not your ChatGPT subscription. Base rate per million input tokens; regional or long-context premiums may apply. Already dispatched requests may be billed after cancellation.';
 const normalized = value => value.normalize('NFKC').toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 const identity = state => hash({ deviceId: state.deviceId ?? null, pairing: state.pairing ?? null });
 const credentialVersion = state => state.prescanCredentialVersion ?? 0;
-const answersHash = (career, formId) => hash(career.formDrafts?.[formId]?.answers ?? {});
+const answersHash = (career, formId) => {
+  const draft = career.formDrafts?.[formId], app = career.applications?.[draft?.applicationId];
+  return hash({ answers: draft?.answers ?? {}, applicationId: draft?.applicationId ?? null,
+    context: app ? applicationContextFingerprint(career, app) : null, saved: app?.formAnswers ?? {} });
+};
 const CONTACTS = {
   name: ['name', 'full name', 'your name', 'applicant name', 'candidate name', 'applicant full name', 'candidate full name'],
   firstName: ['first name', 'given name', 'forename', 'legal first name'],
@@ -24,7 +29,6 @@ const CONTACTS = {
   city: ['city', 'town', 'town city', 'city town', 'town or city', 'city or town'],
   postalCode: ['postcode', 'post code', 'postal code', 'zip', 'zip code', 'zip postal code', 'postcode zip code'],
   linkedinUrl: ['linkedin', 'linkedin url', 'linkedin profile', 'linkedin profile url'],
-  personalSummary: ['personal summary', 'professional summary', 'personal summary this section is optional use it to tell us a little more about yourself'],
   requiresSponsorship: ['requires employer sponsorship', 'requires sponsorship', 'do you require sponsorship',
     'do you require visa sponsorship', 'do you now or in the future require visa sponsorship',
     'will you now or in the future require sponsorship', 'will you now or in the future require visa sponsorship'],
@@ -162,13 +166,17 @@ export function createBrowserForms({ store, credentials, authorize, assertAvaila
     active.set(args.requestId, run);
     try {
       const previous = career.formDrafts?.[formId];
-      const staged = previous?.evidence === evidence && previous.evidenceRevision === (career.evidenceRevision ?? 0) ? previous.answers : {};
+      const app = career.applications?.[previous?.applicationId];
+      const applicationContext = app ? applicationContextFingerprint(career, app) : null;
+      const staged = previous?.evidence === evidence && previous.evidenceRevision === (career.evidenceRevision ?? 0) &&
+        (!previous.applicationId || previous.applicationContext === applicationContext) ? previous.answers : {};
       const bank = knownBank(career), values = new Map(), reasons = new Map(), pending = [];
       for (const field of snapshot.fields) {
         const reason = unavailableField(field);
         if (reason) { reasons.set(field.id, reason); continue; }
-        const answer = staged?.[field.id];
+        const answer = reusableApplicationAnswer(career, app?.id, field, applicationContext) ?? (app || !isApplicationWritingField(field) ? staged?.[field.id] : null);
         if (answer && validFormValue(field, answer.value)) { values.set(field.id, { value: answer.value, source: 'agent' }); continue; }
+        if (isApplicationWritingField(field)) { reasons.set(field.id, 'Ask your connected agent to write this answer for this application.'); continue; }
         if (otherPersonContact(field)) { reasons.set(field.id, 'This asks about another person. Stage an explicit supported answer with your connected agent or complete manually.'); continue; }
         if (contactKey(field) !== 'requiresSponsorship' && /\b(?:sponsor|sponsorship|visa|work authori[sz]ation|eligible to work)\b/i.test(field.label)) {
           reasons.set(field.id, 'Confirm eligibility for this application with your connected agent or complete manually.'); continue;
@@ -202,14 +210,14 @@ export function createBrowserForms({ store, credentials, authorize, assertAvaila
         saved.career ??= structuredClone(career);
         saved.career.formDrafts ??= {};
         const old = saved.career.formDrafts[formId];
-        if (!old || old.evidence !== evidence) {
+        if (!old || old.evidence !== evidence || old.applicationContext !== applicationContext) {
           saved.career.formDrafts[formId] = { formId, snapshot: fingerprint, ...snapshot, evidence, evidenceRevision: career.evidenceRevision ?? 0,
-            answers: {}, createdAt: new Date().toISOString() };
+            applicationId: app?.id ?? null, applicationContext, answers: {}, createdAt: new Date().toISOString() };
           saved.career.revision++;
         }
+        run.answersHash = answersHash(saved.career, formId);
       });
       // A context reset deliberately clears stale answers; all later checks bind the new empty answer set.
-      if (previous && previous.evidence !== evidence) run.answersHash = hash({});
       current(run);
       let inputTokens = 0, requests = 0;
       if (useApi) {

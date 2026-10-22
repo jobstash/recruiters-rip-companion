@@ -16,7 +16,6 @@ export const CONTACT_FIELDS = Object.freeze({
   addressLine2: { label: 'Address line 2', maxLength: 500 },
   city: { label: 'Town or city', maxLength: 300 },
   postalCode: { label: 'Postcode / ZIP code', maxLength: 100 },
-  personalSummary: { label: 'Personal summary', type: 'textarea', maxLength: 10000 },
   linkedinUrl: { label: 'LinkedIn profile URL', type: 'url', maxLength: 2048 },
 });
 export const profileFields = {

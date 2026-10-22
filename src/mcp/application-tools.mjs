@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { applicationContextFingerprint, currentApplicationJob, isApplicationWritingField, upsertApplication } from '../application-workflow.mjs';
 import { readCareer, mutateCareer, replayCareer, mutationSchema, fail } from './state.mjs';
 import { assertCleanStatement } from './facts.mjs';
 import { cvDocumentTexts, inspectCvQuality, renderableCv, unsupportedNumbers } from './cv-quality.mjs';
@@ -7,6 +7,7 @@ import { matchingProfileVersion } from './assessment-policy.mjs';
 import { policyIdFor } from './matching-contract.mjs';
 import { SKILL_DIGEST } from '../generated/skill-digest.mjs';
 import { localJobOriginal } from './job-tools.mjs';
+import { formEvidence } from './form-tools.mjs';
 
 export const CV_WRITING_GUIDE = [
   'Write to win the interview. The saved CV is the base career record: employers, roles, dates and achievements come from it. Facts are what the candidate has told you since; use them to tailor truthfully.',
@@ -40,7 +41,7 @@ const cvSchema = object({
   additional: { type: 'array', maxItems: 6, items: object({ title: text(100), items: strings(20, 400, 1) }) },
 }, ['headline', 'summary', 'experience']);
 export const CV_POLICY_ID = policyIdFor({ guide: CV_WRITING_GUIDE, schema: cvSchema, skill: SKILL_DIGEST });
-const jobSchema = object({ title: text(300), company: text(300), description: text(100000), url: text(2000), location: text(300) }, ['title', 'company', 'description']);
+const jobSchema = object({ title: text(300), company: text(300), description: text(100000), url: text(2000), applyUrl: text(2000), location: text(300) }, ['title', 'company', 'description']);
 const pagination = { limit: { type: 'integer', minimum: 1, maximum: 50 }, offset: { type: 'integer', minimum: 0, maximum: 10000 } };
 const defaultPresentation = Object.freeze({ template: 'classic', paper: 'A4' });
 const thirdPerson = /\b(?:he|she|they)\s+(?:has|have|led|built|managed|delivered|worked)\b|\bthe candidate\b/i;
@@ -125,11 +126,12 @@ function catalogueJob(job, jobId) {
     fail('INVALID_JOB', 'The catalogue did not return a complete matching job. Read the job again, or paste the advert as job.');
   const url = job.applyUrl ?? job.url;
   return { id: job.id, title: job.title, company, description: job.description,
-    ...(typeof url === 'string' && url ? { url } : {}), ...(typeof job.location === 'string' && job.location ? { location: job.location } : {}) };
+    ...(typeof url === 'string' && url ? { url } : {}), ...(typeof job.url === 'string' && job.url ? { originalUrl: job.url } : {}),
+    ...(typeof job.location === 'string' && job.location ? { location: job.location } : {}) };
 }
 function capturedApplicationJob(career, jobId) {
-  const { id, title, company, description, applyUrl, location } = localJobOriginal(career, jobId, true);
-  return { id, title, company, description, url: applyUrl, ...(location ? { location } : {}) };
+  const { id, title, company, description, applyUrl, url, location } = localJobOriginal(career, jobId, true);
+  return { id, title, company, description, url: applyUrl, originalUrl: url, ...(location ? { location } : {}) };
 }
 function summary(app) {
   return { id: app.id, job: { ...(app.job.id ? { id: app.job.id } : {}), title: app.job.title, company: app.job.company, ...(app.job.url ? { url: app.job.url } : {}) },
@@ -144,7 +146,15 @@ function context(career, app) {
   const row = app.job.id ? career.matching?.scores?.[app.job.id] : undefined;
   const assessment = row && currentAssessment(row, matchingProfileVersion(career))
     ? (({ overall, band, decision, gates, dimensions, requirements, reason }) => ({ overall, band, decision, gates, dimensions, requirements, reason }))(row) : null;
-  return { revision: career.revision, application: app, job: app.job,
+  const fingerprint = applicationContextFingerprint(career, app), evidence = formEvidence(career);
+  const forms = Object.values(career.formDrafts ?? {}).filter(draft => draft.applicationId === app.id)
+    .sort((a, b) => (b.updatedAt ?? b.createdAt).localeCompare(a.updatedAt ?? a.createdAt))
+    .map(draft => ({ formId: draft.formId, snapshot: draft.snapshot, evidenceRevision: draft.evidenceRevision,
+      url: draft.url, title: draft.title, fields: draft.fields, writingFields: draft.fields.filter(isApplicationWritingField), actions: draft.actions ?? [],
+      contextCurrent: draft.applicationContext === fingerprint && draft.evidence === evidence,
+      instructions: 'Read career_form_read with formId to check Chrome attachment and current answers before staging. If contextCurrent is false, read/prepare the page again in Chrome first. Only empty supported writing fields need prose; do not overwrite populated fields.' }));
+  return { revision: career.revision, application: app, job: currentApplicationJob(career, app),
+    contextFingerprint: fingerprint, forms,
     profile: { name, email, phone, location, links, headline, seniority, roleCapabilities, skills }, preferences,
     cv: cvRecord(career), facts, assessment,
     presentation: {
@@ -163,7 +173,7 @@ export function createApplicationTools({ store, platform, documents, exportDocum
 
   add('career_job_read', 'Read a complete catalogue job or a local capture (including listing text marked complete:false).', object({ id: text(100) }), true, args =>
     typeof args.id === 'string' && args.id.startsWith('local:') ? localJobOriginal(readCareer(store), args.id) : platform('job_read', args));
-  add('career_application_create', 'Create an application for a catalogue or complete locally captured job (jobId), or an advert the user pasted (job). Then read career_application_context and save the tailored CV and cover letter.',
+  add('career_application_create', 'Create or reuse the application for the exact catalogue or complete locally captured job (jobId), or full pasted advert (job, with exact url and optional applyUrl). Never match by title/company alone. A changed original invalidates old document fingerprints. Read career_application_context and reuse current documents; save and export new drafts only when missing or stale.',
     object({ ...mutationSchema, jobId: text(100), job: jobSchema }, ['requestId', 'revision']), false, async args => {
       if ((args.jobId === undefined) === (args.job === undefined)) fail('INVALID_INPUT', 'Provide either jobId for a catalogue job or job for a pasted advert.');
       const replay = replayCareer(store, args, 'career_application_create', args);
@@ -173,10 +183,8 @@ export function createApplicationTools({ store, platform, documents, exportDocum
         ? capturedApplicationJob(readCareer(store), args.jobId)
         : catalogueJob(await platform('job_read', { id: args.jobId }), args.jobId);
       return mutateCareer(store, args, 'career_application_create', args, career => {
-        const app = { id: randomUUID(), job, createdAt: now(), updatedAt: now(),
-          cv: null, coverLetter: null, cvHistory: [], coverLetterHistory: [], exports: [] };
-        career.applications[app.id] = app;
-        return { applicationId: app.id, job };
+        const app = upsertApplication(career, job);
+        return { applicationId: app.id, job: app.job };
       });
     });
   add('career_applications_list', 'List saved applications, most recently updated first.', object(pagination, []), true, args => {
@@ -219,7 +227,8 @@ export function createApplicationTools({ store, platform, documents, exportDocum
       if (!layout.fits) issues.unshift(`layout: ${layout.error}`);
       return mutateCareer(store, args, 'career_application_cv_save', args, current => {
         const target = application(current, app.id);
-        const draft = { version: (target.cv?.version ?? 0) + 1, document: args.cv, presentation, policyId: CV_POLICY_ID, createdAt: now() };
+        const draft = { version: (target.cv?.version ?? 0) + 1, document: args.cv, presentation, policyId: CV_POLICY_ID,
+          contextFingerprint: applicationContextFingerprint(current, target), createdAt: now() };
         if (target.cv) target.cvHistory.push(target.cv);
         target.cv = draft;
         target.updatedAt = now();
@@ -232,7 +241,8 @@ export function createApplicationTools({ store, platform, documents, exportDocum
       const items = args.paragraphs.map((text, index) => ({ field: `paragraphs[${index}]`, text }));
       assertVoice(items);
       assertNumbers(career, items);
-      const letter = { version: (app.coverLetter?.version ?? 0) + 1, paragraphs: args.paragraphs, createdAt: now() };
+      const letter = { version: (app.coverLetter?.version ?? 0) + 1, paragraphs: args.paragraphs,
+        contextFingerprint: applicationContextFingerprint(career, app), createdAt: now() };
       if (app.coverLetter) app.coverLetterHistory.push(app.coverLetter);
       app.coverLetter = letter;
       app.updatedAt = now();
@@ -246,6 +256,8 @@ export function createApplicationTools({ store, platform, documents, exportDocum
       const career = readCareer(store), app = application(career, args.applicationId);
       const draft = args.kind === 'cv' ? app.cv : app.coverLetter;
       if (!draft) fail('MISSING_DRAFT', `Save the ${args.kind === 'cv' ? 'CV' : 'cover letter'} before exporting it.`);
+      if (draft.contextFingerprint !== applicationContextFingerprint(career, app))
+        fail('APPLICATION_CONTEXT_CHANGED', 'The job or career evidence changed, or this draft has no job binding. Read the application context and save a current draft before exporting.');
       const format = args.format ?? 'pdf';
       let bytes, expectedText, textValidation = null;
       if (args.kind === 'cv') {
@@ -257,7 +269,8 @@ export function createApplicationTools({ store, platform, documents, exportDocum
           bytes = await documents.renderCareerCvPdf(input);
         }
       } else {
-        const title = ['Cover letter', app.job.title, app.job.company].filter(Boolean).join(' — ');
+        const job = currentApplicationJob(career, app);
+        const title = ['Cover letter', job.title, job.company].filter(Boolean).join(' — ');
         expectedText = [title, ...draft.paragraphs].join('\n\n') + '\n';
         if (format === 'pdf') bytes = await documents.renderCareerPdf(title, draft.paragraphs);
       }
@@ -272,7 +285,8 @@ export function createApplicationTools({ store, platform, documents, exportDocum
         const target = application(current, app.id);
         const exported = await exportDocument({ applicationId: app.id, kind: args.kind, bytes,
           filename: `${args.kind}-${app.id}-v${draft.version}.${format}`, mediaType: format === 'pdf' ? 'application/pdf' : 'text/plain' });
-        const record = { ...exported, kind: args.kind, format, documentVersion: draft.version, textValidation, createdAt: now() };
+        const record = { ...exported, kind: args.kind, format, documentVersion: draft.version,
+          contextFingerprint: draft.contextFingerprint, textValidation, createdAt: now() };
         target.exports.push(record);
         target.updatedAt = now();
         return { applicationId: target.id, export: record };

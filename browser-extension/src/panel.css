@@ -29,4 +29,12 @@ label { display: block; }
 select option { background: var(--color-surface); color: var(--color-ink); }
 #save-details { margin-top: var(--spacing-16); }
 #paste { color: var(--color-smoke); }
+#application { margin-top: var(--spacing-16); border-top: 1px solid var(--color-facet); }
+#application h2 { margin-top: var(--spacing-16); }
+#application-title { overflow-wrap: anywhere; }
+#application-host { margin-bottom: var(--spacing-16); }
+.document-row { padding-block: var(--spacing-8); border-top: 1px solid var(--color-facet); }
+.document-row p { margin-bottom: var(--spacing-8); }
+.document-actions { display: flex; flex-wrap: wrap; gap: var(--spacing-8); }
+button { max-width: 100%; overflow-wrap: anywhere; }
 [hidden] { display: none !important; }

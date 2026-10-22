@@ -149,6 +149,8 @@ export function inspectForm(request = null) {
     const customChoice = nativeType !== 'select' && (el.getAttribute('role') === 'combobox' || ['list', 'both'].includes(el.getAttribute('aria-autocomplete')));
     const field = { id: `control-${index}`, label: nativeType === 'radio' ? clean(el.closest('fieldset')?.querySelector('legend')?.textContent || label) : label, type: nativeType, signature: '', empty, required: group.some(n => n.required), manualOnly: !empty || customChoice || group.some(disabled) };
     if (el.autocomplete) field.autocomplete = clean(el.autocomplete);
+    if (el.getAttribute('maxlength') !== null && Number.isInteger(el.maxLength) && el.maxLength >= 0)
+      field.maxLength = Math.min(el.maxLength, 10000);
     if (options) field.options = options;
     const fieldBytes = JSON.stringify(field).length * 3;
     if (schemaBytes + fieldBytes > 200000) continue;
@@ -342,4 +344,91 @@ export function observePage() {
     .map(el => clean(el.getAttribute('aria-label') || el.textContent || el.validationMessage)).filter(Boolean).slice(0, 5).map(item => item.slice(0, 200));
   return { url: location.href, title: clean(document.title).slice(0, 300), fieldsInspected: fields.length, fieldsVisible: visibleFields,
     observedText, confirmationCandidates, outcome: 'unknown', alerts };
+}
+
+// Capture only public job context. Entered form values are deliberately excluded.
+// Linked descriptions are fetched only from this page's origin; the agent must
+// retrieve the supplied job link itself when no complete original is available.
+export async function captureApplicationContext() {
+  const here = new URL(location.href);
+  if (!['http:', 'https:'].includes(here.protocol) || here.username || here.password) return { jobLinks: [] };
+  const clean = value => String(value ?? '').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '').trim();
+  const urlFor = value => {
+    try {
+      const url = new URL(value, here);
+      if (url.origin !== here.origin || url.username || url.password || url.href.length > 2000) return null;
+      url.hash = ''; return url;
+    } catch { return null; }
+  };
+  const token = url => url.pathname.match(/\/(?:postings|jobs|positions|roles)\/([^/]+)/i)?.[1]
+    || url.pathname.match(/\/([a-f0-9]{8}-[a-f0-9-]{27,})(?:\/|$)/i)?.[1]
+    || url.searchParams.get('gh_jid');
+  const jobToken = token(here), links = new Map();
+  for (const anchor of [...document.querySelectorAll('a[href]')].slice(0, 1000)) {
+    const url = urlFor(anchor.getAttribute('href')), title = clean(anchor.textContent).replace(/\s+/g, ' ').slice(0, 300);
+    if (!url || url.href === here.href || /\/(?:applications?|apply)(?:\/|$)/i.test(url.pathname) || !title) continue;
+    const sameJob = jobToken && token(url) === jobToken;
+    const descriptionLink = /\b(?:job description|view (?:the )?job|back to (?:the )?(?:job|role)|position details)\b/i.test(title);
+    if ((sameJob || descriptionLink) && links.size < 6) links.set(url.href, { url: url.href, title });
+  }
+  const jobLinks = [...links.values()];
+  const textFromHtml = html => {
+    const template = document.createElement('template');
+    template.innerHTML = html;
+    template.content.querySelectorAll('script,style,noscript,form,input,textarea,select,button,iframe,object,nav,header,footer').forEach(node => node.remove());
+    for (const node of template.content.querySelectorAll('p,div,li,h1,h2,h3,br')) node.prepend(document.createTextNode('\n'));
+    return clean(template.content.textContent).replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n');
+  };
+  const originalFrom = (doc, url) => {
+    const postings = [];
+    let visited = 0;
+    const walk = (value, depth = 0) => {
+      if (!value || typeof value !== 'object' || depth > 12 || ++visited > 2000) return;
+      if (Array.isArray(value)) { for (const item of value) walk(item, depth + 1); return; }
+      if ([value['@type']].flat().some(type => /(?:^|\/)JobPosting$/.test(type || '')) && typeof value.description === 'string') postings.push(value);
+      for (const [key, item] of Object.entries(value).slice(0, 100)) if (key !== 'description') walk(item, depth + 1);
+    };
+    for (const script of [...doc.querySelectorAll('script[type="application/ld+json"]')].slice(0, 20)) {
+      if (script.textContent.length > 500000) continue;
+      try { walk(JSON.parse(script.textContent)); } catch { /* Structured page data is inert. */ }
+    }
+    if (postings.length === 1) {
+      const job = postings[0], body = textFromHtml(job.description);
+      const title = clean(typeof job.title === 'string' ? job.title : typeof job.name === 'string' ? job.name : doc.querySelector('h1')?.textContent).slice(0, 300);
+      if (title && body && body.length <= 100000) return { url, title, text: body, complete: true };
+    }
+    const main = doc.querySelector('main,article,[role="main"]');
+    if (!main) return null;
+    const text = textFromHtml(main.innerHTML);
+    if (!text || text.length > 100000) return null;
+    // Unstructured static HTML may omit client-rendered job sections. Preserve
+    // it as context, never claim the complete advert merely from its length.
+    return { url, title: clean(doc.querySelector('h1')?.textContent || doc.title).slice(0, 300), text, complete: false };
+  };
+  const current = originalFrom(document, here.href);
+  if (current?.complete) return { original: current, jobLinks };
+  if (jobLinks.length !== 1) return { ...(current ? { original: current } : {}), jobLinks };
+  const abort = new AbortController(), timer = setTimeout(() => abort.abort(), 8000);
+  try {
+    const response = await fetch(jobLinks[0].url, { credentials: 'same-origin', redirect: 'error', signal: abort.signal });
+    if (!response.ok || !response.headers.get('content-type')?.includes('text/html') || Number(response.headers.get('content-length') || 0) > 1000000 || !response.body) return { jobLinks };
+    const reader = response.body.getReader(), chunks = []; let total = 0;
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        total += value.byteLength;
+        if (total > 1000000) { await reader.cancel(); return { jobLinks }; }
+        chunks.push(value);
+      }
+    } finally { reader.releaseLock(); }
+    const bytes = new Uint8Array(total); let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+    const template = document.createElement('template');
+    template.innerHTML = new TextDecoder().decode(bytes);
+    const doc = template.content;
+    const original = originalFrom(doc, jobLinks[0].url);
+    return { ...(original ? { original } : {}), jobLinks };
+  } catch { return { jobLinks }; }
+  finally { clearTimeout(timer); }
 }

@@ -520,6 +520,41 @@ test('smart paste uses native clipboard only after a trusted click or Tab onto a
   assert.equal(page.messages.filter(message => message.action === 'paste-value').length, 2);
 });
 
+test('clicking an already focused field refreshes its answer after rearming', async () => {
+  const page = pastePage(), el = page.controls[0];
+  page.invoke(inspectForm);
+  page.invoke(armSmartPaste, { session: randomUUID() });
+  page.respond(() => ({ value: 'Previous answer' }));
+  page.focus(el);
+  await tick();
+  page.invoke(disarmSmartPaste);
+  page.invoke(armSmartPaste, { session: randomUUID() });
+  page.respond(() => ({ value: 'New job-specific summary' }));
+  // Clicking the same DOM control does not emit another focusin.
+  page.listeners.pointerdown({ target: el, button: 0, isTrusted: true });
+  page.listeners.click?.({ target: el, button: 0, isTrusted: true });
+  await tick();
+  assert.equal(page.clipboard.at(-1), 'New job-specific summary');
+  assert.equal(el.value, '');
+});
+
+test('clearing a mistaken paste refreshes only an eligible empty focused control', async () => {
+  for (const scenario of ['cleared', 'untrusted', 'populated', 'protected', 'disarmed']) {
+    const page = pastePage(), el = page.controls[0];
+    page.invoke(inspectForm);
+    page.invoke(armSmartPaste, { session: randomUUID() });
+    page.context.document.activeElement = el;
+    page.respond(() => ({ value: 'Prepared summary' }));
+    el.value = scenario === 'populated' ? 'Keep my text' : '';
+    if (scenario === 'protected') el.type = 'password';
+    if (scenario === 'disarmed') page.invoke(disarmSmartPaste);
+    page.listeners.input?.({ target: el, isTrusted: scenario !== 'untrusted' });
+    await tick();
+    assert.deepEqual(page.clipboard, scenario === 'cleared' ? ['Prepared summary'] : []);
+    assert.equal(el.value, scenario === 'populated' ? 'Keep my text' : '');
+  }
+});
+
 test('changed, protected, hidden and populated fields never request clipboard data', async () => {
   for (const mutate of [
     page => { page.controls[0].type = 'password'; },

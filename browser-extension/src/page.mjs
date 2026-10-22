@@ -282,11 +282,11 @@ export function armSmartPaste({ session } = {}) {
     // window blur: that would erase the trusted click/Tab selection mid-switch.
     globalThis.addEventListener('blur', invalidate);
     document.addEventListener('visibilitychange', () => { if (document.visibilityState !== 'visible') invalidate(); }, true);
-    document.addEventListener('focusin', event => {
+    const select = (event, el = event.target) => {
       const selection = arm.selection;
       arm.selection = null;
       if (!arm.active || !event.isTrusted || !selection || Date.now() - selection.at > 1000) return;
-      const bound = globalThis[Symbol.for('recruiters.form-controls.v1')], el = event.target;
+      const bound = globalThis[Symbol.for('recruiters.form-controls.v1')];
       if (!selection.tab && selection.el !== el) return;
       for (const [fieldId, field] of bound?.fields ?? []) {
         if (field.el !== el) continue;
@@ -308,6 +308,21 @@ export function armSmartPaste({ session } = {}) {
         } catch { /* The extension disconnected; nothing reaches the clipboard. */ }
         return;
       }
+    };
+    document.addEventListener('focusin', select, true);
+    // An already focused control emits click, but no new focusin, including
+    // when the user returns from the panel after answers have been refreshed.
+    document.addEventListener('click', event => {
+      if (event.button !== 0) return;
+      const el = event.target?.closest?.('input,textarea') || event.target?.closest?.('label')?.control;
+      if (el && document.activeElement === el) select(event, el);
+    }, true);
+    document.addEventListener('input', event => {
+      if (!arm.active || !event.isTrusted || document.activeElement !== event.target) return;
+      invalidate();
+      if (event.target.value !== '') return;
+      arm.selection = { el: event.target, at: Date.now() };
+      select(event);
     }, true);
   }
   return { armed: true, fields: [...identities.fields.values()].filter(field => field.check()).length };

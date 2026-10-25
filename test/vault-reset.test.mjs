@@ -142,6 +142,8 @@ test('a revoked pairing is forgotten, then the identity is replaced while career
   assert.deepEqual(current.reconnectAccount, { id: '602677', label: 'Synthetic account' });
   assert.equal(current.career.sources.one.text, 'Kept source sentinel');
   assert.equal(await read(path.join(directory, 'career-files', deviceId, 'exports', 'a.pdf'), 'utf8'), 'pdf sentinel');
+});
+
 test('a 3.4 keychain vault is imported once with its identity, pairing and career', async t => {
   const { writeFile, readdir } = await import('node:fs/promises');
   const directory = await mkdtemp(path.join(os.tmpdir(), 'recruiters-legacy-vault-'));

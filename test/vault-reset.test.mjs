@@ -153,6 +153,7 @@ test('a used vault is never replaced by a 3.4 vault, and an unreadable 3.4 vault
   await writeFile(path.join(directory, 'vault.bin'), 'enc:{}');
   const kept = createVault(directory, { decryptLegacy: () => assert.fail('Used vault was replaced') }); await kept.open();
   assert.equal(kept.get().career.sources.one.text, 'Current source sentinel');
+  assert.deepEqual((await readdir(directory)).filter(name => name.startsWith('vault.')).sort(), ['vault.bin.superseded', 'vault.json']);
 
   const fresh = await mkdtemp(path.join(os.tmpdir(), 'recruiters-legacy-locked-'));
   t.after(() => rm(fresh, { recursive: true, force: true }));

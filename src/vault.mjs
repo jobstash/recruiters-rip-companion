@@ -55,6 +55,8 @@ export function createVault(directory, { decryptLegacy } = {}) {
         if (error.code !== 'ENOENT') throw new Error('Local storage could not be opened. Saved data has not been replaced.');
       }
       if (decryptLegacy && (!loaded || pristine(loaded))) loaded = await importLegacy() ?? loaded;
+      // A used vault.json wins; set the 3.4 file aside so later launches keep the mock keychain.
+      else if (decryptLegacy) await rename(legacyFilename, `${legacyFilename}.superseded`).catch(error => { if (error.code !== 'ENOENT') throw error; });
       if (!loaded) {
         loaded = { version: 2, ...identity(), label: 'My computer', pairing: null, career: createCareerState(), identityArchives: {} };
         await persist(loaded);

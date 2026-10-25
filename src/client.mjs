@@ -6,6 +6,15 @@ export function canonicalJSON(value) {
   if (value && typeof value === 'object') return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonicalJSON(value[key])}`).join(',')}}`;
   return JSON.stringify(value);
 }
+async function rejectionReason(response) {
+  let text = '';
+  try {
+    for await (const chunk of response.body ?? []) { text += Buffer.from(chunk).toString('utf8'); if (text.length > 4096) break; }
+    const body = JSON.parse(text);
+    const reason = typeof body?.message === 'string' ? body.message : typeof body?.error === 'string' ? body.error : '';
+    return reason.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, 200);
+  } catch { return ''; } finally { await response.body?.cancel().catch(() => {}); }
+}
 export function createDeviceClient(store, localOnly) {
   const originAllowed = origin => origin === PRODUCT_ORIGINS[localOnly ? 1 : 0];
   // The CV share carries a ≤5 MiB document as base64 JSON; every other device route stays within 16 KiB.
@@ -27,11 +36,11 @@ export function createDeviceClient(store, localOnly) {
       response = await fetch(`${origin}/api${backendPath}`, { method, redirect: 'error', headers: { 'Content-Type': 'application/json', 'X-Device-Id': state.deviceId, 'X-Device-Time': time, 'X-Device-Nonce': nonce, 'X-Device-Signature': signature }, ...(method === 'POST' ? { body: raw } : {}), signal: options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(timeout)]) : AbortSignal.timeout(timeout) });
     } catch { const error = new Error('Could not reach the platform. Check your connection.'); error.code = 'DEVICE_OFFLINE'; throw error; }
     if (!response.ok) {
-      await response.body?.cancel();
-      const error = new Error(response.status === 403
+      const reason = await rejectionReason(response);
+      const error = new Error(`${response.status === 403
         ? 'Check your membership and account connection.'
         : response.status === 401 ? 'Reconnect your account in companion settings.'
-        : 'The product could not accept this device operation.');
+        : 'The product could not accept this device operation.'} Platform (${response.status})${reason ? `: ${reason}` : '.'}`);
       error.status = response.status; error.code = response.status === 401 || response.status === 403 ? 'DEVICE_UNAUTHORIZED' : 'DEVICE_REQUEST_FAILED'; throw error;
     }
     let size = 0; const chunks = [];

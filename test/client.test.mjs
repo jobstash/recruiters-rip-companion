@@ -35,3 +35,22 @@ test('production transfer limits reject oversized requests before sending and ov
   await assert.rejects(client.request('POST', '/device/platform', { operation: 'status', args: {} }), /8 MiB/);
   assert.equal(networkCalls, 1);
 });
+
+test('rejected device requests report the platform status and reason', async t => {
+  const original = globalThis.fetch;
+  t.after(() => { globalThis.fetch = original; });
+  const { privateKey } = generateKeyPairSync('ed25519');
+  const client = createDeviceClient({ get: () => ({ deviceId: randomUUID(), privateKey, pairing: { origin: 'https://recruiters.rip' } }) }, false);
+  const cases = [
+    [403, { statusCode: 403, message: 'Device is no longer paired', error: 'Forbidden' }, 'DEVICE_UNAUTHORIZED', 'Check your membership and account connection. Platform (403): Device is no longer paired'],
+    [400, { error: 'Invalid device input.' }, 'DEVICE_REQUEST_FAILED', 'The product could not accept this device operation. Platform (400): Invalid device input.'],
+    [500, 'not json', 'DEVICE_REQUEST_FAILED', 'The product could not accept this device operation. Platform (500).'],
+    [400, { error: `bad\u0007${'x'.repeat(400)}` }, 'DEVICE_REQUEST_FAILED', `The product could not accept this device operation. Platform (400): bad ${'x'.repeat(196)}`],
+  ];
+  for (const [status, body, code, message] of cases) {
+    globalThis.fetch = async () => new Response(typeof body === 'string' ? body : JSON.stringify(body), { status });
+    await assert.rejects(client.request('POST', '/device/platform', { operation: 'status', args: {} }), error => {
+      assert.equal(error.code, code); assert.equal(error.status, status); assert.equal(error.message, message); return true;
+    });
+  }
+});

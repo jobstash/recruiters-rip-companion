@@ -167,7 +167,7 @@ function localState() {
   const publicState = status();
   if (locked) return { ...publicState, failure, browserConnection };
   const state = vault.get();
-  return { ...publicState, account: state.pairing?.account ?? null, origin: state.pairing?.origin ?? null, browserConnection, failure,
+  return { ...publicState, account: state.pairing?.account ?? null, reconnectAccount: state.reconnectAccount ?? null, origin: state.pairing?.origin ?? null, browserConnection, failure,
     setup: setup(), careerViewVersion: `${state.deviceId}:${sessionEpoch}:${careerViewRevision}`,
     prescan: { credentials: prescanCredentials.publicState(), run: prescan.status(),
       contextVersion: `${sessionEpoch}:${careerViewRevision}:${matchingProfileVersion(state.career ?? {})}` },
@@ -233,7 +233,7 @@ async function initialize() {
     vaultOpened = true;
     await vault.update(state => { state.career = upgradeCareer(state.career); });
     if (screenLocked || sleeping) fail('LOCAL_LOCKED', 'Unlock this computer before opening saved career data.');
-    locked = false; failure = ''; client = createDeviceClient(store, localOnly);
+    locked = false; failure = ''; client = createDeviceClient(store, localOnly, { onUnpaired: forgetRevokedPairing });
     files = createDocumentFiles({ directory, store, assertAvailable });
   })();
   try { await initializing; } finally { initializing = undefined; }
@@ -247,17 +247,22 @@ async function pair(payload) {
   const expiry = typeof pairing.expiresAt === 'number' ? pairing.expiresAt : Date.parse(pairing.expiresAt);
   if (payload.productOrigin !== productOrigin || pairing.deviceId !== store.get().deviceId || !Number.isFinite(expiry) || expiry <= Date.now() || expiry > Date.now() + 301000 || typeof pairing.challenge !== 'string' || pairing.challenge.length > 512 || !pairing.account || typeof pairing.account.id !== 'string' || pairing.account.id.length > 200 || typeof pairing.account.label !== 'string' || pairing.account.label.length > 240) fail('INVALID_INPUT', 'The account pairing link is invalid or expired. Start a new connection from local settings.');
   exact(pairing.account, ['id', 'label']);
-  const existing = store.get().pairing;
-  if (existing && (existing.account.id !== pairing.account.id || existing.origin !== payload.productOrigin)) fail('INVALID_INPUT', 'This computer is paired with another account. Sign in with the account shown in the companion.');
+  const existing = store.get().pairing, expected = existing?.account ?? store.get().reconnectAccount;
+  if ((expected && expected.id !== pairing.account.id) || (existing && existing.origin !== payload.productOrigin)) fail('INVALID_INPUT', 'This computer is paired with another account. Sign in with the account shown in the companion.');
   if (!await confirm('Connect this platform account?', `Account: ${JSON.stringify(pairing.account.label)}\nAccount ID: ${pairing.account.id}\nPlatform: ${payload.productOrigin}\n\nAllow this computer to access the job feed.`)) fail('CANCELLED', 'Account connection canceled.');
   const activation = await client.request('POST', '/device/activate', { challenge: pairing.challenge, account: pairing.account }, { origin: payload.productOrigin });
   if (activation.deviceId !== pairing.deviceId || activation.account?.id !== pairing.account.id || activation.account?.label !== pairing.account.label) fail('INVALID_INPUT', 'The activated account does not match the local approval.');
-  await store.update(state => { if (state.deviceId !== pairing.deviceId) fail('INVALID_INPUT', 'The device identity changed during pairing.'); state.pairing = { origin: payload.productOrigin, account: { ...pairing.account } }; });
+  await store.update(state => { if (state.deviceId !== pairing.deviceId) fail('INVALID_INPUT', 'The device identity changed during pairing.'); state.pairing = { origin: payload.productOrigin, account: { ...pairing.account } }; delete state.reconnectAccount; });
   emit(); return status();
   });
 }
+async function forgetRevokedPairing() {
+  await vault.forgetPairing(); emit();
+}
 async function connectAccount() {
-  assertAvailable(false); const state = store.get();
+  assertAvailable(false);
+  if (store.get().reconnectAccount && !store.get().pairing) { browserForms?.cancelAll(); sessionEpoch++; mcpBridge?.disconnect(); await vault.rotateIdentity(); emit(); }
+  const state = store.get();
   const url = new URL('/settings/provider', productOrigin);
   pairingReturn?.close(); pairingReturn = undefined;
   if (!state.pairing) {

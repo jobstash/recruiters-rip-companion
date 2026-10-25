@@ -61,7 +61,8 @@ async function refresh() {
     $('connect-account').textContent = state.paired ? 'Open account' : 'Connect account';
     $('connect-account').classList.toggle('primary', !state.paired);
     $('connect-account').classList.toggle('ghost', state.paired);
-    $('account-hint').textContent = state.paired ? 'Connected' : 'Not connected';
+    $('account-hint').textContent = state.paired ? 'Connected'
+      : state.reconnectAccount ? `Unpaired on recruiters.rip. Connect ${state.reconnectAccount.label} again to restore job access.` : 'Not connected';
     $('me-account').hidden = state.paired;
     renderSharing(state.introductions);
     syncGithub(state.paired);

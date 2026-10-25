@@ -120,3 +120,26 @@ test('flush waits for accepted writes without changing career data or identity',
   assert.equal(saved.career.revision, before.career.revision);
   assert.equal(saved.deviceId, before.deviceId);
 });
+
+test('a revoked pairing is forgotten, then the identity is replaced while career data and exports stay', async t => {
+  const { mkdir, writeFile, readFile: read } = await import('node:fs/promises');
+  const { vault, directory, reopen } = await fixture(t);
+  await vault.update(state => { state.pairing = { origin: 'https://recruiters.rip', account: { id: '602677', label: 'Synthetic account' } }; state.career.sources.one = { text: 'Kept source sentinel' }; });
+  const old = vault.get();
+  const exports = path.join(directory, 'career-files', old.deviceId, 'exports');
+  await mkdir(exports, { recursive: true, mode: 0o700 }); await writeFile(path.join(exports, 'a.pdf'), 'pdf sentinel');
+
+  await vault.forgetPairing();
+  assert.equal(vault.get().pairing, null);
+  assert.deepEqual(vault.get().reconnectAccount, { id: '602677', label: 'Synthetic account' });
+  assert.equal(vault.get().deviceId, old.deviceId);
+
+  const { previousDeviceId, deviceId } = await vault.rotateIdentity();
+  const reopened = reopen(); await reopened.open(); const current = reopened.get();
+  assert.equal(previousDeviceId, old.deviceId); assert.equal(current.deviceId, deviceId); assert.notEqual(deviceId, old.deviceId);
+  assert.notEqual(current.privateKey, old.privateKey); assert.notEqual(current.publicKey, old.publicKey);
+  assert.equal(current.pairing, null);
+  assert.deepEqual(current.reconnectAccount, { id: '602677', label: 'Synthetic account' });
+  assert.equal(current.career.sources.one.text, 'Kept source sentinel');
+  assert.equal(await read(path.join(directory, 'career-files', deviceId, 'exports', 'a.pdf'), 'utf8'), 'pdf sentinel');
+});

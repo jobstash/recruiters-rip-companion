@@ -50,6 +50,18 @@ export function createVault(directory) {
       writes = pending.catch(() => {}); return pending;
     },
     async flush() { await writes; },
+    /** The platform unpaired this identity: forget the pairing but keep the account it must reconnect to. */
+    async forgetPairing() {
+      await this.update(next => { if (next.pairing) { next.reconnectAccount = next.pairing.account; next.pairing = null; } });
+    },
+    /** A revoked identity cannot pair again; replace its keys and keep career data and exports. */
+    async rotateIdentity() {
+      let result;
+      await this.update(next => { result = { previousDeviceId: next.deviceId }; Object.assign(next, identity()); next.pairing = null; result.deviceId = next.deviceId; });
+      const files = path.join(directory, 'career-files');
+      await rename(path.join(files, result.previousDeviceId), path.join(files, result.deviceId)).catch(error => { if (error.code !== 'ENOENT') throw error; });
+      return result;
+    },
     async resetIdentity() {
       let result;
       await this.update(next => {

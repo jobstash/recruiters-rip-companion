@@ -54,3 +54,21 @@ test('rejected device requests report the platform status and reason', async t =
     });
   }
 });
+
+test('only a platform report that this device is unpaired triggers recovery', async t => {
+  const original = globalThis.fetch;
+  t.after(() => { globalThis.fetch = original; });
+  const { privateKey } = generateKeyPairSync('ed25519');
+  let unpaired = 0;
+  const client = createDeviceClient({ get: () => ({ deviceId: randomUUID(), privateKey, pairing: { origin: 'https://recruiters.rip' } }) }, false, { onUnpaired: async () => { unpaired++; } });
+  const reply = (status, message) => { globalThis.fetch = async () => new Response(JSON.stringify({ statusCode: status, message }), { status }); };
+  for (const [status, message, path, expected] of [
+    [403, 'Device is not active', '/device/platform', 1], [403, 'Device is no longer paired', '/device/heartbeat', 2],
+    [403, 'An active paid membership is required', '/device/platform', 2], [403, 'Device request expired', '/device/platform', 2],
+    [403, 'Device is not active', '/device/activate', 2], [400, 'Device is not active', '/device/platform', 2],
+  ]) {
+    reply(status, message);
+    await assert.rejects(client.request('POST', path, {}), { code: status === 403 ? 'DEVICE_UNAUTHORIZED' : 'DEVICE_REQUEST_FAILED' });
+    assert.equal(unpaired, expected, `${status} ${message} ${path}`);
+  }
+});

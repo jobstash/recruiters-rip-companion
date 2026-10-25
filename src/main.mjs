@@ -51,7 +51,7 @@ app.commandLine.appendSwitch('use-mock-keychain');
 const directory = path.join(app.getPath('userData'), localOnly ? 'local-device' : 'device');
 const uiURL = pathToFileURL(path.join(root, 'ui', 'index.html')).href;
 const vault = createVault(directory);
-let window, client, nativeBridge, mcpBridge, documents, files, locked = true, failure = '';
+let window, client, nativeBridge, mcpBridge, documents, files, locked = true, failure = '', mcpClients = [];
 let pendingApproval, confirmation = Promise.resolve(), initializing, exiting = false, screenLocked = false, sleeping = false;
 let heartbeatTimer, heartbeatBusy = false, browserConnection = 'pending', queuedPairing, pairingReturn;
 let sessionEpoch = 0, careerViewRevision = 0;
@@ -165,9 +165,9 @@ function setup() {
 }
 function localState() {
   const publicState = status();
-  if (locked) return { ...publicState, failure, browserConnection };
+  if (locked) return { ...publicState, failure, browserConnection, mcpClients };
   const state = vault.get();
-  return { ...publicState, account: state.pairing?.account ?? null, origin: state.pairing?.origin ?? null, browserConnection, failure,
+  return { ...publicState, account: state.pairing?.account ?? null, origin: state.pairing?.origin ?? null, browserConnection, mcpClients, failure,
     setup: setup(), careerViewVersion: `${state.deviceId}:${sessionEpoch}:${careerViewRevision}`,
     prescan: { credentials: prescanCredentials.publicState(), run: prescan.status(),
       contextVersion: `${sessionEpoch}:${careerViewRevision}:${matchingProfileVersion(state.career ?? {})}` },
@@ -786,7 +786,7 @@ else {
     await showSettings();
     try { await updates.initialize(); } catch { /* The updater retains its actionable error; career access must still open. */ }
     await installConnections(); await startNativeBridge();
-    mcpBridge = await startMcpBroker({ directory, createServer: createSessionServer });
+    mcpBridge = await startMcpBroker({ directory, createServer: createSessionServer, onConnections: clients => { mcpClients = clients; emit(); } });
     try { await initialize(); } catch { failure = 'Local storage is unavailable. Check the companion data folder, then open local storage.'; }
     heartbeatTimer = setInterval(() => { if (locked || heartbeatBusy || !vault.get().pairing) return; heartbeatBusy = true; void client.request('POST', '/device/heartbeat', {}).catch(() => {}).finally(() => { heartbeatBusy = false; }); }, 30000);
     const lock = () => { browserForms.cancelAll(); void prescan.cancel(); void cancelUpdate().catch(error => { failure = safeFailure(error).message; }); sessionEpoch++; locked = true; pairingReturn?.close(); pendingApproval?.finish(false); mcpBridge.disconnect(); emit(); };

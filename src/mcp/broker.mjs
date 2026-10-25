@@ -5,17 +5,19 @@ import { writeFile, chmod, unlink } from 'node:fs/promises';
 import { privateDirectory } from '../vault.mjs';
 
 const MAX_FRAME = 16 * 1024 * 1024;
-export async function startMcpBroker({ directory, createServer }) {
+/** onConnections receives the client name each open session declared in its MCP initialize request ('' until it does). */
+export async function startMcpBroker({ directory, createServer, onConnections = () => {} }) {
   await privateDirectory(directory);
   const socketPath = path.join(directory, 'mcp.sock');
   try { await unlink(socketPath); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   const token = randomBytes(32).toString('hex');
-  const clients = new Set();
+  const clients = new Map();
+  const report = () => onConnections([...clients.values()]);
   const listener = net.createServer(socket => {
     let input = Buffer.alloc(0), authenticated = false, transport, server;
     const timer = setTimeout(() => socket.destroy(), 5000);
     const close = () => {
-      clearTimeout(timer); clients.delete(socket);
+      clearTimeout(timer); if (clients.delete(socket)) report();
       transport?.onclose?.(); void server?.close();
     };
     socket.once('close', close);
@@ -46,7 +48,11 @@ export async function startMcpBroker({ directory, createServer }) {
               async close() { socket.destroy(); },
             };
             server = createServer(); await server.connect(transport);
-            clients.add(socket); return;
+            clients.set(socket, ''); report(); return;
+          }
+          if (message?.method === 'initialize' && clients.get(socket) === '') {
+            const name = message.params?.clientInfo?.name;
+            if (typeof name === 'string') { clients.set(socket, name.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, 80)); report(); }
           }
           transport.onmessage?.(message);
         }).catch(() => socket.destroy());
@@ -59,7 +65,7 @@ export async function startMcpBroker({ directory, createServer }) {
   await writeFile(config, JSON.stringify({ socket: socketPath, token }), { mode: 0o600 });
   await chmod(config, 0o600);
   return {
-    disconnect() { for (const socket of clients) socket.destroy(); },
-    close() { for (const socket of clients) socket.destroy(); listener.close(); },
+    disconnect() { for (const socket of clients.keys()) socket.destroy(); },
+    close() { for (const socket of clients.keys()) socket.destroy(); listener.close(); },
   };
 }

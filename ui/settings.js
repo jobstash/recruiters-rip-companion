@@ -36,6 +36,20 @@ window.helpUI = {
   refresh(current) { $('help-version').textContent = typeof current?.updates?.version === 'string' ? `Version ${current.updates.version}` : ''; },
   clear() { $('help-version').textContent = ''; },
 };
+// Live local MCP sessions, named by the clientInfo each app declared when it connected.
+const chatApps = { chatgpt: /chatgpt|codex|openai/i, claude: /claude/i };
+function renderConnections(clients = []) {
+  const counts = { chatgpt: 0, claude: 0 }, other = new Set();
+  for (const name of clients) {
+    if (!name) continue;
+    const key = Object.keys(chatApps).find(app => chatApps[app].test(name));
+    if (key) counts[key]++; else other.add(name);
+  }
+  for (const [key, count] of Object.entries(counts))
+    $(`${key}-connection`).textContent = count ? `Connected now${count > 1 ? ` · ${count} sessions` : ''}` : 'Not connected';
+  $('other-connections').hidden = !other.size;
+  $('other-connections').textContent = other.size ? `Also connected: ${[...other].join(', ')}` : '';
+}
 async function refresh() {
   const request = ++stateRequest;
   try {
@@ -72,6 +86,7 @@ async function refresh() {
       void window.careerBrowser.refresh();
     }
     $('mcp-command').textContent = state.setup.command; $('mcp-config').textContent = state.setup.claudeConfig;
+    renderConnections(state.mcpClients);
     window.prescanUI?.refresh(state.prescan, state.paired);
     window.updatesUI?.refresh(state.updates);
     window.helpUI.refresh(state);

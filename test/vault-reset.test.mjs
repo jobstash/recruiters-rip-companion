@@ -120,3 +120,44 @@ test('flush waits for accepted writes without changing career data or identity',
   assert.equal(saved.career.revision, before.career.revision);
   assert.equal(saved.deviceId, before.deviceId);
 });
+
+test('a 3.4 keychain vault is imported once with its identity, pairing and career', async t => {
+  const { writeFile, readdir } = await import('node:fs/promises');
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'recruiters-legacy-vault-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const legacy = { version: 2, deviceId: '11111111-1111-4111-8111-111111111111', publicKey: 'legacy-public', privateKey: 'legacy-private', label: 'Old Mac',
+    pairing: { origin: 'https://recruiters.rip', account: { id: '7', label: 'Synthetic' } }, userPaused: false,
+    career: { version: 1, revision: 113, evidenceRevision: 22, profile: { headline: 'Synthetic headline' }, sources: { s: { text: 'cv' } }, facts: {}, applications: {}, receipts: {} }, identityArchives: {} };
+  await writeFile(path.join(directory, 'vault.bin'), `enc:${JSON.stringify(legacy)}`);
+  const decryptLegacy = bytes => { const text = bytes.toString('utf8'); assert.ok(text.startsWith('enc:')); return text.slice(4); };
+
+  await createVault(directory).open();
+  const vault = createVault(directory, { decryptLegacy }); await vault.open();
+  const state = vault.get();
+  assert.equal(state.deviceId, '11111111-1111-4111-8111-111111111111');
+  assert.deepEqual(state.pairing, legacy.pairing);
+  assert.equal(state.career.revision, 113);
+  assert.equal(state.career.profile.headline, 'Synthetic headline');
+  assert.equal('userPaused' in state, false);
+  assert.deepEqual((await readdir(directory)).sort(), ['vault.bin.imported', 'vault.json']);
+  assert.equal((await stat(path.join(directory, 'vault.json'))).mode & 0o777, 0o600);
+
+  const again = createVault(directory, { decryptLegacy: () => assert.fail('Imported twice') }); await again.open();
+  assert.equal(again.get().deviceId, '11111111-1111-4111-8111-111111111111');
+});
+
+test('a used vault is never replaced by a 3.4 vault, and an unreadable 3.4 vault keeps everything', async t => {
+  const { writeFile, readdir } = await import('node:fs/promises');
+  const { vault, directory } = await fixture(t);
+  await vault.update(state => { state.career.sources.one = { text: 'Current source sentinel' }; });
+  await writeFile(path.join(directory, 'vault.bin'), 'enc:{}');
+  const kept = createVault(directory, { decryptLegacy: () => assert.fail('Used vault was replaced') }); await kept.open();
+  assert.equal(kept.get().career.sources.one.text, 'Current source sentinel');
+
+  const fresh = await mkdtemp(path.join(os.tmpdir(), 'recruiters-legacy-locked-'));
+  t.after(() => rm(fresh, { recursive: true, force: true }));
+  await writeFile(path.join(fresh, 'vault.bin'), 'encrypted');
+  await assert.rejects(createVault(fresh, { decryptLegacy: () => { throw new Error('keychain denied'); } }).open(),
+    error => error.code === 'LEGACY_VAULT_LOCKED' && /Allow keychain access/.test(error.message));
+  assert.deepEqual(await readdir(fresh), ['vault.bin']);
+});

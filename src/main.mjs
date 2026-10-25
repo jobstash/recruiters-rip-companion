@@ -1,13 +1,13 @@
-import { app, BrowserWindow, ipcMain, powerMonitor, Menu, shell, clipboard, dialog } from 'electron';
+import { app, BrowserWindow, ipcMain, powerMonitor, Menu, shell, clipboard, dialog, safeStorage } from 'electron';
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { readFile, writeFile, chmod, unlink, mkdir } from 'node:fs/promises';
-import { watch } from 'node:fs';
+import { watch, existsSync } from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execFile } from 'node:child_process';
-import { createVault, privateDirectory } from './vault.mjs';
+import { createVault, privateDirectory, LEGACY_VAULT } from './vault.mjs';
 import { createDeviceClient } from './client.mjs';
 import { installNative } from './install-native.mjs';
 import { BROWSER_IDENTITIES } from './browser-identity.mjs';
@@ -45,12 +45,13 @@ const localOnly = packageMetadata.localProduct === true || (!app.isPackaged && p
 const browserIdentity = localOnly ? BROWSER_IDENTITIES.local : BROWSER_IDENTITIES.production;
 const productOrigin = browserIdentity.productOrigin;
 app.setName('Recruiters Companion');
-// Local data is plain private JSON; keep Chromium from creating an OS keychain item.
-app.commandLine.appendSwitch('use-mock-keychain');
 // Keep the storage directory name stable across the visible brand rename.
 const directory = path.join(app.getPath('userData'), localOnly ? 'local-device' : 'device');
+// Local data is plain private JSON; keep Chromium from creating an OS keychain item, except to import a 3.4 keychain-encrypted vault once.
+const legacyVault = existsSync(path.join(directory, LEGACY_VAULT));
+if (!legacyVault) app.commandLine.appendSwitch('use-mock-keychain');
 const uiURL = pathToFileURL(path.join(root, 'ui', 'index.html')).href;
-const vault = createVault(directory);
+const vault = createVault(directory, legacyVault ? { decryptLegacy: encrypted => safeStorage.decryptString(encrypted) } : {});
 let window, client, nativeBridge, mcpBridge, documents, files, locked = true, failure = '';
 let pendingApproval, confirmation = Promise.resolve(), initializing, exiting = false, screenLocked = false, sleeping = false;
 let heartbeatTimer, heartbeatBusy = false, browserConnection = 'pending', queuedPairing, pairingReturn;
@@ -148,7 +149,7 @@ function assertAvailable() {
   if (locked || screenLocked || sleeping) fail('LOCAL_LOCKED', 'Open the companion and unlock local storage.');
 }
 function safeFailure(error) {
-  const allowed = new Set(['DEVICE_OFFLINE', 'DEVICE_UNAUTHORIZED', 'DEVICE_REQUEST_FAILED', 'LOCAL_LOCKED', 'LOCAL_BUSY', 'IDENTITY_CHANGED', 'NOT_FOUND', 'INVALID_INPUT', 'PAIRING_REQUIRED', 'CANCELLED', 'HOST_UNAVAILABLE', 'HOST_INSTALL_FAILED', 'UPDATE_MANUAL_OPEN_FAILED']);
+  const allowed = new Set(['DEVICE_OFFLINE', 'DEVICE_UNAUTHORIZED', 'DEVICE_REQUEST_FAILED', 'LOCAL_LOCKED', 'LOCAL_BUSY', 'IDENTITY_CHANGED', 'LEGACY_VAULT_LOCKED', 'NOT_FOUND', 'INVALID_INPUT', 'PAIRING_REQUIRED', 'CANCELLED', 'HOST_UNAVAILABLE', 'HOST_INSTALL_FAILED', 'UPDATE_MANUAL_OPEN_FAILED']);
   const known = error instanceof CareerError || error?.publicUpdateError === true || allowed.has(error?.code);
   return { code: known ? error.code : 'LOCAL_OPERATION_FAILED', message: known ? error.message : 'This action could not be completed. Reopen the companion and try again.' };
 }
@@ -787,7 +788,7 @@ else {
     try { await updates.initialize(); } catch { /* The updater retains its actionable error; career access must still open. */ }
     await installConnections(); await startNativeBridge();
     mcpBridge = await startMcpBroker({ directory, createServer: createSessionServer });
-    try { await initialize(); } catch { failure = 'Local storage is unavailable. Check the companion data folder, then open local storage.'; }
+    try { await initialize(); } catch (error) { failure = error?.code === 'LEGACY_VAULT_LOCKED' ? error.message : 'Local storage is unavailable. Check the companion data folder, then open local storage.'; }
     heartbeatTimer = setInterval(() => { if (locked || heartbeatBusy || !vault.get().pairing) return; heartbeatBusy = true; void client.request('POST', '/device/heartbeat', {}).catch(() => {}).finally(() => { heartbeatBusy = false; }); }, 30000);
     const lock = () => { browserForms.cancelAll(); void prescan.cancel(); void cancelUpdate().catch(error => { failure = safeFailure(error).message; }); sessionEpoch++; locked = true; pairingReturn?.close(); pendingApproval?.finish(false); mcpBridge.disconnect(); emit(); };
     const unlock = () => { if (screenLocked || sleeping) return; void initialize().then(() => emit()).catch(() => { failure = 'Local storage could not be reopened. Your saved data has not been replaced.'; }); };

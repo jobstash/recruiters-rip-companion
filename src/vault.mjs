@@ -13,9 +13,15 @@ function identity() {
   const pair = generateKeyPairSync('ed25519');
   return { deviceId: randomUUID(), publicKey: pair.publicKey.export({ type: 'spki', format: 'der' }).toString('base64url'), privateKey: pair.privateKey.export({ type: 'pkcs8', format: 'pem' }) };
 }
+export const LEGACY_VAULT = 'vault.bin';
+const LEGACY_LOCKED = 'Allow keychain access for Recruiters Companion to import the career data saved by version 3.4. To start fresh instead, move vault.bin out of the device folder. Saved data has not been replaced.';
+const legacyLocked = () => Object.assign(new Error(LEGACY_LOCKED), { code: 'LEGACY_VAULT_LOCKED' });
+const validEnvelope = value => value?.version === 2 && value.deviceId && value.privateKey && value.publicKey;
+const pristine = value => !value.pairing && value.career?.revision === 0 && !Object.keys(value.career.sources ?? {}).length && !Object.keys(value.identityArchives ?? {}).length;
 /** Plain JSON in a private (0700) directory, file mode 0600: no OS keychain or at-rest encryption. */
-export function createVault(directory) {
+export function createVault(directory, { decryptLegacy } = {}) {
   const filename = path.join(directory, 'vault.json');
+  const legacyFilename = path.join(directory, LEGACY_VAULT);
   let state, writes = Promise.resolve();
   async function persist(value) {
     const json = JSON.stringify(value);
@@ -23,6 +29,18 @@ export function createVault(directory) {
     const temp = `${filename}.${randomUUID()}.tmp`;
     try { await writeFile(temp, json, { mode: 0o600, flag: 'wx' }); await rename(temp, filename); }
     finally { await unlink(temp).catch(error => { if (error.code !== 'ENOENT') throw error; }); }
+  }
+  /** Version 3.4 kept the same envelope encrypted with the OS keychain; import it once and keep the original as vault.bin.imported. */
+  async function importLegacy() {
+    let encrypted;
+    try { encrypted = await readFile(legacyFilename); } catch (error) { if (error.code === 'ENOENT') return null; throw legacyLocked(); }
+    let value;
+    try { value = JSON.parse(decryptLegacy(encrypted)); } catch { throw legacyLocked(); }
+    if (!validEnvelope(value)) throw legacyLocked();
+    delete value.userPaused;
+    await persist(value);
+    await rename(legacyFilename, `${legacyFilename}.imported`);
+    return value;
   }
   return {
     async open() {
@@ -32,9 +50,12 @@ export function createVault(directory) {
         const info = await lstat(filename);
         if (!info.isFile() || info.isSymbolicLink() || info.size > 130 * 1024 * 1024 || (process.getuid && info.uid !== process.getuid())) throw new Error('Invalid local storage.');
         loaded = JSON.parse(await readFile(filename, 'utf8'));
-        if (loaded.version !== 2 || !loaded.deviceId || !loaded.privateKey || !loaded.publicKey) throw new Error('Invalid local storage.');
+        if (!validEnvelope(loaded)) throw new Error('Invalid local storage.');
       } catch (error) {
         if (error.code !== 'ENOENT') throw new Error('Local storage could not be opened. Saved data has not been replaced.');
+      }
+      if (decryptLegacy && (!loaded || pristine(loaded))) loaded = await importLegacy() ?? loaded;
+      if (!loaded) {
         loaded = { version: 2, ...identity(), label: 'My computer', pairing: null, career: createCareerState(), identityArchives: {} };
         await persist(loaded);
       }

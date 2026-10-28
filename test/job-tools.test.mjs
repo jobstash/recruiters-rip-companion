@@ -138,7 +138,7 @@ test('listing captures are readable in Jobs but cannot be used as full originals
   assert.equal(listing.jobs[0].company, null);
   assert.equal(listing.jobs[0].publishedAt, null);
   const list = await f.browser.list({ kind: 'jobs' });
-  assert.deepEqual(list.items[0].card, { title: 'Unknown employer role', company: null, publishedAt: null, facts: [],
+  assert.deepEqual(list.items[0].card, { title: 'Unknown employer role', company: null, logoUrl: null, publishedAt: null, facts: [],
     stage: 'unscored', label: null, established: false, rank: null, prefilterScore: null, included: false, overridden: false, score: null, stale: false, status: null });
   const detail = await f.browser.read({ kind: 'jobs', id });
   assert.equal(detail.sections.find(section => section.heading === 'Captured listing text').text, 'A short card');

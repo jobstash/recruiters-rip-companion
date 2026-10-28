@@ -171,7 +171,7 @@ function jobVerdict({ reviewed, prescan }, card, minimumScore) {
     // The label is the whole actionable decision; repeating location, relocation and the saved review prose below it is noise.
     return { kind: 'ineligible', number: null, numberLabel: null, headline: card.label, detail: null, reason: null };
   }
-  const included = card.included ? 'Sent to agent' : 'Not sent';
+  const included = card.included ? 'Queued for AI review' : 'Skipped';
   const manual = card.overridden ? ' · manual' : '';
   if (card.stage === 'prefilter') {
     const score = prescanScore(prescan);
@@ -181,7 +181,7 @@ function jobVerdict({ reviewed, prescan }, card, minimumScore) {
       reason: staleReview ? joinFacts([staleReview, reason]) : reason };
   }
   return { kind: 'unscored', number: null, numberLabel: null, headline: `${included}${manual}`,
-    detail: prescan ? prescanStatuses[prescan.status] ?? 'Not pre-filtered' : 'Not pre-filtered yet',
+    detail: prescan ? prescanStatuses[prescan.status] ?? 'Not scored' : 'Not scored yet',
     reason: staleReview ? joinFacts([staleReview, reason]) : reason };
 }
 
@@ -236,8 +236,9 @@ function jobItem({ id, reviewed, prescan, imported, metadata }, inclusion, caree
     .filter(value => typeof value === 'string' && value).join(' · ');
   const facts = [...fact(role('seniority')), ...fact(pay), ...fact(locationFact(role('city') || role('location'), role('workMode'))),
     ...fact(role('commitment')), ...fact(role('classification'))];
+  const logoUrl = typeof role('logoUrl') === 'string' && /^https:\/\//.test(role('logoUrl')) ? role('logoUrl') : null;
   const card = {
-    title: roleTitle || title, company: company || null,
+    title: roleTitle || title, company: company || null, logoUrl,
     publishedAt: typeof publishedAt === 'string' && Number.isFinite(Date.parse(publishedAt)) ? publishedAt : null,
     facts, ...cardStage({ id, reviewed, prescan }, inclusion),
   };
@@ -269,9 +270,9 @@ function jobItem({ id, reviewed, prescan, imported, metadata }, inclusion, caree
         ? imported.description : 'No advert text was captured. Open the job page and capture its full advert.'),
     ] : []),
     ...(prescan ? [fields('Metadata', [
-      ['Pre-filter', joinFacts([prescanStatus(prescan), prescan.provider === 'openai' ? 'OpenAI Decisions' : prescan.provider,
+      ['Shortlist', joinFacts([prescanStatus(prescan), prescan.provider === 'openai' ? 'OpenAI Decisions' : prescan.provider,
         prescan.model, prescan.current ? 'current' : 'out of date'])],
-    ], 'No pre-filter metadata saved.')] : []),
+    ], 'No shortlist metadata saved.')] : []),
   ];
   return { id, title, heading: roleTitle || title, card, block, header, verdict, sections };
 }

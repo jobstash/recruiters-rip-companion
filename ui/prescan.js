@@ -9,12 +9,15 @@
   const runSteps = document.querySelector('.run-steps');
   const keyAction = document.getElementById('jobs-prescan-settings');
   const handover = document.getElementById('copy-review-prompt');
+  const reviewButtons = { codex: document.getElementById('review-codex'), claude: document.getElementById('review-claude') };
+  let review = { hosts: { codex: false, claude: false }, preferredHost: 'codex' };
   const range = element('range');
   const publicationRanges = [
     ['today', 'Today', 'today'], ['yesterday', 'Yesterday', 'since yesterday'], ['past_3_days', 'Past 3 days', 'in the past 3 days'],
     ['past_week', 'Past week', 'in the past week'], ['past_2_weeks', 'Past 2 weeks', 'in the past 2 weeks'],
-    ['past_month', 'Past month', 'in the past month'], ['all', 'Whole catalogue', 'any time'],
   ];
+  // Older presets saved by earlier versions fall back to the widest offered range.
+  const rangeIndexFor = value => { const index = publicationRanges.findIndex(([name]) => name === value); return index >= 0 ? index : ['past_month', 'all'].includes(value) ? publicationRanges.length - 1 : 2; };
   let current = null;
   let paired = false;
   let pending = false;
@@ -36,15 +39,15 @@
   const cost = value => `US$${value.toFixed(2)}`;
   const recovery = (code, detail) => {
     const text = (() => { switch (code) {
-      case 'CANCELLED': return 'Pre-filtering canceled.';
+      case 'CANCELLED': return 'Shortlisting canceled.';
       case 'LOCAL_LOCKED': return 'Unlock local storage before continuing.';
-      case 'PROFILE_INCOMPLETE': return 'Add your CV and career profile to start pre-filtering.';
+      case 'PROFILE_INCOMPLETE': return 'Add your CV and career profile before shortlisting.';
       case 'PAIRING_REQUIRED':
       case 'DEVICE_UNAUTHORIZED': return 'Check the account connection and job-feed membership.';
       case 'PRESCAN_CONTEXT_CHANGED':
       case 'IDENTITY_CHANGED':
       case 'PROFILE_CHANGED':
-      case 'RANKINGS_CHANGED': return 'Your profile or account changed. Pre-filter again.';
+      case 'RANKINGS_CHANGED': return 'Your profile or account changed. Shortlist again.';
       case 'PRESCAN_KEY_REQUIRED': return 'Save an OpenAI API key before starting.';
       case 'PRESCAN_INVALID_KEY':
       case 'PRESCAN_AUTH': return 'Replace the API key and check its OpenAI API permissions, then start again.';
@@ -71,12 +74,12 @@
     key.disabled = !entering || pending;
     const needsSetup = available && (!configured || !paired || keyError);
     const selectedRange = rangeDraft ?? run?.publicationRange ?? 'past_3_days';
-    const rangeIndex = publicationRanges.findIndex(([value]) => value === selectedRange);
-    const rangeLabel = publicationRanges[rangeIndex < 0 ? 2 : rangeIndex][1];
-    range.value = String(rangeIndex < 0 ? 2 : rangeIndex);
+    const rangeIndex = rangeIndexFor(selectedRange);
+    const rangeLabel = publicationRanges[rangeIndex][1];
+    range.value = String(rangeIndex);
     range.disabled = !available || pending;
     range.setAttribute('aria-valuetext', rangeLabel);
-    element('range-label').textContent = publicationRanges[rangeIndex < 0 ? 2 : rangeIndex][2];
+    element('range-label').textContent = publicationRanges[rangeIndex][2];
     element('save').disabled = !entering || pending || !key.value;
     element('save').textContent = configured ? 'Save new key' : 'Save key';
     element('key-label').textContent = configured ? 'New OpenAI API key' : 'OpenAI API key';
@@ -116,11 +119,23 @@
     keyAction.disabled = !available;
     element('start').classList.toggle('primary', currentStep === 'prefilter'); element('start').classList.toggle('ghost', currentStep !== 'prefilter');
     element('cancel').classList.toggle('primary', active); element('cancel').classList.toggle('ghost', !active);
-    handover.classList.toggle('primary', currentStep === 'handover'); handover.classList.toggle('ghost', currentStep !== 'handover');
+    // The next step is one click into the user's AI app when it is installed; Copy prompt is the fallback for any other host.
+    const installed = ['codex', 'claude'].filter(host => review.hosts[host] === true);
+    const primaryHost = installed.includes(review.preferredHost) ? review.preferredHost : installed[0] ?? null;
+    for (const host of ['codex', 'claude']) {
+      const button = reviewButtons[host];
+      button.hidden = !installed.includes(host);
+      button.classList.toggle('primary', currentStep === 'handover' && host === primaryHost);
+      button.classList.toggle('ghost', !(currentStep === 'handover' && host === primaryHost));
+    }
+    handover.classList.toggle('primary', currentStep === 'handover' && !primaryHost);
+    handover.classList.toggle('ghost', currentStep !== 'handover' && !primaryHost);
+    handover.classList.toggle('text', Boolean(primaryHost));
+    document.getElementById('review-help').textContent = primaryHost ? 'Opens a new conversation with the review prompt filled in. You send it.' : 'Paste the prompt into Codex or Claude with recruiters.rip enabled.';
     // Blocked jobs stay in the scope total but are never pre-filtered.
     const blockedPart = () => Number.isSafeInteger(preview.blocked) && preview.blocked > 0 ? ` · ${count(preview.blocked)} blocked` : '';
-    const scopeLine = () => preview.jobCount === 0 ? `${count(preview.totalCatalogue)} jobs in scope${blockedPart()} · all pre-filtered`
-      : `${count(preview.totalCatalogue)} jobs in scope${blockedPart()} · ${count(preview.jobCount)} to pre-filter · ~${cost(preview.estimatedCostUsd)}`;
+    const scopeLine = () => preview.jobCount === 0 ? `${count(preview.totalCatalogue)} jobs in scope${blockedPart()} · all scored`
+      : `${count(preview.totalCatalogue)} jobs in scope${blockedPart()} · ${count(preview.jobCount)} to score · ~${cost(preview.estimatedCostUsd)}`;
     element('preview').textContent = !available ? 'Open local storage to load the job count.'
       : running || starting ? ''
         : rangeDraft !== null ? pending ? 'Saving publication time…' : 'Job count needs updating.'
@@ -131,9 +146,9 @@
     // The state line is the first thing in the section: it says whether pre-filtering can run and which key does it.
     const since = savedDate(credentials?.savedAt);
     element('key-status').textContent = !available ? 'Open local storage to configure the optional Decisions API.'
-      : !configured ? 'No API key saved. Job pre-filtering is off until you add an OpenAI API key.'
+      : !configured ? 'No API key saved. Shortlisting is off until you add an OpenAI API key.'
         : replacing ? `The key …${credentials.keyHint} stays active until you save a new one.`
-          : `API key saved${since ? ` on ${since}` : ''}. Job pre-filtering can run.`;
+          : `API key saved${since ? ` on ${since}` : ''}. Shortlisting can run.`;
 
     if (!available) { element('progress').textContent = ''; element('recovery').textContent = ''; return; }
     const blocked = Number.isSafeInteger(run.blocked) && run.blocked >= 0 ? run.blocked : 0;
@@ -144,12 +159,12 @@
     const spent = Number.isFinite(run.estimatedCostUsd) && run.estimatedCostUsd > 0 ? ` · ${cost(run.estimatedCostUsd)}` : '';
     // Live progress only; a finished run is summarized by the scope line above.
     element('progress').textContent = running || starting
-      ? `Pre-filtering ${count(checked)}/${scope}${spent}` : '';
+      ? `Scoring ${count(checked)}/${scope}${spent}` : '';
     let advice = '';
     if (run.status === 'failed') advice = recovery(run.lastError?.code, run.lastError?.status ? `HTTP ${run.lastError.status}` : undefined);
-    if (run.status === 'cancelled' || run.status === 'interrupted') advice = `Scan stopped at ${count(checked)}/${scope}${spent}. Start again to continue.`;
-    if (run.status === 'stale') advice = 'Profile changed. Pre-filter again.';
-    if (run.status === 'completed' && run.unavailable) advice = `${count(run.unavailable)} jobs could not be pre-filtered.`;
+    if (run.status === 'cancelled' || run.status === 'interrupted') advice = `Stopped at ${count(checked)}/${scope}${spent}. Start again to continue.`;
+    if (run.status === 'stale') advice = 'Profile changed. Shortlist again.';
+    if (run.status === 'completed' && run.unavailable) advice = `${count(run.unavailable)} jobs could not be scored.`;
     element('recovery').textContent = advice;
   }
 
@@ -201,7 +216,8 @@
     render();
   }
 
-  function refresh(publicState, accountPaired = paired) {
+  function refresh(publicState, accountPaired = paired, reviewState = review) {
+    if (reviewState?.hosts) review = reviewState;
     if (!publicState?.credentials || !publicState?.run) { clear(); return; }
     const nextContext = JSON.stringify([publicState.contextVersion, publicState.credentials.credentialVersion,
       publicState.run.runId, publicState.run.status, publicState.run.publicationRange, accountPaired]);
@@ -219,7 +235,7 @@
   async function invoke(op, input) {
     const response = await window.companion.invoke(op, input);
     if (!response.ok) {
-      const error = new Error(response.error?.message || 'Pre-filtering failed.');
+      const error = new Error(response.error?.message || 'Shortlisting failed.');
       error.code = response.error?.code;
       throw error;
     }
@@ -245,7 +261,7 @@
     pending = true;
     starting = op === 'prescan-start';
     if (starting || op === 'prescan-range-set') invalidatePreview();
-    message.textContent = starting ? 'Starting pre-filtering…' : 'Saving…';
+    message.textContent = starting ? 'Starting…' : 'Saving…';
     render();
     try {
       await invoke(op, input);
@@ -253,14 +269,14 @@
       message.textContent = success;
     } catch (error) {
       if (token !== generation) return;
-      message.textContent = error.message === 'Pre-filtering failed.' ? recovery(error.code) : error.message;
+      message.textContent = error.message === 'Shortlisting failed.' ? recovery(error.code) : error.message;
     } finally {
       if (token === generation) {
         try { await readState(token); }
         catch {
           if (token === generation) {
             clear();
-            element('message').textContent = 'Could not load pre-filtering. Reopen the companion.';
+            element('message').textContent = 'Could not load shortlisting. Reopen the companion.';
           }
         }
       }
@@ -291,7 +307,7 @@
     const input = { provider: 'openai', apiKey: key.value };
     key.value = '';
     replacing = false;
-    void perform('prescan-key-save', input, 'Decisions API key saved. Job pre-filtering can run.');
+    void perform('prescan-key-save', input, 'Decisions API key saved. Shortlisting can run.');
   });
   element('replace').addEventListener('click', () => {
     if (pending || !current?.credentials.configured) return;
@@ -307,7 +323,7 @@
   element('remove').addEventListener('click', () => {
     key.value = '';
     replacing = false;
-    void perform('prescan-key-remove', { provider: 'openai' }, 'API key removed. Job pre-filtering is off.');
+    void perform('prescan-key-remove', { provider: 'openai' }, 'API key removed. Shortlisting is off.');
   });
   element('start').addEventListener('click', () => {
     if (pending || !current) return;

@@ -133,19 +133,25 @@ main { flex: 1; min-height: 0; overflow: auto; padding: var(--spacing-32) var(--
 .career-record-summary { font: 400 13px/1.6 var(--font-geist-mono); color: var(--color-smoke); white-space: pre-wrap; }
 /* Job cards: three plain lines (title, company · date, facts) and one right column that answers "is this job in the next run?"
    A number appears only after an agent review. */
-.career-card .career-record { flex: 1 1 auto; min-width: 0; padding: 20px var(--spacing-24); }
+/* Card: [Review switch] [mark + three lines] [figure]. The switch leads because it is the user's decision about the row;
+   the figure trails because it is what the list is sorted by. */
+.career-card .career-record { flex: 1 1 auto; flex-direction: row; align-items: flex-start; gap: var(--spacing-16); min-width: 0; padding: 20px var(--spacing-16) 20px 0; }
+.career-card-lead { flex: none; display: flex; align-items: flex-start; width: 72px; padding: 20px 0 20px var(--spacing-24); }
+.career-card-mark { flex: none; display: grid; place-items: center; width: 36px; height: 36px; border: 1px solid var(--color-facet); background: var(--color-surface); color: var(--color-smoke); font: 500 14px/1 var(--font-geist-mono); overflow: hidden; }
+.career-card-logo { position: absolute; width: 36px; height: 36px; object-fit: contain; background: var(--color-light); }
+.career-card-mark { position: relative; }
 .career-card-body { display: flex; flex-direction: column; gap: var(--spacing-8); min-width: 0; }
 .career-card .career-record-title { font-size: 15px; }
 .career-card-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 var(--spacing-8); font: 400 13px/1.4 var(--font-geist); color: var(--color-ink-2); }
 .career-card-company + .career-card-date::before { content: "·"; margin-right: var(--spacing-8); color: var(--color-smoke); }
 .career-card-date { font-variant-numeric: tabular-nums; color: var(--color-ink); }
 .career-card-facts { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 400 12px/1.5 var(--font-geist-mono); color: var(--color-smoke); }
-.career-card-side { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; width: 128px; padding: 20px var(--spacing-24) 20px 0; text-align: right; }
+.career-card-side { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; width: 112px; padding: 20px var(--spacing-24) 20px 0; text-align: right; }
 .career-card-figure { font: 500 24px/1 var(--font-geist-mono); font-variant-numeric: tabular-nums; letter-spacing: -.02em; color: var(--color-ink); }
 .career-card-caption { font: 400 10px/1.4 var(--font-geist-mono); letter-spacing: .02em; color: var(--color-smoke); }
 /* Ineligible job: the saved verdict stands where the number would, in ink, wrapping within the column if it must. */
 .career-card-verdict { font-size: 12px; color: var(--color-ink); white-space: normal; overflow-wrap: anywhere; }
-.career-card-include { display: flex; flex-direction: row-reverse; align-items: center; gap: var(--spacing-8); min-height: 24px; margin-top: 4px; white-space: nowrap; cursor: pointer; }
+.career-card-include { display: flex; flex-direction: column; align-items: center; gap: 4px; min-height: 24px; white-space: nowrap; cursor: pointer; }
 .career-card-reason { white-space: normal; overflow-wrap: anywhere; }
 .career-card-include:hover .career-card-caption { color: var(--color-ink); }
 /* Square switch: a native checkbox drawn as a ruled square; checked fills the inner square with ink. */
@@ -282,8 +288,9 @@ dialog::backdrop { background: color-mix(in oklab, var(--color-void) 80%, transp
   .career-categories button { padding-inline: var(--spacing-8); }
   .career-reader-content dl { grid-template-columns: minmax(0, 1fr); gap: var(--spacing-8); }
   .career-reader-content dd + dt { margin-top: var(--spacing-8); }
-  .career-card .career-record { padding: var(--spacing-16); }
-  .career-card-side { width: 112px; padding: var(--spacing-16) var(--spacing-16) var(--spacing-16) 0; }
+  .career-card .career-record { gap: var(--spacing-8); padding: var(--spacing-16) var(--spacing-8) var(--spacing-16) 0; }
+  .career-card-lead { width: 60px; padding: var(--spacing-16) 0 var(--spacing-16) var(--spacing-16); }
+  .career-card-side { width: 96px; padding: var(--spacing-16) var(--spacing-16) var(--spacing-16) 0; }
   .career-cutoff { padding-inline: var(--spacing-16); }
   .run-steps { grid-template-columns: minmax(0, 1fr); gap: var(--spacing-16); }
   .career-chart-row { grid-template-columns: minmax(80px, 96px) minmax(0, 1fr) 3ch; gap: var(--spacing-8); }

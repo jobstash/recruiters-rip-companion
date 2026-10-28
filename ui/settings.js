@@ -88,7 +88,7 @@ async function refresh() {
     }
     $('mcp-command').textContent = state.setup.command; $('mcp-config').textContent = state.setup.claudeConfig;
     renderConnections(state.mcpClients);
-    window.prescanUI?.refresh(state.prescan, state.paired);
+    window.prescanUI?.refresh(state.prescan, state.paired, state.review);
     window.updatesUI?.refresh(state.updates);
     window.helpUI.refresh(state);
     if (requestedSection) { const section = requestedSection; requestedSection = null; openSettings(section); }
@@ -106,7 +106,7 @@ async function action(op, success) {
   if (busy) return;
   busy = true;
   // Browser instances manage their own controls; the Jobs toolbar's Copy review prompt is an ordinary action.
-  const controls = [...document.querySelectorAll('button')].filter(button => (!button.closest('#me-browser, #career-browser, #views, #prescan, #update-settings') || button.id === 'copy-review-prompt') && !['approval-cancel', 'approval-allow'].includes(button.id));
+  const controls = [...document.querySelectorAll('button')].filter(button => (!button.closest('#me-browser, #career-browser, #views, #prescan, #update-settings') || ['copy-review-prompt', 'review-codex', 'review-claude'].includes(button.id)) && !['approval-cancel', 'approval-allow'].includes(button.id));
   const disabled = controls.map(control => control.disabled); controls.forEach(control => { control.disabled = true; });
   try {
     const result = await invoke(op);
@@ -128,6 +128,8 @@ for (const [id, op, message] of [
   ['open-extension-folder', 'open-extension-folder', 'Extension folder opened. In Chrome’s Manage extensions, enable Developer mode and choose Load unpacked.'],
   ['import-cv', 'import-cv', result => result.cancelled ? 'Import canceled.' : 'CV imported.'],
   ['copy-review-prompt', 'copy-review-prompt', 'Copied. Paste into Codex or Claude.'],
+  ['review-codex', 'review-codex', 'Codex opened with the review prompt. Send it to start.'],
+  ['review-claude', 'review-claude', 'Claude opened with the review prompt. Send it to start.'],
   ['open-exports', 'open-exports', 'Export folder opened.'],
   ['backup', 'backup', result => result.exported ? 'Backup exported.' : 'Export canceled.'],
   ['delete-rankings', 'delete-rankings', 'Job assessments cleared.'],

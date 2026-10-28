@@ -9,6 +9,7 @@ import { fail } from './mcp/state.mjs';
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const hosts = ['claude', 'codex'];
 const labels = { claude: 'Claude Desktop', codex: 'ChatGPT desktop (Codex)' };
+export const REVIEW_PROMPT = 'Use the recruiters.rip skill to review the jobs queued for you and show me the best matches.';
 // Keep application tools distinct from an existing user-scoped registration,
 // which may point to another Companion identity and override the project name.
 const applicationConnection = 'recruiters-rip-applications';
@@ -82,13 +83,30 @@ export function createApplicationLauncher({ directory, command, openExternal, ho
         fail('HOST_UNAVAILABLE', `Install ${labels[host]} on this Mac, sign in, then try again, or choose another installed host.`);
       await configure(host);
       const prompt = `Call career_application_preparation_read with {"preparationId":"${preparationId}"} using only the ${applicationConnection} MCP connection for this workspace. Follow its instructions to prepare and save this application's CV, cover letter and written answers. Use the original job description and saved career evidence; do not invent facts. Leave submission to me. If that connection or its tools are unavailable, ask me to approve the workspace and enable ${applicationConnection}; do not use another Companion connection or substitute guessed content.`;
-      const url = new URL(host === 'claude' ? 'claude://code/new' : 'codex://threads/new');
-      url.searchParams.set(host === 'claude' ? 'q' : 'prompt', prompt);
-      url.searchParams.set(host === 'claude' ? 'folder' : 'path', workspace);
-      if (host === 'codex') url.searchParams.set('mode', 'codex');
+      const url = hostUrl(host, prompt);
       try { await openExternal(url.href); }
       catch { fail('HOST_LAUNCH_FAILED', `Could not open ${labels[host]}. Open it once and sign in, then try again. Your preparation request is saved; no prompt was sent by Companion.`); }
       return { opened: true, host, requiresSend: true };
     },
+    /** Open a new host conversation prefilled with the job-review prompt. The user still sends it. */
+    async review(input) {
+      if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => key !== 'host') || !hosts.includes(input.host))
+        fail('INVALID_INPUT', 'Choose Claude or Codex.');
+      const { host } = input;
+      if (await hostAvailable(host) !== true)
+        fail('HOST_UNAVAILABLE', `Install ${labels[host]} on this Mac, sign in, then try again, or copy the prompt instead.`);
+      await configure(host);
+      const prompt = `${REVIEW_PROMPT} If the skill is unavailable, use the ${applicationConnection} MCP connection for this workspace and its career_match_jobs tool.`;
+      try { await openExternal(hostUrl(host, prompt).href); }
+      catch { fail('HOST_LAUNCH_FAILED', `Could not open ${labels[host]}. Open it once and sign in, then try again, or copy the prompt instead.`); }
+      return { opened: true, host, requiresSend: true };
+    },
   };
+  function hostUrl(host, prompt) {
+    const url = new URL(host === 'claude' ? 'claude://code/new' : 'codex://threads/new');
+    url.searchParams.set(host === 'claude' ? 'q' : 'prompt', prompt);
+    url.searchParams.set(host === 'claude' ? 'folder' : 'path', workspace);
+    if (host === 'codex') url.searchParams.set('mode', 'codex');
+    return url;
+  }
 }

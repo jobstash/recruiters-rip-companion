@@ -301,8 +301,9 @@ export function matchingCatalogueJobs(catalogue, window) {
         typeof job.company !== 'string' || !publicationInWindow(job.publishedAt, window)))
     fail('INVALID_CATALOGUE', 'The platform returned an incomplete catalogue. No new rankings were saved; request the catalogue again.');
   const jobs = catalogue.jobs.map(job => {
-    const { id, title, company, publishedAt, applyUrl } = job;
-    return { id, title, company, publishedAt, ...(typeof applyUrl === 'string' ? { applyUrl } : {}), ...displayTerms(job) };
+    const { id, title, company, publishedAt, applyUrl, logoUrl } = job;
+    return { id, title, company, publishedAt, ...(typeof applyUrl === 'string' ? { applyUrl } : {}),
+      ...(typeof logoUrl === 'string' && /^https:\/\//.test(logoUrl) && logoUrl.length <= 2000 ? { logoUrl } : {}), ...displayTerms(job) };
   });
   return { jobs, window, total: catalogue.total };
 }

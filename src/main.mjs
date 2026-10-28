@@ -37,7 +37,7 @@ import { createFormTools, currentForm, formEvidence } from './mcp/form-tools.mjs
 import { createBrowserForms } from './browser-forms.mjs';
 import { createUpdateController } from './updates.mjs';
 import { createApplicationWorkflow, createApplicationPreparationTools } from './application-workflow.mjs';
-import { createApplicationLauncher } from './application-launcher.mjs';
+import { createApplicationLauncher, REVIEW_PROMPT } from './application-launcher.mjs';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const packageMetadata = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
@@ -164,6 +164,9 @@ function setup() {
   return { command, claudeConfig: JSON.stringify({ mcpServers: { 'recruiters-rip': { command, args: [] } } }, null, 2),
     claudePackage: path.join(app.isPackaged ? root.replace(/app\.asar$/, 'app.asar.unpacked') : root, 'src', 'generated', localOnly ? 'recruiters-rip-local.mcpb' : 'recruiters-rip.mcpb') };
 }
+// Installed review hosts are read once per session and whenever the review buttons are used; opening Jobs does not stat the disk every refresh.
+let reviewHosts = { claude: false, codex: false };
+async function refreshReviewHosts() { try { reviewHosts = await applicationAccess().launcher.available(); } catch { /* keeps the last known value */ } }
 function localState() {
   const publicState = status();
   if (locked) return { ...publicState, failure, browserConnection, mcpClients };
@@ -173,6 +176,7 @@ function localState() {
     prescan: { credentials: prescanCredentials.publicState(), run: prescan.status(),
       contextVersion: `${sessionEpoch}:${careerViewRevision}:${matchingProfileVersion(state.career ?? {})}` },
     updates: { ...updates.state(), blocked: paidWorkActive() || updateInstalling },
+    review: { hosts: reviewHosts, preferredHost: ['claude', 'codex'].includes(state.browserPreferences?.applicationHost) ? state.browserPreferences.applicationHost : reviewHosts.codex ? 'codex' : 'claude' },
     introductions: introductionsStatus(state.career ?? {}),
     approval: pendingApproval ? { id: pendingApproval.id, title: pendingApproval.title, detail: pendingApproval.detail } : null };
 }
@@ -725,7 +729,15 @@ async function settingsOperation(op, input) {
       careerViewRevision++;
       result = { cancelled: Boolean(result.cancelled) };
     }
-    else if (op === 'copy-review-prompt') clipboard.writeText('Use the recruiters.rip skill to review the jobs sent to you and show me the best matches.');
+    else if (op === 'copy-review-prompt') clipboard.writeText(REVIEW_PROMPT);
+    else if (op === 'review-codex' || op === 'review-claude') {
+      const host = op === 'review-codex' ? 'codex' : 'claude';
+      const access = applicationAccess();
+      result = await access.launcher.review({ host });
+      access.assertAvailable(false);
+      await access.store.update(next => { next.browserPreferences ??= {}; next.browserPreferences.applicationHost = host; });
+      await refreshReviewHosts();
+    }
     else if (op === 'copy-command') clipboard.writeText(setup().command);
     else if (op === 'copy-config') clipboard.writeText(setup().claudeConfig);
     else if (op === 'install-chatgpt') result = await installChatGptPlugin({ directory, root: app.isPackaged ? root.replace(/app\.asar$/, 'app.asar.unpacked') : root, localOnly, command: setup().command });
@@ -794,6 +806,7 @@ else {
     await installConnections(); await startNativeBridge();
     mcpBridge = await startMcpBroker({ directory, createServer: createSessionServer, onConnections: clients => { mcpClients = clients; emit(); } });
     try { await initialize(); } catch (error) { failure = error?.code === 'LEGACY_VAULT_LOCKED' ? error.message : 'Local storage is unavailable. Check the companion data folder, then open local storage.'; }
+    await refreshReviewHosts();
     heartbeatTimer = setInterval(() => { if (locked || heartbeatBusy || !vault.get().pairing) return; heartbeatBusy = true; void client.request('POST', '/device/heartbeat', {}).catch(() => {}).finally(() => { heartbeatBusy = false; }); }, 30000);
     const lock = () => { browserForms.cancelAll(); void prescan.cancel(); void cancelUpdate().catch(error => { failure = safeFailure(error).message; }); sessionEpoch++; locked = true; pairingReturn?.close(); pendingApproval?.finish(false); mcpBridge.disconnect(); emit(); };
     const unlock = () => { if (screenLocked || sleeping) return; void initialize().then(() => emit()).catch(() => { failure = 'Local storage could not be reopened. Your saved data has not been replaced.'; }); };

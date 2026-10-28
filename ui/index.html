@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self'; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-src 'none'; object-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' https:; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-src 'none'; object-src 'none'">
 <title>Recruiters.rip Companion</title>
 <link rel="stylesheet" href="design-tokens.css">
 <link rel="stylesheet" href="settings.css">
@@ -88,12 +88,12 @@
 <p class="run-step-name"><span class="run-step-number">2</span>Recency</p>
 <div class="prescan-publication">
 <label for="prescan-range" class="run-step-state">Published <span id="prescan-range-label">Past 3 days</span></label>
-<input id="prescan-range" type="range" min="0" max="6" step="1" value="2" aria-valuetext="Past 3 days" aria-describedby="prescan-range-help" disabled>
+<input id="prescan-range" type="range" min="0" max="4" step="1" value="2" aria-valuetext="Past 3 days" aria-describedby="prescan-range-help" disabled>
 <p id="prescan-range-help" class="run-step-help">Today or the past 3 days work best: older listings already have many applicants.</p>
 </div>
 </li>
 <li id="run-step-prefilter" class="run-step">
-<p class="run-step-name"><span class="run-step-number">3</span>Pre-filter</p>
+<p class="run-step-name"><span class="run-step-number">3</span>Shortlist</p>
 <p id="prescan-preview" class="run-step-state" role="status" aria-live="polite" aria-atomic="true">Loading job count…</p>
 <p id="prescan-progress" class="run-step-state" role="status" aria-live="polite" aria-atomic="true"></p>
 <div class="actions"><button id="prescan-start" class="ghost" type="button" aria-describedby="prescan-preview" disabled>Start</button><button id="prescan-cancel" class="ghost" type="button" hidden>Stop</button></div>
@@ -101,7 +101,7 @@
 <p id="prescan-message" class="run-step-help" role="status" aria-live="polite"></p>
 </li>
 <li id="run-step-handover" class="run-step">
-<p class="run-step-name"><span class="run-step-number">4</span>Send to agent</p>
+<p class="run-step-name"><span class="run-step-number">4</span>AI review</p>
 <div id="career-surface" class="career-surface">
 <div class="career-surface-control">
 <label for="career-minimum-score" class="run-step-state">Minimum score</label>
@@ -110,7 +110,8 @@
 </div>
 <p id="career-surface-sentence" class="run-step-help" role="status"></p>
 </div>
-<div class="actions"><button id="copy-review-prompt" class="ghost" type="button">Copy prompt</button></div>
+<div class="actions"><button id="review-codex" class="ghost" type="button" hidden>Open Codex</button><button id="review-claude" class="ghost" type="button" hidden>Open Claude</button><button id="copy-review-prompt" class="ghost" type="button">Copy prompt</button></div>
+<p id="review-help" class="run-step-help">Opens a new conversation with the review prompt filled in. You send it.</p>
 </li>
 </ol>
 </section>

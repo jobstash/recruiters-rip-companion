@@ -12,7 +12,7 @@
   // Why an unscored job has no score. The caption stands where the number would be.
   const statusWords = { unavailable: 'Advert unavailable', refused: 'Declined', oversize: 'Too large',
     incompatible_location: 'Location conflict predicted', below_minimum: 'Below your minimum' };
-  const statusWord = card => statusWords[card.status] ?? 'Not pre-filtered';
+  const statusWord = card => statusWords[card.status] ?? 'Not scored';
   const dateFormat = new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium', timeZone: 'UTC' });
   const displayDate = value => typeof value === 'string' && Number.isFinite(Date.parse(value)) ? dateFormat.format(new Date(value)) : null;
   const integer = value => value.toLocaleString('en-GB');
@@ -26,7 +26,7 @@
   };
 
   function cardSpoken(card, date) {
-    const sent = card.included ? 'sent to agent' : 'not sent';
+    const sent = card.included ? 'queued for AI review' : 'skipped';
     const stage = card.stage === 'reviewed'
       ? [`fit ${card.score === null ? 'not saved' : `${card.score} of 100`}`, card.stale ? 'out of date' : null]
       : card.stage === 'ineligible'
@@ -36,9 +36,27 @@
           : [statusWord(card).toLowerCase(), sent];
     return [card.title, card.company, ...stage, date ? `published ${date}` : 'publication date not stated'].filter(Boolean).join(', ');
   }
-  /** Body goes inside the record button; the right column (the number the list is ordered by, then the Send switch) is a
-   *  sibling so the checkbox is never nested inside the button. */
-  function renderCard(item, button, side, onInclude) {
+  /** Row anatomy, left to right: the Review switch (own column, never inside the button), the record button with the
+   *  company mark and three text lines, then the number the list is sorted by. The switch column stays for reviewed and
+   *  ineligible rows so titles align. */
+  function renderLogo(card) {
+    const mark = node('span', 'career-card-mark');
+    const initial = (card.company ?? '').trim().charAt(0).toUpperCase();
+    mark.textContent = initial || '·';
+    if (typeof card.logoUrl === 'string' && card.logoUrl.startsWith('https://')) {
+      const image = document.createElement('img');
+      image.className = 'career-card-logo';
+      image.alt = '';
+      image.decoding = 'async';
+      image.loading = 'lazy';
+      image.referrerPolicy = 'no-referrer';
+      image.addEventListener('error', () => image.remove(), { once: true });
+      image.src = card.logoUrl;
+      mark.append(image);
+    }
+    return mark;
+  }
+  function renderCard(item, button, lead, side, onInclude) {
     const card = item.card;
     const date = displayDate(card.publishedAt);
     const body = node('span', 'career-card-body');
@@ -49,7 +67,7 @@
     body.append(meta);
     const facts = Array.isArray(card.facts) ? card.facts.filter(fact => typeof fact === 'string' && fact) : [];
     if (facts.length) body.append(node('span', 'career-card-facts', facts.join(' · ')));
-    button.append(body);
+    button.append(renderLogo(card), body);
     button.setAttribute('aria-label', cardSpoken(card, date));
 
     if (card.stage === 'reviewed') {
@@ -62,7 +80,7 @@
       side.append(node('span', 'career-card-caption career-card-verdict', card.label));
       return;
     }
-    // The number the Score sort orders by, in the column, so the cutoff rule can be read against it.
+    // The number the Score sort orders by, so the cutoff rule can be read against it.
     if (card.stage === 'prefilter' && Number.isInteger(card.prefilterScore) && card.prefilterScore >= 0) {
       side.append(node('span', 'career-card-figure', String(card.prefilterScore)),
         node('span', 'career-card-caption', card.stale ? 'Score · out of date' : 'Score'));
@@ -73,13 +91,13 @@
     const checkbox = node('input', 'career-include');
     checkbox.type = 'checkbox';
     checkbox.checked = card.included === true;
-    checkbox.setAttribute('aria-label', `Send ${card.title} to the agent`);
+    checkbox.setAttribute('aria-label', `Queue ${card.title} for AI review`);
     checkbox.dataset.id = item.id;
     checkbox.addEventListener('click', event => event.stopPropagation());
     checkbox.addEventListener('change', event => { void onInclude(item, event.target.checked, event.target); });
     label.addEventListener('click', event => event.stopPropagation());
-    label.append(checkbox, node('span', 'career-card-caption', card.overridden ? 'Send · manual' : 'Send'));
-    side.append(label);
+    label.append(checkbox, node('span', 'career-card-caption', card.overridden ? 'Review · manual' : 'Review'));
+    lead.append(label);
   }
   function renderRow(item, button) {
     button.append(node('span', 'career-record-title', item.title));
@@ -153,7 +171,7 @@
       } catch (error) {
         keepPlace = null;
         if (control) control.checked = item.card.included === true;
-        listStatus.textContent = `Could not change sending. ${error.message}`;
+        listStatus.textContent = `Could not change the review queue. ${error.message}`;
       }
     }
 
@@ -244,7 +262,7 @@
       checkbox.className = 'career-include';
       checkbox.checked = card.included === true;
       checkbox.addEventListener('change', () => { void setInclusion(item, checkbox.checked, checkbox); });
-      label.append(checkbox, node('span', '', card.status === 'incompatible_location' ? 'Send anyway' : 'Send to agent'));
+      label.append(checkbox, node('span', '', card.status === 'incompatible_location' ? 'Review anyway' : 'Queue for AI review'));
       actions.append(label);
       if (card.overridden) {
         const reset = node('button', 'text', 'Reset');
@@ -421,13 +439,13 @@
       if (document.activeElement !== slider) showSliderValue(inclusion.minimumScore);
       const jobs = `${integer(inclusion.candidates)} ${inclusion.candidates === 1 ? 'job' : 'jobs'}`;
       surfaceSentence.textContent = inclusion.scored === null
-        ? `All ${jobs} will be sent`
-        : `${integer(inclusion.included)} of ${jobs} will be sent${inclusion.stale ? ' · scored before your profile changed; pre-filter again' : ''}`;
+        ? `Your AI reviews all ${jobs}. Shortlist first to skip poor matches.`
+        : `Your AI reviews ${integer(inclusion.included)} of ${jobs} and skips the rest${inclusion.stale ? ' · scored before your profile changed; shortlist again' : ''}.`;
     }
     function renderCutoff(inclusion, index) {
       const divider = document.createElement('li');
       divider.className = 'career-cutoff';
-      divider.append(node('span', 'career-cutoff-text', `Below minimum score ${inclusion.minimumScore} · not sent`));
+      divider.append(node('span', 'career-cutoff-text', `Below minimum score ${inclusion.minimumScore} · skipped`));
       if (slider) {
         const change = node('button', 'text', 'Change');
         change.type = 'button';
@@ -470,10 +488,10 @@
           button.setAttribute('aria-controls', `${prefix}-reader`);
           if (item.card && typeof item.card === 'object') {
             row.className = 'career-row career-card';
-            const side = node('span', 'career-card-side');
-            renderCard(item, button, side, setInclusion);
-            row.append(button, side);
-            if (place?.focusId === item.id) refocus = side.querySelector('input');
+            const lead = node('span', 'career-card-lead'), side = node('span', 'career-card-side');
+            renderCard(item, button, lead, side, setInclusion);
+            row.append(lead, button, side);
+            if (place?.focusId === item.id) refocus = lead.querySelector('input');
           } else {
             renderRow(item, button);
             row.append(button);
@@ -489,7 +507,7 @@
         records.hidden = result.items.length === 0;
         const range = `${integer(offset + 1)}–${integer(offset + result.items.length)} of ${integer(result.total)}`;
         listStatus.textContent = result.items.length
-          ? inclusion ? `${range} · ${integer(inclusion.included)} sent to agent` : range
+          ? inclusion ? `${range} · ${integer(inclusion.included)} queued for AI review` : range
           : offset ? 'No records on this page. Choose Previous.' : category.empty;
         if (typeof place?.notice === 'string' && place.notice) listStatus.textContent = `${place.notice} · ${listStatus.textContent}`;
         if (slider && inclusion) renderSurface(inclusion);

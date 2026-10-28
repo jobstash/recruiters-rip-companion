@@ -18,7 +18,7 @@ function showView(next) {
     if (button.dataset.view === next) button.setAttribute('aria-current', 'page'); else button.removeAttribute('aria-current');
   }
   for (const name of views) $(`view-${name}`).hidden = name !== next;
-  if (next !== 'setup') window.prescanUI?.clearInput();
+  if (next !== 'setup') window.decisionsUI?.clearInput();
 }
 for (const button of document.querySelectorAll('[data-view]')) button.addEventListener('click', () => showView(button.dataset.view));
 function openSettings(target) {
@@ -30,7 +30,6 @@ function openSettings(target) {
 window.openCompanionSettings = openSettings;
 $('me-account').addEventListener('click', () => openSettings('account-settings'));
 $('me-chat-apps').addEventListener('click', () => openSettings('chat-app-settings'));
-$('jobs-prescan-settings').addEventListener('click', () => openSettings('prescan'));
 // Help reads the running package version from the same state snapshot Settings → Updates renders.
 window.helpUI = {
   refresh(current) { $('help-version').textContent = typeof current?.updates?.version === 'string' ? `Version ${current.updates.version}` : ''; },
@@ -67,7 +66,7 @@ async function refresh() {
     if (locked) {
       $('mcp-command').textContent = ''; $('mcp-config').textContent = '';
       window.careerBrowser?.clear(); careerViewVersion = undefined;
-      window.prescanUI?.clear();
+      window.decisionsUI?.clear();
       window.updatesUI?.clear();
       window.helpUI.clear();
       return;
@@ -88,7 +87,8 @@ async function refresh() {
     }
     $('mcp-command').textContent = state.setup.command; $('mcp-config').textContent = state.setup.claudeConfig;
     renderConnections(state.mcpClients);
-    window.prescanUI?.refresh(state.prescan, state.paired, state.review);
+    window.decisionsUI?.refresh(state.decisions);
+    window.careerBrowser?.setContext({ review: state.review, publicationRange: state.publicationRange, paired: state.paired });
     window.updatesUI?.refresh(state.updates);
     window.helpUI.refresh(state);
     if (requestedSection) { const section = requestedSection; requestedSection = null; openSettings(section); }
@@ -96,7 +96,7 @@ async function refresh() {
   } catch {
     if (request !== stateRequest) return;
     window.careerBrowser?.clear(); careerViewVersion = undefined;
-    window.prescanUI?.clear();
+    window.decisionsUI?.clear();
     window.updatesUI?.clear();
     window.helpUI.clear();
     notice('Could not load settings. Reopen the companion.', 'error', true);
@@ -106,7 +106,7 @@ async function action(op, success) {
   if (busy) return;
   busy = true;
   // Browser instances manage their own controls; the Jobs toolbar's Copy review prompt is an ordinary action.
-  const controls = [...document.querySelectorAll('button')].filter(button => (!button.closest('#me-browser, #career-browser, #views, #prescan, #update-settings') || ['copy-review-prompt', 'review-codex', 'review-claude'].includes(button.id)) && !['approval-cancel', 'approval-allow'].includes(button.id));
+  const controls = [...document.querySelectorAll('button')].filter(button => (!button.closest('#me-browser, #career-browser, #views, #decisions, #update-settings') || ['copy-review-prompt', 'review-codex', 'review-claude'].includes(button.id)) && !['approval-cancel', 'approval-allow'].includes(button.id));
   const disabled = controls.map(control => control.disabled); controls.forEach(control => { control.disabled = true; });
   try {
     const result = await invoke(op);

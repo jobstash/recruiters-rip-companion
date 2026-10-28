@@ -3,8 +3,7 @@ import { cvHeading } from './mcp/application-tools.mjs';
 import { renderableCv } from './mcp/cv-quality.mjs';
 import { createMatchingTools } from './mcp/matching-tools.mjs';
 import { fail, readCareer } from './mcp/state.mjs';
-import { currentPrescanRow, prescanInclusion } from './prescan/state.mjs';
-import { DEFAULT_PUBLICATION_RANGE, publicationWindowForRange } from './prescan/publication-range.mjs';
+import { reviewInclusion } from './mcp/review-queue.mjs';
 import { localJobMetadata } from './mcp/job-tools.mjs';
 import { blockedIds, listBlocks } from './mcp/blocklist.mjs';
 import { employmentHistory } from './employment-browser.mjs';
@@ -110,37 +109,21 @@ const assessmentLabels = {
 };
 const assessmentLabel = value => own(assessmentLabels, value) ? assessmentLabels[value] : readable(value);
 const blockKinds = { job: 'Job', company: 'Company', category: 'Category' };
-const prescanStatuses = {
-  unavailable: 'Original advert unavailable', oversize: 'Input exceeds the provider limit', refused: 'Provider declined assessment',
-  incompatible_location: 'Location conflict predicted', below_minimum: 'Salary below your minimum',
-};
-const prescanScore = row => row?.status === 'scored' && Number.isInteger(row.priority) && row.priority >= 0 && row.priority <= 100
-  ? row.priority : -1;
-const prescanStatus = row => prescanScore(row) >= 0 ? null : prescanStatuses[row.status] || 'Not scored';
-const prescanLocations = { aligned: 'Compatible', uncertain: 'Not established', conflict: 'Conflict' };
-const cardStatuses = new Set(['unavailable', 'refused', 'oversize', 'incompatible_location', 'below_minimum']);
 // A saved review with one of these verdicts makes the job ineligible: the card shows the verdict, never a number.
 const ineligibleMatches = new Set(['incompatible_location', 'excluded']);
 const ineligibleLabel = reviewed => ineligibleMatches.has(reviewed?.matchStatus) ? assessmentLabel(reviewed.matchStatus) : 'Location incompatible';
-// A card shows where the job stands: reviewed by an agent (fit), ineligible (a saved verdict instead of a number),
-// scored by the pre-filter for the next run (score and whether it is sent), or neither. Fit and pre-filter score are
-// different scales and never share a caption.
-// An established incompatibility (any saved gate fail, or relocation required against a refusal to relocate) is never a
-// candidate and has no switch; a predicted one (pre-scan only) keeps the switch.
-function cardStage({ id, reviewed, prescan }, inclusion) {
+// A card shows where the job stands: reviewed by the agent (fit), ineligible (a saved verdict instead of a number), or
+// open — waiting for the agent's next review. An established incompatibility (any saved gate fail, or relocation required
+// against a refusal to relocate) is never offered again until the profile changes.
+function cardStage({ id, reviewed }, inclusion) {
   const reviewCurrent = reviewed?.reviewStatus === 'current';
   const established = !reviewCurrent && inclusion.established(id);
   const ineligible = reviewCurrent ? ineligibleMatches.has(reviewed.matchStatus) : established;
-  const candidate = !reviewCurrent && !established;
-  const rank = candidate ? inclusion.rank.get(id) ?? null : null;
   return {
-    stage: ineligible ? 'ineligible' : reviewCurrent ? 'reviewed' : rank !== null ? 'prefilter' : 'unscored',
+    stage: ineligible ? 'ineligible' : reviewCurrent ? 'reviewed' : 'open',
     label: ineligible ? ineligibleLabel(reviewed) : null, established,
-    rank,
-    included: candidate && inclusion.includedIds.has(id), overridden: candidate && inclusion.overridden(id),
     score: Number.isInteger(reviewed?.overall) ? reviewed.overall : null,
-    stale: reviewed ? !reviewCurrent : Boolean(prescan) && prescan.current !== true,
-    status: !reviewCurrent && prescan && cardStatuses.has(prescan.status) ? prescan.status : null,
+    stale: reviewed ? !reviewCurrent : false,
   };
 }
 const bandLabel = band => typeof band === 'string' && band ? band.replace(/^./, letter => letter.toUpperCase()) : undefined;
@@ -154,7 +137,7 @@ const joinFacts = parts => parts.filter(part => typeof part === 'string' && part
 
 /** The verdict is the reader's first block: the number that placed the job in the list, the rule it was measured against,
  *  and the agent's reason when one exists. Everything else in the reader is evidence for it. */
-function jobVerdict({ reviewed, prescan }, card) {
+function jobVerdict({ reviewed }, card) {
   const reviewDate = displayDate(reviewed?.scoredAt);
   const staleReview = reviewed && card.stage !== 'reviewed' && Number.isInteger(reviewed.overall)
     ? `Reviewed at ${reviewed.overall} before your profile changed` : null;
@@ -171,17 +154,9 @@ function jobVerdict({ reviewed, prescan }, card) {
     // The label is the whole actionable decision; repeating location, relocation and the saved review prose below it is noise.
     return { kind: 'ineligible', number: null, numberLabel: null, headline: card.label, detail: null, reason: null };
   }
-  // The pre-qualification is shown as a verdict, never as a number: the number only orders the queue.
-  const included = card.included ? 'Pre-qualified for AI review' : 'Skipped';
-  const manual = card.overridden ? ' · manual' : '';
-  if (card.stage === 'prefilter') {
-    return { kind: 'prefilter', number: null, numberLabel: null, headline: `${included}${manual}`,
-      detail: joinFacts([card.overridden ? null : card.included ? 'Shortlist found this worth a full review' : 'Shortlist found this unlikely to fit',
-        card.stale ? 'shortlisted before your profile changed' : null]),
-      reason: staleReview ? joinFacts([staleReview, reason]) : reason };
-  }
-  return { kind: 'unscored', number: null, numberLabel: null, headline: `${included}${manual}`,
-    detail: prescan ? prescanStatuses[prescan.status] ?? 'Not scored' : 'Not scored yet',
+  // An open job has no verdict yet; a stale earlier review is still worth showing as context.
+  if (!staleReview && !reason) return null;
+  return { kind: 'open', number: null, numberLabel: null, headline: 'Not reviewed yet', detail: null,
     reason: staleReview ? joinFacts([staleReview, reason]) : reason };
 }
 
@@ -220,8 +195,8 @@ function applicationSection(career, id) {
   ], 'No application details saved.')];
 }
 
-function jobItem({ id, reviewed, prescan, imported, metadata }, inclusion, career) {
-  const role = key => imported?.[key] ?? metadata?.[key] ?? reviewed?.[key] ?? prescan?.[key];
+function jobItem({ id, reviewed, imported, metadata }, inclusion, career) {
+  const role = key => imported?.[key] ?? metadata?.[key] ?? reviewed?.[key];
   const roleTitle = text(role('title'), '');
   const company = text(role('company'), '');
   const title = [roleTitle, company].filter(Boolean).join(' — ') || 'Job details unavailable';
@@ -240,20 +215,20 @@ function jobItem({ id, reviewed, prescan, imported, metadata }, inclusion, caree
   const card = {
     title: roleTitle || title, company: company || null, logoUrl,
     publishedAt: typeof publishedAt === 'string' && Number.isFinite(Date.parse(publishedAt)) ? publishedAt : null,
-    facts, ...cardStage({ id, reviewed, prescan }, inclusion),
+    facts, ...cardStage({ id, reviewed }, inclusion),
   };
   // What the reader can offer to block besides the job itself.
   const block = { company: company || null, category: text(role('classification'), '') || null };
   const applyUrl = typeof role('applyUrl') === 'string' && /^https?:\/\//.test(role('applyUrl')) ? role('applyUrl') : null;
   const header = { company: company || null, published: displayDate(publishedAt) ? `Published ${displayDate(publishedAt)}` : null, facts, applyUrl };
-  const verdict = jobVerdict({ reviewed, prescan }, card);
+  const verdict = jobVerdict({ reviewed }, card);
   const salaryCheck = reviewed?.salaryEligibility?.status && reviewed.salaryEligibility.status !== 'not_required'
-    ? assessmentLabel(reviewed.salaryEligibility.status) : prescan?.status === 'below_minimum' ? 'Below your minimum' : null;
+    ? assessmentLabel(reviewed.salaryEligibility.status) : null;
   // Checks contains only independent decision facts. An ineligible verdict already names the decisive gate, so location and
   // relocation are not repeated beneath it.
   const ineligible = card.stage === 'ineligible';
   const checks = fields('Checks', [
-    ['Location', ineligible ? undefined : reviewed ? assessmentLabel(reviewed.matchStatus) : own(prescanLocations, prescan?.location) ? prescanLocations[prescan.location] : undefined],
+    ['Location', ineligible ? undefined : reviewed ? assessmentLabel(reviewed.matchStatus) : undefined],
     ['Relocation', ineligible ? undefined : assessmentLabel(reviewed?.relocation)],
     ['Salary', joinFacts([pay, salaryCheck]) || undefined],
     ...(record(reviewed?.gates) ? [['Career direction', gateLabels[reviewed.gates.direction]], ['Mandatory conditions', gateLabels[reviewed.gates.constraints]],
@@ -269,10 +244,6 @@ function jobItem({ id, reviewed, prescan, imported, metadata }, inclusion, caree
       section(imported.complete ? 'Original advert' : 'Captured listing text', imported.description?.trim()
         ? imported.description : 'No advert text was captured. Open the job page and capture its full advert.'),
     ] : []),
-    ...(prescan ? [fields('Metadata', [
-      ['Shortlist', joinFacts([prescanStatus(prescan), prescan.provider === 'openai' ? 'OpenAI Decisions' : prescan.provider,
-        prescan.model, prescan.current ? 'current' : 'out of date'])],
-    ], 'No shortlist metadata saved.')] : []),
   ];
   return { id, title, heading: roleTitle || title, card, block, header, verdict, sections };
 }
@@ -290,20 +261,13 @@ async function reviewedRows(career) {
   return rows;
 }
 
-function prescanRow(career, id, row, now) {
-  const saved = { ...row, id };
-  return { ...saved, provider: career.prescan.provider, model: career.prescan.model,
-    current: currentPrescanRow(career, saved, now) };
-}
-
-// Candidates for the next agent run: every catalogue job without a current review, in catalogue order.
+// Candidates for the next agent review: every catalogue job without a current review, in catalogue order.
 function jobInclusion(career, rows) {
   const candidates = entries(career.matching?.jobs).map(([id]) => id).filter(id => rows.get(id)?.reviewed?.reviewStatus !== 'current');
-  return prescanInclusion(career, candidates, publicationWindowForRange(career.prescan?.publicationRange ?? DEFAULT_PUBLICATION_RANGE));
+  return reviewInclusion(career, candidates);
 }
 
 async function jobUnion(career) {
-  const now = Date.now();
   const rows = new Map(entries(career.matching?.jobs).map(([id, metadata]) => [id, { id, metadata }]));
   for (const reviewed of await reviewedRows(career)) {
     if (!forbidden.has(reviewed.id)) {
@@ -311,11 +275,6 @@ async function jobUnion(career) {
       item.reviewed = reviewed;
       rows.set(reviewed.id, item);
     }
-  }
-  for (const [id, row] of entries(career.prescan?.rows)) {
-    const item = rows.get(id) ?? { id };
-    item.prescan = prescanRow(career, id, row, now);
-    rows.set(id, item);
   }
   for (const [id, job] of entries(career.jobs)) {
     const item = rows.get(id) ?? { id };
@@ -328,18 +287,18 @@ async function jobUnion(career) {
   return { rows, inclusion: jobInclusion(career, rows) };
 }
 
-// Each view has one fixed order. Shortlist: newest first. Queue: shortlist rank (best first), unscored switched-on jobs
-// after. Reviewed: current reviews by fit, ineligible last. Newer publication breaks ties, then ID.
-const jobViews = ['shortlist', 'queue', 'reviewed'];
-const stageOrder = { reviewed: 0, prefilter: 1, unscored: 2, ineligible: 3 };
+// Each view has one fixed order. Jobs: newest first. Reviewed: current reviews by fit, ineligible last. Newer
+// publication breaks ties, then ID.
+const jobViews = ['jobs', 'reviewed'];
+const stageOrder = { reviewed: 0, open: 1, ineligible: 2 };
 function sortJobs(staged, view) {
   const sortable = staged.map(({ row, stage }) => {
-    const publishedAt = row.imported?.publishedAt ?? row.metadata?.publishedAt ?? row.reviewed?.publishedAt ?? row.prescan?.publishedAt;
+    const publishedAt = row.imported?.publishedAt ?? row.metadata?.publishedAt ?? row.reviewed?.publishedAt;
     const timestamp = typeof publishedAt === 'string' ? Date.parse(publishedAt) : NaN;
-    const value = stage.stage === 'reviewed' ? -(stage.score ?? -1) : stage.stage === 'prefilter' ? stage.rank : 0;
+    const value = stage.stage === 'reviewed' ? -(stage.score ?? -1) : 0;
     return { row, group: stageOrder[stage.stage], value, published: Number.isFinite(timestamp) ? timestamp : -Infinity };
   });
-  return sortable.sort((a, b) => (view === 'shortlist' ? 0 : a.group - b.group || a.value - b.value) ||
+  return sortable.sort((a, b) => (view === 'jobs' ? 0 : a.group - b.group || a.value - b.value) ||
     (a.published === b.published ? 0 : a.published > b.published ? -1 : 1) ||
     (a.row.id < b.row.id ? -1 : a.row.id > b.row.id ? 1 : 0)).map(item => item.row);
 }
@@ -365,9 +324,9 @@ export function createCareerBrowser({ store }) {
   return {
     async list(args = {}) {
       validate(args, ['kind', 'offset', 'limit', 'view']);
-      const { kind, offset = 0, limit = 25, view = 'shortlist' } = args;
+      const { kind, offset = 0, limit = 25, view = 'jobs' } = args;
       if ((own(args, 'view') && (kind !== 'jobs' || !jobViews.includes(args.view)))) {
-        fail('INVALID_INPUT', 'Use view shortlist, queue or reviewed for Jobs only.');
+        fail('INVALID_INPUT', 'Use view jobs or reviewed for Jobs only.');
       }
       if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isInteger(limit) || limit < 1 || limit > 100) {
         fail('INVALID_INPUT', 'Use limit 1–100 and a nonnegative safe integer offset.');
@@ -386,14 +345,13 @@ export function createCareerBrowser({ store }) {
       if (kind === 'jobs') {
         const { rows, inclusion } = await jobUnion(career);
         const staged = [...rows.values()].map(row => ({ row, stage: cardStage(row, inclusion) }));
-        const inView = { shortlist: () => true, queue: ({ stage }) => stage.included, reviewed: ({ stage }) => stage.stage === 'reviewed' || stage.stage === 'ineligible' };
-        const counts = { shortlist: staged.length, queue: staged.filter(inView.queue).length, reviewed: staged.filter(inView.reviewed).length,
+        const inView = { jobs: () => true, reviewed: ({ stage }) => stage.stage === 'reviewed' || stage.stage === 'ineligible' };
+        const counts = { jobs: staged.length, reviewed: staged.filter(inView.reviewed).length,
           applications: entries(career.applications).length, blocks: listBlocks(career).length };
         const sorted = sortJobs(staged.filter(inView[view]), view);
         const items = sorted.slice(offset, offset + limit).map(row => jobItem(row, inclusion, career));
         return { items, total: sorted.length, nextOffset: offset + items.length < sorted.length ? offset + items.length : null, counts,
-          inclusion: { minimumScore: inclusion.minimumScore, included: inclusion.includedIds.size,
-            scored: inclusion.ranked ? inclusion.rankedIds.length : null, stale: inclusion.stale, candidates: inclusion.candidates } };
+          inclusion: { included: inclusion.includedIds.size, candidates: inclusion.candidates } };
       }
       if (kind === 'blocks') {
         const blocks = listBlocks(career);
@@ -476,7 +434,7 @@ export async function openJobPage({ store, openExternal }, args) {
   const { rows } = await jobUnion(career);
   const row = rows.get(args.id);
   if (!row) fail('NOT_FOUND', 'This saved job was not found. Refresh the list.');
-  const url = [row.imported?.applyUrl, row.metadata?.applyUrl, row.reviewed?.applyUrl, row.prescan?.applyUrl]
+  const url = [row.imported?.applyUrl, row.metadata?.applyUrl, row.reviewed?.applyUrl]
     .find(value => typeof value === 'string' && /^https?:\/\//.test(value));
   if (!url) fail('NOT_FOUND', 'This job has no saved job page.');
   await openExternal(url);

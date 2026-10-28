@@ -24,13 +24,11 @@ import { createDocumentFiles, readSelectedSource } from './mcp/files.mjs';
 import { createScopedAccess } from './mcp/scope.mjs';
 import { createMatchingTools, deleteRankings } from './mcp/matching-tools.mjs';
 import { matchingProfileVersion } from './mcp/assessment-policy.mjs';
-import { setInclusionMinimumScore, setInclusionOverride } from './prescan/state.mjs';
 import { addBlock, removeBlock } from './mcp/blocklist.mjs';
 import { installChatGptPlugin } from './host-setup.mjs';
 import { createCareerBrowser } from './career-browser.mjs';
-import { createPrescanCredentials } from './prescan/credentials.mjs';
-import { createPrescanController } from './prescan/service.mjs';
-import { createPrescanTools } from './mcp/prescan-tools.mjs';
+import { createDecisionCredentials } from './decisions/credentials.mjs';
+import { savedPublicationRange, setPublicationRange } from './mcp/review-queue.mjs';
 import { startPairingReturn } from './pairing-return.mjs';
 import { createJobTools, importCapturedJobs } from './mcp/job-tools.mjs';
 import { createFormTools, currentForm, formEvidence } from './mcp/form-tools.mjs';
@@ -60,7 +58,7 @@ let windowLoaded;
 const sockets = new Set();
 const mutations = new Set(), formRequests = new Set();
 let updateInstalling = false, quitReady = false, quitDraining = false, vaultOpened = false, updateApprovalAbort;
-let prescan, browserForms, updates, prescanViewState = '';
+let browserForms, updates;
 const identityKey = state => JSON.stringify([state.deviceId, state.pairing?.origin, state.pairing?.account?.id]);
 const store = {
   get() { assertAvailable(false); return vault.get(); },
@@ -82,7 +80,7 @@ function assertWorkAllowed() {
 function assertPaidWorkAllowed() {
   assertWorkAllowed();
   if (['checking', 'downloading', 'awaiting-approval', 'staging', 'installing', 'launched'].includes(updates.state().status))
-    fail('LOCAL_BUSY', 'Finish or cancel the update before starting pre-filtering or form preparation.');
+    fail('LOCAL_BUSY', 'Finish or cancel the update before preparing a form.');
 }
 async function mutation(action) {
   assertWorkAllowed();
@@ -90,28 +88,8 @@ async function mutation(action) {
   mutations.add(pending);
   try { return await pending; } finally { mutations.delete(pending); }
 }
-const prescanCredentials = createPrescanCredentials({ store, onChange: async () => { browserForms?.cancelAll(); await prescan?.cancel(); } });
-prescan = createPrescanController({
-  store, credentials: prescanCredentials,
-  makeScope() {
-    const scoped = createScopedAccess(store, { assertAvailable, epoch: () => sessionEpoch });
-    return { store: scoped.store, assertAvailable: scoped.assertAvailable,
-      platform: async (operation, args) => {
-        scoped.assertAvailable(false);
-        const result = await platform(operation, args);
-        scoped.assertAvailable(false);
-        return result;
-      } };
-  },
-  onChange() {
-    if (!prescan || locked) return;
-    const current = prescan.status();
-    const viewState = `${current.runId ?? ''}:${current.status}`;
-    if (viewState !== prescanViewState) { prescanViewState = viewState; careerViewRevision++; }
-    emit();
-  },
-});
-browserForms = createBrowserForms({ store, credentials: prescanCredentials, assertAvailable });
+const decisionCredentials = createDecisionCredentials({ store, onChange: async () => { browserForms?.cancelAll(); emit(); } });
+browserForms = createBrowserForms({ store, credentials: decisionCredentials, assertAvailable });
 updates = createUpdateController({
   version: packageMetadata.version, platform: process.platform, arch: process.arch,
   directory: path.join(app.getPath('userData'), localOnly ? 'local-updates' : 'updates'),
@@ -120,7 +98,7 @@ updates = createUpdateController({
   authorize: ({ latestVersion, message }) => confirm(`Update to ${latestVersion}?`, message, updateApprovalAbort?.signal),
   quit: () => app.quit(), onChange: () => emit(),
 });
-function paidWorkActive() { return formRequests.size > 0 || prescan.isActive(); }
+function paidWorkActive() { return formRequests.size > 0; }
 async function cancelUpdate() {
   updateApprovalAbort?.abort();
   if (['checking', 'downloading', 'awaiting-approval', 'staging'].includes(updates.state().status)) await updates.cancel();
@@ -129,7 +107,7 @@ async function cancelUpdate() {
 async function updateAction(op) {
   assertAvailable(false);
   if (op === 'update-cancel') return cancelUpdate();
-  if (updateInstalling || paidWorkActive()) fail('LOCAL_BUSY', 'Finish or cancel active pre-filtering and form preparation before updating.');
+  if (updateInstalling || paidWorkActive()) fail('LOCAL_BUSY', 'Finish or cancel active form preparation before updating.');
   if (op === 'update-check') return updates.check();
   if (op === 'update-download') return updates.download();
   if (op !== 'update-install') fail('INVALID_INPUT', 'This update action is unavailable.');
@@ -157,7 +135,7 @@ function status() {
   if (locked) return { installed: true, mode: 'local_mcp', paired: false, decisionApiConfigured: false, connections: [], execution: { state: 'locked' } };
   const state = vault.get();
   return { installed: true, mode: 'local_mcp', deviceId: state.deviceId, publicKey: state.publicKey, label: state.label,
-    paired: Boolean(state.pairing), decisionApiConfigured: prescanCredentials.publicState().configured, connections: [], execution: { state: state.pairing ? 'ready' : 'needs_connection' } };
+    paired: Boolean(state.pairing), decisionApiConfigured: decisionCredentials.publicState().configured, connections: [], execution: { state: state.pairing ? 'ready' : 'needs_connection' } };
 }
 function setup() {
   const command = path.join(directory, 'recruiters-rip-mcp');
@@ -173,8 +151,8 @@ function localState() {
   const state = vault.get();
   return { ...publicState, account: state.pairing?.account ?? null, reconnectAccount: state.reconnectAccount ?? null, origin: state.pairing?.origin ?? null, browserConnection, mcpClients, failure,
     setup: setup(), careerViewVersion: `${state.deviceId}:${sessionEpoch}:${careerViewRevision}`,
-    prescan: { credentials: prescanCredentials.publicState(), run: prescan.status(),
-      contextVersion: `${sessionEpoch}:${careerViewRevision}:${matchingProfileVersion(state.career ?? {})}` },
+    decisions: { credentials: decisionCredentials.publicState() },
+    publicationRange: savedPublicationRange(state.career ?? {}),
     updates: { ...updates.state(), blocked: paidWorkActive() || updateInstalling },
     review: { hosts: reviewHosts, preferredHost: ['claude', 'codex'].includes(state.browserPreferences?.applicationHost) ? state.browserPreferences.applicationHost : reviewHosts.codex ? 'codex' : 'claude' },
     introductions: introductionsStatus(state.career ?? {}),
@@ -214,7 +192,7 @@ function showSettings() {
 }
 async function showDecisionsSettings() {
   await showSettings();
-  window.webContents.send('settings-section', 'prescan');
+  window.webContents.send('settings-section', 'decisions');
 }
 function confirm(title, detail, signal) {
   const pending = confirmation.then(() => new Promise(resolve => {
@@ -369,13 +347,6 @@ function createSessionServer() {
     ...createMatchingTools({ store: scoped.store, platform: scopedPlatform, exportDocument: localFiles.exportDocument }),
     ...createJobTools({ store: scoped.store }),
     ...createFormTools({ store: scoped.store, browser: browserBridge }),
-    ...createPrescanTools({ controller: Object.fromEntries(['start', 'cancel', 'status', 'results'].map(method => [method, async args => {
-      scoped.assertAvailable(method === 'start' || method === 'cancel');
-      if (method === 'start') assertPaidWorkAllowed();
-      const result = await prescan[method](args);
-      scoped.assertAvailable(false);
-      return result;
-    }])) }),
     ...createIntroductionTools({ store: scoped.store, platform: scopedPlatform,
       shareCv: async body => {
         scoped.assertAvailable(false);
@@ -394,7 +365,6 @@ function createSessionServer() {
   server = createMcpServer({ tools, assertAvailable: scoped.assertAvailable, readResource: localFiles.readResource, listResources: localFiles.listResources,
     notifyActivity: name => {
       if (tools.some(tool => tool.name === name && !tool.readOnly)) { careerViewRevision++; emit(); }
-      if (name === 'career_rankings_delete') void prescan.cancel();
     } });
   return server;
 }
@@ -498,9 +468,9 @@ async function nativeOperation(op, payload, socket = null) {
     scoped.assertAvailable(false); careerViewRevision++; emit(); return result;
   });
   assertPaidWorkAllowed();
-  if (!prescanCredentials.publicState().configured) {
+  if (!decisionCredentials.publicState().configured) {
     await showDecisionsSettings();
-    fail('PRESCAN_KEY_REQUIRED', 'Add your OpenAI key in Companion’s Optional Decisions API settings, then choose Read page again.');
+    fail('DECISIONS_KEY_REQUIRED', 'Add your OpenAI key in Companion’s Optional Decisions API settings, then choose Read page again.');
   }
   const scoped = createScopedAccess(store, { assertAvailable, epoch: () => sessionEpoch });
   const preparedState = scoped.store.get(), identity = identityKey(preparedState);
@@ -683,34 +653,23 @@ async function settingsOperation(op, input) {
       await shell.openExternal(new URL('/account#github', productOrigin).href);
       return { ok: true, result: { opened: true } };
     }
-    if (op.startsWith('prescan-')) {
+    if (op === 'decisions-key-save' || op === 'decisions-key-remove') {
       assertAvailable(false);
-      if (op === 'prescan-preview') { exact(input, []); return { ok: true, result: await prescan.preview({}) }; }
-      let result;
-      if (op === 'prescan-key-save') result = await prescanCredentials.save(input);
-      else if (op === 'prescan-key-remove') result = await prescanCredentials.remove(input);
-      else if (op === 'prescan-range-set') result = await prescan.setPublicationRange(input);
-      else if (op === 'prescan-start') { assertPaidWorkAllowed(); result = await prescan.start(input); }
-      else if (op === 'prescan-cancel') { exact(input, []); result = await prescan.cancel(); }
-      else if (op === 'prescan-include' || op === 'prescan-threshold') {
-        exact(input, op === 'prescan-include' ? ['id', 'included'] : ['minimumScore']);
-        const scoped = createScopedAccess(store, { assertAvailable, epoch: () => sessionEpoch });
-        await scoped.store.update(state => {
-          const career = state.career ??= createCareerState();
-          if (op === 'prescan-include') setInclusionOverride(career, input.id, input.included);
-          else setInclusionMinimumScore(career, input.minimumScore);
-        });
-        scoped.assertAvailable(false); careerViewRevision++;
-        result = { completed: true };
-      }
-      else fail('INVALID_INPUT', 'This pre-scan action is unavailable.');
+      const result = op === 'decisions-key-save' ? await decisionCredentials.save(input) : await decisionCredentials.remove(input);
       emit(); return { ok: true, result };
+    }
+    if (op === 'publication-range-set') {
+      assertAvailable(false); exact(input, ['publicationRange']);
+      const scoped = createScopedAccess(store, { assertAvailable, epoch: () => sessionEpoch });
+      await scoped.store.update(state => { setPublicationRange(state.career ??= createCareerState(), input.publicationRange); });
+      scoped.assertAvailable(false); careerViewRevision++;
+      emit(); return { ok: true, result: { publicationRange: input.publicationRange } };
     }
     exact(input, op === 'approval' ? ['id', 'allow'] : []);
     if (op === 'unlock') { await initialize(); if (queuedPairing) { const payload = queuedPairing; queuedPairing = undefined; void pair(payload).catch(error => { failure = safeFailure(error).message; emit(); }); } emit(); return { ok: true, result: localState() }; }
     assertAvailable(false); let result = { completed: true };
     if (op === 'approval') { if (!pendingApproval || pendingApproval.id !== input.id || typeof input.allow !== 'boolean') fail('INVALID_INPUT', 'This approval expired.'); pendingApproval.finish(input.allow); }
-    else if (op === 'delete-rankings') { await prescan.cancel(); result = await deleteRankings(store); careerViewRevision++; }
+    else if (op === 'delete-rankings') { result = await deleteRankings(store); careerViewRevision++; }
     else if (op === 'connect-account') result = await connectAccount();
     else if (op === 'import-cv') {
       const scoped = createScopedAccess(store, { assertAvailable, epoch: () => sessionEpoch });
@@ -769,7 +728,7 @@ async function settingsOperation(op, input) {
 ipcMain.handle('local-settings', async (event, op, input = {}) => {
   if (event.sender !== window?.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== uiURL) throw new Error('Local settings only.');
   try {
-    if (['prescan-key-save', 'prescan-key-remove', 'prescan-range-set', 'prescan-start', 'import-cv', 'delete-rankings', 'connect-account', 'backup'].includes(op))
+    if (['decisions-key-save', 'decisions-key-remove', 'publication-range-set', 'import-cv', 'delete-rankings', 'connect-account', 'backup'].includes(op))
       return await mutation(() => settingsOperation(op, input));
     return await settingsOperation(op, input);
   } catch (error) { return { ok: false, error: safeFailure(error) }; }
@@ -785,7 +744,6 @@ else {
       if (quitDraining) return;
       quitDraining = true; browserForms.cancelAll(); pendingApproval?.finish(false);
       void (async () => {
-        await prescan.cancel();
         await cancelUpdate();
         await Promise.allSettled([...mutations]);
         // Queue behind every accepted career write before allowing Electron to exit.
@@ -812,7 +770,7 @@ else {
     try { await initialize(); } catch (error) { failure = error?.code === 'LEGACY_VAULT_LOCKED' ? error.message : 'Local storage is unavailable. Check the companion data folder, then open local storage.'; }
     await refreshReviewHosts();
     heartbeatTimer = setInterval(() => { if (locked || heartbeatBusy || !vault.get().pairing) return; heartbeatBusy = true; void client.request('POST', '/device/heartbeat', {}).catch(() => {}).finally(() => { heartbeatBusy = false; }); }, 30000);
-    const lock = () => { browserForms.cancelAll(); void prescan.cancel(); void cancelUpdate().catch(error => { failure = safeFailure(error).message; }); sessionEpoch++; locked = true; pairingReturn?.close(); pendingApproval?.finish(false); mcpBridge.disconnect(); emit(); };
+    const lock = () => { browserForms.cancelAll(); void cancelUpdate().catch(error => { failure = safeFailure(error).message; }); sessionEpoch++; locked = true; pairingReturn?.close(); pendingApproval?.finish(false); mcpBridge.disconnect(); emit(); };
     const unlock = () => { if (screenLocked || sleeping) return; void initialize().then(() => emit()).catch(() => { failure = 'Local storage could not be reopened. Your saved data has not been replaced.'; }); };
     powerMonitor.on('lock-screen', () => { screenLocked = true; lock(); }); powerMonitor.on('suspend', () => { sleeping = true; lock(); });
     powerMonitor.on('unlock-screen', () => { screenLocked = false; unlock(); }); powerMonitor.on('resume', () => { sleeping = false; unlock(); });

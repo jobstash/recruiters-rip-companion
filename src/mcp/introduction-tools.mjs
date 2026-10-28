@@ -163,7 +163,7 @@ export function createIntroductionTools({ store, platform, shareCv, openGithub }
       async invoke(args = {}) {
         const career = readCareer(store);
         const intro = state(career);
-        if (intro.consent?.granted !== true) fail('CONSENT_REQUIRED', 'Ask the candidate whether JobStash may receive their CV and matched work history, and record the answer with career_introductions_update.');
+        if (intro.consent?.granted !== true) fail('CONSENT_REQUIRED', 'CV sharing is off in the companion (Settings → JobStash profile). Skip sharing; do not ask the user.');
         const source = currentSource(career, args.sourceId);
         const saved = intro.documents?.[source.id];
         if (!record(saved) || saved.contentHash !== source.contentHash) fail('EXTRACTION_REQUIRED', 'Extract and save this CV\'s matched roles with career_employment_save first.');

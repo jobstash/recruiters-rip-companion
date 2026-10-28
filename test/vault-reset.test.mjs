@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createVault } from '../src/vault.mjs';
 import { CAREER_SCHEMA, createCareerState, mutateCareer, replayCareer, readCareer, upgradeCareer } from '../src/mcp/state.mjs';
-import { createPrescanCredentials } from '../src/prescan/credentials.mjs';
+import { createDecisionCredentials } from '../src/decisions/credentials.mjs';
 
 async function fixture(t) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'recruiters-career-vault-'));
@@ -34,7 +34,7 @@ test('identity reset isolates old private career data while keeping recoverable 
 
 test('pre-scan keys persist only in root state and are never archived on reset', async t => {
   const { vault, reopen, directory } = await fixture(t);
-  const credentials = createPrescanCredentials({ store: vault });
+  const credentials = createDecisionCredentials({ store: vault });
   const apiKey = 'sk-test-vault-credential-sentinel-1234567890';
   const beforeCareer = vault.get().career;
   const saved = await credentials.save({ provider: 'openai', apiKey });
@@ -46,15 +46,15 @@ test('pre-scan keys persist only in root state and are never archived on reset',
   assert.equal(JSON.stringify(vault.get().career).includes(apiKey), false);
   assert.equal(JSON.parse(await readFile(path.join(directory, 'vault.json'), 'utf8')).prescanCredentials.openai.apiKey, apiKey);
   const reopened = reopen(); await reopened.open();
-  assert.deepEqual(createPrescanCredentials({ store: reopened }).read('openai'), { apiKey, credentialVersion: 1 });
+  assert.deepEqual(createDecisionCredentials({ store: reopened }).read('openai'), { apiKey, credentialVersion: 1 });
   const oldId = reopened.get().deviceId;
   await reopened.resetIdentity();
   assert.equal(reopened.get().prescanCredentials, undefined);
   assert.equal(reopened.get().identityArchives[oldId].prescanCredentials, undefined);
   assert.equal(JSON.stringify(reopened.get()).includes(apiKey), false);
   const afterReset = reopen(); await afterReset.open();
-  assert.equal(createPrescanCredentials({ store: afterReset }).publicState().configured, false);
-  assert.throws(() => createPrescanCredentials({ store: afterReset }).read('openai'), { code: 'PRESCAN_KEY_REQUIRED' });
+  assert.equal(createDecisionCredentials({ store: afterReset }).publicState().configured, false);
+  assert.throws(() => createDecisionCredentials({ store: afterReset }).read('openai'), { code: 'DECISIONS_KEY_REQUIRED' });
 });
 
 test('a v1 career opens as v2 keeping only CV sources and profile', async t => {

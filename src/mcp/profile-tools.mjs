@@ -176,7 +176,7 @@ function onboarding(career, pairing) {
     pairing: { paired: Boolean(pairing), account: pairing?.account ? { id: pairing.account.id, label: pairing.account.label } : null },
     catalogRequiresPairing: !pairing, sourceCount: currentSources(career).length, factCount, missing, actions, questions,
     introductions: { ...introductions, nextSteps: locallyReady ? sharingSteps : [] },
-    nextSteps: locallyReady ? ['Match jobs using the CV/profile, saved preferences and any existing facts once paired. Collect new facts only while reviewing an individual matched listing for submission; reuse them in subsequent matching.'] : [...actions.map(item => item.instruction), ...questions.map(item => item.question), ...(hasBackground && unansweredPreferences.length ? ['Ask these preference questions together in one message, save every answer with career_preferences_update, then read career_profile_read to confirm before any pre-filter or job review.'] : [])],
+    nextSteps: locallyReady ? ['Match jobs using the CV/profile, saved preferences and any existing facts once paired. Collect new facts only while reviewing an individual matched listing for submission; reuse them in subsequent matching.'] : [...actions.map(item => item.instruction), ...questions.map(item => item.question), ...(hasBackground && unansweredPreferences.length ? ['Ask these preference questions together in one message, save every answer with career_preferences_update, then read career_profile_read before any job review.'] : [])],
   };
 }
 

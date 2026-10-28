@@ -191,7 +191,7 @@ export function createBrowserForms({ store, credentials, assertAvailable, fetchI
           if (saved.credentialVersion !== run.credentialVersion) fail('FORM_CONTEXT_CHANGED', 'Your API key changed. Prepare again.');
           run.key = saved.apiKey;
         } catch (error) {
-          if (error.code !== 'PRESCAN_KEY_REQUIRED') throw error;
+          if (error.code !== 'DECISIONS_KEY_REQUIRED') throw error;
         }
       }
       const useApi = Boolean(args.useApi && run.key && pending.length && bank.length);

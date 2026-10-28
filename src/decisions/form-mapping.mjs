@@ -1,8 +1,8 @@
 import { CareerError } from '../mcp/state.mjs';
-import { openaiDecisionProvider } from '../prescan/providers/openai.mjs';
+import { openaiDecisions } from './provider.mjs';
 
-export const FORM_DECISIONS = Object.freeze({ provider: 'openai', label: 'OpenAI Decisions', model: openaiDecisionProvider.model,
-  inputUsdPerMillion: openaiDecisionProvider.inputUsdPerMillion, maxInputBytes: 240000, maxQuestions: 7 });
+export const FORM_DECISIONS = Object.freeze({ provider: 'openai', label: 'OpenAI Decisions', model: openaiDecisions.model,
+  inputUsdPerMillion: openaiDecisions.inputUsdPerMillion, maxInputBytes: 240000, maxQuestions: 7 });
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const error = (code, message) => new CareerError(code, message);
 const invalid = () => error('FORM_INVALID_RESPONSE', 'OpenAI returned an invalid mapping. No API suggestions were released.');
@@ -60,7 +60,7 @@ function normalize(data, questions) {
   return { values, inputTokens: data.usage.input_tokens };
 }
 export async function mapFormValues({ apiKey, bank, questions, signal, fetchImpl = globalThis.fetch }) {
-  if (typeof apiKey !== 'string' || !/^sk-[A-Za-z0-9_-]{16,500}$/.test(apiKey)) throw error('PRESCAN_KEY_REQUIRED', 'Save an OpenAI API key in Settings first.');
+  if (typeof apiKey !== 'string' || !/^sk-[A-Za-z0-9_-]{16,500}$/.test(apiKey)) throw error('DECISIONS_KEY_REQUIRED', 'Save an OpenAI API key in Settings first.');
   if (!Array.isArray(questions) || questions.length < 1 || questions.length > FORM_DECISIONS.maxQuestions) throw error('INVALID_INPUT', 'Map at most seven form fields per request.');
   const body = JSON.stringify({ model: FORM_DECISIONS.model, input: [{ role: 'developer', content: POLICY },
     { role: 'user', content: JSON.stringify({ knownAnswers: bank }) }], questions });

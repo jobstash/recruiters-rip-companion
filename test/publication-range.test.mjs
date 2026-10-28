@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { publicationWindowForRange, publicationInWindow } from '../src/prescan/publication-range.mjs';
+import { publicationWindowForRange, publicationInWindow } from '../src/mcp/publication-range.mjs';
 
 const now = Date.parse('2026-10-20T12:00:00.000Z');
 const day = 86400000;
@@ -26,7 +26,7 @@ test('whole catalogue includes old publications without including future or inva
 });
 
 test('today and yesterday follow the local calendar through daylight-saving changes', () => {
-  const source = new URL('../src/prescan/publication-range.mjs', import.meta.url).href;
+  const source = new URL('../src/mcp/publication-range.mjs', import.meta.url).href;
   const result = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e',
     `import {publicationWindowForRange} from ${JSON.stringify(source)};
      const now=Date.parse('2026-10-26T12:00:00Z');

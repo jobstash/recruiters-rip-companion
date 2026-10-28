@@ -1,12 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createPrescanCredentials } from '../src/prescan/credentials.mjs';
+import { createDecisionCredentials } from '../src/decisions/credentials.mjs';
 
 const apiKey = 'sk-test-local-credential-1234567890';
 function fixture() {
   let state = { career: { profile: { name: 'Candidate' } } }, changes = 0;
   const store = { get: () => structuredClone(state), async update(change) { const next = structuredClone(state); await change(next); state = next; } };
-  const credentials = createPrescanCredentials({ store, onChange: async () => { changes++; } });
+  const credentials = createDecisionCredentials({ store, onChange: async () => { changes++; } });
   return { store, credentials, changes: () => changes };
 }
 
@@ -14,7 +14,7 @@ test('save/read/remove keep key at root and only expose a secret-free descriptor
   const { store, credentials, changes } = fixture();
   assert.deepEqual(credentials.publicState(), { provider: 'openai', model: 'gpt-6-luna', configured: false, credentialVersion: 0, inputUsdPerMillion: 0.1,
     savedAt: null, keyHint: null, providers: [{ id: 'openai', label: 'OpenAI Decisions', model: 'gpt-6-luna', inputUsdPerMillion: 0.1 }] });
-  assert.throws(() => credentials.read('openai'), { code: 'PRESCAN_KEY_REQUIRED' });
+  assert.throws(() => credentials.read('openai'), { code: 'DECISIONS_KEY_REQUIRED' });
   const career = store.get().career;
   const saved = await credentials.save({ provider: 'openai', apiKey });
   assert.equal(saved.configured, true); assert.equal(saved.credentialVersion, 1);
@@ -36,26 +36,26 @@ test('save/read/remove keep key at root and only expose a secret-free descriptor
   assert.equal(removed.configured, false); assert.equal(removed.credentialVersion, 3);
   assert.deepEqual([removed.savedAt, removed.keyHint], [null, null]);
   assert.equal(JSON.stringify(store.get()).includes('sk-'), false);
-  assert.throws(() => credentials.read('openai'), { code: 'PRESCAN_KEY_REQUIRED' });
+  assert.throws(() => credentials.read('openai'), { code: 'DECISIONS_KEY_REQUIRED' });
   assert.equal(changes(), 3);
 });
 
 test('keys require plain API format without whitespace, controls, JWTs or caller endpoints', async () => {
   const { store, credentials, changes } = fixture();
   for (const key of [null, 42, '', 'sk-short', 'eyJ.fake.jwt', `Bearer ${apiKey}`, ` ${apiKey}`, `${apiKey}\n`, `${apiKey}\r`, `${apiKey}\t`, `${apiKey}\0`, 'sk-' + 'a'.repeat(501)]) {
-    await assert.rejects(credentials.save({ provider: 'openai', apiKey: key }), { code: 'PRESCAN_INVALID_KEY' });
+    await assert.rejects(credentials.save({ provider: 'openai', apiKey: key }), { code: 'DECISIONS_INVALID_KEY' });
   }
   for (const provider of ['jev', '__proto__', undefined]) {
-    await assert.rejects(credentials.save({ provider, apiKey }), { code: 'PRESCAN_UNSUPPORTED_PROVIDER' });
-    assert.throws(() => credentials.read(provider), { code: 'PRESCAN_UNSUPPORTED_PROVIDER' });
+    await assert.rejects(credentials.save({ provider, apiKey }), { code: 'DECISIONS_UNSUPPORTED_PROVIDER' });
+    assert.throws(() => credentials.read(provider), { code: 'DECISIONS_UNSUPPORTED_PROVIDER' });
   }
-  await assert.rejects(credentials.save({ provider: 'openai', apiKey, endpoint: 'https://evil.invalid' }), { code: 'PRESCAN_INVALID_INPUT' });
+  await assert.rejects(credentials.save({ provider: 'openai', apiKey, endpoint: 'https://evil.invalid' }), { code: 'DECISIONS_INVALID_INPUT' });
   assert.equal(store.get().prescanCredentials, undefined); assert.equal(changes(), 0);
 });
 
 test('failed credential persistence does not notify or claim configured state', async () => {
   let changed = false;
-  const credentials = createPrescanCredentials({ store: { get: () => ({}), async update() { throw new Error('Storage unavailable'); } }, onChange: () => { changed = true; } });
+  const credentials = createDecisionCredentials({ store: { get: () => ({}), async update() { throw new Error('Storage unavailable'); } }, onChange: () => { changed = true; } });
   await assert.rejects(credentials.save({ provider: 'openai', apiKey }));
   assert.equal(changed, false); assert.equal(credentials.publicState().configured, false);
 });

@@ -2,7 +2,7 @@ export const PUBLICATION_DAYS = 7;
 const PUBLICATION_WINDOW_MS = PUBLICATION_DAYS * 24 * 60 * 60 * 1000;
 export const matchingProfileVersion = career => `${career.evidenceRevision ?? 0}:${career.rankingVersion ?? 0}`;
 
-// Without these the agent and the pre-filter cannot judge role direction, location or work-mode fit, so every scan and
+// Without these the agent cannot judge role direction, location or work-mode fit, so every scan and
 // review would be spent on guesses. Onboarding asks for each one before any catalogue work; answers live in the vault.
 export const ESSENTIAL_PREFERENCES = Object.freeze({
   roles: 'Which roles or job titles are you looking for?',

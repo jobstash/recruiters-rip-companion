@@ -2,7 +2,7 @@ import { fail } from './state.mjs';
 import { localJob, localJobMetadata } from './job-tools.mjs';
 
 // The user's block list: a job, every job of a company or every job of a category (classification) is kept out of
-// pre-filtering, the agent's next run, recommendations and the ranked list until the entry is removed.
+// the agent's next review, recommendations and the Jobs list until the entry is removed.
 export const BLOCK_KINDS = ['job', 'company', 'category'];
 const forbidden = new Set(['__proto__', 'prototype', 'constructor']);
 const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -14,8 +14,7 @@ export const blockKey = value => typeof value === 'string' ? value.normalize('NF
 export function knownJob(career, id) {
   if (typeof id !== 'string' || forbidden.has(id)) return null;
   const sources = [localJob(career, id) && localJobMetadata(localJob(career, id)),
-    record(career.matching?.jobs) && Object.hasOwn(career.matching.jobs, id) ? career.matching.jobs[id] : null,
-    record(career.prescan?.rows) && Object.hasOwn(career.prescan.rows, id) ? career.prescan.rows[id] : null].filter(record);
+    record(career.matching?.jobs) && Object.hasOwn(career.matching.jobs, id) ? career.matching.jobs[id] : null].filter(record);
   if (!sources.length) return null;
   const first = key => sources.map(source => label(source[key])).find(Boolean) ?? null;
   return { id, title: first('title'), company: first('company'), classification: first('classification') };
@@ -45,9 +44,9 @@ export function blockedIds(career) {
   return id => Boolean(blocked(knownJob(career, id) ?? { id }));
 }
 
-/** Every saved job ID the companion can show: catalogue, local captures and pre-filter rows. */
+/** Every saved job ID the companion can show: catalogue and local captures. */
 function savedJobIds(career) {
-  return new Set([career.matching?.jobs, career.jobs, career.prescan?.rows]
+  return new Set([career.matching?.jobs, career.jobs]
     .flatMap(store => record(store) ? Object.keys(store) : []).filter(id => !forbidden.has(id)));
 }
 

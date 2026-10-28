@@ -8,7 +8,7 @@
 <link rel="stylesheet" href="design-tokens.css">
 <link rel="stylesheet" href="settings.css">
 <script src="career-browser.js" defer></script>
-<script src="prescan.js" defer></script>
+<script src="decisions.js" defer></script>
 <script src="updates.js" defer></script>
 <script src="settings.js" defer></script>
 </head>
@@ -46,11 +46,11 @@
 </div>
 <div id="me-browser" class="career-browser">
 <div class="career-toolbar">
-<div class="career-categories" role="group" aria-label="Saved career records">
-<button type="button" class="ghost" data-career-kind="sources" aria-pressed="true" disabled>CVs</button>
-<button type="button" class="ghost" data-career-kind="facts" aria-pressed="false" disabled>Facts</button>
-<button type="button" class="ghost" data-career-kind="preferences" aria-pressed="false" disabled>Preferences</button>
-<button type="button" class="ghost" data-career-kind="career" aria-pressed="false" disabled>Career</button>
+<div class="tabs" role="tablist" aria-label="Saved career records">
+<button type="button" class="tab" role="tab" data-career-kind="sources" aria-selected="true" disabled>CVs</button>
+<button type="button" class="tab" role="tab" data-career-kind="facts" aria-selected="false" disabled>Facts</button>
+<button type="button" class="tab" role="tab" data-career-kind="preferences" aria-selected="false" disabled>Preferences</button>
+<button type="button" class="tab" role="tab" data-career-kind="career" aria-selected="false" disabled>Career</button>
 </div>
 </div>
 <div class="career-panes">
@@ -77,42 +77,20 @@
 <section id="view-jobs" class="career-view jobs-view" aria-label="Jobs" hidden>
 <div id="career-browser" class="career-browser">
 <div class="career-toolbar jobs-toolbar">
-<div class="career-categories jobs-stages" role="group" aria-label="Job stages">
-<button id="career-stage-shortlist" type="button" class="ghost" data-career-kind="jobs" data-career-view="shortlist" aria-pressed="true" disabled>Shortlist<span class="stage-count" data-stage-count="shortlist"></span></button>
-<button id="career-stage-queue" type="button" class="ghost" data-career-kind="jobs" data-career-view="queue" aria-pressed="false" disabled>For review<span class="stage-count" data-stage-count="queue"></span></button>
-<button id="career-stage-reviewed" type="button" class="ghost" data-career-kind="jobs" data-career-view="reviewed" aria-pressed="false" disabled>Reviewed<span class="stage-count" data-stage-count="reviewed"></span></button>
-<button id="career-category-applications" type="button" class="ghost" data-career-kind="applications" aria-pressed="false" disabled>Applications<span class="stage-count" data-stage-count="applications"></span></button>
-<button id="career-category-blocks" type="button" class="ghost" data-career-kind="blocks" aria-pressed="false" disabled>Blocked<span class="stage-count" data-stage-count="blocks"></span></button>
+<div class="tabs jobs-stages" role="tablist" aria-label="Job stages">
+<button id="career-stage-jobs" type="button" class="tab" role="tab" data-career-kind="jobs" data-career-view="jobs" aria-selected="true" disabled>Jobs<span class="stage-count" data-stage-count="jobs"></span></button>
+<button id="career-stage-reviewed" type="button" class="tab" role="tab" data-career-kind="jobs" data-career-view="reviewed" aria-selected="false" disabled>Reviewed<span class="stage-count" data-stage-count="reviewed"></span></button>
+<button id="career-category-applications" type="button" class="tab" role="tab" data-career-kind="applications" aria-selected="false" disabled>Applications<span class="stage-count" data-stage-count="applications"></span></button>
+<button id="career-category-blocks" type="button" class="tab" role="tab" data-career-kind="blocks" aria-selected="false" disabled>Blocked<span class="stage-count" data-stage-count="blocks"></span></button>
 </div>
-<div id="review-launch" class="actions review-launch" aria-label="Continue the review in your AI"><button id="review-codex" class="ghost" type="button" hidden>Continue in Codex</button><button id="review-claude" class="ghost" type="button" hidden>Continue in Claude</button><button id="copy-review-prompt" class="ghost" type="button">Copy prompt</button></div>
 </div>
 <section id="stage-panels" class="stage-panels" aria-label="Stage controls">
-<div id="run-step-prefilter" class="stage-panel" data-stage-panel="shortlist">
-<div id="run-step-key" class="stage-block" hidden>
-<p id="prescan-key-state" class="run-step-state" role="status">Open local storage.</p>
-<div class="actions"><button id="jobs-prescan-settings" class="ghost" type="button">Add key</button></div>
+<div id="stage-jobs" class="stage-panel stage-panel-jobs" data-stage-panel="jobs">
+<div class="stage-block publication-window">
+<label for="publication-range" class="run-step-state">Published <span id="publication-range-label">in the past 3 days</span></label>
+<input id="publication-range" type="range" min="0" max="4" step="1" value="2" aria-valuetext="Past 3 days" disabled>
 </div>
-<div class="stage-block prescan-publication">
-<label for="prescan-range" class="run-step-state">Published <span id="prescan-range-label">Past 3 days</span></label>
-<input id="prescan-range" type="range" min="0" max="4" step="1" value="2" aria-valuetext="Past 3 days" aria-describedby="prescan-range-help" disabled>
-<p id="prescan-range-help" class="run-step-help">Today or the past 3 days work best: older listings already have many applicants.</p>
-</div>
-<div class="stage-block">
-<p id="prescan-preview" class="run-step-state" role="status" aria-live="polite" aria-atomic="true">Loading job count…</p>
-<p id="prescan-progress" class="run-step-state" role="status" aria-live="polite" aria-atomic="true"></p>
-<div class="actions"><button id="prescan-start" class="ghost" type="button" aria-describedby="prescan-preview" disabled>Start</button><button id="prescan-cancel" class="ghost" type="button" hidden>Stop</button></div>
-<p id="prescan-recovery" class="run-step-help" role="status" aria-live="polite"></p>
-<p id="prescan-message" class="run-step-help" role="status" aria-live="polite"></p>
-</div>
-</div>
-<div id="run-step-handover" class="stage-panel" data-stage-panel="queue" hidden>
-<div id="career-surface" class="career-surface stage-block">
-<div class="career-categories" role="group" aria-label="Jobs that go on for review">
-<button id="career-queue-qualified" type="button" class="ghost" aria-pressed="true" disabled>Pre-qualified only</button>
-<button id="career-queue-all" type="button" class="ghost" aria-pressed="false" disabled>All jobs</button>
-</div>
-<p id="career-surface-sentence" class="run-step-help" role="status"></p>
-</div>
+<div id="review-launch" class="actions review-launch" aria-label="Continue the review in your AI"><button id="review-codex" class="ghost" type="button" hidden>Continue in Codex</button><button id="review-claude" class="ghost" type="button" hidden>Continue in Claude</button><button id="copy-review-prompt" class="ghost" type="button">Copy prompt</button></div>
 </div>
 </section>
 <div class="career-panes jobs-panes">
@@ -178,20 +156,20 @@
 <p id="other-connections" class="caption" aria-live="polite" hidden></p>
 </div>
 </section>
-<section id="prescan" class="setup-section" aria-labelledby="prescan-title">
-<h2 id="prescan-title">Optional Decisions API</h2>
+<section id="decisions" class="setup-section" aria-labelledby="decisions-title">
+<h2 id="decisions-title">Optional Decisions API</h2>
 <div class="settings-content">
-<p id="prescan-key-status" class="prescan-key-status" role="status" aria-live="polite">Open local storage to configure the optional Decisions API.</p>
-<form id="prescan-form" autocomplete="off">
-<div id="prescan-key-saved" class="actions" hidden>
-<button id="prescan-replace" class="ghost" type="button" disabled>Replace key</button>
-<button id="prescan-remove" class="text" type="button" disabled>Remove key</button>
+<p id="decisions-key-status" class="decisions-key-status" role="status" aria-live="polite">Open local storage to configure the optional Decisions API.</p>
+<form id="decisions-form" autocomplete="off">
+<div id="decisions-key-saved" class="actions" hidden>
+<button id="decisions-replace" class="ghost" type="button" disabled>Replace key</button>
+<button id="decisions-remove" class="text" type="button" disabled>Remove key</button>
 </div>
-<div id="prescan-key-entry" class="prescan-key-entry" hidden>
-<label class="prescan-field" for="prescan-key"><span id="prescan-key-label">OpenAI API key</span><input id="prescan-key" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" aria-describedby="prescan-key-status" disabled></label>
-<div class="actions"><button id="prescan-save" class="primary" type="button" disabled>Save key</button><button id="prescan-cancel-entry" class="text" type="button" hidden>Cancel</button></div>
+<div id="decisions-key-entry" class="decisions-key-entry" hidden>
+<label class="decisions-field" for="decisions-key"><span id="decisions-key-label">OpenAI API key</span><input id="decisions-key" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" aria-describedby="decisions-key-status" disabled></label>
+<div class="actions"><button id="decisions-save" class="primary" type="button" disabled>Save key</button><button id="decisions-cancel-entry" class="text" type="button" hidden>Cancel</button></div>
 </div>
-<p id="prescan-key-message" role="status" aria-live="polite"></p>
+<p id="decisions-key-message" role="status" aria-live="polite"></p>
 </form>
 </div>
 </section>
@@ -215,8 +193,8 @@
 <h2 id="help-flow-title">How it works</h2>
 <div class="settings-content"><ol id="help-steps" class="help-steps">
 <li>Connect your account in Settings.</li>
-<li>Optionally pre-filter jobs with the Decisions API.</li>
-<li>Your agent reviews jobs against your CVs and facts.</li>
+<li>Choose the publication window under Jobs and continue in Codex or Claude.</li>
+<li>Your AI reviews every job in the window against your CVs and facts.</li>
 <li>Tailor documents and apply.</li>
 </ol></div>
 </section>

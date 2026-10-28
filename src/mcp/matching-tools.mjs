@@ -7,10 +7,10 @@ import {
   RERANK_POLICY, RERANK_SIZE, assessmentSchema, comparisonSchema, deriveDecision, idSchema,
 } from './matching-contract.mjs';
 import { compareFacts } from './facts.mjs';
-import { prescanInclusion } from '../prescan/state.mjs';
+import { reviewInclusion, savedPublicationRange } from './review-queue.mjs';
 import { blockFilter } from './blocklist.mjs';
 import { completeLocalJobs, localJob, localJobMetadata, localJobOriginal } from './job-tools.mjs';
-import { DEFAULT_PUBLICATION_RANGE, publicationInWindow, publicationWindowForRange } from '../prescan/publication-range.mjs';
+import { publicationInWindow, publicationWindowForRange } from './publication-range.mjs';
 
 const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
 const object = (properties, required = []) => ({ type: 'object', properties, required, additionalProperties: false });
@@ -50,6 +50,7 @@ export async function deleteRankings(store) {
     career.matching = { jobs: {}, scores: {}, pairs: {} };
     delete career.prescan;
     delete career.prescanInclusion;
+    delete career.reviewOverrides;
   });
   return result;
 }
@@ -151,7 +152,7 @@ export function candidateContext(career) {
   if (!(professional.headline?.trim() || professional.roleCapabilities?.length) || (!cv && !facts.length))
     fail('PROFILE_INCOMPLETE', 'Save a professional headline or roleCapabilities, and import a CV with career_source_import or save career facts with career_facts_save, before matching.');
   const missing = missingPreferences(career);
-  if (missing.length) fail('PREFERENCES_REQUIRED', `Before any pre-filter or review, ask the candidate: ${missing.map(field => ESSENTIAL_PREFERENCES[field]).join(' ')} Save every answer with career_preferences_update (fields: ${missing.join(', ')}), read career_profile_read to confirm, then continue.`);
+  if (missing.length) fail('PREFERENCES_REQUIRED', `Before any review, ask the candidate: ${missing.map(field => ESSENTIAL_PREFERENCES[field]).join(' ')} Save every answer with career_preferences_update (fields: ${missing.join(', ')}), read career_profile_read to confirm, then continue.`);
   return { ...professional, ...(cv ? { cv } : {}), facts, preferences };
 }
 
@@ -331,10 +332,9 @@ export async function loadMatchingCatalogue(platform, window) {
   }
 }
 
-export function createMatchingTools({ store, platform, exportDocument, preserveFinalAssessments = false, approvedPublicationWindow }) {
+export function createMatchingTools({ store, platform, exportDocument }) {
   const describe = name => MATCHING_TOOL_DESCRIPTIONS[name];
-  const publicationScope = () => approvedPublicationWindow ??
-    publicationWindowForRange(store.get().prescanPublicationRange ?? DEFAULT_PUBLICATION_RANGE);
+  const publicationScope = () => publicationWindowForRange(savedPublicationRange(store.get().career ?? {}));
   return [
     {
       name: 'career_rankings_delete', description: describe('career_rankings_delete'),
@@ -361,7 +361,7 @@ export function createMatchingTools({ store, platform, exportDocument, preserveF
           const previous = career.matching;
           const currentJobs = Object.fromEntries([...jobs, ...completeLocalJobs(career)].map(job => [job.id, job]));
           const currentScores = Object.fromEntries(Object.entries(previous?.scores ?? {}).filter(([id]) => own(currentJobs, id)));
-          const keepArchive = preserveFinalAssessments || args.localOnly;
+          const keepArchive = args.localOnly;
           const scores = keepArchive ? previous?.scores ?? {} : currentScores;
           const retainedJobs = keepArchive
             ? Object.fromEntries(Object.entries(previous?.jobs ?? {}).filter(([id]) => own(scores, id) && !own(currentJobs, id)))
@@ -371,13 +371,12 @@ export function createMatchingTools({ store, platform, exportDocument, preserveF
           const saved = career.matching = { jobs: { ...retainedJobs, ...currentJobs }, scores, pairs };
           const profileVersion = matchingProfileVersion(career);
           const candidates = Object.keys(currentJobs).filter(id => !currentAssessment(saved.scores[id], profileVersion));
-          const inclusion = prescanInclusion(career, candidates, window);
+          const inclusion = reviewInclusion(career, candidates);
           result = { candidate, profileVersion, policyId: ASSESSMENT_POLICY_ID, evidenceRevision: career.evidenceRevision ?? 0,
             publicationWindow: window,
             assessmentPolicy: { protocol: MATCHING_PROTOCOL, weights: DIMENSION_WEIGHTS, bands: BANDS, recommendMinimum: RECOMMEND_MINIMUM },
             assessmentSchema,
             jobIds: [...inclusion.includedIds], excluded: inclusion.candidates - inclusion.includedIds.size, blocked: inclusion.blocked,
-            minimumScore: inclusion.minimumScore, prefilterStale: inclusion.stale,
             total: Object.keys(currentJobs).length, ...counts(currentJobs, currentScores, profileVersion), batchSize: 10, workers: 8 };
         });
         return result;

@@ -39,7 +39,7 @@ export async function packageMcp() {
       const manifest = {
         manifest_version: '0.3', name, display_name: 'Recruiters.rip', version,
         description: 'Complete saved rankings and grounded CareerCup CV preparation. Requires Recruiters.rip Companion.',
-        long_description: 'Review jobs and prepare tailored application documents in your subscription app. Optional companion-managed API pre-scans prioritise jobs before final review and require a separately billed key entered only in local settings. The companion asks permission before sending career context to the provider. Keys are never exposed to chat. No web-job-search fallback.',
+        long_description: 'Review jobs and prepare tailored application documents in your subscription app. An optional OpenAI Decisions key, entered only in local companion settings and separately billed, maps known values into application forms. Keys are never exposed to chat. No web-job-search fallback.',
         author: { name: 'JobStash' },
         server: { type: 'node', entry_point: 'server/index.cjs', mcp_config: { command: 'node', args: ['${__dirname}/server/index.cjs', ...(local ? ['--local-product'] : [])] } },
         tools_generated: true, prompts_generated: true,

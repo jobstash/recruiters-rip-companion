@@ -25,7 +25,7 @@ em, i { font-style: normal; }
 ::selection { background: color-mix(in oklab, var(--color-disperse-azure) 35%, transparent); color: var(--color-ink); }
 :focus-visible { outline: 2px solid transparent; box-shadow: var(--shadow-focus-ring); }
 .caption { font-family: var(--font-geist-mono); font-size: 13px; line-height: 1.6; letter-spacing: .02em; color: var(--color-smoke); }
-.eyebrow, .brand-sub, .prescan-field, .career-reader-content h3, .career-reader-content dt {
+.eyebrow, .brand-sub, .decisions-field, .career-reader-content h3, .career-reader-content dt {
   font-family: var(--font-geist-mono); font-size: 12px; line-height: 1.33; font-weight: 500; letter-spacing: .08em; text-transform: uppercase;
 }
 .eyebrow { color: var(--color-smoke); }
@@ -89,17 +89,25 @@ main { flex: 1; min-height: 0; overflow: auto; padding: var(--spacing-32) var(--
 .stage-panel { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: var(--spacing-16) var(--spacing-40); padding: var(--spacing-16) 0 var(--spacing-24); border-top: 1px solid var(--color-facet); }
 .stage-block { display: grid; align-content: start; gap: var(--spacing-8); min-width: 0; }
 .stage-block .actions { margin-top: var(--spacing-8); }
+/* Jobs stage: publication window left, hand-over actions right, both resting on the slider's baseline row. */
+.jobs-toolbar .tabs { flex: 1 1 100%; }
+.stage-panel-jobs { grid-template-columns: minmax(0, 1fr) auto; align-items: end; }
+.stage-panel-jobs .review-launch { align-self: end; min-height: 44px; }
 .jobs-stages .stage-count { margin-left: var(--spacing-8); color: var(--color-smoke); font-variant-numeric: tabular-nums; }
-.jobs-stages [aria-pressed="true"] .stage-count { color: var(--color-ink); }
+.jobs-stages [aria-selected="true"] .stage-count { color: var(--color-ink); }
 .run-step-state { font: 400 14px/1.5 var(--font-geist); color: var(--color-ink); font-variant-numeric: tabular-nums; }
 .run-step-help { font: 400 13px/1.6 var(--font-geist); color: var(--color-smoke); }
 .run-step-state:empty, .run-step-help:empty { display: none; }
-.career-categories { display: flex; flex-wrap: wrap; gap: var(--spacing-8); }
-.career-categories button { border-color: var(--color-facet); padding-inline: var(--spacing-16); color: var(--color-smoke); }
-.career-categories button[aria-pressed="true"] { color: var(--color-ink); border-color: var(--color-ink); }
-.career-categories button[aria-pressed="true"]::after { content: ""; position: absolute; bottom: -1px; left: 0; right: 0; height: 1px; background: var(--rr-dispersion); box-shadow: var(--shadow-edge-glow); }
-.career-categories button:disabled { color: var(--color-dust); border-color: var(--color-facet); }
-.career-categories button:disabled::after { display: none; }
+/* Tabs are navigation, not actions: ruled text with the current one underlined, like the top bar. Boxed buttons are
+   reserved for things that do something. */
+.tabs { display: flex; flex-wrap: wrap; gap: var(--spacing-8); border-bottom: 1px solid var(--color-facet); }
+.tabs .tab { position: relative; min-height: 44px; margin-bottom: -1px; padding: 12px var(--spacing-8); border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: var(--color-smoke); font: 500 12px/1.33 var(--font-geist-mono); letter-spacing: .08em; text-transform: uppercase; cursor: pointer; }
+.tabs .tab:hover:not(:disabled) { color: var(--color-ink); }
+.tabs .tab[aria-selected="true"] { color: var(--color-ink); border-bottom-color: var(--color-ink); }
+.tabs .tab[aria-selected="true"]::after { content: ""; position: absolute; bottom: -2px; left: 0; right: 0; height: 2px; background: var(--rr-dispersion); box-shadow: var(--shadow-edge-glow); }
+.tabs .tab:disabled { color: var(--color-dust); cursor: not-allowed; }
+.tabs .tab:disabled::after { display: none; }
+.tabs .tab:focus-visible { outline: 2px solid transparent; box-shadow: var(--shadow-focus-ring); }
 /* Sort and Clear belong to the list they act on: the list column's own head row, not the tab strip above both panes. */
 .review-launch { flex-wrap: wrap; justify-content: flex-end; min-width: 0; }
 .career-list-tools { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--spacing-8) var(--spacing-16); min-width: 0; min-height: 44px; }
@@ -134,8 +142,7 @@ main { flex: 1; min-height: 0; overflow: auto; padding: var(--spacing-32) var(--
    A number appears only after an agent review. */
 /* Card: [Review switch] [mark + three lines] [figure]. The switch leads because it is the user's decision about the row;
    the figure trails because it is what the list is sorted by. */
-.career-card .career-record { flex: 1 1 auto; flex-direction: row; align-items: flex-start; gap: var(--spacing-16); min-width: 0; padding: 20px var(--spacing-16) 20px 0; }
-.career-card-lead { flex: none; display: flex; align-items: flex-start; width: 72px; padding: 20px 0 20px var(--spacing-24); }
+.career-card .career-record { flex: 1 1 auto; flex-direction: row; align-items: flex-start; gap: var(--spacing-16); min-width: 0; padding: 20px var(--spacing-16) 20px var(--spacing-24); }
 .career-card-mark { flex: none; display: grid; place-items: center; width: 36px; height: 36px; border: 1px solid var(--color-facet); background: var(--color-surface); color: var(--color-smoke); font: 500 14px/1 var(--font-geist-mono); overflow: hidden; }
 .career-card-logo { position: absolute; width: 36px; height: 36px; object-fit: contain; background: var(--color-light); }
 .career-card-mark { position: relative; }
@@ -150,20 +157,12 @@ main { flex: 1; min-height: 0; overflow: auto; padding: var(--spacing-32) var(--
 .career-card-caption { font: 400 10px/1.4 var(--font-geist-mono); letter-spacing: .02em; color: var(--color-smoke); }
 /* Ineligible job: the saved verdict stands where the number would, in ink, wrapping within the column if it must. */
 .career-card-verdict { font-size: 12px; color: var(--color-ink); white-space: normal; overflow-wrap: anywhere; }
-.career-card-include { display: flex; flex-direction: column; align-items: center; gap: 4px; min-height: 24px; white-space: nowrap; cursor: pointer; }
-.career-card-reason { white-space: normal; overflow-wrap: anywhere; }
-.career-card-include:hover .career-card-caption { color: var(--color-ink); }
-/* Square switch: a native checkbox drawn as a ruled square; checked fills the inner square with ink. */
-.career-include { appearance: none; flex: none; width: 20px; height: 20px; margin: 0; padding: 3px; border: 1px solid var(--color-ink); border-radius: 0; background: transparent; background-clip: content-box; cursor: pointer; }
-.career-include:checked { background-color: var(--color-ink); }
-.career-include:focus-visible { box-shadow: var(--shadow-focus-ring); }
-.career-include:disabled { border-color: var(--color-facet); cursor: not-allowed; }
 /* Hand over: the slider sets the score bound and the sentence states the resulting count. */
 .career-surface { display: grid; gap: var(--spacing-8); }
 #career-minimum-score { grid-area: slider; }
-#career-minimum-score, #prescan-range { width: 100%; min-width: 0; min-height: 44px; margin: 0; accent-color: var(--color-ink); cursor: pointer; }
-#career-minimum-score:focus-visible, #prescan-range:focus-visible { outline: 2px solid var(--color-ink); outline-offset: 2px; box-shadow: var(--shadow-focus-ring); }
-#career-minimum-score:disabled, #prescan-range:disabled { cursor: not-allowed; }
+#publication-range { width: 100%; min-width: 0; min-height: 44px; margin: 0; accent-color: var(--color-ink); cursor: pointer; }
+#publication-range:focus-visible { outline: 2px solid var(--color-ink); outline-offset: 2px; box-shadow: var(--shadow-focus-ring); }
+#publication-range:disabled { cursor: not-allowed; }
 .career-surface-sentence { font: 400 13px/1.6 var(--font-geist-mono); font-variant-numeric: tabular-nums; color: var(--color-ink); }
 .career-surface-sentence:empty { display: none; }
 .career-next-run button { justify-self: start; }
@@ -196,7 +195,6 @@ main { flex: 1; min-height: 0; overflow: auto; padding: var(--spacing-32) var(--
 .career-reader-content .career-verdict-headline { font: 500 18px/1.35 var(--font-geist); letter-spacing: normal; text-transform: none; color: var(--color-ink); }
 .career-verdict-detail { font: 400 14px/1.5 var(--font-geist); color: var(--color-ink-2); }
 .career-verdict-reason { font: 400 14px/1.5 var(--font-geist); color: var(--color-ink); }
-.career-verdict-switch { display: inline-flex; align-items: center; gap: var(--spacing-8); min-height: 36px; cursor: pointer; }
 .career-verdict .actions { align-items: center; }
 /* Reviewed fit chart: ink bars on a ruled track, no colour. Overall first and heavier; dimensions in ink-2. */
 .career-chart { display: grid; gap: var(--spacing-8); }
@@ -235,19 +233,18 @@ details[open] summary::before { transform: rotate(-135deg); }
 summary:hover { color: var(--color-ink); }
 .app-details > :not(summary) { margin-top: var(--spacing-16); }
 .command { display: block; margin: 0; padding: var(--spacing-16); background: var(--color-surface); border: 1px solid var(--color-facet); font: 400 13px/1.6 var(--font-geist-mono); color: var(--color-ink); white-space: pre-wrap; overflow-wrap: anywhere; }
-#prescan-form, .prescan-key-entry { display: grid; gap: var(--spacing-16); min-width: 0; }
+#decisions-form, .decisions-key-entry { display: grid; gap: var(--spacing-16); min-width: 0; }
 /* The key state reads as body copy, not a caption: it is the section's primary fact. */
-.prescan-key-status { max-width: var(--reading); line-height: 1.6; }
+.decisions-key-status { max-width: var(--reading); line-height: 1.6; }
 .key-hint { text-transform: none; }
-.prescan-field { display: grid; gap: var(--spacing-8); min-width: 0; }
-.prescan-field input { width: 100%; min-width: 0; min-height: 44px; padding: 12px 0; border: 0; border-bottom: 1px solid var(--color-ink); border-radius: 0; background: transparent; color: var(--color-ink); font: 400 18px/1.4 var(--font-geist); letter-spacing: normal; text-transform: none; }
-.prescan-field input:focus { border-bottom-color: transparent; background-image: var(--rr-dispersion); background-repeat: no-repeat; background-size: 100% 2px; background-position: 0 100%; box-shadow: var(--shadow-input-focus); }
-.prescan-field input:focus-visible { box-shadow: var(--shadow-focus-ring), var(--shadow-input-focus); }
-.prescan-field input:disabled { border-color: var(--color-facet); color: var(--color-dust); cursor: not-allowed; }
+.decisions-field { display: grid; gap: var(--spacing-8); min-width: 0; }
+.decisions-field input { width: 100%; min-width: 0; min-height: 44px; padding: 12px 0; border: 0; border-bottom: 1px solid var(--color-ink); border-radius: 0; background: transparent; color: var(--color-ink); font: 400 18px/1.4 var(--font-geist); letter-spacing: normal; text-transform: none; }
+.decisions-field input:focus { border-bottom-color: transparent; background-image: var(--rr-dispersion); background-repeat: no-repeat; background-size: 100% 2px; background-position: 0 100%; box-shadow: var(--shadow-input-focus); }
+.decisions-field input:focus-visible { box-shadow: var(--shadow-focus-ring), var(--shadow-input-focus); }
+.decisions-field input:disabled { border-color: var(--color-facet); color: var(--color-dust); cursor: not-allowed; }
 .me-actions { display: grid; gap: var(--spacing-16); padding-bottom: var(--spacing-24); }
-.prescan-publication { display: grid; gap: var(--spacing-8); min-width: 0; }
-#prescan-progress { font: 400 13px/1.6 var(--font-geist-mono); }
-#prescan-preview:empty, #prescan-progress:empty, #prescan-key-message:empty { display: none; }
+.publication-window { display: grid; gap: var(--spacing-8); min-width: 0; }
+#decisions-key-message:empty { display: none; }
 
 .update-content { gap: var(--spacing-16); }
 #update-progress { width: 100%; max-width: var(--reading); accent-color: var(--color-ink); }
@@ -276,14 +273,13 @@ dialog::backdrop { background: color-mix(in oklab, var(--color-void) 80%, transp
   .app-row { grid-template-columns: minmax(0, 1fr); grid-template-areas: "name" "status" "action" "details"; }
   .setup-section { grid-template-columns: minmax(0, 1fr); gap: var(--spacing-24); }
   .me-actions button { padding-inline: var(--spacing-8); }
-  .career-categories { gap: var(--spacing-8); }
-  .career-categories button { padding-inline: var(--spacing-8); }
   .career-reader-content dl { grid-template-columns: minmax(0, 1fr); gap: var(--spacing-8); }
   .career-reader-content dd + dt { margin-top: var(--spacing-8); }
-  .career-card .career-record { gap: var(--spacing-8); padding: var(--spacing-16) var(--spacing-8) var(--spacing-16) 0; }
-  .career-card-lead { width: 60px; padding: var(--spacing-16) 0 var(--spacing-16) var(--spacing-16); }
+  .career-card .career-record { gap: var(--spacing-8); padding: var(--spacing-16) var(--spacing-8) var(--spacing-16) var(--spacing-16); }
   .career-card-side { width: 96px; padding: var(--spacing-16) var(--spacing-16) var(--spacing-16) 0; }
-    .stage-panel { grid-template-columns: minmax(0, 1fr); }
+  .stage-panel { grid-template-columns: minmax(0, 1fr); }
+  .stage-panel-jobs { grid-template-columns: minmax(0, 1fr); }
+  .stage-panel-jobs .review-launch { justify-content: flex-start; }
   .career-chart-row { grid-template-columns: minmax(80px, 96px) minmax(0, 1fr) 3ch; gap: var(--spacing-8); }
   .career-requirement { grid-template-columns: minmax(0, 1fr); }
   .career-requirement-status { grid-column: 1; }
@@ -298,10 +294,8 @@ dialog::backdrop { background: color-mix(in oklab, var(--color-void) 80%, transp
   .career-list, .career-records, .career-reader { overflow: visible; }
 }
 @media (forced-colors: active) {
-  .tab button[aria-current="page"], .career-categories button[aria-pressed="true"] { border-bottom: 2px solid Highlight; }
+  .tab button[aria-current="page"], .tabs .tab[aria-selected="true"] { border-bottom: 2px solid Highlight; }
   .career-record[aria-current="true"] { border-left: 2px solid Highlight; }
-  .career-include { forced-color-adjust: none; border-color: CanvasText; }
-  .career-include:checked { background-color: Highlight; }
   .career-chart-track { border-color: CanvasText; }
   .career-chart-fill, .career-chart-row.is-overall .career-chart-fill { forced-color-adjust: none; background: CanvasText; }
   :focus-visible { outline: 2px solid Highlight; outline-offset: 2px; }

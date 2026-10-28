@@ -19,7 +19,6 @@ Preserve `rip.recruiters.companion`, **Recruiters.rip Companion**, **Recruiters 
 | Durable captured jobs | `src/mcp/job-tools.mjs`, with integrations in matching, application tools and `src/career-browser.mjs` |
 | Form snapshots, agent answers and preparation | `src/mcp/form-tools.mjs`, `src/browser-forms.mjs`, `src/decisions/form-mapping.mjs` |
 | Matching rubric and policy fingerprints | `src/mcp/matching-contract.mjs`, `src/mcp/matching-tools.mjs` |
-| Optional job pre-filtering | `src/prescan/` |
 | Evidence-bound CVs and document exports | `src/mcp/application-tools.mjs`, `src/documents/` |
 | Public release updates | `src/updates.mjs`, `src/update-install.cjs`, `ui/updates.js` |
 | Packaging and release metadata | `scripts/package-local.mjs`, `scripts/after-pack.cjs`, `scripts/release-metadata.mjs`, `src/package-release.mjs` |
@@ -28,7 +27,7 @@ Preserve `rip.recruiters.companion`, **Recruiters.rip Companion**, **Recruiters 
 
 Career records use plain private JSON, not keychain storage or at-rest encryption. The optional OpenAI key is outside `career` and excluded from MCP, extension responses, logs and career exports. The website never receives private career content or provider keys.
 
-Claude/Codex handles final assessments, questions and new application text. Optional OpenAI Decisions requests only prioritize jobs or choose known values for form fields. They require native data-sharing/billing approval, bounded requests and context/credential invalidation. Never run live inference in tests or invent unknown answers or membership.
+Claude/Codex handles job assessments, questions and new application text. Optional OpenAI Decisions requests only choose known values for form fields (Chrome Read page); they never assess jobs. They require bounded requests and context/credential invalidation. Never run live inference in tests or invent unknown answers or membership.
 
 The current career schema remains 2. Captured jobs and form drafts are lazy additions; do not reset existing careers to introduce them. Facts retain subject/employer identity. CV claims retain internal support citations; rendered documents omit that validation metadata.
 
@@ -36,7 +35,7 @@ The current career schema remains 2. Captured jobs and form drafts are lazy addi
 
 `career.jobs` is durable and independent of the replaceable matching cache. Import uses runtime validation, request/revision receipts and detail/apply URL aliases. Source-page provenance alone is not job identity. A snippet never overwrites a complete original. Changing an original advances ranking context so an in-flight old assessment cannot become current.
 
-Register `createJobTools({store})`. Native capture calls `importCapturedJobs({store,requestId,revision,sourceUrl,jobs})`. `career_job_read` and application creation resolve local IDs without platform access. `career_match_jobs({localOnly:true})` is offline; normal feed calls retain membership enforcement and follow `prescanPublicationRange` (default Past 3 days). Explicit imports are not publication-filtered, and unknown publication dates stay unknown. The publication slider spans Today through Whole catalogue; middleware returns exact range counts and paged metadata, and every in-scope pending job is selected without a job-count cap.
+Register `createJobTools({store})`. Native capture calls `importCapturedJobs({store,requestId,revision,sourceUrl,jobs})`. `career_job_read` and application creation resolve local IDs without platform access. `career_match_jobs({localOnly:true})` is offline; normal feed calls retain membership enforcement and follow `career.publicationRange` (legacy `prescanPublicationRange` read as fallback; default Past 3 days), returning every job in the window minus blocked jobs and established incompatibilities (`src/mcp/review-queue.mjs`) without a job-count cap. Explicit imports are not publication-filtered, and unknown publication dates stay unknown. The publication slider spans Today through Past 2 weeks; the MCP also accepts past_month and all; middleware returns exact range counts and paged metadata.
 
 Incomplete listing cards are visible but require the full original before assessment/application use (`FULL_AD_REQUIRED`). Ranking resets do not delete captures.
 
@@ -48,13 +47,13 @@ External website requests remain limited to status, pairing and opening settings
 
 The page functions are self-contained for `chrome.scripting` serialization. They treat page data as untrusted, exclude protected/populated controls, bind the document and actual nodes, and revalidate live schema and radio membership before filling. Page handlers can synchronously change another control or reject a value, so report retained values rather than setter calls. Never submit, click Next, upload files or fill consent/password/payment/government-ID/demographic controls.
 
-`createBrowserForms` gates private-value release through native approval. The agent reads `career_form_read` and stages text with `career_form_answers_save`; staged answers bind to the snapshot and career evidence. Preserve fact qualifications and contact ownership. Unknown answers remain manual. One optional Decisions key serves pre-filtering and known-value mapping.
+`createBrowserForms` gates private-value release through native approval. The agent reads `career_form_read` and stages text with `career_form_answers_save`; staged answers bind to the snapshot and career evidence. Preserve fact qualifications and contact ownership. Unknown answers remain manual. The one optional Decisions key serves known-value mapping only.
 
 ## Updates and packages
 
 The updater uses only the official repository's actual latest stable published release and validated mac-arm64 assets. It verifies SHA-256, bounds streams and extraction, rejects untrusted redirects/paths, checks bundle identity/version/architecture/signature and replaces only its running installed app. Source/local/unwritable installations use verified manual handoff. No command publishes or changes repository visibility.
 
-Download, installer handover, launched and confirmed are distinct states. A separate immutable startup confirmation prevents a late helper write from downgrading confirmation. The previous app stays available until new-version startup confirms; failed swaps/launch commands roll back. Installation rejects active paid work and drains accepted writes with `vault.flush()`. The exact pre-filter `isActive()` signal includes draining requests even when its displayed summary is stale.
+Download, installer handover, launched and confirmed are distinct states. A separate immutable startup confirmation prevents a late helper write from downgrading confirmation. The previous app stays available until new-version startup confirms; failed swaps/launch commands roll back. Installation rejects active paid work and drains accepted writes with `vault.flush()`.
 
 Inspect packaged artifacts, not just configuration. Electron-builder merges protocol arrays: the after-pack hook clears local `CFBundleURLTypes` before signing, while production retains the real scheme. Native identity and updater helper files must be available under `app.asar.unpacked`. Keep the bundled extension and font licences in the package.
 

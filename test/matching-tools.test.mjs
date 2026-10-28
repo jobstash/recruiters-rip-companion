@@ -5,10 +5,8 @@ import addFormats from 'ajv-formats';
 import { createMatchingTools } from '../src/mcp/matching-tools.mjs';
 import { createCareerState } from '../src/mcp/state.mjs';
 import { salaryEligibility, recentPublication, matchingProfileVersion } from '../src/mcp/assessment-policy.mjs';
-import { DEFAULT_INCLUSION_MINIMUM_SCORE } from '../src/prescan/state.mjs';
 import { ASSESSMENT_POLICY_ID, RERANK_POLICY, RERANK_SIZE, deriveDecision, fitBand, overallFit } from '../src/mcp/matching-contract.mjs';
-import { publicationInWindow } from '../src/prescan/publication-range.mjs';
-import { decisionProviders } from '../src/prescan/providers.mjs';
+import { publicationInWindow } from '../src/mcp/publication-range.mjs';
 import { addBlock, removeBlock } from '../src/mcp/blocklist.mjs';
 
 const publishedAt = new Date(Date.now() - 86400000).toISOString();
@@ -41,7 +39,7 @@ const termsOf = ({ salary, city, location, workMode, seniority, commitment, clas
   ({ salary, city, location, workMode, seniority, commitment, classification });
 const fact = (subject, answer, kind = 'note') => ({ kind, subject, answer });
 const emptyMatching = { jobs: {}, scores: {}, pairs: {} };
-function fixture({ jobs = [job('a'), job('b'), job('c')], batch, emptyProfile = false, exportDocument, preserveFinalAssessments = false } = {}) {
+function fixture({ jobs = [job('a'), job('b'), job('c')], batch, emptyProfile = false, exportDocument } = {}) {
   const career = createCareerState();
   if (!emptyProfile) {
     Object.assign(career.profile, { headline: 'Software engineer', skills: ['JavaScript'], location: 'Dublin',
@@ -78,7 +76,7 @@ function fixture({ jobs = [job('a'), job('b'), job('c')], batch, emptyProfile = 
   };
   const ajv = new Ajv({ strict: false, allErrors: true });
   addFormats(ajv);
-  const tools = new Map(createMatchingTools({ store, platform, exportDocument, preserveFinalAssessments }).map(tool => [tool.name, { ...tool, validate: ajv.compile(tool.inputSchema) }]));
+  const tools = new Map(createMatchingTools({ store, platform, exportDocument }).map(tool => [tool.name, { ...tool, validate: ajv.compile(tool.inputSchema) }]));
   const call = async (name, args = {}, context) => {
     const tool = tools.get(name);
     if (!tool.validate(args)) throw Object.assign(new Error(ajv.errorsText(tool.validate.errors)), { code: 'INVALID_INPUT' });
@@ -88,24 +86,6 @@ function fixture({ jobs = [job('a'), job('b'), job('c')], batch, emptyProfile = 
     call('career_match_save', { profileVersion, policyId: ASSESSMENT_POLICY_ID, assessments }, context);
   return { store, calls, tools, call, save, setCatalogue: jobs => { catalogue = jobs; }, setPlatformError: error => { platformError = error; } };
 }
-
-test('subscription assignment and original batches never expose saved preliminary judgments', async () => {
-  const f = fixture();
-  const sentinel = 'PRIVATE_PRELIMINARY_JUDGMENT';
-  await f.store.update(state => {
-    state.career.prescan = { provider: 'openai', profileVersion: '0:0', rows: {
-      'node:a': { id: 'node:a', status: 'scored', publishedAt, priority: 99, direction: sentinel, constraints: sentinel, eligibility: sentinel,
-        dimensions: { direction: sentinel }, confidence: sentinel, answers: [sentinel], reason: sentinel, commentary: sentinel },
-    }, rawAnswers: sentinel, commentary: sentinel };
-  });
-  const context = await f.call('career_match_jobs');
-  const batch = await f.call('career_match_batch', { ids: context.jobIds });
-  assert.equal(JSON.stringify({ context, batch }).includes(sentinel), false);
-  assert.equal(context.candidate.cv, 'Software engineer at Acme, 2019–2023. Built reporting services.');
-  assert.equal(batch.jobs[0].ad, 'Full original ad');
-  // Only the pre-filtered job clears the minimum score; its preliminary judgments still never travel with it.
-  assert.deepEqual(context.jobIds, ['node:a']);
-});
 
 test('overall fit weights the four dimensions and bands follow their thresholds', () => {
   const only = (key, value = 100) => ({ ...dimensions(0), [key]: value });
@@ -917,7 +897,7 @@ test('token validation rejects missing or malformed inputs and every integer ove
 test('recommendation order is overall then known publication date then ID and unstated consent never authorizes a move', async () => {
   const f = fixture();
   await f.store.update(state => {
-    state.prescanPublicationRange = 'past_week';
+    state.career.publicationRange = 'past_week';
     delete state.career.profile.preferences.willingToRelocate;
     state.career.matching = {
       jobs: { 'node:older': job('older', new Date(Date.now() - 4 * 86400000).toISOString()), 'node:new-b': job('new-b'),
@@ -1037,7 +1017,7 @@ test('reassessment retains the selected month scope and replaces earlier job cac
     job('older', new Date(now - 8 * 86400000).toISOString()),
     job('future', new Date(now + 86400000).toISOString()),
   ] });
-  await f.store.update(state => { state.prescanPublicationRange = 'past_month'; });
+  await f.store.update(state => { state.career.publicationRange = 'past_month'; });
   const first = await f.call('career_match_jobs');
   assert.deepEqual(first.jobIds, ['node:recent', 'node:six-days', 'node:older']);
   await f.save([assessment('recent', 90)], first.profileVersion);
@@ -1056,7 +1036,7 @@ test('new analysis uses the past three days while an explicit broader selection 
     job('older', new Date(now - 4 * 86400000).toISOString())] });
   const initial = await f.call('career_match_jobs');
   assert.deepEqual(initial.jobIds, ['node:recent']);
-  await f.store.update(state => { state.prescanPublicationRange = 'all'; });
+  await f.store.update(state => { state.career.publicationRange = 'all'; });
   const broader = await f.call('career_match_jobs');
   assert.deepEqual(broader.jobIds, ['node:recent', 'node:older']);
 });
@@ -1101,57 +1081,33 @@ test('an in-flight details request cannot restore jobs after deleting rankings',
   assert.deepEqual(f.store.get().career.matching, emptyMatching);
 });
 
-test('pre-scan discovery preserves existing final assessments while assigning only current catalogue jobs', async () => {
-  const f = fixture({ jobs: [{ ...job('old'), ...statedTerms }], preserveFinalAssessments: true });
-  const first = await f.call('career_match_jobs');
-  await f.save([assessment('old', 84, 'not_required')], first.profileVersion);
-  const before = f.store.get().career.matching;
-  f.setCatalogue([job('new')]);
-  const discovery = await f.call('career_match_jobs');
-  assert.deepEqual(discovery.jobIds, ['node:new']);
-  assert.equal(discovery.total, 1);
-  assert.equal(discovery.pending, 1);
-  assert.deepEqual(f.store.get().career.matching.scores, before.scores);
-  assert.deepEqual(f.store.get().career.matching.jobs['node:old'], before.jobs['node:old']);
-  const saved = await f.call('career_matches');
-  assert.equal(saved.matches[0].overall, 84);
-  assert.equal(saved.matches[0].city, statedTerms.city);
-});
-
-test('discovery assigns only the jobs at or above the minimum pre-filter score, honours overrides and reports the excluded count', async () => {
-  const ids = ['first', 'second', 'third', 'fourth', 'reviewed', 'plain'];
+test('discovery assigns every current catalogue job except blocked IDs and established incompatibilities, reporting both counts', async () => {
+  const ids = ['gate', 'move', 'stale', 'blocked', 'plain'];
   const f = fixture({ jobs: ids.map(id => job(id)) });
   const planned = await f.call('career_match_jobs');
   assert.deepEqual(planned.jobIds, ids.map(id => `node:${id}`));
-  assert.equal(planned.excluded, 0);
-  assert.equal(planned.minimumScore, DEFAULT_INCLUSION_MINIMUM_SCORE);
-  await f.save([assessment('reviewed', 70)], planned.profileVersion);
-  const priorities = { first: 95, second: 90, third: 60, fourth: 40 };
-  await f.store.update(state => {
-    state.career.prescan = { profileVersion: matchingProfileVersion(state.career), prescanPolicyId: decisionProviders.openai.policyId,
-      provider: 'openai', rows: Object.fromEntries(Object.entries(priorities).map(([id, priority]) =>
-        [`node:${id}`, { priority, status: 'scored', publishedAt, direction: 'aligned', constraints: 'aligned', eligibility: 'aligned' }])) };
-    state.career.prescanInclusion = { minimumScore: 91, scale: 2, overrides: { 'node:fourth': true, 'node:second': false, 'node:plain': true } };
-  });
+  assert.deepEqual([planned.excluded, planned.blocked], [0, 0]);
+  assert.equal('minimumScore' in planned, false);
+  await f.save([excluded('gate'), assessment('move', 90, 'required'), assessment('stale', 70, 'required')], planned.profileVersion);
+  await f.store.update(state => { addBlock(state.career, { id: 'node:blocked', kind: 'job' }); });
+  // Current reviews are not candidates; the unreviewed job is still assigned and only the blocked job is counted.
   const scoped = await f.call('career_match_jobs');
-  assert.deepEqual(scoped.jobIds, ['node:first', 'node:fourth', 'node:plain']);
-  assert.equal(scoped.excluded, 2);
-  assert.equal(scoped.minimumScore, 91);
-  assert.equal(scoped.pending, 5);
-  // The boundary is inclusive: 60 passes a minimum of 60 and fails 61.
-  await f.store.update(state => { state.career.prescanInclusion = { minimumScore: 60, scale: 2, overrides: {} }; });
-  assert.deepEqual((await f.call('career_match_jobs')).jobIds, ['node:first', 'node:second', 'node:third']);
-  await f.store.update(state => { state.career.prescanInclusion = { minimumScore: 61, scale: 2, overrides: {} }; });
-  const narrowed = await f.call('career_match_jobs');
-  assert.deepEqual(narrowed.jobIds, ['node:first', 'node:second']);
-  assert.equal(narrowed.excluded, 3);
+  assert.deepEqual(scoped.jobIds, ['node:plain']);
+  assert.deepEqual([scoped.excluded, scoped.blocked, scoped.pending], [0, 1, 2]);
+  // After a profile change the stale gate failure and refused relocations stay settled; nothing is re-queued for them.
+  await f.store.update(state => { state.career.evidenceRevision = (state.career.evidenceRevision ?? 0) + 1; });
+  const changed = await f.call('career_match_jobs');
+  assert.notEqual(changed.profileVersion, planned.profileVersion);
+  assert.deepEqual(changed.jobIds, ['node:plain']);
+  assert.deepEqual([changed.excluded, changed.blocked], [3, 1]);
+  await f.store.update(state => { state.career.profile.preferences.willingToRelocate = true; });
+  const relocating = await f.call('career_match_jobs');
+  assert.deepEqual(relocating.jobIds, ['node:move', 'node:stale', 'node:plain']);
+  assert.deepEqual([relocating.excluded, relocating.blocked], [1, 1]);
   await f.call('career_rankings_delete');
-  const career = f.store.get().career;
-  assert.equal(career.prescan, undefined);
-  assert.equal(career.prescanInclusion, undefined);
   const fresh = await f.call('career_match_jobs');
-  assert.deepEqual(fresh.jobIds, ids.map(id => `node:${id}`));
-  assert.equal(fresh.excluded, 0);
+  assert.deepEqual(fresh.jobIds, ids.filter(id => id !== 'blocked').map(id => `node:${id}`));
+  assert.deepEqual([fresh.excluded, fresh.blocked], [0, 1]);
 });
 
 /** Seven recommendable rows r1..r7 (overall 90..61) plus high-overall rows that are not current recommendations. */

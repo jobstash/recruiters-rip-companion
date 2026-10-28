@@ -6,9 +6,7 @@ import { createCareerState } from '../src/mcp/state.mjs';
 import { createCareerBrowser, openJobPage, requirementContextPrompt } from '../src/career-browser.mjs';
 import { addBlock, removeBlock } from '../src/mcp/blocklist.mjs';
 import { ASSESSMENT_POLICY_ID, deriveDecision } from '../src/mcp/matching-contract.mjs';
-import { DEFAULT_INCLUSION_MINIMUM_SCORE } from '../src/prescan/state.mjs';
 import { createMatchingTools } from '../src/mcp/matching-tools.mjs';
-import { decisionProviders } from '../src/prescan/providers.mjs';
 
 function fixture() {
   const state = { privateKey: 'PRIVATE_KEY_SENTINEL', career: createCareerState() };
@@ -29,15 +27,8 @@ function finalAssessment(overall = 80, changes = {}) {
 }
 const unavailableAssessment = () => ({ status: 'unavailable', reason: 'Original advert unavailable.',
   ...deriveDecision({ status: 'unavailable' }), profileVersion: '0:0', policyId: ASSESSMENT_POLICY_ID, scoredAt });
-function savePrescan(career, rows) {
-  career.prescan = { assessmentPolicyId: ASSESSMENT_POLICY_ID, prescanPolicyId: decisionProviders.openai.policyId,
-    profileVersion: '0:0', provider: 'openai', model: 'saved-model', rows: Object.fromEntries(rows.map(row => [row.id, row])) };
-}
-const preliminary = (id, publishedAt, priority = 75, extra = {}) => ({
-  id, title: id, company: 'Company', publishedAt, priority, status: 'scored',
-  direction: 'aligned', constraints: 'aligned', eligibility: 'aligned',
-  dimensions: { direction: 80, capability: 70, scope: 60, preferences: 90 }, confidence: 0.8, ...extra,
-});
+// Catalogue display metadata as `career_match_jobs` stores it under `career.matching.jobs`.
+const catalogueJob = (id, publishedAt, extra = {}) => ({ id, title: id, company: 'Company', publishedAt, ...extra });
 const fieldValue = (item, heading, label) => item.sections.find(section => section.heading === heading)?.fields?.find(field => field.label === label)?.value;
 const sectionFields = (item, heading) => item.sections.find(section => section.heading === heading)?.fields;
 // What read({ kind: 'jobs' }) returns for a listed item: the reader projection without card, block or id.
@@ -111,41 +102,39 @@ test('browser kinds cut over to jobs without keeping obsolete assessment endpoin
     await assert.rejects(browser.read({ kind, id: 'saved' }), { code: 'INVALID_INPUT' });
   }
   assert.deepEqual(await browser.list({ kind: 'jobs' }), { items: [], total: 0, nextOffset: null,
-    counts: { shortlist: 0, queue: 0, reviewed: 0, applications: 0, blocks: 0 },
-    inclusion: { minimumScore: 36, included: 0, scored: null, stale: false, candidates: 0 } });
+    counts: { jobs: 0, reviewed: 0, applications: 0, blocks: 0 }, inclusion: { included: 0, candidates: 0 } });
   await assert.rejects(browser.read({ kind: 'jobs', id: 'missing' }), { code: 'NOT_FOUND' });
 });
 
 test('Jobs views are strictly validated and obsolete sorts are rejected', async () => {
   const { browser } = fixture();
-  for (const view of [null, undefined, '', 'newest', 'Score', 'rank', 0, {}, ['queue']])
+  for (const view of [null, undefined, '', 'newest', 'Score', 'rank', 'shortlist', 'queue', 0, {}, ['jobs']])
     await assert.rejects(browser.list({ kind: 'jobs', view }), { code: 'INVALID_INPUT' });
   for (const kind of ['sources', 'facts', 'preferences', 'career', 'applications', 'blocks'])
-    await assert.rejects(browser.list({ kind, view: 'shortlist' }), {
-      code: 'INVALID_INPUT', message: 'Use view shortlist, queue or reviewed for Jobs only.' });
+    await assert.rejects(browser.list({ kind, view: 'jobs' }), {
+      code: 'INVALID_INPUT', message: 'Use view jobs or reviewed for Jobs only.' });
   for (const sort of [null, undefined, '', 'score', 'recent'])
     await assert.rejects(browser.list({ kind: 'jobs', sort }), { code: 'INVALID_INPUT' });
-  for (const view of ['shortlist', 'queue', 'reviewed'])
+  for (const view of ['jobs', 'reviewed'])
     assert.deepEqual(await browser.list({ kind: 'jobs', view }), { items: [], total: 0, nextOffset: null,
-      counts: { shortlist: 0, queue: 0, reviewed: 0, applications: 0, blocks: 0 },
-      inclusion: { minimumScore: 36, included: 0, scored: null, stale: false, candidates: 0 } });
-  await assert.rejects(browser.read({ kind: 'jobs', id: 'missing', view: 'shortlist' }), { code: 'INVALID_INPUT' });
+      counts: { jobs: 0, reviewed: 0, applications: 0, blocks: 0 }, inclusion: { included: 0, candidates: 0 } });
+  await assert.rejects(browser.read({ kind: 'jobs', id: 'missing', view: 'jobs' }), { code: 'INVALID_INPUT' });
 });
 
-test('Jobs views paginate publication order, the included queue and reviewed jobs independently', async () => {
+test('Jobs views paginate publication order and reviewed jobs independently', async () => {
   const { state, browser } = fixture();
   const rows = [
-    preliminary('high-conflict', '2026-10-10T12:00:00Z', 90, { direction: 'conflict' }),
-    preliminary('low-aligned', '2026-10-11T12:00:00Z', 10),
-    preliminary('zero', '2026-10-12T12:00:00Z', 0),
-    preliminary('refused', '2026-10-13T12:00:00Z', 100, { status: 'refused' }),
-    preliminary('invalid-score', '2026-10-09T12:00:00Z', 101),
-    preliminary('unknown-b', null, 10),
-    preliminary('unknown-a', 'not a date', 10),
+    catalogueJob('high-conflict', '2026-10-10T12:00:00Z'),
+    catalogueJob('low-aligned', '2026-10-11T12:00:00Z'),
+    catalogueJob('zero', '2026-10-12T12:00:00Z'),
+    catalogueJob('refused', '2026-10-13T12:00:00Z'),
+    catalogueJob('invalid-score', '2026-10-09T12:00:00Z'),
+    catalogueJob('unknown-b', null),
+    catalogueJob('unknown-a', 'not a date'),
   ];
-  savePrescan(state.career, rows);
   state.career.matching = {
-    jobs: { 'final-fit-99': { title: 'Reviewed', publishedAt: '2026-10-14T12:00:00Z' },
+    jobs: { ...Object.fromEntries(rows.map(row => [row.id, row])),
+      'final-fit-99': { title: 'Reviewed', publishedAt: '2026-10-14T12:00:00Z' },
       'catalogue-only': { title: 'Saved unscored', publishedAt: '2026-10-11T13:00:00+01:00' } },
     scores: { 'final-fit-99': finalAssessment(99) },
   };
@@ -154,7 +143,7 @@ test('Jobs views paginate publication order, the included queue and reviewed job
     description: 'The original captured advert.', updatedAt: '2000-01-01T00:00:00Z' };
   const expectedRecent = ['capture', 'final-fit-99', 'refused', 'zero', 'catalogue-only', 'low-aligned',
     'high-conflict', 'invalid-score', 'unknown-a', 'unknown-b'];
-  for (const [view, expected] of [['shortlist', expectedRecent], ['queue', []], ['reviewed', ['final-fit-99']]]) {
+  for (const [view, expected] of [['jobs', expectedRecent], ['reviewed', ['final-fit-99']]]) {
     const seen = [];
     let offset = 0;
     do {
@@ -170,11 +159,9 @@ test('Jobs views paginate publication order, the included queue and reviewed job
   assert.deepEqual(reviewed.verdict, { kind: 'reviewed', number: 99, numberLabel: 'Fit',
     headline: 'Recommended', detail: 'Strong fit · Reviewed 14 Oct 2026', reason: 'Saved full-advert review.' });
   assert.equal(reviewed.heading, 'Reviewed');
-  assert.equal(fieldValue(reviewed, 'Checks', 'Pre-filter'), undefined);
-  assert.equal(reviewed.sections.some(section => section.heading === 'Pre-filter'), false);
   assert.equal((await browser.read({ kind: 'jobs', id: 'catalogue-only' })).title, 'Saved unscored');
-  assert.deepEqual((await browser.read({ kind: 'jobs', id: 'catalogue-only' })).verdict, { kind: 'unscored', number: null,
-    numberLabel: null, headline: 'Skipped', detail: 'Not scored yet', reason: null });
+  // An open job without an earlier review has no verdict at all.
+  assert.equal((await browser.read({ kind: 'jobs', id: 'catalogue-only' })).verdict, null);
   assert.equal((await browser.read({ kind: 'jobs', id: 'capture' })).sections.find(section => section.heading === 'Original advert').text,
     'The original captured advert.');
 });
@@ -199,7 +186,7 @@ test('reviewed jobs show overall fit with its breakdown, gates, requirements and
   };
   const page = await browser.list({ kind: 'jobs' });
   const item = id => page.items.find(item => item.id === id);
-  assert.deepEqual(item('leader').card, { ...item('leader').card, stage: 'reviewed', score: 70, stale: false, rank: null, included: false, overridden: false, status: null });
+  assert.deepEqual(item('leader').card, { ...item('leader').card, stage: 'reviewed', label: null, established: false, score: 70, stale: false });
   assert.equal(item('leader').card.publishedAt, publishedAt);
   assert.equal(item('leader').heading, 'leader');
   assert.equal(item('leader').title, 'leader — Company');
@@ -310,10 +297,7 @@ test('Jobs preserve every archived assessment and capture across globally sorted
     career.matching.jobs[id] = { id, title: id, company: 'Company', publishedAt };
     career.matching.scores[id] = finalAssessment(index % 100 + 1);
   }
-  const scans = [preliminary('pre-low', publishedAt, 20), preliminary('reviewed-0', publishedAt, 100),
-    preliminary('pre-high', publishedAt, 99)];
-  savePrescan(career, scans);
-  for (const row of scans) career.matching.jobs[row.id] = { ...row };
+  for (const row of [catalogueJob('pre-low', publishedAt), catalogueJob('pre-high', publishedAt)]) career.matching.jobs[row.id] = { ...row };
   career.jobs = {};
   career.jobs.capture = { title: 'Saved capture', complete: false, description: 'Listing excerpt.' };
   const before = structuredClone(state);
@@ -329,14 +313,12 @@ test('Jobs preserve every archived assessment and capture across globally sorted
   assert.deepEqual(items.map(item => item.id), expected);
   assert.equal(new Set(items.map(item => item.id)).size, items.length);
   assert.deepEqual(await browser.list({ kind: 'jobs', offset: 108 }), { items: [], total: 108, nextOffset: null,
-    counts: { shortlist: 108, queue: 1, reviewed: 105, applications: 0, blocks: 0 },
-    inclusion: { minimumScore: 36, included: 1, scored: 2, stale: false, candidates: 2 } });
+    counts: { jobs: 108, reviewed: 105, applications: 0, blocks: 0 }, inclusion: { included: 2, candidates: 2 } });
   const merged = items.find(item => item.id === 'reviewed-0');
-  assert.deepEqual(merged.card, { ...merged.card, stage: 'reviewed', score: 1, stale: false, rank: null, included: false });
-  // A current review supersedes the pre-filter: the verdict is the fit, the pre-scan survives only as a Role row.
+  assert.deepEqual(merged.card, { ...merged.card, stage: 'reviewed', score: 1, stale: false });
   assert.deepEqual({ ...merged.verdict, reason: null }, { kind: 'reviewed', number: 1, numberLabel: 'Fit', headline: 'Not recommended',
     detail: 'Poor fit · Reviewed 14 Oct 2026', reason: null });
-  assert.equal(merged.sections.filter(section => section.heading === 'Metadata').length, 1);
+  assert.equal(merged.sections.some(section => ['Metadata', 'Shortlist'].includes(section.heading)), false);
   assert.deepEqual(await browser.read({ kind: 'jobs', id: merged.id }), readerOf(merged));
   assert.deepEqual(state, before);
 });
@@ -377,18 +359,18 @@ test('jobs retain stale, excluded, unavailable, old, relocation and missing-meta
     assert.deepEqual(await browser.read({ kind: 'jobs', id: row.id }), readerOf(item));
   }
   const stale = page.items.find(item => item.id === 'stale');
-  assert.deepEqual([stale.card.score, stale.card.stale, stale.card.stage, stale.card.rank], [99, true, 'unscored', null]);
+  assert.deepEqual([stale.card.score, stale.card.stale, stale.card.stage], [99, true, 'open']);
   assert.equal(stale.verdict.reason.includes('Reviewed at 99 before your profile changed'), true);
   assert.equal(page.items.find(item => item.id === 'legacy').verdict.reason.includes('Reviewed at'), true);
-  assert.equal(page.items.find(item => item.id === 'invalid').verdict.headline, 'Pre-qualified for AI review');
+  assert.equal(page.items.find(item => item.id === 'invalid').verdict.headline, 'Not reviewed yet');
   const excluded = page.items.find(item => item.id === 'excluded');
   assert.equal(excluded.verdict.headline, 'Excluded by a gate');
   assert.equal(fieldValue(excluded, 'Checks', 'Mandatory conditions'), 'Fails');
-  assert.deepEqual(excluded.card, { ...excluded.card, stage: 'ineligible', label: 'Excluded by a gate', established: false, score: 85, rank: null, included: false });
+  assert.deepEqual(excluded.card, { ...excluded.card, stage: 'ineligible', label: 'Excluded by a gate', established: false, score: 85 });
   assert.equal(excluded.sections.find(section => section.chart).heading, 'Fit — excluded by a gate');
   const unavailable = page.items.find(item => item.id === 'unavailable');
   assert.equal(unavailable.verdict.number, null);
-  assert.deepEqual(unavailable.card, { ...unavailable.card, score: null, rank: null, status: null });
+  assert.deepEqual(unavailable.card, { ...unavailable.card, stage: 'reviewed', score: null, stale: false });
   assert.equal(unavailable.sections.some(section => ['Fit', 'Requirements'].includes(section.heading)), false);
   const relocation = page.items.find(item => item.id === 'relocation');
   assert.equal(relocation.verdict.headline, 'Location incompatible');
@@ -402,87 +384,11 @@ test('jobs retain stale, excluded, unavailable, old, relocation and missing-meta
   assert.deepEqual(state, before);
 });
 
-test('shortlist presentation keeps qualification, freshness and operational failures, and a stale review yields to a current shortlist', async () => {
-  const { state, browser } = fixture();
-  const publishedAt = currentDate();
-  const rows = [
-    preliminary('merged', publishedAt, 82, { location: 'London', applyUrl: 'https://example.test/job' }),
-    preliminary('uncertain', publishedAt, 95, { constraints: 'uncertain' }),
-    preliminary('refused', publishedAt, null, { status: 'refused', direction: null, constraints: null, eligibility: null, dimensions: null, confidence: null }),
-    preliminary('unavailable', publishedAt, null, { status: 'unavailable' }),
-    preliminary('oversize', publishedAt, null, { status: 'oversize' }),
-    preliminary('conflict', publishedAt, 100, { direction: 'conflict' }),
-    preliminary('ineligible', publishedAt, 98, { eligibility: 'conflict' }),
-    preliminary('old', '2000-01-01T00:00:00Z'),
-    preliminary('missing-ad', publishedAt),
-    preliminary('changed-ad', publishedAt),
-  ];
-  state.career.matching = { jobs: Object.fromEntries(rows.filter(row => row.id !== 'missing-ad').map(row => [row.id, { ...row }])),
-    scores: { merged: { ...finalAssessment(99), profileVersion: 'old' } } };
-  state.career.matching.jobs['changed-ad'].publishedAt = '2000-01-01T00:00:00Z';
-  savePrescan(state.career, rows);
-  const before = structuredClone(state);
-  const page = await browser.list({ kind: 'jobs' });
-  assert.equal(page.total, rows.length);
-  const stale = rows.filter(row => ['old', 'missing-ad', 'changed-ad'].includes(row.id));
-  assert.deepEqual(page.items.slice(0, 4).map(item => item.id), ['conflict', 'ineligible', 'merged', 'missing-ad']);
-  const merged = page.items.find(item => item.id === 'merged');
-  assert.deepEqual(merged.card, { ...merged.card, stage: 'prefilter', rank: 4, included: true, overridden: false, score: 99, stale: true, status: null });
-  assert.equal(merged.sections[0].heading, 'Checks');
-  // Shortlist qualification has no numeric score; the previous review fit remains separate.
-  assert.deepEqual(merged.verdict, { kind: 'prefilter', number: null, numberLabel: null, headline: 'Pre-qualified for AI review',
-    detail: 'Shortlist found this worth a full review · shortlisted before your profile changed',
-    reason: 'Reviewed at 99 before your profile changed · Saved full-advert review.' });
-  assert.equal(Object.hasOwn(merged.card, 'prefilterScore'), false);
-  assert.equal(merged.sections.find(section => section.chart).chart[0].value, 99);
-  assert.equal(merged.header.facts.includes('London'), true);
-  assert.equal(merged.sections.filter(section => section.heading === 'Metadata').length, 1);
-  assert.equal(fieldValue(merged, 'Metadata', 'Shortlist'), 'OpenAI Decisions · saved-model · current');
-  const failures = { refused: 'Provider declined assessment', unavailable: 'Original advert unavailable',
-    oversize: 'Input exceeds the provider limit' };
-  for (const [id, reason] of Object.entries(failures)) {
-    const item = page.items.find(item => item.id === id);
-    assert.equal(item.verdict.detail, reason);
-    assert.deepEqual(item.card, { ...item.card, stage: 'unscored', rank: null, included: false, score: null, stale: false, status: id });
-    assert.equal(item.sections.some(section => section.chart), false);
-  }
-  for (const row of stale) {
-    const item = page.items.find(item => item.id === row.id);
-    assert.deepEqual([item.card.stale, item.card.stage, item.card.rank, item.card.included], [true, 'unscored', null, false]);
-    assert.match(fieldValue(item, 'Metadata', 'Shortlist'), /out of date$/);
-  }
-  for (const item of page.items) assert.deepEqual(await browser.read({ kind: 'jobs', id: item.id }), readerOf(item));
-  assert.deepEqual(state, before);
-});
-
-test('profile and provider policy changes keep the pre-filter ranking as out of date; an unknown provider drops it', async () => {
-  const { state, browser } = fixture();
-  const row = preliminary('saved', currentDate());
-  state.career.matching = { jobs: { saved: { ...row } }, scores: {} };
-  savePrescan(state.career, [row]);
-  const current = await browser.list({ kind: 'jobs' });
-  assert.match(fieldValue(current.items[0], 'Metadata', 'Shortlist'), /current$/);
-  assert.deepEqual(current.items[0].card, { ...current.items[0].card, stage: 'prefilter', rank: 1, included: true, score: null, stale: false });
-  for (const [changed, card, inclusion] of [
-    [{ profileVersion: '1:0' }, { stage: 'prefilter', rank: 1 }, { scored: 1, stale: true }],
-    [{ prescanPolicyId: 'earlier-policy' }, { stage: 'prefilter', rank: 1 }, { scored: 1, stale: true }],
-    [{ provider: 'retired-provider' }, { stage: 'unscored', rank: null }, { scored: null, stale: false }]]) {
-    savePrescan(state.career, [row]);
-    Object.assign(state.career.prescan, changed);
-    const page = await browser.list({ kind: 'jobs' });
-    assert.match(fieldValue(page.items[0], 'Metadata', 'Shortlist'), /out of date$/);
-    assert.deepEqual(page.items[0].card, { ...page.items[0].card, ...card, included: true, score: null, stale: true });
-    assert.deepEqual(page.inclusion, { minimumScore: 36, included: 1, ...inclusion, candidates: 1 });
-    assert.deepEqual(await browser.read({ kind: 'jobs', id: row.id }), readerOf(page.items[0]));
-  }
-});
-
-test('each jobs operation uses one local snapshot for both assessment types', async () => {
+test('each jobs operation uses one local snapshot for metadata and reviews', async () => {
   const { state, store, browser } = fixture();
   const publishedAt = currentDate();
-  const row = preliminary('saved', publishedAt);
-  state.career.matching = { jobs: { saved: { ...row } }, scores: { saved: finalAssessment() } };
-  savePrescan(state.career, [row]);
+  const row = catalogueJob('saved', publishedAt);
+  state.career.matching = { jobs: { saved: { ...row }, other: catalogueJob('other', publishedAt) }, scores: { saved: finalAssessment() } };
   let reads = 0;
   store.get = () => {
     assert.equal(++reads, 1, 'An operation must not mix career snapshots');
@@ -493,28 +399,8 @@ test('each jobs operation uses one local snapshot for both assessment types', as
   reads = 0;
   const detail = await browser.read({ kind: 'jobs', id: row.id });
   assert.equal(reads, 1);
-  assert.deepEqual(detail, readerOf(page.items[0]));
+  assert.deepEqual(detail, readerOf(page.items.find(item => item.id === row.id)));
   assert.equal(JSON.stringify(detail).includes('PRIVATE_KEY_SENTINEL'), false);
-});
-
-test('a current final review supersedes a stale pre-scan and fills missing catalogue metadata', async () => {
-  const { state, browser } = fixture();
-  const row = preliminary('saved', '2000-01-01T00:00:00Z', 99,
-    { title: 'Saved role title', company: 'Saved employer', city: 'London', applyUrl: 'https://example.test/saved' });
-  state.career.matching = { jobs: {}, scores: { saved: finalAssessment(0) } };
-  savePrescan(state.career, [row]);
-  const page = await browser.list({ kind: 'jobs' });
-  assert.equal(page.total, 1);
-  const item = page.items[0];
-  assert.equal(item.title, 'Saved role title — Saved employer');
-  assert.deepEqual(item.card, { title: 'Saved role title', company: 'Saved employer', logoUrl: null, publishedAt: '2000-01-01T00:00:00Z',
-    facts: ['London'], stage: 'reviewed', label: null, established: false, rank: null, included: false, overridden: false, score: 0, stale: false, status: null });
-  assert.equal(item.sections[0].heading, 'Checks');
-  assert.equal(item.sections.some(section => section.heading === 'Pre-filter'), false);
-  assert.equal(item.header.facts.includes('London'), true);
-  assert.equal(item.header.applyUrl, 'https://example.test/saved');
-  assert.equal(item.sections.filter(section => section.heading === 'Metadata').length, 1);
-  assert.deepEqual(await browser.read({ kind: 'jobs', id: row.id }), readerOf(item));
 });
 
 test('job cards mirror structured catalogue fields as plain facts and omit missing facts and shortlist scores', async () => {
@@ -528,26 +414,25 @@ test('job cards mirror structured catalogue fields as plain facts and omit missi
       city: null, location: 'Lisbon', workMode: null, salary: { stated: 90000, currency: 'EUR', period: 'year' } },
     bare: { title: 'Bare', publishedAt: null },
   }, scores: { full: finalAssessment(92) } };
-  savePrescan(state.career, [preliminary('full', publishedAt, 70), preliminary('sparse', publishedAt, 15)]);
   const page = await browser.list({ kind: 'jobs' });
   const card = id => page.items.find(item => item.id === id).card;
   assert.deepEqual(card('full'), { title: 'Protocol Engineer', company: 'Example Labs', logoUrl: null, publishedAt,
     facts: ['Senior', 'USD 120,000–160,000 per year', 'Berlin · Remote', 'Full Time', 'Smart Contracts'],
-    stage: 'reviewed', label: null, established: false, rank: null, included: false, overridden: false, score: 92, stale: false, status: null });
+    stage: 'reviewed', label: null, established: false, score: 92, stale: false });
   assert.deepEqual(card('sparse'), { title: 'Analyst', company: 'Sparse Co', logoUrl: null, publishedAt: null,
     facts: ['EUR 90,000 per year', 'Lisbon'],
-    stage: 'unscored', label: null, established: false, rank: null, included: false, overridden: false, score: null, stale: true, status: null });
+    stage: 'open', label: null, established: false, score: null, stale: false });
   assert.deepEqual(card('bare'), { title: 'Bare', company: null, logoUrl: null, publishedAt: null, facts: [],
-    stage: 'unscored', label: null, established: false, rank: null, included: false, overridden: false, score: null, stale: false, status: null });
-  assert.deepEqual(page.inclusion, { minimumScore: 36, included: 0, scored: 0, stale: false, candidates: 2 });
+    stage: 'open', label: null, established: false, score: null, stale: false });
+  assert.deepEqual(page.inclusion, { included: 2, candidates: 2 });
   assert.equal(page.items.some(item => 'summary' in item), false);
 });
 
-test('Jobs views separate publication order, shortlist-ranked inclusion and current reviews', async () => {
+test('Jobs views separate publication order from current reviews; stale reviews are open with their earlier fit as context', async () => {
   const { state, browser } = fixture();
   const publishedAt = currentDate();
-  const rows = [preliminary('weak-review', publishedAt, 70), preliminary('strong-prefilter', publishedAt, 95),
-    preliminary('stale-review', publishedAt, 60), preliminary('stale-both', '2000-01-01T00:00:00Z', 99), preliminary('stale-prefilter', '2000-01-01T00:00:00Z', 97)];
+  const rows = [catalogueJob('weak-review', publishedAt), catalogueJob('never-reviewed', publishedAt),
+    catalogueJob('stale-review', publishedAt), catalogueJob('stale-both', '2000-01-01T00:00:00Z'), catalogueJob('old-open', '2000-01-01T00:00:00Z')];
   state.career.matching = { jobs: Object.fromEntries(rows.map(row => [row.id, { ...row }])), scores: {
     'weak-review': finalAssessment(40),
     'stale-review': { ...finalAssessment(88), profileVersion: 'old' },
@@ -555,40 +440,35 @@ test('Jobs views separate publication order, shortlist-ranked inclusion and curr
     'review-only': finalAssessment(35),
   } };
   state.career.matching.jobs['review-only'] = { title: 'Review only', publishedAt };
-  savePrescan(state.career, rows);
-  const page = await browser.list({ kind: 'jobs', view: 'shortlist' });
+  const page = await browser.list({ kind: 'jobs', view: 'jobs' });
   assert.deepEqual(page.items.map(item => item.id),
-    ['review-only', 'stale-review', 'strong-prefilter', 'weak-review', 'stale-both', 'stale-prefilter']);
-  assert.deepEqual(page.inclusion, { minimumScore: 36, included: 2, scored: 2, stale: false, candidates: 4 });
-  assert.deepEqual(page.counts, { shortlist: 6, queue: 2, reviewed: 2, applications: 0, blocks: 0 });
+    ['never-reviewed', 'review-only', 'stale-review', 'weak-review', 'old-open', 'stale-both']);
+  assert.deepEqual(page.inclusion, { included: 4, candidates: 4 });
+  assert.deepEqual(page.counts, { jobs: 6, reviewed: 2, applications: 0, blocks: 0 });
   assert.equal(Object.hasOwn(page, 'cutoffIndex'), false);
-  const stage = id => { const { stage, rank, included, score, stale } = page.items.find(item => item.id === id).card; return { stage, rank, included, score, stale }; };
-  assert.deepEqual(stage('weak-review'), { stage: 'reviewed', rank: null, included: false, score: 40, stale: false });
-  assert.deepEqual(stage('review-only'), { stage: 'reviewed', rank: null, included: false, score: 35, stale: false });
-  assert.deepEqual(stage('strong-prefilter'), { stage: 'prefilter', rank: 1, included: true, score: null, stale: false });
-  assert.deepEqual(stage('stale-review'), { stage: 'prefilter', rank: 2, included: true, score: 88, stale: true });
-  assert.deepEqual(stage('stale-both'), { stage: 'unscored', rank: null, included: false, score: 30, stale: true });
-  assert.deepEqual(stage('stale-prefilter'), { stage: 'unscored', rank: null, included: false, score: null, stale: true });
+  const stage = id => { const { stage, score, stale } = page.items.find(item => item.id === id).card; return { stage, score, stale }; };
+  assert.deepEqual(stage('weak-review'), { stage: 'reviewed', score: 40, stale: false });
+  assert.deepEqual(stage('review-only'), { stage: 'reviewed', score: 35, stale: false });
+  assert.deepEqual(stage('never-reviewed'), { stage: 'open', score: null, stale: false });
+  assert.deepEqual(stage('stale-review'), { stage: 'open', score: 88, stale: true });
+  assert.deepEqual(stage('stale-both'), { stage: 'open', score: 30, stale: true });
+  assert.deepEqual(stage('old-open'), { stage: 'open', score: null, stale: false });
   const verdict = id => page.items.find(item => item.id === id).verdict;
   assert.equal(verdict('weak-review').kind, 'reviewed');
-  assert.equal(verdict('stale-review').kind, 'prefilter');
-  assert.equal(verdict('stale-review').reason.includes('Reviewed at 88 before your profile changed'), true);
-  assert.equal(verdict('stale-both').kind, 'unscored');
-  assert.equal(verdict('strong-prefilter').kind, 'prefilter');
+  assert.deepEqual(verdict('stale-review'), { kind: 'open', number: null, numberLabel: null, headline: 'Not reviewed yet', detail: null,
+    reason: 'Reviewed at 88 before your profile changed · Saved full-advert review.' });
+  assert.equal(verdict('stale-both').kind, 'open');
+  assert.equal(verdict('never-reviewed'), null);
+  assert.equal(verdict('old-open'), null);
   for (const item of page.items) assert.equal('reviewed' in item.card, false);
-  assert.deepEqual((await browser.list({ kind: 'jobs', view: 'queue' })).items.map(item => item.id),
-    ['strong-prefilter', 'stale-review']);
   assert.deepEqual((await browser.list({ kind: 'jobs', view: 'reviewed' })).items.map(item => item.id),
     ['weak-review', 'review-only']);
 });
 
-test('ineligible reviews sort last with a label instead of a number; established incompatibility has no switch even with an override saved', async () => {
+test('ineligible reviews sort last with a label instead of a number; established incompatibility is never a candidate', async () => {
   const { state, browser } = fixture();
   const publishedAt = currentDate();
-  const rows = [preliminary('ranked', publishedAt, 90), preliminary('predicted', publishedAt, null,
-    { status: 'incompatible_location', priority: null, fit: null, location: 'conflict', locationConflict: 0.8, dimensions: null, confidence: null }),
-  preliminary('stale-gate', publishedAt, 95), preliminary('stale-relocation', publishedAt, 94), preliminary('cheap', publishedAt, null,
-    { status: 'below_minimum', priority: null, fit: null, location: null, dimensions: null, confidence: null })];
+  const rows = [catalogueJob('ranked', publishedAt), catalogueJob('stale-gate', publishedAt), catalogueJob('stale-relocation', publishedAt)];
   state.career.matching = { jobs: { ...Object.fromEntries(rows.map(row => [row.id, { ...row }])),
     excluded: { title: 'excluded', company: 'Company', publishedAt }, relocation: { title: 'relocation', company: 'Company', publishedAt } }, scores: {
     excluded: finalAssessment(85, { gates: { ...passing, constraints: 'fail' } }),
@@ -597,70 +477,28 @@ test('ineligible reviews sort last with a label instead of a number; established
     'stale-relocation': { ...finalAssessment(65, { relocation: 'required' }), profileVersion: 'old' },
   } };
   state.career.profile.preferences.willingToRelocate = false;
-  savePrescan(state.career, rows);
-  state.career.prescanInclusion = { scale: 2, minimumScore: 60, overrides: { 'stale-gate': true, 'stale-relocation': true, predicted: true, cheap: true } };
   const page = await browser.list({ kind: 'jobs' });
-  assert.deepEqual(page.items.map(item => item.id), ['cheap', 'excluded', 'predicted', 'ranked', 'relocation', 'stale-gate', 'stale-relocation']);
+  assert.deepEqual(page.items.map(item => item.id), ['excluded', 'ranked', 'relocation', 'stale-gate', 'stale-relocation']);
   const card = id => page.items.find(item => item.id === id).card;
   // Current ineligible reviews: the verdict is the card; the number lives only in the reader's qualified chart.
-  assert.deepEqual(card('excluded'), { ...card('excluded'), stage: 'ineligible', label: 'Excluded by a gate', established: false, score: 85, rank: null, included: false, overridden: false });
-  assert.deepEqual(card('relocation'), { ...card('relocation'), stage: 'ineligible', label: 'Location incompatible', established: false, score: 80, rank: null, included: false });
-  // Established incompatibility from a stale review: never a candidate, overrides ignored, label from the saved verdict.
-  assert.deepEqual(card('stale-gate'), { ...card('stale-gate'), stage: 'ineligible', label: 'Excluded by a gate', established: true, rank: null, included: false, overridden: false, stale: true });
-  assert.deepEqual(card('stale-relocation'), { ...card('stale-relocation'), stage: 'ineligible', label: 'Location incompatible', established: true, rank: null, included: false, overridden: false, stale: true });
+  assert.deepEqual(card('excluded'), { ...card('excluded'), stage: 'ineligible', label: 'Excluded by a gate', established: false, score: 85, stale: false });
+  assert.deepEqual(card('relocation'), { ...card('relocation'), stage: 'ineligible', label: 'Location incompatible', established: false, score: 80, stale: false });
+  // Established incompatibility from a stale review: never a candidate, label from the saved verdict.
+  assert.deepEqual(card('stale-gate'), { ...card('stale-gate'), stage: 'ineligible', label: 'Excluded by a gate', established: true, score: 70, stale: true });
+  assert.deepEqual(card('stale-relocation'), { ...card('stale-relocation'), stage: 'ineligible', label: 'Location incompatible', established: true, score: 65, stale: true });
   assert.equal(page.items.find(item => item.id === 'stale-gate').sections.find(section => section.chart).heading, 'Fit — excluded by a gate');
-  // Predicted conflicts and verified salary shortfalls stay unranked but overridable.
-  assert.deepEqual(card('predicted'), { ...card('predicted'), stage: 'unscored', label: null, established: false, rank: null, included: true, overridden: true, status: 'incompatible_location' });
-  assert.deepEqual(card('cheap'), { ...card('cheap'), stage: 'unscored', label: null, established: false, rank: null, included: true, overridden: true, status: 'below_minimum' });
-  const predicted = page.items.find(item => item.id === 'predicted');
-  assert.deepEqual(predicted.verdict, { kind: 'unscored', number: null, numberLabel: null,
-    headline: 'Pre-qualified for AI review · manual', detail: 'Location conflict predicted', reason: null });
-  assert.equal(fieldValue(predicted, 'Checks', 'Location'), 'Conflict');
-  assert.equal(fieldValue(predicted, 'Metadata', 'Shortlist'), 'Location conflict predicted · OpenAI Decisions · saved-model · current');
-  assert.equal(page.items.find(item => item.id === 'cheap').verdict.detail, 'Salary below your minimum');
-  assert.equal(fieldValue(page.items.find(item => item.id === 'cheap'), 'Checks', 'Location'), undefined);
-  assert.deepEqual(card('ranked'), { ...card('ranked'), stage: 'prefilter', included: true, label: null, established: false });
-  assert.deepEqual(page.inclusion, { minimumScore: 60, included: 3, scored: 3, stale: false, candidates: 5 });
-  assert.deepEqual((await browser.list({ kind: 'jobs', view: 'queue' })).items.map(item => item.id), ['ranked', 'cheap', 'predicted']);
+  for (const id of ['excluded', 'relocation', 'stale-gate', 'stale-relocation']) {
+    const item = page.items.find(item => item.id === id);
+    assert.deepEqual(item.verdict, { kind: 'ineligible', number: null, numberLabel: null, headline: item.card.label, detail: null, reason: null });
+    assert.equal(fieldValue(item, 'Checks', 'Location'), undefined);
+    assert.equal(fieldValue(item, 'Checks', 'Relocation'), undefined);
+  }
+  assert.deepEqual(card('ranked'), { ...card('ranked'), stage: 'open', label: null, established: false, score: null, stale: false });
+  assert.equal(page.items.find(item => item.id === 'ranked').verdict, null);
+  assert.deepEqual(page.inclusion, { included: 1, candidates: 3 });
+  assert.deepEqual(page.counts, { jobs: 5, reviewed: 4, applications: 0, blocks: 0 });
   assert.deepEqual((await browser.list({ kind: 'jobs', view: 'reviewed' })).items.map(item => item.id),
     ['excluded', 'relocation', 'stale-gate', 'stale-relocation']);
-});
-
-test('queue pages include switched-on jobs by shortlist rank then unscored jobs without a cutoff', async () => {
-  const { state, browser } = fixture();
-  const publishedAt = currentDate();
-  const rows = Array.from({ length: 7 }, (_, index) => preliminary(`job-${index}`, publishedAt, 99 - index));
-  state.career.matching = { jobs: Object.fromEntries(rows.map(row => [row.id, { ...row }])), scores: { reviewed: finalAssessment(50) } };
-  state.career.matching.jobs.reviewed = { title: 'Reviewed', publishedAt };
-  state.career.matching.jobs.plain = { title: 'Plain', publishedAt };
-  savePrescan(state.career, rows);
-  state.career.prescanInclusion = { scale: 2, minimumScore: 96, overrides: { 'job-1': false, 'job-5': true, plain: true, reviewed: true } };
-  const first = await browser.list({ kind: 'jobs', view: 'queue', limit: 3 });
-  assert.deepEqual(first.items.map(item => item.id), ['job-0', 'job-2', 'job-3']);
-  assert.equal(first.nextOffset, 3);
-  assert.equal(Object.hasOwn(first, 'cutoffIndex'), false);
-  assert.deepEqual(first.inclusion, { minimumScore: 96, included: 5, scored: 7, stale: false, candidates: 8 });
-  assert.deepEqual(first.counts, { shortlist: 9, queue: 5, reviewed: 1, applications: 0, blocks: 0 });
-  const second = await browser.list({ kind: 'jobs', view: 'queue', offset: 3, limit: 3 });
-  assert.deepEqual(second.items.map(item => item.id), ['job-5', 'plain']);
-  assert.equal(second.nextOffset, null);
-  assert.equal(Object.hasOwn(second, 'cutoffIndex'), false);
-  const all = await browser.list({ kind: 'jobs', view: 'shortlist' });
-  assert.deepEqual(all.items.map(item => item.id), [...rows.map(row => row.id), 'plain', 'reviewed']);
-  const flags = Object.fromEntries(all.items.map(item => [item.id, [item.card.rank, item.card.included, item.card.overridden]]));
-  assert.deepEqual(flags, {
-    reviewed: [null, false, false], 'job-0': [1, true, false], 'job-1': [2, false, true], 'job-2': [3, true, false], 'job-3': [4, true, false],
-    'job-4': [5, false, false], 'job-5': [6, true, true], 'job-6': [7, false, false], plain: [null, true, true],
-  });
-  assert.deepEqual((await browser.list({ kind: 'jobs', view: 'reviewed' })).items.map(item => item.id), ['reviewed']);
-  state.career.prescanInclusion = { scale: 2, minimumScore: 93, overrides: {} };
-  const wide = await browser.list({ kind: 'jobs', view: 'queue' });
-  assert.deepEqual(wide.items.map(item => item.id), rows.map(row => row.id));
-  assert.deepEqual(wide.inclusion, { minimumScore: 93, included: 7, scored: 7, stale: false, candidates: 8 });
-  state.career.prescanInclusion = { scale: 2, minimumScore: 100, overrides: {} };
-  const none = await browser.list({ kind: 'jobs', view: 'queue' });
-  assert.deepEqual(none.items, []);
-  assert.deepEqual(none.inclusion, { minimumScore: 100, included: 0, scored: 7, stale: false, candidates: 8 });
 });
 
 test('facts lead with explanations and preserve actual interview context; applications show saved drafts', async () => {
@@ -714,14 +552,25 @@ async function rendererFixture(browser, wide, operations = {}) {
   class Node {
     constructor(tag = 'div') {
       this.tagName = tag.toUpperCase();
+      this.id = '';
       this.children = [];
       this.attributes = new Map();
       this.listeners = new Map();
-      this.classList = { add() {}, remove() {} };
+      const classes = new Set();
+      this.classList = {
+        add: (...names) => { names.forEach(name => classes.add(name)); },
+        remove: (...names) => { names.forEach(name => classes.delete(name)); },
+        toggle: (name, force) => { (force ?? !classes.has(name)) ? classes.add(name) : classes.delete(name); },
+      };
+      Object.defineProperty(this, 'className', {
+        get: () => [...classes].join(' '),
+        set: value => { classes.clear(); String(value).split(' ').filter(Boolean).forEach(name => classes.add(name)); },
+      });
       this.hidden = false;
       this.disabled = false;
       this.isConnected = true;
       this.textContent = '';
+      this.value = '';
       this.dataset = {};
       this.style = {};
     }
@@ -733,8 +582,9 @@ async function rendererFixture(browser, wide, operations = {}) {
     addEventListener(name, callback) { this.listeners.set(name, callback); }
     focus() { focused = this; }
     querySelectorAll(selector) {
-      const matches = child => selector.startsWith('.') ? child.className?.split(' ').includes(selector.slice(1))
-        : selector.startsWith('[') ? child.attributes.has(selector.slice(1, -1)) : child.tagName === selector.toUpperCase();
+      const matches = child => selector.startsWith('.') ? child.className.split(' ').includes(selector.slice(1))
+        : selector.startsWith('#') ? child.id === selector.slice(1)
+          : selector.startsWith('[') ? child.attributes.has(selector.slice(1, -1)) : child.tagName === selector.toUpperCase();
       return this.children.flatMap(child => [...(matches(child) ? [child] : []), ...child.querySelectorAll(selector)]);
     }
     querySelector(selector) { return this.querySelectorAll(selector)[0] ?? null; }
@@ -747,10 +597,15 @@ async function rendererFixture(browser, wide, operations = {}) {
   const names = ['records', 'list-status', 'list-retry', 'pagination', 'previous', 'next', 'reader', 'reader-title',
     'reader-status', 'reader-retry', 'reader-content', 'close'];
   const ids = [...names.flatMap(name => [`career-${name}`, `me-${name}`]), 'career-browser', 'me-browser', 'delete-rankings',
-    'career-surface', 'career-queue-qualified', 'career-queue-all', 'career-surface-sentence', 'run-step-prefilter', 'run-step-handover'];
+    'stage-jobs', 'publication-range', 'publication-range-label', 'review-launch', 'review-codex', 'review-claude', 'copy-review-prompt'];
   const nodes = Object.fromEntries(ids.map(id => [id, new Node()]));
-  nodes['run-step-prefilter'].dataset.stagePanel = 'shortlist';
-  nodes['run-step-handover'].dataset.stagePanel = 'queue';
+  for (const id of ids) nodes[id].id = id;
+  nodes['stage-jobs'].dataset.stagePanel = 'jobs';
+  nodes['publication-range'].value = '2';
+  nodes['publication-range'].disabled = true;
+  nodes['publication-range-label'].textContent = 'in the past 3 days';
+  for (const id of ['review-codex', 'review-claude', 'copy-review-prompt']) { nodes[id].className = 'ghost'; nodes['review-launch'].append(nodes[id]); }
+  nodes['review-codex'].hidden = true; nodes['review-claude'].hidden = true;
   const category = kind => {
     const node = new Node('button');
     node.dataset.careerKind = kind;
@@ -759,20 +614,23 @@ async function rendererFixture(browser, wide, operations = {}) {
   const categories = Object.fromEntries(['sources', 'facts', 'preferences'].map(category));
   const jobCategories = Object.fromEntries(['jobs', 'applications', 'blocks'].map(category));
   const stageCounts = [];
-  for (const view of ['shortlist', 'queue', 'reviewed']) {
-    const button = view === 'shortlist' ? jobCategories.jobs : category('jobs')[1];
+  // The Jobs tab list: two jobs views, then applications and blocks; each tab carries its own count.
+  for (const view of ['jobs', 'reviewed']) {
+    const button = view === 'jobs' ? jobCategories.jobs : category('jobs')[1];
     button.dataset.careerView = view;
-    button.setAttribute('aria-pressed', String(view === 'shortlist'));
+    button.setAttribute('aria-selected', String(view === 'jobs'));
     nodes[`career-stage-${view}`] = button;
-    if (view !== 'shortlist') jobCategories[view] = button;
+    if (view !== 'jobs') jobCategories[view] = button;
   }
-  for (const name of ['shortlist', 'queue', 'reviewed', 'applications', 'blocks']) {
+  for (const name of ['applications', 'blocks']) {
+    jobCategories[name].setAttribute('aria-selected', 'false');
+    nodes[`career-category-${name}`] = jobCategories[name];
+  }
+  for (const name of ['jobs', 'reviewed', 'applications', 'blocks']) {
     const count = new Node('span'); count.className = 'stage-count'; count.dataset.stageCount = name;
     (nodes[`career-stage-${name}`] ?? jobCategories[name]).append(count);
     stageCounts.push(count);
   }
-  nodes['career-category-applications'] = jobCategories.applications;
-  nodes['career-category-blocks'] = jobCategories.blocks;
   nodes['me-browser'].querySelectorAll = selector => selector === '[data-stage-count]' ? [] : Object.values(categories);
   nodes['career-browser'].querySelectorAll = selector => selector === '[data-stage-count]' ? stageCounts : Object.values(jobCategories);
   const calls = [];
@@ -783,29 +641,31 @@ async function rendererFixture(browser, wide, operations = {}) {
     return { ok: true, result: await (operation === 'career-list' ? browser.list(input) : browser.read(input)) };
   } } };
   const document = { getElementById: id => nodes[id], createElement: tag => new Node(tag),
-    querySelectorAll: () => [nodes['run-step-prefilter'], nodes['run-step-handover']] };
+    querySelectorAll: () => [nodes['stage-jobs']], get activeElement() { return focused; } };
   runInNewContext(await readFile(new URL('../ui/career-browser.js', import.meta.url), 'utf8'), { window, document });
-  const byClass = (node, className) => node.className?.split(' ').includes(className) ? node
+  const byClass = (node, className) => node.className.split(' ').includes(className) ? node
     : node.children.map(child => byClass(child, className)).find(Boolean) ?? null;
-  const rows = prefix => nodes[`${prefix}-records`].children.filter(row => row.className !== 'career-cutoff').map(row => byClass(row, 'career-record'));
+  const rows = prefix => nodes[`${prefix}-records`].children.map(row => byClass(row, 'career-record'));
   return { window, nodes, categories, jobCategories, calls, rows, byClass, focused: () => focused,
+    stageCount: name => stageCounts.find(count => count.dataset.stageCount === name),
     settle: () => new Promise(resolve => setImmediate(resolve)),
     titles: (prefix = 'career') => rows(prefix).map(button => byClass(button, 'career-record-title').textContent) };
 }
 
 for (const wide of [false, true]) test(`Jobs paging and stage changes keep the reader column and pagination stable in ${wide ? 'wide' : 'narrow'} mode`, async () => {
   const { state, browser } = fixture();
-  const rows = Array.from({ length: 27 }, (_, index) => preliminary(String(index).padStart(2, '0'),
-    new Date(Date.now() - (index + 1) * 60000).toISOString(), index + 40));
-  savePrescan(state.career, rows);
-  state.career.matching = { jobs: Object.fromEntries(rows.map(row => [row.id, row])), scores: {} };
+  const rows = Array.from({ length: 27 }, (_, index) => catalogueJob(String(index).padStart(2, '0'),
+    new Date(Date.now() - (index + 1) * 60000).toISOString()));
+  state.career.matching = { jobs: Object.fromEntries(rows.map(row => [row.id, row])), scores: { 26: finalAssessment(50) } };
   state.career.applications.app = { id: 'app', job: { title: 'Applied Role', company: 'Employer' } };
   const ui = await rendererFixture(browser, wide);
   await ui.window.careerBrowser.refresh();
   await ui.settle();
   assert.equal(ui.titles()[0], '00');
-  assert.equal(ui.nodes['run-step-prefilter'].hidden, false);
-  assert.equal(ui.nodes['delete-rankings'].disabled, false);
+  assert.equal(ui.nodes['stage-jobs'].hidden, false);
+  assert.equal(ui.nodes['review-launch'].hidden, false);
+  assert.equal(ui.nodes['delete-rankings'].hidden, true);
+  assert.equal(ui.nodes['publication-range'].disabled, false);
   assert.equal(ui.nodes['career-pagination'].hidden, false);
   assert.equal(ui.nodes['career-reader'].hidden, !wide);
   assert.equal(ui.nodes['career-reader-title'].textContent, wide ? '00' : '');
@@ -825,17 +685,21 @@ for (const wide of [false, true]) test(`Jobs paging and stage changes keep the r
   assert.equal(ui.nodes['career-reader-title'].textContent, '26');
   assert.equal(ui.nodes['career-reader'].hidden, false);
 
-  ui.nodes['career-stage-queue'].focus();
-  ui.nodes['career-stage-queue'].fire('click');
+  ui.nodes['career-stage-reviewed'].focus();
+  ui.nodes['career-stage-reviewed'].fire('click');
   await ui.settle();
-  assert.equal(ui.titles()[0], '26');
-  assert.equal(ui.nodes['run-step-prefilter'].hidden, true);
-  assert.equal(ui.nodes['run-step-handover'].hidden, false);
+  assert.equal(ui.calls.at(-1).args.view, 'reviewed');
+  assert.deepEqual(ui.titles(), ['26']);
+  assert.equal(ui.nodes['stage-jobs'].hidden, true);
+  assert.equal(ui.nodes['review-launch'].hidden, false);
+  assert.equal(ui.nodes['delete-rankings'].hidden, false);
+  assert.equal(ui.nodes['delete-rankings'].disabled, false);
   assert.equal(ui.nodes['career-previous'].disabled, true);
-  assert.equal(ui.nodes['career-next'].disabled, false);
+  assert.equal(ui.nodes['career-next'].disabled, true);
+  assert.equal(ui.nodes['career-pagination'].hidden, true);
   assert.equal(ui.nodes['career-reader'].hidden, !wide);
   assert.equal(ui.nodes['career-reader-title'].textContent, wide ? '26' : '');
-  assert.equal(ui.focused(), ui.nodes['career-stage-queue']);
+  assert.equal(ui.focused(), ui.nodes['career-stage-reviewed']);
   assert.equal(ui.nodes['career-records'].querySelectorAll('[aria-current]').length, wide ? 1 : 0);
 
   // Applications shares the Jobs list + reader; the jobs-only toolbar controls hide and disable while it is active.
@@ -844,21 +708,23 @@ for (const wide of [false, true]) test(`Jobs paging and stage changes keep the r
   assert.equal(ui.calls.at(-1).args.kind, 'applications');
   assert.equal(Object.hasOwn(ui.calls.at(-1).args, 'view'), false);
   assert.deepEqual(ui.titles(), ['Applied Role — Employer']);
-  assert.equal(ui.jobCategories.applications.attributes.get('aria-pressed'), 'true');
-  assert.equal(ui.jobCategories.jobs.attributes.get('aria-pressed'), 'false');
-  for (const id of ['run-step-prefilter', 'run-step-handover', 'delete-rankings']) assert.equal(ui.nodes[id].hidden, true, id);
+  assert.equal(ui.jobCategories.applications.attributes.get('aria-selected'), 'true');
+  assert.equal(ui.jobCategories.jobs.attributes.get('aria-selected'), 'false');
+  assert.equal(ui.nodes['career-stage-reviewed'].attributes.get('aria-selected'), 'false');
+  for (const id of ['stage-jobs', 'review-launch', 'delete-rankings']) assert.equal(ui.nodes[id].hidden, true, id);
   assert.equal(ui.nodes['delete-rankings'].disabled, true);
+  assert.equal(ui.nodes['publication-range'].disabled, true);
   assert.equal(ui.nodes['career-reader'].hidden, !wide);
   assert.equal(ui.nodes['career-reader-title'].textContent, wide ? 'Applied Role — Employer' : '');
   ui.jobCategories.jobs.fire('click');
   await ui.settle();
   assert.equal(ui.calls.at(-1).args.kind, 'jobs');
-  assert.equal(ui.calls.at(-1).args.view, 'shortlist');
+  assert.equal(ui.calls.at(-1).args.view, 'jobs');
   assert.equal(ui.titles()[0], '00');
-  assert.equal(ui.nodes['run-step-handover'].hidden, true);
+  assert.equal(ui.nodes['stage-jobs'].hidden, false);
+  assert.equal(ui.nodes['review-launch'].hidden, false);
   assert.equal(ui.nodes['delete-rankings'].hidden, true);
-  assert.equal(ui.nodes['run-step-prefilter'].hidden, false);
-  assert.equal(ui.nodes['delete-rankings'].disabled, false);
+  assert.equal(ui.nodes['publication-range'].disabled, false);
 
   // Me browses CVs and facts with its own list and never sends a jobs view.
   assert.equal(ui.titles('me').length, 0);
@@ -869,12 +735,13 @@ for (const wide of [false, true]) test(`Jobs paging and stage changes keep the r
   assert.equal(ui.titles()[0], '00');
   ui.window.careerBrowser.clear();
   assert.equal(ui.nodes['delete-rankings'].disabled, true);
+  assert.equal(ui.nodes['publication-range'].disabled, true);
   assert.equal(ui.nodes['career-pagination'].hidden, true);
   assert.equal(ui.nodes['career-reader'].hidden, !wide);
   assert.equal(ui.nodes['career-reader-status'].textContent, wide ? 'Select a job' : '');
 });
 
-test('job cards show reviewed fit or shortlist qualification, a Review switch and facts without a cutoff', async () => {
+test('job cards show reviewed fit or nothing yet, plus facts, without a switch, lead column or cutoff', async () => {
   const { state, browser } = fixture();
   const publishedAt = currentDate();
   state.career.matching = { jobs: {
@@ -883,95 +750,62 @@ test('job cards show reviewed fit or shortlist qualification, a Review switch an
     b: { title: 'Backend Engineer', company: 'Second Co', publishedAt },
     c: { title: 'Data Engineer', company: 'Third Co', publishedAt },
     r: { title: 'Analyst', company: 'Review Co', publishedAt: '2000-01-01T00:00:00Z' },
-    x: { title: 'Declined Role', company: 'Other', publishedAt: null },
-  }, scores: { r: finalAssessment(92) } };
-  savePrescan(state.career, [preliminary('a', publishedAt, 90), preliminary('b', publishedAt, 80), preliminary('c', publishedAt, 70),
-    preliminary('x', null, null, { status: 'refused' })]);
-  state.career.prescanInclusion = { scale: 2, minimumScore: 75, overrides: { b: false } };
+    x: { title: 'Undated Role', company: 'Other', publishedAt: null },
+  }, scores: { r: finalAssessment(92), c: { ...finalAssessment(61), profileVersion: 'old' } } };
   const ui = await rendererFixture(browser, true);
   await ui.window.careerBrowser.refresh();
   await ui.settle();
   const lis = ui.nodes['career-records'].children;
   const [a, b, c, reviewed, x] = ui.rows('career');
-  const row = button => lis.find(li => li.children[1] === button);
-  const lead = button => row(button).children[0];
-  const side = button => row(button).children[2];
-  const checkbox = button => ui.byClass(lead(button), 'career-include');
+  const row = button => lis.find(li => li.children[0] === button);
+  const side = button => row(button).children[1];
   const captions = button => side(button).querySelectorAll('.career-card-caption').map(node => node.textContent);
 
-  // Reviewed: fit with an empty lead. Candidates: Review switch in the lead, qualification in the side.
-  assert.deepEqual(row(a).children.map(node => node.className), ['career-card-lead', 'career-record', 'career-card-side']);
+  // Each row is the record button then the side column; reviewed rows carry the fit, open rows carry nothing.
+  assert.deepEqual(row(a).children.map(node => node.className), ['career-record', 'career-card-side']);
   assert.deepEqual(a.children.map(node => node.className), ['career-card-mark', 'career-card-body']);
-  assert.equal(lead(reviewed).children.length, 0);
   assert.equal(ui.byClass(side(reviewed), 'career-card-figure').textContent, '92');
   assert.deepEqual(captions(reviewed), ['Fit']);
-  assert.equal(checkbox(reviewed), null);
   assert.equal(reviewed.attributes.get('aria-label'), 'Analyst, Review Co, fit 92 of 100, published 1 Jan 2000');
-  assert.equal(ui.byClass(side(a), 'career-card-figure'), null);
-  assert.equal(ui.byClass(side(b), 'career-card-figure'), null);
-  assert.equal(ui.byClass(side(c), 'career-card-figure'), null);
-  assert.equal(checkbox(a).type, 'checkbox');
-  assert.equal(checkbox(a).checked, true);
-  assert.equal(checkbox(a).attributes.get('aria-label'), 'Queue Protocol Engineer for AI review');
-  assert.deepEqual(captions(a), ['Pre-qualified']);
-  assert.equal(ui.byClass(lead(a), 'career-card-caption').textContent, 'Review');
-  assert.equal(checkbox(b).checked, false);
-  assert.deepEqual(captions(b), ['Skipped']);
-  assert.equal(ui.byClass(lead(b), 'career-card-caption').textContent, 'Review · manual');
-  assert.equal(checkbox(c).checked, false);
-  assert.deepEqual(captions(c), ['Skipped']);
-  assert.equal(ui.byClass(lead(c), 'career-card-caption').textContent, 'Review');
-  assert.equal(checkbox(x).checked, false);
-  assert.deepEqual(captions(x), ['Declined']);
-  assert.equal(ui.byClass(lead(x), 'career-card-caption').textContent, 'Review');
-  assert.equal(ui.byClass(side(x), 'career-card-reason').textContent, 'Declined');
-  assert.equal(a.attributes.get('aria-label'), `Protocol Engineer, Example Labs, pre-qualified for AI review, published ${new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium', timeZone: 'UTC' }).format(new Date(publishedAt))}`);
-  assert.equal(x.attributes.get('aria-label'), 'Declined Role, Other, declined, skipped, publication date not stated');
+  for (const button of [a, b, c, x]) {
+    assert.equal(side(button).children.length, 0);
+    assert.equal(ui.byClass(row(button), 'career-include'), null);
+    assert.equal(button.querySelectorAll('input').length, 0);
+  }
+  const date = new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium', timeZone: 'UTC' }).format(new Date(publishedAt));
+  assert.equal(a.attributes.get('aria-label'), `Protocol Engineer, Example Labs, not reviewed yet, published ${date}`);
+  assert.equal(c.attributes.get('aria-label'), `Data Engineer, Third Co, not reviewed yet, published ${date}`);
+  assert.equal(x.attributes.get('aria-label'), 'Undated Role, Other, not reviewed yet, publication date not stated');
   // Facts are one plain line; missing facts leave no line at all.
   assert.equal(ui.byClass(a, 'career-card-facts').textContent, 'Senior · USD 150,000 per year · Berlin · Remote · Full Time · Smart Contracts');
   assert.equal(ui.byClass(a, 'career-card-company').textContent, 'Example Labs');
+  assert.equal(ui.byClass(a, 'career-card-mark').textContent, 'E');
   assert.equal(ui.byClass(b, 'career-card-facts'), null);
   assert.equal(ui.byClass(x, 'career-card-date').textContent, 'Publication date not stated');
   assert.equal(a.attributes.get('aria-controls'), 'career-reader');
 
   assert.deepEqual(lis.map(li => li.className), Array(5).fill('career-row career-card'));
+  assert.equal(lis.some(li => li.className === 'career-cutoff'), false);
   assert.equal(ui.nodes['career-list-status'].textContent, '1–5 of 5');
-  assert.equal(ui.nodes['career-surface-sentence'].textContent, '1 of 4 jobs found suitable for further review.');
-  assert.equal(ui.nodes['career-queue-qualified'].attributes.get('aria-pressed'), 'true');
-  assert.equal(ui.nodes['career-queue-all'].attributes.get('aria-pressed'), 'false');
-  assert.equal(ui.nodes['career-queue-qualified'].disabled, false);
-  assert.equal(ui.nodes['career-queue-all'].disabled, false);
+  assert.deepEqual(['jobs', 'reviewed', 'applications', 'blocks'].map(name => ui.stageCount(name).textContent), [' 5', ' 1', ' 0', ' 0']);
 
-  // Toggling records the choice without opening the record; the switch never bubbles to the row.
-  const openTitle = ui.nodes['career-reader-title'].textContent;
-  const readsBefore = ui.calls.filter(call => call.operation === 'career-read').length;
-  assert.equal(checkbox(c).fire('click'), false);
-  checkbox(c).checked = true;
-  checkbox(c).fire('change');
-  await ui.settle();
-  assert.deepEqual(ui.calls.at(-1), { operation: 'prescan-include', args: { id: 'c', included: true } });
-  assert.equal(ui.nodes['career-reader-title'].textContent, openTitle);
-  assert.equal(ui.nodes['career-records'].querySelectorAll('[aria-current]').length, 1);
-  assert.equal(ui.calls.filter(call => call.operation === 'career-read').length, readsBefore);
-
-  // The verdict owns the inclusion control and offers Reset only for manual overrides.
-  b.fire('click');
+  // The first record opened on its own: an open job has no verdict block and no inclusion control in the reader.
+  assert.equal(ui.nodes['career-reader-title'].textContent, 'Protocol Engineer');
+  assert.equal(ui.byClass(ui.nodes['career-reader-content'], 'career-verdict'), null);
+  assert.equal(ui.byClass(ui.nodes['career-reader-content'], 'career-reader-facts').textContent, 'Senior · USD 150,000 per year · Berlin · Remote · Full Time · Smart Contracts');
+  // A stale earlier review shows as context under "Not reviewed yet", without a number.
+  c.fire('click');
   await ui.settle();
   let verdict = ui.byClass(ui.nodes['career-reader-content'], 'career-verdict');
-  assert.equal(ui.byClass(verdict, 'career-verdict-headline').textContent, 'Skipped · manual');
-  const reset = verdict.querySelector('button');
-  assert.equal(reset.id, 'career-inclusion-reset');
-  assert.equal(reset.textContent, 'Reset');
-  reset.fire('click');
-  await ui.settle();
-  assert.deepEqual(ui.calls.at(-1), { operation: 'prescan-include', args: { id: 'b', included: null } });
-  a.fire('click');
-  await ui.settle();
-  verdict = ui.byClass(ui.nodes['career-reader-content'], 'career-verdict');
-  assert.equal(ui.byClass(verdict, 'career-verdict-headline').textContent, 'Pre-qualified for AI review');
+  assert.equal(verdict.className, 'career-verdict is-open');
+  assert.equal(ui.byClass(verdict, 'career-verdict-headline').textContent, 'Not reviewed yet');
+  assert.equal(ui.byClass(verdict, 'career-verdict-number'), null);
+  assert.equal(ui.byClass(verdict, 'career-verdict-reason').textContent, 'Reviewed at 61 before your profile changed · Saved full-advert review.');
+  assert.equal(verdict.querySelectorAll('button').length, 0);
   reviewed.fire('click');
   await ui.settle();
   verdict = ui.byClass(ui.nodes['career-reader-content'], 'career-verdict');
+  assert.equal(ui.byClass(verdict, 'career-verdict-number').textContent, '92');
   assert.equal(ui.byClass(verdict, 'career-verdict-headline').textContent, 'Recommended');
   // A reviewed job's fit is a bar chart: Overall first and heavier, then the four dimensions, each fill as wide as its score.
   const chart = ui.byClass(ui.nodes['career-reader-content'], 'career-chart');
@@ -982,37 +816,16 @@ test('job cards show reviewed fit or shortlist qualification, a Review switch an
   assert.equal(ui.byClass(chart, 'career-chart-track').attributes.get('aria-hidden'), 'true');
   assert.equal(ui.nodes['career-reader-content'].children.some(section => section.children[0]?.textContent === 'Fit breakdown'), false);
 
-  // Queue modes save zero for all jobs and the default qualifying score for pre-qualified jobs.
-  ui.nodes['career-queue-all'].fire('click');
+  // Reviewed lists current reviews only; Clear reviews appears there and nowhere else.
+  ui.nodes['career-stage-reviewed'].fire('click');
   await ui.settle();
-  assert.deepEqual(ui.calls.at(-1), { operation: 'prescan-threshold', args: { minimumScore: 0 } });
-  ui.nodes['career-queue-qualified'].fire('click');
-  await ui.settle();
-  assert.deepEqual(ui.calls.at(-1), { operation: 'prescan-threshold', args: { minimumScore: 36 } });
-
-  // An inclusion edit keeps the open record and the toggled switch through the state refresh that follows.
-  c.fire('click');
-  await ui.settle();
-  checkbox(c).checked = true;
-  checkbox(c).fire('change');
-  await ui.settle();
-  await ui.window.careerBrowser.refresh();
-  await ui.settle();
-  assert.equal(ui.nodes['career-reader-title'].textContent, 'Data Engineer');
-  assert.equal(ui.focused().className, 'career-include');
-  assert.equal(ui.focused().dataset.id, 'c');
-
-  // The queue filters to included jobs and never adds a cutoff.
-  ui.nodes['career-stage-queue'].fire('click');
-  await ui.settle();
-  assert.equal(ui.calls.findLast(call => call.operation === 'career-list').args.view, 'queue');
-  assert.deepEqual(ui.titles(), ['Protocol Engineer']);
-  assert.equal(ui.nodes['career-records'].children.some(li => li.className === 'career-cutoff'), false);
+  assert.equal(ui.calls.findLast(call => call.operation === 'career-list').args.view, 'reviewed');
+  assert.deepEqual(ui.titles(), ['Analyst']);
+  assert.equal(ui.nodes['delete-rankings'].hidden, false);
   ui.jobCategories.applications.fire('click');
   await ui.settle();
-  assert.equal(ui.nodes['run-step-handover'].hidden, true);
-  assert.equal(ui.nodes['career-queue-qualified'].disabled, true);
-  assert.equal(ui.nodes['career-queue-all'].disabled, true);
+  assert.equal(ui.nodes['stage-jobs'].hidden, true);
+  assert.equal(ui.nodes['delete-rankings'].hidden, true);
 });
 
 test('requirement rows copy the exact saved requirement and report success or safe failure inline', async () => {
@@ -1051,158 +864,150 @@ test('requirement rows copy the exact saved requirement and report success or sa
   assert.equal(ui.nodes['career-list-status'].textContent.includes('Saved assessment changed'), false);
 });
 
-test('ineligible cards show the verdict instead of a number or switch, and an established incompatibility reads as a sentence', async () => {
+test('ineligible cards show the verdict instead of a number, and an established incompatibility reads as a sentence', async () => {
   const { state, browser } = fixture();
   const publishedAt = currentDate();
   state.career.matching = { jobs: {
     a: { title: 'Protocol Engineer', company: 'Example Labs', publishedAt },
     e: { title: 'Montréal Lead', company: 'Far Co', publishedAt },
     s: { title: 'Gated Role', company: 'Gate Co', publishedAt },
-    p: { title: 'Waltham Role', company: 'Site Co', publishedAt },
   }, scores: {
     e: finalAssessment(74, { relocation: 'required' }),
     s: { ...finalAssessment(70, { gates: { ...passing, constraints: 'fail' } }), profileVersion: 'old' },
   } };
   state.career.profile.preferences.willingToRelocate = false;
-  savePrescan(state.career, [preliminary('a', publishedAt, 90), preliminary('s', publishedAt, 95),
-    preliminary('p', publishedAt, null, { status: 'incompatible_location', priority: null, location: 'conflict', dimensions: null, confidence: null })]);
-  state.career.prescanInclusion = { scale: 2, minimumScore: 75, overrides: { s: true } };
   const ui = await rendererFixture(browser, true);
   await ui.window.careerBrowser.refresh();
   await ui.settle();
   const lis = ui.nodes['career-records'].children;
-  const [a, e, p, s] = ui.rows('career');
-  const row = button => lis.find(li => li.children[1] === button);
-  const lead = button => row(button).children[0];
-  const side = button => row(button).children[2];
+  const [a, e, s] = ui.rows('career');
+  const row = button => lis.find(li => li.children[0] === button);
+  const side = button => row(button).children[1];
   const captions = button => side(button).querySelectorAll('.career-card-caption').map(node => node.textContent);
-  assert.deepEqual(ui.titles(), ['Protocol Engineer', 'Montréal Lead', 'Waltham Role', 'Gated Role']);
-  // Predicted conflict: unranked, switch kept, reason captioned.
-  assert.equal(ui.byClass(lead(p), 'career-include').checked, false);
-  assert.deepEqual(captions(p), ['Location conflict predicted']);
-  assert.equal(ui.byClass(lead(p), 'career-card-caption').textContent, 'Review');
-  assert.equal(ui.byClass(side(p), 'career-card-reason').textContent, 'Location conflict predicted');
-  assert.equal(p.attributes.get('aria-label').includes('location conflict predicted, skipped'), true);
-  // Current ineligible review and established stale review: the label only; no number, no switch, no "manual".
+  assert.deepEqual(ui.titles(), ['Protocol Engineer', 'Montréal Lead', 'Gated Role']);
+  // Open: nothing on the right yet.
+  assert.equal(side(a).children.length, 0);
+  assert.equal(a.attributes.get('aria-label').startsWith('Protocol Engineer, Example Labs, not reviewed yet, published'), true);
+  // Current ineligible review and established stale review: the label only; no number, no switch.
   for (const [button, label] of [[e, 'Location incompatible'], [s, 'Excluded by a gate']]) {
     assert.equal(ui.byClass(side(button), 'career-card-figure'), null);
-    assert.equal(ui.byClass(lead(button), 'career-include'), null);
-    assert.equal(lead(button).children.length, 0);
+    assert.equal(ui.byClass(row(button), 'career-include'), null);
     assert.deepEqual(captions(button), [label]);
     assert.equal(ui.byClass(side(button), 'career-card-verdict').textContent, label);
   }
   assert.equal(JSON.stringify(side(e)).includes('74'), false);
   assert.equal(e.attributes.get('aria-label').startsWith('Montréal Lead, Far Co, not eligible, Location incompatible, published'), true);
   assert.equal(s.attributes.get('aria-label').startsWith('Gated Role, Gate Co, not eligible, Excluded by a gate, published'), true);
-  assert.equal(ui.nodes['career-surface-sentence'].textContent, '1 of 3 jobs found suitable for further review.');
   // The reader verdict explains both current and established ineligibility; neither has an inclusion control.
   e.fire('click');
   await ui.settle();
   let verdict = ui.byClass(ui.nodes['career-reader-content'], 'career-verdict');
   assert.equal(ui.byClass(verdict, 'career-verdict-headline').textContent, 'Location incompatible');
-  assert.equal(ui.byClass(verdict, 'career-verdict-switch'), null);
+  assert.equal(verdict.querySelectorAll('button').length, 0);
   s.fire('click');
   await ui.settle();
   verdict = ui.byClass(ui.nodes['career-reader-content'], 'career-verdict');
   assert.equal(ui.byClass(verdict, 'career-verdict-headline').textContent, 'Excluded by a gate');
-  assert.equal(ui.byClass(verdict, 'career-verdict-switch'), null);
+  assert.equal(verdict.querySelectorAll('button').length, 0);
+  assert.equal(ui.byClass(verdict, 'career-verdict-reason'), null);
+  // Reviewed lists both; the open job stays in Jobs only.
+  ui.nodes['career-stage-reviewed'].fire('click');
+  await ui.settle();
+  assert.deepEqual(ui.titles(), ['Montréal Lead', 'Gated Role']);
+  assert.deepEqual(['jobs', 'reviewed', 'applications', 'blocks'].map(name => ui.stageCount(name).textContent), [' 3', ' 2', ' 0', ' 0']);
 });
 
-test('queue modes restore saved selection, skip unchanged saves and show exact current and stale shortlist counts', async () => {
-  const { state, browser } = fixture();
-  const publishedAt = currentDate();
-  const rows = Array.from({ length: 1000 }, (_, index) => preliminary(`job-${index}`, publishedAt, 80));
-  state.career.matching = { jobs: Object.fromEntries(rows.map(row => [row.id, { ...row }])), scores: {} };
-  savePrescan(state.career, rows);
-  const ui = await rendererFixture(browser, true, {
-    'prescan-threshold': ({ minimumScore }) => {
-      state.career.prescanInclusion = { scale: 2, minimumScore, overrides: {} };
-    },
-  });
-  await ui.window.careerBrowser.refresh();
-  await ui.settle();
-  assert.equal(ui.nodes['career-surface-sentence'].textContent, '1000 of 1000 jobs found suitable for further review.');
-  assert.deepEqual(['shortlist', 'queue', 'reviewed'].map(view => ui.nodes[`career-stage-${view}`].querySelector('.stage-count').textContent),
-    [' 1,000', ' 1,000', ' 0']);
-  assert.equal(ui.nodes['career-category-applications'].querySelector('.stage-count').textContent, ' 0');
-  assert.equal(ui.nodes['career-category-blocks'].querySelector('.stage-count').textContent, ' 0');
-  assert.equal(ui.nodes['career-list-status'].textContent, '1–25 of 1,000');
-  ui.nodes['career-queue-all'].fire('click');
-  await ui.settle();
-  assert.deepEqual(ui.calls.at(-1), { operation: 'prescan-threshold', args: { minimumScore: 0 } });
-  await ui.window.careerBrowser.refresh();
-  await ui.settle();
-  assert.equal(ui.nodes['career-queue-qualified'].attributes.get('aria-pressed'), 'false');
-  assert.equal(ui.nodes['career-queue-all'].attributes.get('aria-pressed'), 'true');
-  assert.equal(ui.nodes['career-surface-sentence'].textContent, 'All 1000 jobs go on for review.');
-  const callsBefore = ui.calls.length;
-  ui.nodes['career-queue-all'].fire('click');
-  assert.equal(ui.calls.length, callsBefore);
-  state.career.prescan.profileVersion = '1:0';
-  await ui.window.careerBrowser.refresh();
-  await ui.settle();
-  assert.equal(ui.nodes['career-surface-sentence'].textContent, 'All 1000 jobs go on for review. Scored before your profile changed; shortlist again.');
-  assert.equal(ui.byClass(ui.nodes['career-records'].children[0], 'career-card-reason').textContent,
-    'Pre-qualified · out of date');
-  ui.nodes['career-queue-qualified'].fire('click');
-  await ui.settle();
-  assert.deepEqual(ui.calls.at(-1), { operation: 'prescan-threshold', args: { minimumScore: 36 } });
-  await ui.window.careerBrowser.refresh();
-  await ui.settle();
-  assert.equal(ui.nodes['career-queue-qualified'].attributes.get('aria-pressed'), 'true');
-  assert.equal(ui.nodes['career-queue-all'].attributes.get('aria-pressed'), 'false');
-  assert.equal(ui.nodes['career-surface-sentence'].textContent, '1000 of 1000 jobs found suitable for further review. Scored before your profile changed; shortlist again.');
-});
-
-test('without a shortlist all jobs go on for review and a failed queue-mode save restores the saved selection', async () => {
+test('the publication slider saves its range once on change, restores the saved range on failure, and setContext drives the review launch', async () => {
   const { state, browser } = fixture();
   const publishedAt = currentDate();
   state.career.matching = { jobs: { a: { title: 'One', company: 'Co', publishedAt }, b: { title: 'Two', company: 'Co', publishedAt } }, scores: {} };
-  const ui = await rendererFixture(browser, true);
+  let failure = null;
+  const ui = await rendererFixture(browser, true, {
+    'publication-range-set': ({ publicationRange }) => {
+      if (failure) throw new Error(failure);
+      state.career.publicationRange = publicationRange;
+    },
+  });
+  const input = ui.nodes['publication-range'], label = ui.nodes['publication-range-label'];
+  const launch = host => ui.nodes[`review-${host}`];
+  assert.equal(input.disabled, true);
   await ui.window.careerBrowser.refresh();
   await ui.settle();
-  assert.equal(ui.nodes['career-surface-sentence'].textContent, 'No shortlist yet: all 2 jobs go on for review.');
+  assert.equal(input.disabled, false);
   assert.equal(ui.nodes['career-list-status'].textContent, '1–2 of 2');
-  assert.equal(ui.nodes['career-queue-qualified'].attributes.get('aria-pressed'), 'true');
-  assert.equal(ui.nodes['career-queue-all'].attributes.get('aria-pressed'), 'false');
-  assert.equal(ui.nodes['career-records'].children.some(li => li.className === 'career-cutoff'), false);
-  ui.window.companion.invoke = async () => ({ ok: false, error: { message: 'Storage is locked.' } });
-  ui.nodes['career-queue-all'].fire('click');
+  ui.window.careerBrowser.setContext({ review: { hosts: { codex: true, claude: false }, preferredHost: 'codex' }, publicationRange: 'past_week', paired: true });
+  assert.deepEqual([input.value, input.attributes.get('aria-valuetext'), label.textContent], ['3', 'Past week', 'in the past week']);
+  assert.deepEqual([launch('codex').hidden, launch('claude').hidden], [false, true]);
+  assert.deepEqual([launch('codex').className, ui.nodes['copy-review-prompt'].className], ['primary', 'text']);
+  // Dragging only moves the label; the change event saves once, and an unchanged value never saves.
+  input.value = '4';
+  input.fire('input');
+  assert.equal(label.textContent, 'in the past 2 weeks');
+  assert.equal(ui.calls.some(call => call.operation === 'publication-range-set'), false);
+  input.fire('change');
   await ui.settle();
-  assert.equal(ui.nodes['career-queue-qualified'].attributes.get('aria-pressed'), 'true');
-  assert.equal(ui.nodes['career-queue-all'].attributes.get('aria-pressed'), 'false');
-  assert.equal(ui.nodes['career-list-status'].textContent, 'Could not change which jobs go on for review. Storage is locked.');
+  assert.deepEqual(ui.calls.at(-1), { operation: 'publication-range-set', args: { publicationRange: 'past_2_weeks' } });
+  ui.window.careerBrowser.setContext({ publicationRange: state.career.publicationRange });
+  assert.deepEqual([input.value, label.textContent], ['4', 'in the past 2 weeks']);
+  const callsBefore = ui.calls.length;
+  input.fire('change');
+  await ui.settle();
+  assert.equal(ui.calls.length, callsBefore);
+  // A failed save reports the error and restores the saved range.
+  failure = 'Storage is locked.';
+  input.value = '0';
+  input.fire('input');
+  input.fire('change');
+  await ui.settle();
+  assert.equal(ui.nodes['career-list-status'].textContent, 'Could not change the publication window. Storage is locked.');
+  assert.deepEqual([input.value, input.attributes.get('aria-valuetext'), label.textContent], ['4', 'Past 2 weeks', 'in the past 2 weeks']);
+  // Only installed hosts are offered; the preferred installed one leads, Copy prompt leads when none is installed.
+  ui.window.careerBrowser.setContext({ review: { hosts: { codex: true, claude: true }, preferredHost: 'claude' } });
+  assert.deepEqual([launch('codex').hidden, launch('claude').hidden], [false, false]);
+  assert.deepEqual([launch('codex').className, launch('claude').className, ui.nodes['copy-review-prompt'].className], ['ghost', 'primary', 'text']);
+  ui.window.careerBrowser.setContext({ review: { hosts: { codex: false, claude: false }, preferredHost: 'codex' } });
+  assert.deepEqual([launch('codex').hidden, launch('claude').hidden], [true, true]);
+  assert.equal(ui.nodes['copy-review-prompt'].className, 'primary');
+  // The launch and the slider belong to the Jobs tabs only.
+  ui.jobCategories.applications.fire('click');
+  await ui.settle();
+  assert.equal(ui.nodes['review-launch'].hidden, true);
+  assert.equal(input.disabled, true);
+  ui.nodes['career-stage-reviewed'].fire('click');
+  await ui.settle();
+  assert.equal(ui.nodes['review-launch'].hidden, false);
+  assert.equal(ui.nodes['stage-jobs'].hidden, true);
   ui.window.careerBrowser.clear();
-  assert.equal(ui.nodes['career-surface-sentence'].textContent, '');
-  assert.equal(ui.nodes['career-queue-qualified'].disabled, true);
-  assert.equal(ui.nodes['career-queue-all'].disabled, true);
+  assert.equal(input.disabled, true);
 });
 
-test('each Jobs stage has its own empty state, active button and controls', async () => {
+test('each Jobs stage has its own empty state, active tab and controls', async () => {
   const { browser } = fixture();
   const ui = await rendererFixture(browser, false);
   await ui.window.careerBrowser.refresh();
   await ui.settle();
   for (const [view, empty] of [
-    ['shortlist', 'No jobs in this publication window yet. Widen the window or start the shortlist.'],
-    ['queue', 'Nothing pre-qualified yet. Run the shortlist, or choose All jobs.'],
-    ['reviewed', 'Nothing reviewed yet. Continue in Codex or Claude to review the pre-qualified jobs.'],
+    ['reviewed', 'Nothing reviewed yet. Continue in Codex or Claude to review the jobs in this window.'],
+    ['jobs', 'No jobs in this publication window yet. Widen the window or start the shortlist.'],
   ]) {
     ui.nodes[`career-stage-${view}`].fire('click');
     await ui.settle();
+    assert.equal(ui.calls.at(-1).args.view, view);
     assert.equal(ui.nodes['career-list-status'].textContent, empty);
-    assert.equal(ui.nodes['run-step-prefilter'].hidden, view !== 'shortlist');
-    assert.equal(ui.nodes['run-step-handover'].hidden, view !== 'queue');
+    assert.equal(ui.nodes['stage-jobs'].hidden, view !== 'jobs');
+    assert.equal(ui.nodes['review-launch'].hidden, false);
     assert.equal(ui.nodes['delete-rankings'].hidden, view !== 'reviewed');
     assert.equal(ui.nodes['delete-rankings'].disabled, false);
-    for (const candidate of ['shortlist', 'queue', 'reviewed'])
-      assert.equal(ui.nodes[`career-stage-${candidate}`].attributes.get('aria-pressed'), String(candidate === view));
+    for (const candidate of ['stage-jobs', 'stage-reviewed', 'category-applications', 'category-blocks'])
+      assert.equal(ui.nodes[`career-${candidate}`].attributes.get('aria-selected'), String(candidate === `stage-${view}`));
   }
   for (const kind of ['applications', 'blocks']) {
     ui.jobCategories[kind].fire('click');
     await ui.settle();
-    assert.equal(ui.nodes['run-step-prefilter'].hidden, true);
-    assert.equal(ui.nodes['run-step-handover'].hidden, true);
+    assert.equal(ui.jobCategories[kind].attributes.get('aria-selected'), 'true');
+    assert.equal(ui.nodes['career-stage-jobs'].attributes.get('aria-selected'), 'false');
+    assert.equal(ui.nodes['stage-jobs'].hidden, true);
+    assert.equal(ui.nodes['review-launch'].hidden, true);
     assert.equal(ui.nodes['delete-rankings'].hidden, true);
     assert.equal(ui.nodes['delete-rankings'].disabled, true);
   }
@@ -1216,20 +1021,22 @@ test('the Jobs list column keeps Previous/Next on its own last grid row regardle
   const order = ['career-list-status', 'career-list-retry', 'career-records', 'career-pagination', 'career-next'];
   assert.deepEqual(ids.filter(id => order.includes(id)), order);
   assert.match(list.trim(), /<nav id="career-pagination"[\s\S]*<\/nav>$/);
-  // Queue controls belong to the queue stage panel, above the list.
+  // The publication window and the review launch belong to the Jobs stage panel, above the list.
   const rail = html.match(/<section id="stage-panels"[\s\S]*?<\/section>/)[0];
-  assert.match(rail, /<div id="run-step-handover" class="stage-panel" data-stage-panel="queue" hidden>[\s\S]*<div id="career-surface" class="career-surface stage-block">/);
-  assert.match(rail, /<div class="career-categories" role="group" aria-label="Jobs that go on for review">/);
-  assert.match(rail, /<button id="career-queue-qualified" type="button" class="ghost" aria-pressed="true" disabled>Pre-qualified only<\/button>/);
-  assert.match(rail, /<button id="career-queue-all" type="button" class="ghost" aria-pressed="false" disabled>All jobs<\/button>/);
-  assert.match(rail, /<div id="run-step-prefilter" class="stage-panel" data-stage-panel="shortlist">\s*<div id="run-step-key" class="stage-block" hidden>/);
+  assert.match(rail, /<div id="stage-jobs" class="stage-panel stage-panel-jobs" data-stage-panel="jobs">[\s\S]*<input id="publication-range" type="range" min="0" max="4" step="1" value="2" aria-valuetext="Past 3 days" disabled>/);
+  assert.match(rail, /<span id="publication-range-label">in the past 3 days<\/span>/);
+  assert.match(rail, /<div id="review-launch"[^>]*>(<button id="review-codex" class="ghost" type="button" hidden>[^<]*<\/button>)(<button id="review-claude" class="ghost" type="button" hidden>[^<]*<\/button>)<button id="copy-review-prompt" class="ghost" type="button">Copy prompt<\/button><\/div>/);
   assert.match(list, /<div class="career-list-tools">\s*<p id="career-list-status"/);
-  for (const obsolete of ['id="run-rail"', 'class="run-steps"', 'class="run-step-number"', 'aria-current="step"', 'id="career-sort"', 'id="career-sort-control"', 'id="career-category-ranked"'])
+  assert.match(list, /<button id="delete-rankings" class="text" type="button" disabled hidden>Clear reviews<\/button>/);
+  for (const obsolete of ['id="run-rail"', 'class="run-steps"', 'class="run-step-number"', 'aria-current="step"', 'id="career-sort"', 'id="career-sort-control"', 'id="career-category-ranked"',
+    'id="run-step-prefilter"', 'id="run-step-handover"', 'id="career-queue-qualified"', 'id="career-queue-all"', 'id="career-surface"', 'career-minimum-score', 'id="review-help"', 'career-cutoff-control',
+    'data-career-view="shortlist"', 'data-career-view="queue"', 'aria-pressed'])
     assert.equal(html.includes(obsolete), false, obsolete);
-  for (const view of ['shortlist', 'queue', 'reviewed'])
-    assert.match(html, new RegExp(`<button id="career-stage-${view}"[^>]*data-career-kind="jobs" data-career-view="${view}"[^>]*>[^<]*<span class="stage-count" data-stage-count="${view}"></span></button>`));
-  assert.equal(html.includes('career-minimum-score'), false);
-  assert.equal(html.includes('id="review-help"'), false);
+  assert.match(html, /<div class="tabs jobs-stages" role="tablist" aria-label="Job stages">/);
+  for (const view of ['jobs', 'reviewed'])
+    assert.match(html, new RegExp(`<button id="career-stage-${view}" type="button" class="tab" role="tab" data-career-kind="jobs" data-career-view="${view}" aria-selected="${view === 'jobs'}" disabled>[^<]*<span class="stage-count" data-stage-count="${view}"></span></button>`));
+  for (const kind of ['applications', 'blocks'])
+    assert.match(html, new RegExp(`<button id="career-category-${kind}" type="button" class="tab" role="tab" data-career-kind="${kind}" aria-selected="false" disabled>[^<]*<span class="stage-count" data-stage-count="${kind}"></span></button>`));
   assert.match(css, /^#career-browser \{ grid-template-rows: auto auto minmax\(0, 1fr\); \}$/m);
   // Four explicit rows, each child pinned to one, so hidden children never let the records take the `auto` row.
   assert.match(css, /^\.career-list \{[^}]*grid-template-rows: auto auto minmax\(0, 1fr\) auto;[^}]*overflow: hidden; \}$/m);
@@ -1238,7 +1045,6 @@ test('the Jobs list column keeps Previous/Next on its own last grid row regardle
   assert.match(css, /^\.career-records \{[^}]*overflow: auto;/m);
   assert.match(css, /^\.career-card-side \{[^}]*width: 112px;/m);
   assert.match(css, /\.career-card-side \{ width: 96px; padding: var\(--spacing-16\) var\(--spacing-16\) var\(--spacing-16\) 0; \}/);
-  assert.equal(html.includes('career-cutoff-control'), false);
 });
 
 test('blocking from the reader hides matching jobs; Blocked lists each block and Unblock restores its jobs', async () => {
@@ -1282,7 +1088,7 @@ test('blocking from the reader hides matching jobs; Blocked lists each block and
   ui.jobCategories.blocks.fire('click');
   await ui.settle();
   assert.deepEqual(ui.calls.at(-2).args, { kind: 'blocks', offset: 0, limit: 25 });
-  assert.equal(ui.nodes['run-step-handover'].hidden, true);
+  assert.equal(ui.nodes['stage-jobs'].hidden, true);
   const summaries = () => ui.rows('career').map(button => ui.byClass(button, 'career-record-summary').textContent);
   assert.deepEqual(ui.titles().sort(), ['Example Labs', 'Smart Contracts']);
   assert.deepEqual(summaries().sort(), ['Category · 1 saved job', 'Company · 2 saved jobs']);

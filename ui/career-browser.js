@@ -9,10 +9,6 @@
     applications: { title: 'Job Applications', empty: 'No saved applications.', locked: 'Open local storage to read saved applications.', select: 'Select an application' },
     blocks: { title: 'Blocked jobs', empty: 'Nothing blocked. Open a job to block it, its company or its category.', locked: 'Open local storage to read blocked jobs.', select: 'Select a block' },
   };
-  // Why an unscored job has no score. The caption stands where the number would be.
-  const statusWords = { unavailable: 'Advert unavailable', refused: 'Declined', oversize: 'Too large',
-    incompatible_location: 'Location conflict predicted', below_minimum: 'Below your minimum' };
-  const statusWord = card => statusWords[card.status] ?? 'Not scored';
   const dateFormat = new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium', timeZone: 'UTC' });
   const displayDate = value => typeof value === 'string' && Number.isFinite(Date.parse(value)) ? dateFormat.format(new Date(value)) : null;
   const integer = value => value.toLocaleString('en-GB');
@@ -26,19 +22,13 @@
   };
 
   function cardSpoken(card, date) {
-    const sent = card.included ? 'pre-qualified for AI review' : 'skipped';
     const stage = card.stage === 'reviewed'
       ? [`fit ${card.score === null ? 'not saved' : `${card.score} of 100`}`, card.stale ? 'out of date' : null]
-      : card.stage === 'ineligible'
-        ? ['not eligible', card.label]
-        : card.stage === 'prefilter'
-          ? [sent, card.overridden ? 'manual' : null]
-          : [statusWord(card).toLowerCase(), sent];
+      : card.stage === 'ineligible' ? ['not eligible', card.label] : ['not reviewed yet'];
     return [card.title, card.company, ...stage, date ? `published ${date}` : 'publication date not stated'].filter(Boolean).join(', ');
   }
-  /** Row anatomy, left to right: the Review switch (own column, never inside the button), the record button with the
-   *  company mark and three text lines, then the number the list is sorted by. The switch column stays for reviewed and
-   *  ineligible rows so titles align. */
+  /** Row anatomy, left to right: the record button with the company mark and three text lines, then the agent's fit or
+   *  verdict when one exists. Open jobs carry nothing on the right: there is nothing to say yet. */
   function renderLogo(card) {
     const mark = node('span', 'career-card-mark');
     const initial = (card.company ?? '').trim().charAt(0).toUpperCase();
@@ -56,7 +46,7 @@
     }
     return mark;
   }
-  function renderCard(item, button, lead, side, onInclude) {
+  function renderCard(item, button, side) {
     const card = item.card;
     const date = displayDate(card.publishedAt);
     const body = node('span', 'career-card-body');
@@ -81,22 +71,6 @@
       return;
     }
     // The pre-qualification is a word, never a number: the number only orders the queue.
-    if (card.stage === 'prefilter') {
-      side.append(node('span', 'career-card-caption career-card-reason', `${card.included ? 'Pre-qualified' : 'Skipped'}${card.stale ? ' · out of date' : ''}`));
-    } else {
-      side.append(node('span', 'career-card-caption career-card-reason', statusWord(card)));
-    }
-    const label = node('label', 'career-card-include');
-    const checkbox = node('input', 'career-include');
-    checkbox.type = 'checkbox';
-    checkbox.checked = card.included === true;
-    checkbox.setAttribute('aria-label', `Queue ${card.title} for AI review`);
-    checkbox.dataset.id = item.id;
-    checkbox.addEventListener('click', event => event.stopPropagation());
-    checkbox.addEventListener('change', event => { void onInclude(item, event.target.checked, event.target); });
-    label.addEventListener('click', event => event.stopPropagation());
-    label.append(checkbox, node('span', 'career-card-caption', card.overridden ? 'Review · manual' : 'Review'));
-    lead.append(label);
   }
   function renderRow(item, button) {
     button.append(node('span', 'career-record-title', item.title));
@@ -105,7 +79,7 @@
 
   /** One list + reader pair. `persistentReader` keeps the reader column rendered on wide screens.
    *  `stagePanels` show the active jobs view's controls; the pre-qualification switch and Clear reviews are disabled on other tabs. */
-  function createBrowser({ root, prefix, kind: initialKind, persistentReader = false, surfaceControl = null, deleteRankings = null, stagePanels = [] }) {
+  function createBrowser({ root, prefix, kind: initialKind, persistentReader = false, deleteRankings = null, stagePanels = [], publication = null, reviewLaunch = null }) {
     const element = name => document.getElementById(`${prefix}-${name}`);
     const categoryButtons = [...root.querySelectorAll('[data-career-kind]')];
     const records = element('records');
@@ -119,17 +93,12 @@
     const readerStatus = element('reader-status');
     const readerRetry = element('reader-retry');
     const content = element('reader-content');
-    // Pre-qualification is a switch, not a dial: on = the default qualifying score, off = every candidate goes on for review.
-    const QUALIFYING_SCORE = 36;
-    const queueButtons = surfaceControl ? { qualified: element('queue-qualified'), all: element('queue-all') } : null;
-    const surfaceSentence = surfaceControl ? element('surface-sentence') : null;
     const persistent = () => persistentReader && sideBySide.matches;
     let enabled = false;
     let kind = initialKind;
-    let view = 'shortlist';
-    const viewEmpty = { shortlist: categories.jobs.empty, queue: 'Nothing pre-qualified yet. Run the shortlist, or choose All jobs.', reviewed: 'Nothing reviewed yet. Continue in Codex or Claude to review the pre-qualified jobs.' };
+    let view = 'jobs';
+    const viewEmpty = { jobs: categories.jobs.empty, reviewed: 'Nothing reviewed yet. Continue in Codex or Claude to review the jobs in this window.' };
     const stageCounts = [...root.querySelectorAll('[data-stage-count]')];
-    const reviewLaunch = root.querySelector('#review-launch');
     let generation = 0;
     let readGeneration = 0;
     let offset = 0;
@@ -138,8 +107,7 @@
     let loading = false;
     let selected = null;
     let selectedButton = null;
-    let minimumScore = null;
-    // Set by an inclusion edit; the refresh that follows keeps the page, the open record and the toggled control.
+    // Set by a block edit; the refresh that follows keeps the page and the open record.
     let keepPlace = null;
 
     async function request(operation, args) {
@@ -162,19 +130,6 @@
       reader.removeAttribute('aria-busy');
       records.querySelectorAll('[aria-current]').forEach(button => button.removeAttribute('aria-current'));
       if (restoreFocus && returnTo?.isConnected) returnTo.focus();
-    }
-
-    // Inclusion is user-owned: the companion records the choice, then the state broadcast reloads this list in place.
-    async function setInclusion(item, included, control = null) {
-      if (!enabled) return;
-      keepPlace = { offset, priorOffsets: [...priorOffsets], selectedId: selected?.id ?? item.id, focusId: control ? item.id : null };
-      try {
-        await request('prescan-include', { id: item.id, included });
-      } catch (error) {
-        keepPlace = null;
-        if (control) control.checked = item.card.included === true;
-        listStatus.textContent = `Could not change the review queue. ${error.message}`;
-      }
     }
 
     // Blocking hides matching jobs from the list, so the refresh that follows keeps the page and focuses the list.
@@ -250,31 +205,7 @@
       row.append(words);
       block.append(row);
       if (typeof verdict.reason === 'string' && verdict.reason) block.append(node('p', 'career-verdict-reason', verdict.reason));
-      const actions = renderInclusionControl(item, card);
-      if (actions?.childElementCount) block.append(actions);
       return block;
-    }
-    function renderInclusionControl(item, card) {
-      if (!card || card.stage === 'reviewed' || (card.stage === 'ineligible' && !card.established)) return null;
-      if (card.established) return null;
-      const actions = node('div', 'actions');
-      const label = node('label', 'career-verdict-switch');
-      const checkbox = document.createElement('input');
-      checkbox.type = 'checkbox';
-      checkbox.className = 'career-include';
-      checkbox.checked = card.included === true;
-      checkbox.addEventListener('change', () => { void setInclusion(item, checkbox.checked, checkbox); });
-      label.append(checkbox, node('span', '', card.status === 'incompatible_location' ? 'Review anyway' : 'Queue for AI review'));
-      actions.append(label);
-      if (card.overridden) {
-        const reset = node('button', 'text', 'Reset');
-        reset.setAttribute('aria-label', 'Reset to the minimum score rule');
-        reset.type = 'button';
-        reset.id = `${prefix}-inclusion-reset`;
-        reset.addEventListener('click', () => { void setInclusion(item, null); });
-        actions.append(reset);
-      }
-      return actions;
     }
     // The job page sits with identity metadata, never inside the decision.
     function renderHeader(detail, item) {
@@ -429,7 +360,7 @@
       for (const panel of stagePanels) panel.hidden = !(active && panel.dataset.stagePanel === view);
       if (reviewLaunch) reviewLaunch.hidden = !active;
       if (deleteRankings) { deleteRankings.hidden = !(active && view === 'reviewed'); deleteRankings.disabled = !enabled || !active; }
-      if (queueButtons) for (const button of Object.values(queueButtons)) button.disabled = !enabled || !active;
+      if (publication) publication.input.disabled = !enabled || !active;
     }
     function renderCounts(counts) {
       for (const node of stageCounts) {
@@ -437,27 +368,35 @@
         node.textContent = Number.isSafeInteger(value) ? ` ${value.toLocaleString('en-GB')}` : '';
       }
     }
-    function showQueueMode(value) {
-      const all = value === 0;
-      queueButtons.qualified.setAttribute('aria-pressed', String(!all));
-      queueButtons.all.setAttribute('aria-pressed', String(all));
+    // Publication window: five positions, Today … Past 2 weeks; older saved presets fall back to the widest offered.
+    const publicationRanges = [
+      ['today', 'Today', 'today'], ['yesterday', 'Yesterday', 'since yesterday'], ['past_3_days', 'Past 3 days', 'in the past 3 days'],
+      ['past_week', 'Past week', 'in the past week'], ['past_2_weeks', 'Past 2 weeks', 'in the past 2 weeks'],
+    ];
+    const rangeIndexFor = value => { const index = publicationRanges.findIndex(([name]) => name === value); return index >= 0 ? index : ['past_month', 'all'].includes(value) ? publicationRanges.length - 1 : 2; };
+    let savedRange = null, rangeSaving = false;
+    function renderPublication(range) {
+      if (!publication || range === undefined) return;
+      savedRange = range;
+      if (document.activeElement === publication.input && rangeSaving) return;
+      const index = rangeIndexFor(range);
+      publication.input.value = String(index);
+      publication.input.setAttribute('aria-valuetext', publicationRanges[index][1]);
+      publication.label.textContent = publicationRanges[index][2];
     }
-    // The surface block states what the switch decides: how many of the unreviewed jobs go on for review.
-    let normalising = false;
-    function renderSurface(inclusion) {
-      minimumScore = inclusion.minimumScore;
-      showQueueMode(inclusion.minimumScore);
-      // A threshold saved by the earlier slider is neither mode; move it to the qualifying score once so the switch tells the truth.
-      if (![0, QUALIFYING_SCORE].includes(inclusion.minimumScore) && !normalising) {
-        normalising = true;
-        request('prescan-threshold', { minimumScore: QUALIFYING_SCORE }).catch(() => {}).finally(() => { normalising = false; });
+    // The handoff leads whenever the user's AI app is installed; Copy prompt is the fallback for any other host.
+    let review = { hosts: { codex: false, claude: false }, preferredHost: 'codex' };
+    function renderReviewLaunch() {
+      if (!reviewLaunch) return;
+      const installed = ['codex', 'claude'].filter(host => review.hosts?.[host] === true);
+      const primaryHost = installed.includes(review.preferredHost) ? review.preferredHost : installed[0] ?? null;
+      for (const host of ['codex', 'claude']) {
+        const button = reviewLaunch.querySelector(`#review-${host}`);
+        button.hidden = !installed.includes(host);
+        button.classList.toggle('primary', host === primaryHost); button.classList.toggle('ghost', host !== primaryHost);
       }
-      const total = inclusion.candidates, jobs = `${total} ${total === 1 ? 'job' : 'jobs'}`;
-      const stale = inclusion.stale ? ' Scored before your profile changed; shortlist again.' : '';
-      surfaceSentence.textContent = inclusion.scored === null
-        ? `No shortlist yet: all ${jobs} go on for review.`
-        : inclusion.minimumScore === 0 ? `All ${jobs} go on for review.${stale}`
-          : `${inclusion.included} of ${jobs} found suitable for further review.${stale}`;
+      const copy = reviewLaunch.querySelector('#copy-review-prompt');
+      copy.classList.toggle('primary', !primaryHost); copy.classList.toggle('text', Boolean(primaryHost)); copy.classList.toggle('ghost', false);
     }
     async function loadPage(focusList = false, place = null) {
       if (!enabled) return;
@@ -480,7 +419,6 @@
       try {
         const result = await request('career-list', { kind, offset, limit: 25, ...(kind === 'jobs' ? { view } : {}) });
         if (!enabled || currentGeneration !== generation) return;
-        const inclusion = kind === 'jobs' && result.inclusion && typeof result.inclusion === 'object' ? result.inclusion : null;
         if (kind === 'jobs') renderCounts(result.counts);
         result.items.forEach((item, index) => {
           const row = document.createElement('li');
@@ -491,10 +429,9 @@
           button.setAttribute('aria-controls', `${prefix}-reader`);
           if (item.card && typeof item.card === 'object') {
             row.className = 'career-row career-card';
-            const lead = node('span', 'career-card-lead'), side = node('span', 'career-card-side');
-            renderCard(item, button, lead, side, setInclusion);
-            row.append(lead, button, side);
-            if (place?.focusId === item.id) refocus = lead.querySelector('input');
+            const side = node('span', 'career-card-side');
+            renderCard(item, button, side);
+            row.append(button, side);
           } else {
             renderRow(item, button);
             row.append(button);
@@ -512,7 +449,6 @@
           ? range
           : offset ? 'No records on this page. Choose Previous.' : kind === 'jobs' ? viewEmpty[view] : category.empty;
         if (typeof place?.notice === 'string' && place.notice) listStatus.textContent = `${place.notice} · ${listStatus.textContent}`;
-        if (queueButtons && inclusion) renderSurface(inclusion);
         previous.disabled = priorOffsets.length === 0;
         next.disabled = nextOffset === null;
         pagination.hidden = previous.disabled && next.disabled;
@@ -536,7 +472,7 @@
         }
       }
       if (!enabled || currentGeneration !== generation) return;
-      // An inclusion edit reopens the record the user had open; otherwise side-by-side layouts show the first record.
+      // A block edit reopens the record the user had open; otherwise side-by-side layouts show the first record.
       const open = reopen ?? (sideBySide.matches ? firstRecord : null);
       if (open) void openRecord(open.item, open.button, false);
       if (refocus) refocus.focus();
@@ -548,26 +484,29 @@
       keepPlace = null;
     }
     categoryButtons.forEach(button => button.addEventListener('click', () => {
-      const nextView = button.dataset.careerView ?? 'shortlist';
+      const nextView = button.dataset.careerView ?? 'jobs';
       if (!enabled || (button.dataset.careerKind === kind && (kind !== 'jobs' || nextView === view))) return;
       kind = button.dataset.careerKind; view = nextView;
-      categoryButtons.forEach(candidate => candidate.setAttribute('aria-pressed', String(candidate === button)));
+      categoryButtons.forEach(candidate => candidate.setAttribute('aria-selected', String(candidate === button)));
       resetPlace();
       showJobActions();
       void loadPage();
     }));
-    // The switch saves the qualifying score (or zero for everything); the list reloads from the saved state.
-    for (const [mode, button] of Object.entries(queueButtons ?? {})) button.addEventListener('click', () => {
+    // Dragging only moves the label; the range is saved once on change, then the agent's next review uses it.
+    publication?.input.addEventListener('input', () => {
+      const index = Number.parseInt(publication.input.value, 10);
+      publication.label.textContent = publicationRanges[index]?.[2] ?? '';
+      publication.input.setAttribute('aria-valuetext', publicationRanges[index]?.[1] ?? '');
+    });
+    publication?.input.addEventListener('change', () => {
       if (!enabled || kind !== 'jobs') return;
-      const value = mode === 'all' ? 0 : QUALIFYING_SCORE;
-      if (value === minimumScore) return;
-      showQueueMode(value);
-      keepPlace = { offset, priorOffsets: [...priorOffsets], selectedId: selected?.id ?? null, focusId: null };
-      request('prescan-threshold', { minimumScore: value }).catch(error => {
-        keepPlace = null;
-        if (minimumScore !== null) showQueueMode(minimumScore);
-        listStatus.textContent = `Could not change which jobs go on for review. ${error.message}`;
-      });
+      const range = publicationRanges[Number.parseInt(publication.input.value, 10)]?.[0];
+      if (!range || range === savedRange) return;
+      rangeSaving = true;
+      request('publication-range-set', { publicationRange: range }).catch(error => {
+        listStatus.textContent = `Could not change the publication window. ${error.message}`;
+        renderPublication(savedRange);
+      }).finally(() => { rangeSaving = false; });
     });
     previous.addEventListener('click', () => {
       if (!enabled || loading || !priorOffsets.length) return;
@@ -593,6 +532,11 @@
     if (persistentReader) sideBySide.addEventListener?.('change', () => { if (!selected) closeReader(); });
 
     return {
+      setContext({ review: nextReview, publicationRange } = {}) {
+        if (nextReview?.hosts) review = nextReview;
+        renderReviewLaunch();
+        renderPublication(publicationRange);
+      },
       refresh() {
         enabled = true;
         categoryButtons.forEach(button => { button.disabled = false; });
@@ -610,8 +554,6 @@
         closeReader();
         resetPlace();
         nextOffset = null;
-        minimumScore = null;
-        if (surfaceSentence) surfaceSentence.textContent = '';
         categoryButtons.forEach(button => { button.disabled = true; });
         records.replaceChildren();
         records.hidden = true;
@@ -630,12 +572,14 @@
   const me = createBrowser({ root: document.getElementById('me-browser'), prefix: 'me', kind: 'sources' });
   const jobs = createBrowser({
     root: document.getElementById('career-browser'), prefix: 'career', kind: 'jobs', persistentReader: true,
-    surfaceControl: document.getElementById('career-surface'),
     deleteRankings: document.getElementById('delete-rankings'),
     stagePanels: [...document.querySelectorAll('#stage-panels [data-stage-panel]')],
+    publication: { input: document.getElementById('publication-range'), label: document.getElementById('publication-range-label') },
+    reviewLaunch: document.getElementById('review-launch'),
   });
   window.careerBrowser = {
     refresh() { return Promise.all([me.refresh(), jobs.refresh()]); },
     clear() { me.clear(); jobs.clear(); },
+    setContext(context) { jobs.setContext(context); },
   };
 })();

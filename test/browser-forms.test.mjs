@@ -28,7 +28,7 @@ function fixture({ fetchImpl = async () => { throw new Error('Unexpected fetch')
   };
   const credentials = { read(provider) {
     assert.equal(provider, 'openai'); assertAvailable();
-    if (!key) throw new CareerError('PRESCAN_KEY_REQUIRED', 'Synthetic key required');
+    if (!key) throw new CareerError('DECISIONS_KEY_REQUIRED', 'Synthetic key required');
     return { apiKey: key, credentialVersion: state.prescanCredentialVersion };
   } };
   const service = createBrowserForms({ store, credentials, assertAvailable, fetchImpl: (...args) => { calls.push(args); return fetchImpl(...args); } });

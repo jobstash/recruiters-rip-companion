@@ -344,6 +344,7 @@
           ? item
           : await request('career-read', { kind: currentKind, id: item.id });
         if (!enabled || currentGeneration !== generation || currentRead !== readGeneration) return;
+        detailSignature = JSON.stringify(detail);
         renderDetail(detail, item);
       } catch (error) {
         if (!enabled || currentGeneration !== generation || currentRead !== readGeneration) return;
@@ -398,51 +399,70 @@
       const copy = reviewLaunch.querySelector('#copy-review-prompt');
       copy.classList.toggle('primary', !primaryHost); copy.classList.toggle('text', Boolean(primaryHost)); copy.classList.toggle('ghost', false);
     }
+    // Rows are keyed by record ID with a signature of what they render, so a background refresh touches only rows whose
+    // content changed; unchanged rows (and their logos) stay in place and nothing blinks.
+    const rowSignature = item => JSON.stringify([item.id, item.title, item.summary ?? null, item.card ?? null]);
+    function buildRow(item) {
+      const row = document.createElement('li');
+      row.className = 'career-row';
+      row.dataset.id = item.id;
+      row.dataset.signature = rowSignature(item);
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'career-record';
+      button.setAttribute('aria-controls', `${prefix}-reader`);
+      if (item.card && typeof item.card === 'object') {
+        row.className = 'career-row career-card';
+        const side = node('span', 'career-card-side');
+        renderCard(item, button, side);
+        row.append(button, side);
+      } else {
+        renderRow(item, button);
+        row.append(button);
+        if (kind === 'blocks') row.append(blockButton('Unblock', `Unblock ${item.title}`, () => removeBlock(item), 'text career-row-action'));
+      }
+      // A property, not a listener, so a reused row can be rebound to the item from the latest page without stacking handlers.
+      button.onclick = () => { void openRecord(item, button); };
+      return row;
+    }
     async function loadPage(focusList = false, place = null) {
       if (!enabled) return;
       const currentGeneration = ++generation;
-      // A background refresh keeps the open reader until the same record is found again on the new page; a navigation closes it.
-      if (!place?.selectedId) closeReader();
+      // A background refresh (the record the user had open is remembered) swaps rows in place and keeps the reader; a
+      // navigation clears the list, closes the reader and shows the loading state.
+      const silent = Boolean(place?.selectedId !== undefined && place?.focusList !== true && place?.notice === undefined && records.childElementCount);
+      if (!silent) {
+        closeReader();
+        records.replaceChildren();
+        records.hidden = true;
+        records.setAttribute('aria-busy', 'true');
+        previous.disabled = true;
+        next.disabled = true;
+        listStatus.textContent = `Loading ${categories[kind].title.toLowerCase()}…`;
+      }
       loading = true;
       nextOffset = null;
-      records.replaceChildren();
-      records.hidden = true;
-      records.setAttribute('aria-busy', 'true');
       listRetry.hidden = true;
-      // The pagination bar keeps its place while a page loads; only its buttons change state.
-      previous.disabled = true;
-      next.disabled = true;
       const category = categories[kind];
-      listStatus.textContent = `Loading ${category.title.toLowerCase()}…`;
       let firstRecord = null;
       let reopen = null;
-      let refocus = null;
       try {
         const result = await request('career-list', { kind, offset, limit: 25, ...(kind === 'jobs' ? { view } : {}) });
         if (!enabled || currentGeneration !== generation) return;
         if (kind === 'jobs') renderCounts(result.counts);
-        result.items.forEach((item, index) => {
-          const row = document.createElement('li');
-          row.className = 'career-row';
-          const button = document.createElement('button');
-          button.type = 'button';
-          button.className = 'career-record';
-          button.setAttribute('aria-controls', `${prefix}-reader`);
-          if (item.card && typeof item.card === 'object') {
-            row.className = 'career-row career-card';
-            const side = node('span', 'career-card-side');
-            renderCard(item, button, side);
-            row.append(button, side);
-          } else {
-            renderRow(item, button);
-            row.append(button);
-            if (kind === 'blocks') row.append(blockButton('Unblock', `Unblock ${item.title}`, () => removeBlock(item), 'text career-row-action'));
-          }
-          button.addEventListener('click', () => { void openRecord(item, button); });
+        const existing = new Map([...records.children].map(row => [row.dataset.id, row]));
+        const rows = result.items.map(item => {
+          const previousRow = existing.get(item.id);
+          const row = previousRow && previousRow.dataset.signature === rowSignature(item) ? previousRow : buildRow(item);
+          const button = row.querySelector('.career-record');
+          if (row === previousRow) button.onclick = () => { void openRecord(item, button); };
           firstRecord ??= { item, button };
           if (place?.selectedId === item.id) reopen = { item, button };
-          records.append(row);
+          return row;
         });
+        // One DOM write for the page, and only when something actually differs.
+        const same = rows.length === records.childElementCount && rows.every((row, index) => row === records.children[index]);
+        if (!same) records.replaceChildren(...rows);
         nextOffset = Number.isInteger(result.nextOffset) && result.nextOffset > offset ? result.nextOffset : null;
         records.hidden = result.items.length === 0;
         const range = `${integer(offset + 1)}–${integer(offset + result.items.length)} of ${integer(result.total)}`;
@@ -473,11 +493,29 @@
         }
       }
       if (!enabled || currentGeneration !== generation) return;
-      // A refresh reopens the record the user had open; a navigation opens the first record on wide layouts. A record that
-      // left this page keeps its reader as it was rather than replacing what the user was reading.
-      const open = reopen ?? (place?.selectedId ? null : sideBySide.matches ? firstRecord : null);
-      if (open) void openRecord(open.item, open.button, false);
-      if (refocus) refocus.focus();
+      // A refresh keeps the record the user had open, re-reading it quietly; a navigation opens the first record on wide
+      // layouts. A record that left this page keeps its reader as it was rather than replacing what the user was reading.
+      if (reopen) void (silent && selected?.id === reopen.item.id ? refreshRecord(reopen.item, reopen.button) : openRecord(reopen.item, reopen.button, false));
+      else if (!place?.selectedId && sideBySide.matches && firstRecord) void openRecord(firstRecord.item, firstRecord.button, false);
+    }
+    // Re-read the open record without the loading state; the reader is rewritten only when its content changed.
+    let detailSignature = '';
+    async function refreshRecord(item, button) {
+      if (!enabled) return;
+      selected = item;
+      selectedButton = button;
+      records.querySelectorAll('[aria-current]').forEach(current => { if (current !== button) current.removeAttribute('aria-current'); });
+      button.setAttribute('aria-current', 'true');
+      const currentGeneration = generation;
+      const currentRead = ++readGeneration;
+      try {
+        const detail = Array.isArray(item.sections) ? item : await request('career-read', { kind, id: item.id });
+        if (!enabled || currentGeneration !== generation || currentRead !== readGeneration) return;
+        const signature = JSON.stringify(detail);
+        if (signature === detailSignature) return;
+        detailSignature = signature;
+        renderDetail(detail, item);
+      } catch { /* The reader keeps what it showed; the next navigation reports errors. */ }
     }
 
     function resetPlace() {

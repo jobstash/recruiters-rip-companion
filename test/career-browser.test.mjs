@@ -590,7 +590,9 @@ async function rendererFixture(browser, wide, operations = {}) {
     querySelector(selector) { return this.querySelectorAll(selector)[0] ?? null; }
     fire(name, event = {}) {
       let propagated = true;
-      this.listeners.get(name)?.({ target: this, stopPropagation() { propagated = false; }, preventDefault() {}, ...event });
+      const payload = { target: this, stopPropagation() { propagated = false; }, preventDefault() {}, ...event };
+      this[`on${name}`]?.(payload);
+      this.listeners.get(name)?.(payload);
       return propagated;
     }
   }
@@ -930,11 +932,22 @@ test('a state refresh while reading keeps the page and the open record; a record
   ui.rows('career')[1].fire('click');
   await ui.settle();
   assert.equal(ui.nodes['career-reader-title'].textContent, '26');
-  // The agent saves a review: the companion broadcasts state and the list refreshes in the background.
-  await ui.window.careerBrowser.refresh();
+  // The agent saves a review: the companion broadcasts state and the list refreshes in the background. Nothing blinks:
+  // unchanged rows are the same nodes, the reader keeps its content, and no loading state is shown in between.
+  const rowsBefore = [...ui.nodes['career-records'].children];
+  const contentBefore = ui.nodes['career-reader-content'].children;
+  let loadingSeen = false, readerCleared = false;
+  const refreshing = ui.window.careerBrowser.refresh();
+  loadingSeen = /^Loading/.test(ui.nodes['career-list-status'].textContent) || ui.nodes['career-records'].hidden;
+  readerCleared = ui.nodes['career-reader-content'].children.length === 0 || /Loading/.test(ui.nodes['career-reader-status'].textContent);
+  await refreshing;
   await ui.settle();
+  assert.equal(loadingSeen, false);
+  assert.equal(readerCleared, false);
   assert.deepEqual(ui.titles(), ['25', '26']);
   assert.equal(ui.calls.at(-1).args.offset, 25);
+  assert.deepEqual([...ui.nodes['career-records'].children], rowsBefore);
+  assert.equal(ui.nodes['career-reader-content'].children, contentBefore);
   assert.equal(ui.nodes['career-reader-title'].textContent, '26');
   assert.equal(ui.nodes['career-records'].querySelectorAll('[aria-current]').length, 1);
   // The open record disappears from this page (blocked elsewhere): the reader is left as it was, not replaced by another job.

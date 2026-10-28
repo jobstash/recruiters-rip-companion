@@ -194,7 +194,11 @@ function showSettings() {
   window.webContents.on('will-attach-webview', event => event.preventDefault());
   window.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
   window.webContents.session.setPermissionCheckHandler(() => false);
-  window.webContents.session.webRequest.onBeforeRequest((details, callback) => callback({ cancel: !details.url.startsWith(pathToFileURL(root + path.sep).href) }));
+  // The renderer reaches the network for exactly one thing: employer logos named by the catalogue (`<img>` only, https only,
+  // no referrer, in-memory session so no cookies). Scripts, styles, fetches, frames and navigations stay local.
+  window.webContents.session.webRequest.onBeforeRequest((details, callback) => callback({
+    cancel: !(details.url.startsWith(pathToFileURL(root + path.sep).href) || (details.resourceType === 'image' && details.url.startsWith('https://'))),
+  }));
   window.on('close', event => { if (!exiting) { event.preventDefault(); window.hide(); } });
   windowLoaded = window.loadURL(uiURL);
   // `pnpm dev` only: reload the settings window when its static UI files change.

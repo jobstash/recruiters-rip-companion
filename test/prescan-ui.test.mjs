@@ -16,19 +16,17 @@ class Node {
   append(...children) { this.children.push(...children); }
   replaceChildren(...children) { this.children = children; this.textContent = children.filter(value => typeof value === 'string').join(''); }
   focus() {}
-  querySelector(selector) { return selector === '.run-step-number' ? this.number : null; }
+  querySelector() { return null; }
 }
 
 async function fixture() {
   const html = await readFile(new URL('../ui/index.html', import.meta.url), 'utf8');
   const ids = [...html.matchAll(/id="([^"]+)"/g)].map(match => match[1]);
   const nodes = Object.fromEntries(ids.map(id => [id, new Node(id)]));
-  for (const id of ['run-step-key', 'run-step-prefilter', 'run-step-handover']) nodes[id].number = new Node();
   nodes['view-jobs'].hidden = true; // no preview network call in this pure render test
   nodes['view-setup'].hidden = true; nodes.settings.hidden = false;
-  const runSteps = new Node(); runSteps.classes.add('run-steps'); runSteps.classes.add('has-key-step');
   const document = { activeElement: null, getElementById: id => nodes[id] ?? null,
-    querySelector: selector => selector === '.run-steps' ? runSteps : null,
+    querySelector: () => null,
     createElement: () => new Node() };
   const window = { companion: { invoke: async () => ({ ok: true, result: {} }) }, addEventListener() {} };
   const MutationObserver = class { observe() {} };
@@ -38,28 +36,20 @@ async function fixture() {
     included: 0, minimumScore: 36, totalCatalogue: 0, inputTokens: 0, requests: 0, estimatedCostUsd: 0 };
   const credentials = configured => ({ provider: 'openai', model: 'gpt-6-luna', configured, credentialVersion: 1,
     inputUsdPerMillion: 0.1, savedAt: configured ? '2026-10-20T19:00:00.000Z' : null, keyHint: configured ? 'hPMA' : null, providers: [] });
-  return { window, nodes, runSteps, state: (configured, changes = {}) => ({ credentials: credentials(configured), run: { ...run, ...changes }, contextVersion: 'synthetic' }) };
+  return { window, nodes, state: (configured, changes = {}) => ({ credentials: credentials(configured), run: { ...run, ...changes }, contextVersion: 'synthetic' }) };
 }
 
-const number = (nodes, name) => nodes[`run-step-${name}`].number.textContent;
-
-test('the API-key setup step disappears after a successful save and the recurring flow renumbers to three steps', async () => {
+test('the API-key setup block disappears after a successful save', async () => {
   const f = await fixture();
   f.window.prescanUI.refresh(f.state(true), true);
   assert.equal(f.nodes['run-step-key'].hidden, true);
-  assert.equal(f.runSteps.classList.contains('has-key-step'), false);
-  assert.deepEqual(['prefilter', 'handover'].map(name => number(f.nodes, name)), ['1', '2']);
-  assert.equal(f.nodes['run-step-handover'].attributes.get('aria-current'), 'step');
   assert.equal(f.nodes['jobs-prescan-settings'].textContent, 'Replace key');
 });
 
-test('the API-key step appears for first setup and after OpenAI rejects a saved key', async () => {
+test('the API-key setup block appears for first setup and after OpenAI rejects a saved key', async () => {
   const f = await fixture();
   f.window.prescanUI.refresh(f.state(false, { status: 'idle' }), true);
   assert.equal(f.nodes['run-step-key'].hidden, false);
-  assert.equal(f.runSteps.classList.contains('has-key-step'), true);
-  assert.deepEqual(['key', 'prefilter', 'handover'].map(name => number(f.nodes, name)), ['1', '2', '3']);
-  assert.equal(f.nodes['run-step-key'].attributes.get('aria-current'), 'step');
   assert.equal(f.nodes['jobs-prescan-settings'].textContent, 'Add key');
 
   f.window.prescanUI.refresh(f.state(true, { status: 'failed', lastError: { code: 'PRESCAN_AUTH' } }), true);

@@ -116,7 +116,7 @@ const prescanStatuses = {
 };
 const prescanScore = row => row?.status === 'scored' && Number.isInteger(row.priority) && row.priority >= 0 && row.priority <= 100
   ? row.priority : -1;
-const prescanStatus = row => prescanScore(row) >= 0 ? 'Scored' : prescanStatuses[row.status] || 'Not scored';
+const prescanStatus = row => prescanScore(row) >= 0 ? null : prescanStatuses[row.status] || 'Not scored';
 const prescanLocations = { aligned: 'Compatible', uncertain: 'Not established', conflict: 'Conflict' };
 const cardStatuses = new Set(['unavailable', 'refused', 'oversize', 'incompatible_location', 'below_minimum']);
 // A saved review with one of these verdicts makes the job ineligible: the card shows the verdict, never a number.
@@ -136,7 +136,7 @@ function cardStage({ id, reviewed, prescan }, inclusion) {
   return {
     stage: ineligible ? 'ineligible' : reviewCurrent ? 'reviewed' : rank !== null ? 'prefilter' : 'unscored',
     label: ineligible ? ineligibleLabel(reviewed) : null, established,
-    rank, prefilterScore: rank !== null ? prescanScore(prescan) : null,
+    rank,
     included: candidate && inclusion.includedIds.has(id), overridden: candidate && inclusion.overridden(id),
     score: Number.isInteger(reviewed?.overall) ? reviewed.overall : null,
     stale: reviewed ? !reviewCurrent : Boolean(prescan) && prescan.current !== true,
@@ -154,7 +154,7 @@ const joinFacts = parts => parts.filter(part => typeof part === 'string' && part
 
 /** The verdict is the reader's first block: the number that placed the job in the list, the rule it was measured against,
  *  and the agent's reason when one exists. Everything else in the reader is evidence for it. */
-function jobVerdict({ reviewed, prescan }, card, minimumScore) {
+function jobVerdict({ reviewed, prescan }, card) {
   const reviewDate = displayDate(reviewed?.scoredAt);
   const staleReview = reviewed && card.stage !== 'reviewed' && Number.isInteger(reviewed.overall)
     ? `Reviewed at ${reviewed.overall} before your profile changed` : null;
@@ -171,13 +171,13 @@ function jobVerdict({ reviewed, prescan }, card, minimumScore) {
     // The label is the whole actionable decision; repeating location, relocation and the saved review prose below it is noise.
     return { kind: 'ineligible', number: null, numberLabel: null, headline: card.label, detail: null, reason: null };
   }
-  const included = card.included ? 'Queued for AI review' : 'Skipped';
+  // The pre-qualification is shown as a verdict, never as a number: the number only orders the queue.
+  const included = card.included ? 'Pre-qualified for AI review' : 'Skipped';
   const manual = card.overridden ? ' · manual' : '';
   if (card.stage === 'prefilter') {
-    const score = prescanScore(prescan);
-    return { kind: 'prefilter', number: score, numberLabel: 'Score', headline: included,
-      detail: joinFacts([`${score} is ${score >= minimumScore ? 'at or above' : 'below'} the qualifying score ${minimumScore}${manual}`,
-        card.stale ? 'scored before your profile changed' : null]),
+    return { kind: 'prefilter', number: null, numberLabel: null, headline: `${included}${manual}`,
+      detail: joinFacts([card.overridden ? null : card.included ? 'Shortlist found this worth a full review' : 'Shortlist found this unlikely to fit',
+        card.stale ? 'shortlisted before your profile changed' : null]),
       reason: staleReview ? joinFacts([staleReview, reason]) : reason };
   }
   return { kind: 'unscored', number: null, numberLabel: null, headline: `${included}${manual}`,
@@ -246,7 +246,7 @@ function jobItem({ id, reviewed, prescan, imported, metadata }, inclusion, caree
   const block = { company: company || null, category: text(role('classification'), '') || null };
   const applyUrl = typeof role('applyUrl') === 'string' && /^https?:\/\//.test(role('applyUrl')) ? role('applyUrl') : null;
   const header = { company: company || null, published: displayDate(publishedAt) ? `Published ${displayDate(publishedAt)}` : null, facts, applyUrl };
-  const verdict = jobVerdict({ reviewed, prescan }, card, inclusion.minimumScore);
+  const verdict = jobVerdict({ reviewed, prescan }, card);
   const salaryCheck = reviewed?.salaryEligibility?.status && reviewed.salaryEligibility.status !== 'not_required'
     ? assessmentLabel(reviewed.salaryEligibility.status) : prescan?.status === 'below_minimum' ? 'Below your minimum' : null;
   // Checks contains only independent decision facts. An ineligible verdict already names the decisive gate, so location and
@@ -328,18 +328,18 @@ async function jobUnion(career) {
   return { rows, inclusion: jobInclusion(career, rows) };
 }
 
-// Score order: current reviews by overall fit, then the pre-filter queue by score, then everything else, with
-// ineligible jobs last; newer publication breaks ties, then ID. Recent order ignores stages entirely.
+// Each view has one fixed order. Shortlist: newest first. Queue: shortlist rank (best first), unscored switched-on jobs
+// after. Reviewed: current reviews by fit, ineligible last. Newer publication breaks ties, then ID.
+const jobViews = ['shortlist', 'queue', 'reviewed'];
 const stageOrder = { reviewed: 0, prefilter: 1, unscored: 2, ineligible: 3 };
-function sortJobs(rows, inclusion, sort) {
-  const sortable = [...rows.values()].map(row => {
+function sortJobs(staged, view) {
+  const sortable = staged.map(({ row, stage }) => {
     const publishedAt = row.imported?.publishedAt ?? row.metadata?.publishedAt ?? row.reviewed?.publishedAt ?? row.prescan?.publishedAt;
     const timestamp = typeof publishedAt === 'string' ? Date.parse(publishedAt) : NaN;
-    const stage = cardStage(row, inclusion);
     const value = stage.stage === 'reviewed' ? -(stage.score ?? -1) : stage.stage === 'prefilter' ? stage.rank : 0;
     return { row, group: stageOrder[stage.stage], value, published: Number.isFinite(timestamp) ? timestamp : -Infinity };
   });
-  return sortable.sort((a, b) => (sort === 'score' ? a.group - b.group || a.value - b.value : 0) ||
+  return sortable.sort((a, b) => (view === 'shortlist' ? 0 : a.group - b.group || a.value - b.value) ||
     (a.published === b.published ? 0 : a.published > b.published ? -1 : 1) ||
     (a.row.id < b.row.id ? -1 : a.row.id > b.row.id ? 1 : 0)).map(item => item.row);
 }
@@ -364,10 +364,10 @@ export function createCareerBrowser({ store }) {
     kind === 'facts' ? factDetail(item, career) : applicationDetail(item, career);
   return {
     async list(args = {}) {
-      validate(args, ['kind', 'offset', 'limit', 'sort']);
-      const { kind, offset = 0, limit = 25, sort = 'score' } = args;
-      if ((own(args, 'sort') && (kind !== 'jobs' || !['score', 'recent'].includes(args.sort)))) {
-        fail('INVALID_INPUT', 'Use sort score or recent for Jobs only.');
+      validate(args, ['kind', 'offset', 'limit', 'view']);
+      const { kind, offset = 0, limit = 25, view = 'shortlist' } = args;
+      if ((own(args, 'view') && (kind !== 'jobs' || !jobViews.includes(args.view)))) {
+        fail('INVALID_INPUT', 'Use view shortlist, queue or reviewed for Jobs only.');
       }
       if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isInteger(limit) || limit < 1 || limit > 100) {
         fail('INVALID_INPUT', 'Use limit 1–100 and a nonnegative safe integer offset.');
@@ -385,13 +385,13 @@ export function createCareerBrowser({ store }) {
       }
       if (kind === 'jobs') {
         const { rows, inclusion } = await jobUnion(career);
-        const sorted = sortJobs(rows, inclusion, sort);
+        const staged = [...rows.values()].map(row => ({ row, stage: cardStage(row, inclusion) }));
+        const inView = { shortlist: () => true, queue: ({ stage }) => stage.included, reviewed: ({ stage }) => stage.stage === 'reviewed' || stage.stage === 'ineligible' };
+        const counts = { shortlist: staged.length, queue: staged.filter(inView.queue).length, reviewed: staged.filter(inView.reviewed).length,
+          applications: entries(career.applications).length, blocks: listBlocks(career).length };
+        const sorted = sortJobs(staged.filter(inView[view]), view);
         const items = sorted.slice(offset, offset + limit).map(row => jobItem(row, inclusion, career));
-        // The divider sits before the first ranked card below the minimum score, reported once on the page that holds it.
-        const below = row => { const { rank } = cardStage(row, inclusion); return rank !== null && career.prescan.rows[row.id].priority < inclusion.minimumScore; };
-        const divider = sort === 'score' ? sorted.findIndex(below) - offset : -1;
-        return { items, total: sorted.length, nextOffset: offset + items.length < sorted.length ? offset + items.length : null,
-          cutoffIndex: divider >= 0 && divider < items.length ? divider : null,
+        return { items, total: sorted.length, nextOffset: offset + items.length < sorted.length ? offset + items.length : null, counts,
           inclusion: { minimumScore: inclusion.minimumScore, included: inclusion.includedIds.size,
             scored: inclusion.ranked ? inclusion.rankedIds.length : null, stale: inclusion.stale, candidates: inclusion.candidates } };
       }

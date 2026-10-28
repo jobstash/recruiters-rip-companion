@@ -6,7 +6,6 @@
   const jobsView = document.getElementById('view-jobs');
   const steps = { key: document.getElementById('run-step-key'),
     prefilter: document.getElementById('run-step-prefilter'), handover: document.getElementById('run-step-handover') };
-  const runSteps = document.querySelector('.run-steps');
   const keyAction = document.getElementById('jobs-prescan-settings');
   const handover = document.getElementById('copy-review-prompt');
   const reviewButtons = { codex: document.getElementById('review-codex'), claude: document.getElementById('review-claude') };
@@ -105,13 +104,10 @@
     element('form').setAttribute('aria-busy', String(pending));
     // The key is setup, not recurring workflow: remove it after a successful save and restore it only when missing or rejected.
     steps.key.hidden = !showKeyStep;
-    runSteps.classList.toggle('has-key-step', showKeyStep);
-    const order = showKeyStep ? ['key', 'prefilter', 'handover'] : ['prefilter', 'handover'];
-    order.forEach((name, index) => { steps[name].querySelector('.run-step-number').textContent = String(index + 1); });
-    const currentStep = showKeyStep ? 'key' : run.status === 'completed' ? 'handover' : 'prefilter';
-    for (const [name, step] of Object.entries(steps)) {
-      if (name === currentStep) step.setAttribute('aria-current', 'step'); else step.removeAttribute('aria-current');
-    }
+    // One primary action per stage: the key when it is missing, Start while the shortlist is not complete, the handoff after.
+    // The handoff leads as soon as there is something to hand off and nothing is being scored right now.
+    const handoffReady = !showKeyStep && !active && Number.isSafeInteger(run.scored) && run.scored > 0;
+    const currentStep = showKeyStep ? 'key' : handoffReady ? 'handover' : 'prefilter';
     element('key-state').textContent = !available ? 'Open local storage.' : keyError ? `Key …${credentials.keyHint} was rejected by OpenAI.`
       : configured ? `Key …${credentials.keyHint} saved.` : 'No OpenAI key saved.';
     keyAction.textContent = configured ? 'Replace key' : 'Add key';

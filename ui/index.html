@@ -76,57 +76,52 @@
 </section>
 <section id="view-jobs" class="career-view jobs-view" aria-label="Jobs" hidden>
 <div id="career-browser" class="career-browser">
-<section id="run-rail" class="run-rail" aria-labelledby="run-rail-title">
-<p id="run-rail-title" class="run-rail-caption">Next agent run</p>
-<ol class="run-steps has-key-step">
-<li id="run-step-key" class="run-step">
-<p class="run-step-name"><span class="run-step-number">1</span>API key</p>
+<div class="career-toolbar jobs-toolbar">
+<div class="career-categories jobs-stages" role="group" aria-label="Job stages">
+<button id="career-stage-shortlist" type="button" class="ghost" data-career-kind="jobs" data-career-view="shortlist" aria-pressed="true" disabled>Shortlist<span class="stage-count" data-stage-count="shortlist"></span></button>
+<button id="career-stage-queue" type="button" class="ghost" data-career-kind="jobs" data-career-view="queue" aria-pressed="false" disabled>For review<span class="stage-count" data-stage-count="queue"></span></button>
+<button id="career-stage-reviewed" type="button" class="ghost" data-career-kind="jobs" data-career-view="reviewed" aria-pressed="false" disabled>Reviewed<span class="stage-count" data-stage-count="reviewed"></span></button>
+<button id="career-category-applications" type="button" class="ghost" data-career-kind="applications" aria-pressed="false" disabled>Applications<span class="stage-count" data-stage-count="applications"></span></button>
+<button id="career-category-blocks" type="button" class="ghost" data-career-kind="blocks" aria-pressed="false" disabled>Blocked<span class="stage-count" data-stage-count="blocks"></span></button>
+</div>
+<div id="review-launch" class="actions review-launch" aria-label="Continue the review in your AI"><button id="review-codex" class="ghost" type="button" hidden>Continue in Codex</button><button id="review-claude" class="ghost" type="button" hidden>Continue in Claude</button><button id="copy-review-prompt" class="ghost" type="button">Copy prompt</button></div>
+</div>
+<section id="stage-panels" class="stage-panels" aria-label="Stage controls">
+<div id="run-step-prefilter" class="stage-panel" data-stage-panel="shortlist">
+<div id="run-step-key" class="stage-block" hidden>
 <p id="prescan-key-state" class="run-step-state" role="status">Open local storage.</p>
 <div class="actions"><button id="jobs-prescan-settings" class="ghost" type="button">Add key</button></div>
-</li>
-<li id="run-step-prefilter" class="run-step">
-<p class="run-step-name"><span class="run-step-number">2</span>Shortlist</p>
-<div class="prescan-publication">
+</div>
+<div class="stage-block prescan-publication">
 <label for="prescan-range" class="run-step-state">Published <span id="prescan-range-label">Past 3 days</span></label>
 <input id="prescan-range" type="range" min="0" max="4" step="1" value="2" aria-valuetext="Past 3 days" aria-describedby="prescan-range-help" disabled>
 <p id="prescan-range-help" class="run-step-help">Today or the past 3 days work best: older listings already have many applicants.</p>
 </div>
+<div class="stage-block">
 <p id="prescan-preview" class="run-step-state" role="status" aria-live="polite" aria-atomic="true">Loading job count…</p>
 <p id="prescan-progress" class="run-step-state" role="status" aria-live="polite" aria-atomic="true"></p>
 <div class="actions"><button id="prescan-start" class="ghost" type="button" aria-describedby="prescan-preview" disabled>Start</button><button id="prescan-cancel" class="ghost" type="button" hidden>Stop</button></div>
 <p id="prescan-recovery" class="run-step-help" role="status" aria-live="polite"></p>
 <p id="prescan-message" class="run-step-help" role="status" aria-live="polite"></p>
-</li>
-<li id="run-step-handover" class="run-step">
-<p class="run-step-name"><span class="run-step-number">3</span>Continue in your AI</p>
-<div id="career-surface" class="career-surface">
+</div>
+</div>
+<div id="run-step-handover" class="stage-panel" data-stage-panel="queue" hidden>
+<div id="career-surface" class="career-surface stage-block">
 <div class="career-categories" role="group" aria-label="Jobs that go on for review">
 <button id="career-queue-qualified" type="button" class="ghost" aria-pressed="true" disabled>Pre-qualified only</button>
 <button id="career-queue-all" type="button" class="ghost" aria-pressed="false" disabled>All jobs</button>
 </div>
 <p id="career-surface-sentence" class="run-step-help" role="status"></p>
 </div>
-<div class="actions"><button id="review-codex" class="ghost" type="button" hidden>Continue in Codex</button><button id="review-claude" class="ghost" type="button" hidden>Continue in Claude</button><button id="copy-review-prompt" class="ghost" type="button">Copy prompt</button></div>
-</li>
-</ol>
+</div>
 </section>
-<div class="career-toolbar jobs-toolbar">
-<div class="career-categories" role="group" aria-label="Job lists">
-<button id="career-category-ranked" type="button" class="ghost" data-career-kind="jobs" aria-pressed="true" disabled>Ranked</button>
-<button id="career-category-applications" type="button" class="ghost" data-career-kind="applications" aria-pressed="false" disabled>Applications</button>
-<button id="career-category-blocks" type="button" class="ghost" data-career-kind="blocks" aria-pressed="false" disabled>Blocked</button>
-</div>
-</div>
 <div class="career-panes jobs-panes">
 <section class="career-list panel" aria-label="Saved jobs">
 <div class="panel-head career-list-head">
 <div class="career-list-tools">
-<label id="career-sort-control" class="career-sort caption" for="career-sort">Sort
-<select id="career-sort" disabled><option value="score" selected>Score</option><option value="recent">Newest</option></select>
-</label>
-<button id="delete-rankings" class="text" type="button" disabled>Clear reviews</button>
-</div>
 <p id="career-list-status" role="status">Open local storage to read saved jobs.</p>
+<button id="delete-rankings" class="text" type="button" disabled hidden>Clear reviews</button>
+</div>
 </div>
 <button id="career-list-retry" class="ghost" type="button" hidden>Retry</button>
 <ul id="career-records" class="career-records career-cards" aria-label="Saved jobs" hidden></ul>

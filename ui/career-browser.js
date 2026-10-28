@@ -5,7 +5,7 @@
     facts: { title: 'Facts', empty: 'No saved career facts.', locked: 'Open local storage to read saved records.', select: 'Select a record' },
     preferences: { title: 'Preferences', empty: 'No preferences saved. Tell your connected agent what you want and what you want to avoid.', locked: 'Open local storage to read saved preferences.', select: 'Select a preference group' },
     career: { title: 'Career', empty: 'No work history yet. Your agent extracts employers from your CV and links the ones it confidently matches to JobStash.', locked: 'Open local storage to read your work history.', select: 'Select an employer' },
-    jobs: { title: 'Jobs', empty: 'No saved jobs. Copy the review prompt into your connected agent to start matching.', locked: 'Open local storage to read saved jobs.', select: 'Select a job' },
+    jobs: { title: 'Jobs', empty: 'No jobs in this publication window yet. Widen the window or start the shortlist.', locked: 'Open local storage to read saved jobs.', select: 'Select a job' },
     applications: { title: 'Job Applications', empty: 'No saved applications.', locked: 'Open local storage to read saved applications.', select: 'Select an application' },
     blocks: { title: 'Blocked jobs', empty: 'Nothing blocked. Open a job to block it, its company or its category.', locked: 'Open local storage to read blocked jobs.', select: 'Select a block' },
   };
@@ -26,13 +26,13 @@
   };
 
   function cardSpoken(card, date) {
-    const sent = card.included ? 'queued for AI review' : 'skipped';
+    const sent = card.included ? 'pre-qualified for AI review' : 'skipped';
     const stage = card.stage === 'reviewed'
       ? [`fit ${card.score === null ? 'not saved' : `${card.score} of 100`}`, card.stale ? 'out of date' : null]
       : card.stage === 'ineligible'
         ? ['not eligible', card.label]
         : card.stage === 'prefilter'
-          ? [Number.isInteger(card.prefilterScore) && card.prefilterScore >= 0 ? `score ${card.prefilterScore}` : null, sent, card.overridden ? 'manual' : null]
+          ? [sent, card.overridden ? 'manual' : null]
           : [statusWord(card).toLowerCase(), sent];
     return [card.title, card.company, ...stage, date ? `published ${date}` : 'publication date not stated'].filter(Boolean).join(', ');
   }
@@ -80,10 +80,9 @@
       side.append(node('span', 'career-card-caption career-card-verdict', card.label));
       return;
     }
-    // The number the Score sort orders by, so the cutoff rule can be read against it.
-    if (card.stage === 'prefilter' && Number.isInteger(card.prefilterScore) && card.prefilterScore >= 0) {
-      side.append(node('span', 'career-card-figure', String(card.prefilterScore)),
-        node('span', 'career-card-caption', card.stale ? 'Score · out of date' : 'Score'));
+    // The pre-qualification is a word, never a number: the number only orders the queue.
+    if (card.stage === 'prefilter') {
+      side.append(node('span', 'career-card-caption career-card-reason', `${card.included ? 'Pre-qualified' : 'Skipped'}${card.stale ? ' · out of date' : ''}`));
     } else {
       side.append(node('span', 'career-card-caption career-card-reason', statusWord(card)));
     }
@@ -105,8 +104,8 @@
   }
 
   /** One list + reader pair. `persistentReader` keeps the reader column rendered on wide screens.
-   *  `jobControls` are shown only while the jobs kind is active; sort, the pre-qualification switch and Clear are also disabled otherwise. */
-  function createBrowser({ root, prefix, kind: initialKind, persistentReader = false, sortControl = null, surfaceControl = null, deleteRankings = null, jobControls = [] }) {
+   *  `stagePanels` show the active jobs view's controls; the pre-qualification switch and Clear reviews are disabled on other tabs. */
+  function createBrowser({ root, prefix, kind: initialKind, persistentReader = false, surfaceControl = null, deleteRankings = null, stagePanels = [] }) {
     const element = name => document.getElementById(`${prefix}-${name}`);
     const categoryButtons = [...root.querySelectorAll('[data-career-kind]')];
     const records = element('records');
@@ -120,7 +119,6 @@
     const readerStatus = element('reader-status');
     const readerRetry = element('reader-retry');
     const content = element('reader-content');
-    const sortSelect = sortControl ? element('sort') : null;
     // Pre-qualification is a switch, not a dial: on = the default qualifying score, off = every candidate goes on for review.
     const QUALIFYING_SCORE = 36;
     const queueButtons = surfaceControl ? { qualified: element('queue-qualified'), all: element('queue-all') } : null;
@@ -128,7 +126,10 @@
     const persistent = () => persistentReader && sideBySide.matches;
     let enabled = false;
     let kind = initialKind;
-    let sort = 'score';
+    let view = 'shortlist';
+    const viewEmpty = { shortlist: categories.jobs.empty, queue: 'Nothing pre-qualified yet. Run the shortlist, or choose All jobs.', reviewed: 'Nothing reviewed yet. Continue in Codex or Claude to review the pre-qualified jobs.' };
+    const stageCounts = [...root.querySelectorAll('[data-stage-count]')];
+    const reviewLaunch = root.querySelector('#review-launch');
     let generation = 0;
     let readGeneration = 0;
     let offset = 0;
@@ -422,12 +423,19 @@
       }
     }
 
+    // Each stage shows only its own controls above the list: the shortlist run, the review handoff, or nothing.
     function showJobActions() {
       const active = kind === 'jobs';
-      for (const control of jobControls) control.hidden = !active;
-      if (deleteRankings) deleteRankings.disabled = !enabled || !active;
-      if (sortSelect) sortSelect.disabled = !enabled || !active;
+      for (const panel of stagePanels) panel.hidden = !(active && panel.dataset.stagePanel === view);
+      if (reviewLaunch) reviewLaunch.hidden = !active;
+      if (deleteRankings) { deleteRankings.hidden = !(active && view === 'reviewed'); deleteRankings.disabled = !enabled || !active; }
       if (queueButtons) for (const button of Object.values(queueButtons)) button.disabled = !enabled || !active;
+    }
+    function renderCounts(counts) {
+      for (const node of stageCounts) {
+        const value = counts?.[node.dataset.stageCount];
+        node.textContent = Number.isSafeInteger(value) ? ` ${value.toLocaleString('en-GB')}` : '';
+      }
     }
     function showQueueMode(value) {
       const all = value === 0;
@@ -451,13 +459,6 @@
         : inclusion.minimumScore === 0 ? `All ${jobs} go on for review.${stale}`
           : `${inclusion.included} of ${jobs} found suitable for further review.${stale}`;
     }
-    function renderCutoff(inclusion, index) {
-      const divider = document.createElement('li');
-      divider.className = 'career-cutoff';
-      divider.append(node('span', 'career-cutoff-text', 'Not pre-qualified · skipped'));
-      divider.dataset.index = String(index);
-      return divider;
-    }
     async function loadPage(focusList = false, place = null) {
       if (!enabled) return;
       const currentGeneration = ++generation;
@@ -477,12 +478,11 @@
       let reopen = null;
       let refocus = null;
       try {
-        const result = await request('career-list', { kind, offset, limit: 25, ...(kind === 'jobs' ? { sort } : {}) });
+        const result = await request('career-list', { kind, offset, limit: 25, ...(kind === 'jobs' ? { view } : {}) });
         if (!enabled || currentGeneration !== generation) return;
         const inclusion = kind === 'jobs' && result.inclusion && typeof result.inclusion === 'object' ? result.inclusion : null;
-        const cutoffIndex = inclusion && sort === 'score' && Number.isInteger(result.cutoffIndex) ? result.cutoffIndex : null;
+        if (kind === 'jobs') renderCounts(result.counts);
         result.items.forEach((item, index) => {
-          if (cutoffIndex === index) records.append(renderCutoff(inclusion, index));
           const row = document.createElement('li');
           row.className = 'career-row';
           const button = document.createElement('button');
@@ -505,13 +505,12 @@
           if (place?.selectedId === item.id) reopen = { item, button };
           records.append(row);
         });
-        if (cutoffIndex === result.items.length) records.append(renderCutoff(inclusion, cutoffIndex));
         nextOffset = Number.isInteger(result.nextOffset) && result.nextOffset > offset ? result.nextOffset : null;
         records.hidden = result.items.length === 0;
         const range = `${integer(offset + 1)}–${integer(offset + result.items.length)} of ${integer(result.total)}`;
         listStatus.textContent = result.items.length
-          ? inclusion ? `${range} · ${integer(inclusion.included)} queued for AI review` : range
-          : offset ? 'No records on this page. Choose Previous.' : category.empty;
+          ? range
+          : offset ? 'No records on this page. Choose Previous.' : kind === 'jobs' ? viewEmpty[view] : category.empty;
         if (typeof place?.notice === 'string' && place.notice) listStatus.textContent = `${place.notice} · ${listStatus.textContent}`;
         if (queueButtons && inclusion) renderSurface(inclusion);
         previous.disabled = priorOffsets.length === 0;
@@ -549,19 +548,14 @@
       keepPlace = null;
     }
     categoryButtons.forEach(button => button.addEventListener('click', () => {
-      if (!enabled || button.dataset.careerKind === kind) return;
-      kind = button.dataset.careerKind;
+      const nextView = button.dataset.careerView ?? 'shortlist';
+      if (!enabled || (button.dataset.careerKind === kind && (kind !== 'jobs' || nextView === view))) return;
+      kind = button.dataset.careerKind; view = nextView;
       categoryButtons.forEach(candidate => candidate.setAttribute('aria-pressed', String(candidate === button)));
       resetPlace();
       showJobActions();
       void loadPage();
     }));
-    sortSelect?.addEventListener('change', () => {
-      if (!enabled || kind !== 'jobs' || !['score', 'recent'].includes(sortSelect.value) || sortSelect.value === sort) return;
-      sort = sortSelect.value;
-      resetPlace();
-      void loadPage();
-    });
     // The switch saves the qualifying score (or zero for everything); the list reloads from the saved state.
     for (const [mode, button] of Object.entries(queueButtons ?? {})) button.addEventListener('click', () => {
       if (!enabled || kind !== 'jobs') return;
@@ -636,9 +630,9 @@
   const me = createBrowser({ root: document.getElementById('me-browser'), prefix: 'me', kind: 'sources' });
   const jobs = createBrowser({
     root: document.getElementById('career-browser'), prefix: 'career', kind: 'jobs', persistentReader: true,
-    sortControl: document.getElementById('career-sort-control'), surfaceControl: document.getElementById('career-surface'),
+    surfaceControl: document.getElementById('career-surface'),
     deleteRankings: document.getElementById('delete-rankings'),
-    jobControls: [document.getElementById('run-rail'), document.getElementById('career-sort-control'), document.getElementById('delete-rankings')],
+    stagePanels: [...document.querySelectorAll('#stage-panels [data-stage-panel]')],
   });
   window.careerBrowser = {
     refresh() { return Promise.all([me.refresh(), jobs.refresh()]); },

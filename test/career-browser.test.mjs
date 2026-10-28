@@ -917,6 +917,35 @@ test('ineligible cards show the verdict instead of a number, and an established 
   assert.deepEqual(['jobs', 'reviewed', 'applications', 'blocks'].map(name => ui.stageCount(name).textContent), [' 3', ' 2', ' 0', ' 0']);
 });
 
+test('a state refresh while reading keeps the page and the open record; a record that left the page keeps its reader', async () => {
+  const { state, browser } = fixture();
+  const rows = Array.from({ length: 27 }, (_, index) => catalogueJob(String(index).padStart(2, '0'),
+    new Date(Date.now() - (index + 1) * 60000).toISOString()));
+  state.career.matching = { jobs: Object.fromEntries(rows.map(row => [row.id, row])), scores: {} };
+  const ui = await rendererFixture(browser, true);
+  await ui.window.careerBrowser.refresh();
+  await ui.settle();
+  ui.nodes['career-next'].fire('click');
+  await ui.settle();
+  ui.rows('career')[1].fire('click');
+  await ui.settle();
+  assert.equal(ui.nodes['career-reader-title'].textContent, '26');
+  // The agent saves a review: the companion broadcasts state and the list refreshes in the background.
+  await ui.window.careerBrowser.refresh();
+  await ui.settle();
+  assert.deepEqual(ui.titles(), ['25', '26']);
+  assert.equal(ui.calls.at(-1).args.offset, 25);
+  assert.equal(ui.nodes['career-reader-title'].textContent, '26');
+  assert.equal(ui.nodes['career-records'].querySelectorAll('[aria-current]').length, 1);
+  // The open record disappears from this page (blocked elsewhere): the reader is left as it was, not replaced by another job.
+  delete state.career.matching.jobs['26'];
+  await ui.window.careerBrowser.refresh();
+  await ui.settle();
+  assert.deepEqual(ui.titles(), ['25']);
+  assert.equal(ui.nodes['career-reader-title'].textContent, '26');
+  assert.equal(ui.nodes['career-records'].querySelectorAll('[aria-current]').length, 0);
+});
+
 test('the publication slider saves its range once on change, restores the saved range on failure, and setContext drives the review launch', async () => {
   const { state, browser } = fixture();
   const publishedAt = currentDate();

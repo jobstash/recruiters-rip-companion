@@ -401,7 +401,8 @@
     async function loadPage(focusList = false, place = null) {
       if (!enabled) return;
       const currentGeneration = ++generation;
-      closeReader();
+      // A background refresh keeps the open reader until the same record is found again on the new page; a navigation closes it.
+      if (!place?.selectedId) closeReader();
       loading = true;
       nextOffset = null;
       records.replaceChildren();
@@ -472,8 +473,9 @@
         }
       }
       if (!enabled || currentGeneration !== generation) return;
-      // A block edit reopens the record the user had open; otherwise side-by-side layouts show the first record.
-      const open = reopen ?? (sideBySide.matches ? firstRecord : null);
+      // A refresh reopens the record the user had open; a navigation opens the first record on wide layouts. A record that
+      // left this page keeps its reader as it was rather than replacing what the user was reading.
+      const open = reopen ?? (place?.selectedId ? null : sideBySide.matches ? firstRecord : null);
       if (open) void openRecord(open.item, open.button, false);
       if (refocus) refocus.focus();
     }
@@ -538,9 +540,10 @@
         renderPublication(publicationRange);
       },
       refresh() {
+        // A state broadcast while the list is already showing keeps the page and the open record; only the first load starts at the top.
+        const place = keepPlace ?? (enabled ? { offset, priorOffsets: [...priorOffsets], selectedId: selected?.id ?? null, focusId: null } : null);
         enabled = true;
         categoryButtons.forEach(button => { button.disabled = false; });
-        const place = keepPlace;
         keepPlace = null;
         if (place) { offset = place.offset; priorOffsets = place.priorOffsets; }
         else { offset = 0; priorOffsets = []; }

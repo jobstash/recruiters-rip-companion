@@ -83,7 +83,6 @@ main { flex: 1; min-height: 0; overflow: auto; padding: var(--spacing-32) var(--
 .career-browser { display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; }
 #career-browser { grid-template-rows: auto auto minmax(0, 1fr); }
 .career-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--spacing-8) var(--spacing-16); padding-bottom: var(--spacing-16); }
-.jobs-toolbar .career-job-actions { min-height: 44px; }
 /* The run rail normally has three recurring steps. The API-key setup step appears only until configured or after rejection. */
 .run-rail { display: grid; gap: var(--spacing-16); padding-bottom: var(--spacing-24); }
 .run-rail-caption { font: 500 12px/1.33 var(--font-geist-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--color-smoke); }
@@ -103,7 +102,9 @@ main { flex: 1; min-height: 0; overflow: auto; padding: var(--spacing-32) var(--
 .career-categories button[aria-pressed="true"]::after { content: ""; position: absolute; bottom: -1px; left: 0; right: 0; height: 1px; background: var(--rr-dispersion); box-shadow: var(--shadow-edge-glow); }
 .career-categories button:disabled { color: var(--color-dust); border-color: var(--color-facet); }
 .career-categories button:disabled::after { display: none; }
-.career-job-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--spacing-8) var(--spacing-16); min-width: 0; max-width: 100%; }
+/* Sort and Clear belong to the list they act on: the list column's own head row, not the tab strip above both panes. */
+.career-list-tools { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--spacing-8) var(--spacing-16); min-width: 0; min-height: 44px; }
+.career-list-tools .text { padding-inline: var(--spacing-8); }
 .career-sort { display: flex; flex-wrap: wrap; align-items: center; gap: var(--spacing-8); min-width: 0; max-width: 100%; }
 .career-sort select { min-width: 0; max-width: 100%; min-height: 44px; padding: var(--spacing-8); border: 1px solid var(--color-facet); border-radius: var(--radius-buttons); background: var(--color-canvas); color: var(--color-ink); font: inherit; cursor: pointer; }
 .career-sort select:disabled { color: var(--color-dust); cursor: not-allowed; }
@@ -140,11 +141,12 @@ main { flex: 1; min-height: 0; overflow: auto; padding: var(--spacing-32) var(--
 .career-card-date { font-variant-numeric: tabular-nums; color: var(--color-ink); }
 .career-card-facts { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 400 12px/1.5 var(--font-geist-mono); color: var(--color-smoke); }
 .career-card-side { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; width: 128px; padding: 20px var(--spacing-24) 20px 0; text-align: right; }
-.career-card-fit { font: 500 24px/1 var(--font-geist-mono); font-variant-numeric: tabular-nums; letter-spacing: -.02em; color: var(--color-ink); }
+.career-card-figure { font: 500 24px/1 var(--font-geist-mono); font-variant-numeric: tabular-nums; letter-spacing: -.02em; color: var(--color-ink); }
 .career-card-caption { font: 400 10px/1.4 var(--font-geist-mono); letter-spacing: .02em; color: var(--color-smoke); }
 /* Ineligible job: the saved verdict stands where the number would, in ink, wrapping within the column if it must. */
 .career-card-verdict { font-size: 12px; color: var(--color-ink); white-space: normal; overflow-wrap: anywhere; }
-.career-card-include { display: flex; flex-direction: row-reverse; align-items: center; gap: var(--spacing-8); min-height: 24px; white-space: nowrap; cursor: pointer; }
+.career-card-include { display: flex; flex-direction: row-reverse; align-items: center; gap: var(--spacing-8); min-height: 24px; margin-top: 4px; white-space: nowrap; cursor: pointer; }
+.career-card-reason { white-space: normal; overflow-wrap: anywhere; }
 .career-card-include:hover .career-card-caption { color: var(--color-ink); }
 /* Square switch: a native checkbox drawn as a ruled square; checked fills the inner square with ink. */
 .career-include { appearance: none; flex: none; width: 20px; height: 20px; margin: 0; padding: 3px; border: 1px solid var(--color-ink); border-radius: 0; background: transparent; background-clip: content-box; cursor: pointer; }

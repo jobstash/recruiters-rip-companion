@@ -9,7 +9,7 @@
     applications: { title: 'Job Applications', empty: 'No saved applications.', locked: 'Open local storage to read saved applications.', select: 'Select an application' },
     blocks: { title: 'Blocked jobs', empty: 'Nothing blocked. Open a job to block it, its company or its category.', locked: 'Open local storage to read blocked jobs.', select: 'Select a block' },
   };
-  // Why an unscored job has no rank; the pre-filter never shows a number, only whether the job is in the next run.
+  // Why an unscored job has no score. The caption stands where the number would be.
   const statusWords = { unavailable: 'Advert unavailable', refused: 'Declined', oversize: 'Too large',
     incompatible_location: 'Location conflict predicted', below_minimum: 'Below your minimum' };
   const statusWord = card => statusWords[card.status] ?? 'Not pre-filtered';
@@ -26,17 +26,18 @@
   };
 
   function cardSpoken(card, date) {
+    const sent = card.included ? 'sent to agent' : 'not sent';
     const stage = card.stage === 'reviewed'
       ? [`fit ${card.score === null ? 'not saved' : `${card.score} of 100`}`, card.stale ? 'out of date' : null]
       : card.stage === 'ineligible'
         ? ['not eligible', card.label]
         : card.stage === 'prefilter'
-          ? [card.rank === null ? null : `rank ${card.rank}`, card.included ? 'in next run' : 'not in next run', card.overridden ? 'manual' : null]
-          : [statusWord(card).toLowerCase(), card.included ? 'in next run' : 'not in next run'];
+          ? [Number.isInteger(card.prefilterScore) && card.prefilterScore >= 0 ? `score ${card.prefilterScore}` : null, sent, card.overridden ? 'manual' : null]
+          : [statusWord(card).toLowerCase(), sent];
     return [card.title, card.company, ...stage, date ? `published ${date}` : 'publication date not stated'].filter(Boolean).join(', ');
   }
-  /** Body goes inside the record button; the right column (fit number or the next-run switch) is a sibling so the
-   *  checkbox is never nested inside the button. */
+  /** Body goes inside the record button; the right column (the number the list is ordered by, then the Send switch) is a
+   *  sibling so the checkbox is never nested inside the button. */
   function renderCard(item, button, side, onInclude) {
     const card = item.card;
     const date = displayDate(card.publishedAt);
@@ -52,7 +53,7 @@
     button.setAttribute('aria-label', cardSpoken(card, date));
 
     if (card.stage === 'reviewed') {
-      side.append(node('span', 'career-card-fit', card.score === null ? '—' : String(card.score)),
+      side.append(node('span', 'career-card-figure', card.score === null ? '—' : String(card.score)),
         node('span', 'career-card-caption', card.stale ? 'Fit · out of date' : 'Fit'));
       return;
     }
@@ -61,19 +62,24 @@
       side.append(node('span', 'career-card-caption career-card-verdict', card.label));
       return;
     }
+    // The number the Score sort orders by, in the column, so the cutoff rule can be read against it.
+    if (card.stage === 'prefilter' && Number.isInteger(card.prefilterScore) && card.prefilterScore >= 0) {
+      side.append(node('span', 'career-card-figure', String(card.prefilterScore)),
+        node('span', 'career-card-caption', card.stale ? 'Score · out of date' : 'Score'));
+    } else {
+      side.append(node('span', 'career-card-caption career-card-reason', statusWord(card)));
+    }
     const label = node('label', 'career-card-include');
     const checkbox = node('input', 'career-include');
     checkbox.type = 'checkbox';
     checkbox.checked = card.included === true;
-    checkbox.setAttribute('aria-label', `Include ${card.title} in the next agent run`);
+    checkbox.setAttribute('aria-label', `Send ${card.title} to the agent`);
     checkbox.dataset.id = item.id;
     checkbox.addEventListener('click', event => event.stopPropagation());
     checkbox.addEventListener('change', event => { void onInclude(item, event.target.checked, event.target); });
     label.addEventListener('click', event => event.stopPropagation());
-    label.append(checkbox, node('span', 'career-card-caption', 'In next run'));
+    label.append(checkbox, node('span', 'career-card-caption', card.overridden ? 'Send · manual' : 'Send'));
     side.append(label);
-    if (card.stage === 'unscored') side.append(node('span', 'career-card-caption', statusWord(card)));
-    if (card.overridden) side.append(node('span', 'career-card-caption', 'manual'));
   }
   function renderRow(item, button) {
     button.append(node('span', 'career-record-title', item.title));
@@ -103,7 +109,7 @@
     const persistent = () => persistentReader && sideBySide.matches;
     let enabled = false;
     let kind = initialKind;
-    let sort = 'rank';
+    let sort = 'score';
     let generation = 0;
     let readGeneration = 0;
     let offset = 0;
@@ -147,7 +153,7 @@
       } catch (error) {
         keepPlace = null;
         if (control) control.checked = item.card.included === true;
-        listStatus.textContent = `Could not change the next run. ${error.message}`;
+        listStatus.textContent = `Could not change sending. ${error.message}`;
       }
     }
 
@@ -178,17 +184,17 @@
       if (!block || typeof block !== 'object') return null;
       const section = node('section', 'career-block');
       if (kind === 'blocks') {
-        section.append(blockButton('Remove block', `Remove block ${item.title}`, () => removeBlock(item)));
+        section.append(blockButton('Unblock', `Unblock ${item.title}`, () => removeBlock(item)));
         return section;
       }
       if (kind !== 'jobs') return null;
       const title = item.card?.title ?? item.title;
       const actions = node('div', 'actions');
-      actions.append(blockButton('Block this job', `Block ${title}`,
+      actions.append(blockButton('Block job', `Block ${title}`,
         () => changeBlock('job-block', { id: item.id, kind: 'job' }, `Blocked ${title}`)));
-      if (typeof block.company === 'string' && block.company) actions.append(blockButton(`Block all ${block.company} jobs`, null,
+      if (typeof block.company === 'string' && block.company) actions.append(blockButton(`Block ${block.company}`, `Block all ${block.company} jobs`,
         () => changeBlock('job-block', { id: item.id, kind: 'company' }, `Blocked ${block.company}`)));
-      if (typeof block.category === 'string' && block.category) actions.append(blockButton(`Block all ${block.category} jobs`, null,
+      if (typeof block.category === 'string' && block.category) actions.append(blockButton(`Block ${block.category}`, `Block all ${block.category} jobs`,
         () => changeBlock('job-block', { id: item.id, kind: 'category' }, `Blocked ${block.category}`)));
       section.append(node('h3', '', 'Block from evaluation'), actions);
       return section;
@@ -238,10 +244,11 @@
       checkbox.className = 'career-include';
       checkbox.checked = card.included === true;
       checkbox.addEventListener('change', () => { void setInclusion(item, checkbox.checked, checkbox); });
-      label.append(checkbox, node('span', '', card.status === 'incompatible_location' ? 'Include anyway' : 'Include in next run'));
+      label.append(checkbox, node('span', '', card.status === 'incompatible_location' ? 'Send anyway' : 'Send to agent'));
       actions.append(label);
       if (card.overridden) {
-        const reset = node('button', 'text', 'Reset to minimum score');
+        const reset = node('button', 'text', 'Reset');
+        reset.setAttribute('aria-label', 'Reset to the minimum score rule');
         reset.type = 'button';
         reset.id = `${prefix}-inclusion-reset`;
         reset.addEventListener('click', () => { void setInclusion(item, null); });
@@ -258,7 +265,7 @@
       const line = [header.company, header.published].filter(value => typeof value === 'string' && value).join(' · ');
       if (line) top.append(node('p', 'career-reader-line', line));
       if (typeof header.applyUrl === 'string' && header.applyUrl) {
-        const open = blockButton('Open job page', null, async () => {
+        const open = blockButton('Open job', 'Open the job page', async () => {
           if (!enabled) return;
           open.disabled = true;
           try { await request('career-open-job', { id: item.id }); }
@@ -415,12 +422,12 @@
       const jobs = `${integer(inclusion.candidates)} ${inclusion.candidates === 1 ? 'job' : 'jobs'}`;
       surfaceSentence.textContent = inclusion.scored === null
         ? `All ${jobs} will be sent`
-        : `${integer(inclusion.included)} of ${jobs} will be sent to the agent${inclusion.stale ? ' · ranked before your profile changed; pre-filter again to update' : ''}`;
+        : `${integer(inclusion.included)} of ${jobs} will be sent${inclusion.stale ? ' · scored before your profile changed; pre-filter again' : ''}`;
     }
     function renderCutoff(inclusion, index) {
       const divider = document.createElement('li');
       divider.className = 'career-cutoff';
-      divider.append(node('span', 'career-cutoff-text', `Below minimum score ${inclusion.minimumScore} · not sent to the agent`));
+      divider.append(node('span', 'career-cutoff-text', `Below minimum score ${inclusion.minimumScore} · not sent`));
       if (slider) {
         const change = node('button', 'text', 'Change');
         change.type = 'button';
@@ -452,7 +459,7 @@
         const result = await request('career-list', { kind, offset, limit: 25, ...(kind === 'jobs' ? { sort } : {}) });
         if (!enabled || currentGeneration !== generation) return;
         const inclusion = kind === 'jobs' && result.inclusion && typeof result.inclusion === 'object' ? result.inclusion : null;
-        const cutoffIndex = inclusion && sort === 'rank' && Number.isInteger(result.cutoffIndex) ? result.cutoffIndex : null;
+        const cutoffIndex = inclusion && sort === 'score' && Number.isInteger(result.cutoffIndex) ? result.cutoffIndex : null;
         result.items.forEach((item, index) => {
           if (cutoffIndex === index) records.append(renderCutoff(inclusion, index));
           const row = document.createElement('li');
@@ -470,7 +477,7 @@
           } else {
             renderRow(item, button);
             row.append(button);
-            if (kind === 'blocks') row.append(blockButton('Remove', `Remove block ${item.title}`, () => removeBlock(item), 'text career-row-action'));
+            if (kind === 'blocks') row.append(blockButton('Unblock', `Unblock ${item.title}`, () => removeBlock(item), 'text career-row-action'));
           }
           button.addEventListener('click', () => { void openRecord(item, button); });
           firstRecord ??= { item, button };
@@ -482,7 +489,7 @@
         records.hidden = result.items.length === 0;
         const range = `${integer(offset + 1)}–${integer(offset + result.items.length)} of ${integer(result.total)}`;
         listStatus.textContent = result.items.length
-          ? inclusion ? `${range} · ${integer(inclusion.included)} sent to the agent` : range
+          ? inclusion ? `${range} · ${integer(inclusion.included)} sent to agent` : range
           : offset ? 'No records on this page. Choose Previous.' : category.empty;
         if (typeof place?.notice === 'string' && place.notice) listStatus.textContent = `${place.notice} · ${listStatus.textContent}`;
         if (slider && inclusion) renderSurface(inclusion);
@@ -529,7 +536,7 @@
       void loadPage();
     }));
     sortSelect?.addEventListener('change', () => {
-      if (!enabled || kind !== 'jobs' || !['rank', 'recent'].includes(sortSelect.value) || sortSelect.value === sort) return;
+      if (!enabled || kind !== 'jobs' || !['score', 'recent'].includes(sortSelect.value) || sortSelect.value === sort) return;
       sort = sortSelect.value;
       resetPlace();
       void loadPage();

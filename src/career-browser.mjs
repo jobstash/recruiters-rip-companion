@@ -122,8 +122,9 @@ const cardStatuses = new Set(['unavailable', 'refused', 'oversize', 'incompatibl
 // A saved review with one of these verdicts makes the job ineligible: the card shows the verdict, never a number.
 const ineligibleMatches = new Set(['incompatible_location', 'excluded']);
 const ineligibleLabel = reviewed => ineligibleMatches.has(reviewed?.matchStatus) ? assessmentLabel(reviewed.matchStatus) : 'Location incompatible';
-// A card shows where the job stands: reviewed by an agent (score), ineligible (a saved verdict instead of a number),
-// ranked by the pre-filter for the next run (rank and inclusion), or neither. Pre-filter priorities never surface as scores.
+// A card shows where the job stands: reviewed by an agent (fit), ineligible (a saved verdict instead of a number),
+// scored by the pre-filter for the next run (score and whether it is sent), or neither. Fit and pre-filter score are
+// different scales and never share a caption.
 // An established incompatibility (any saved gate fail, or relocation required against a refusal to relocate) is never a
 // candidate and has no switch; a predicted one (pre-scan only) keeps the switch.
 function cardStage({ id, reviewed, prescan }, inclusion) {
@@ -135,7 +136,8 @@ function cardStage({ id, reviewed, prescan }, inclusion) {
   return {
     stage: ineligible ? 'ineligible' : reviewCurrent ? 'reviewed' : rank !== null ? 'prefilter' : 'unscored',
     label: ineligible ? ineligibleLabel(reviewed) : null, established,
-    rank, included: candidate && inclusion.includedIds.has(id), overridden: candidate && inclusion.overridden(id),
+    rank, prefilterScore: rank !== null ? prescanScore(prescan) : null,
+    included: candidate && inclusion.includedIds.has(id), overridden: candidate && inclusion.overridden(id),
     score: Number.isInteger(reviewed?.overall) ? reviewed.overall : null,
     stale: reviewed ? !reviewCurrent : Boolean(prescan) && prescan.current !== true,
     status: !reviewCurrent && prescan && cardStatuses.has(prescan.status) ? prescan.status : null,
@@ -169,13 +171,13 @@ function jobVerdict({ reviewed, prescan }, card, minimumScore) {
     // The label is the whole actionable decision; repeating location, relocation and the saved review prose below it is noise.
     return { kind: 'ineligible', number: null, numberLabel: null, headline: card.label, detail: null, reason: null };
   }
-  const included = card.included ? 'In next run' : 'Not in next run';
+  const included = card.included ? 'Sent to agent' : 'Not sent';
   const manual = card.overridden ? ' · manual' : '';
   if (card.stage === 'prefilter') {
-    const priority = prescanScore(prescan);
-    return { kind: 'prefilter', number: priority, numberLabel: 'Priority', headline: included,
-      detail: joinFacts([`${priority} is ${priority >= minimumScore ? 'at or above' : 'below'} your minimum ${minimumScore}${manual}`,
-        card.stale ? 'ranked before your profile changed' : null]),
+    const score = prescanScore(prescan);
+    return { kind: 'prefilter', number: score, numberLabel: 'Score', headline: included,
+      detail: joinFacts([`${score} is ${score >= minimumScore ? 'at or above' : 'below'} your minimum ${minimumScore}${manual}`,
+        card.stale ? 'scored before your profile changed' : null]),
       reason: staleReview ? joinFacts([staleReview, reason]) : reason };
   }
   return { kind: 'unscored', number: null, numberLabel: null, headline: `${included}${manual}`,
@@ -325,7 +327,7 @@ async function jobUnion(career) {
   return { rows, inclusion: jobInclusion(career, rows) };
 }
 
-// Rank order: current reviews by overall fit, then the pre-filter queue by rank, then everything else, with
+// Score order: current reviews by overall fit, then the pre-filter queue by score, then everything else, with
 // ineligible jobs last; newer publication breaks ties, then ID. Recent order ignores stages entirely.
 const stageOrder = { reviewed: 0, prefilter: 1, unscored: 2, ineligible: 3 };
 function sortJobs(rows, inclusion, sort) {
@@ -336,7 +338,7 @@ function sortJobs(rows, inclusion, sort) {
     const value = stage.stage === 'reviewed' ? -(stage.score ?? -1) : stage.stage === 'prefilter' ? stage.rank : 0;
     return { row, group: stageOrder[stage.stage], value, published: Number.isFinite(timestamp) ? timestamp : -Infinity };
   });
-  return sortable.sort((a, b) => (sort === 'rank' ? a.group - b.group || a.value - b.value : 0) ||
+  return sortable.sort((a, b) => (sort === 'score' ? a.group - b.group || a.value - b.value : 0) ||
     (a.published === b.published ? 0 : a.published > b.published ? -1 : 1) ||
     (a.row.id < b.row.id ? -1 : a.row.id > b.row.id ? 1 : 0)).map(item => item.row);
 }
@@ -362,9 +364,9 @@ export function createCareerBrowser({ store }) {
   return {
     async list(args = {}) {
       validate(args, ['kind', 'offset', 'limit', 'sort']);
-      const { kind, offset = 0, limit = 25, sort = 'rank' } = args;
-      if ((own(args, 'sort') && (kind !== 'jobs' || !['rank', 'recent'].includes(args.sort)))) {
-        fail('INVALID_INPUT', 'Use sort rank or recent for Jobs only.');
+      const { kind, offset = 0, limit = 25, sort = 'score' } = args;
+      if ((own(args, 'sort') && (kind !== 'jobs' || !['score', 'recent'].includes(args.sort)))) {
+        fail('INVALID_INPUT', 'Use sort score or recent for Jobs only.');
       }
       if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isInteger(limit) || limit < 1 || limit > 100) {
         fail('INVALID_INPUT', 'Use limit 1–100 and a nonnegative safe integer offset.');
@@ -386,7 +388,7 @@ export function createCareerBrowser({ store }) {
         const items = sorted.slice(offset, offset + limit).map(row => jobItem(row, inclusion, career));
         // The divider sits before the first ranked card below the minimum score, reported once on the page that holds it.
         const below = row => { const { rank } = cardStage(row, inclusion); return rank !== null && career.prescan.rows[row.id].priority < inclusion.minimumScore; };
-        const divider = sort === 'rank' ? sorted.findIndex(below) - offset : -1;
+        const divider = sort === 'score' ? sorted.findIndex(below) - offset : -1;
         return { items, total: sorted.length, nextOffset: offset + items.length < sorted.length ? offset + items.length : null,
           cutoffIndex: divider >= 0 && divider < items.length ? divider : null,
           inclusion: { minimumScore: inclusion.minimumScore, included: inclusion.includedIds.size,

@@ -44,7 +44,7 @@
       case 'PRESCAN_CONTEXT_CHANGED':
       case 'IDENTITY_CHANGED':
       case 'PROFILE_CHANGED':
-      case 'RANKINGS_CHANGED': return 'Your profile or account changed. Start pre-filtering again.';
+      case 'RANKINGS_CHANGED': return 'Your profile or account changed. Pre-filter again.';
       case 'PRESCAN_KEY_REQUIRED': return 'Save an OpenAI API key before starting.';
       case 'PRESCAN_INVALID_KEY':
       case 'PRESCAN_AUTH': return 'Replace the API key and check its OpenAI API permissions, then start again.';
@@ -95,10 +95,10 @@
     const active = starting || running;
     element('start').hidden = available && active;
     element('start').disabled = !available || pending || keyError || (!needsSetup && previewState !== 'ready');
-    element('start').textContent = available && !paired ? 'Connect account' : 'Start pre-filtering';
+    element('start').textContent = available && !paired ? 'Connect account' : 'Start';
     element('cancel').hidden = !available || !active;
     element('cancel').disabled = cancelling;
-    element('cancel').textContent = cancelling ? 'Stopping…' : 'Stop pre-filtering';
+    element('cancel').textContent = cancelling ? 'Stopping…' : 'Stop';
     element('form').setAttribute('aria-busy', String(pending));
     // The key is setup, not recurring workflow: remove it after a successful save and restore it only when missing or rejected.
     steps.key.hidden = !showKeyStep;
@@ -148,7 +148,7 @@
     let advice = '';
     if (run.status === 'failed') advice = recovery(run.lastError?.code, run.lastError?.status ? `HTTP ${run.lastError.status}` : undefined);
     if (run.status === 'cancelled' || run.status === 'interrupted') advice = `Scan stopped at ${count(checked)}/${scope}${spent}. Start again to continue.`;
-    if (run.status === 'stale') advice = 'Profile changed. Start pre-filtering again.';
+    if (run.status === 'stale') advice = 'Profile changed. Pre-filter again.';
     if (run.status === 'completed' && run.unavailable) advice = `${count(run.unavailable)} jobs could not be pre-filtered.`;
     element('recovery').textContent = advice;
   }

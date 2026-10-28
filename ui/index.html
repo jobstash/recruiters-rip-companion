@@ -64,7 +64,7 @@
 </nav>
 </section>
 <section id="me-reader" class="career-reader panel" aria-labelledby="me-reader-title" hidden>
-<button id="me-close" class="back text" type="button">Back to list</button>
+<button id="me-close" class="back text" type="button">Back</button>
 <h2 id="me-reader-title" tabindex="-1"></h2>
 <div class="edge-rule" aria-hidden="true"></div>
 <p id="me-reader-status" class="career-reader-status" role="status"></p>
@@ -96,21 +96,21 @@
 <p class="run-step-name"><span class="run-step-number">3</span>Pre-filter</p>
 <p id="prescan-preview" class="run-step-state" role="status" aria-live="polite" aria-atomic="true">Loading job count…</p>
 <p id="prescan-progress" class="run-step-state" role="status" aria-live="polite" aria-atomic="true"></p>
-<div class="actions"><button id="prescan-start" class="ghost" type="button" aria-describedby="prescan-preview" disabled>Start pre-filtering</button><button id="prescan-cancel" class="ghost" type="button" hidden>Cancel</button></div>
+<div class="actions"><button id="prescan-start" class="ghost" type="button" aria-describedby="prescan-preview" disabled>Start</button><button id="prescan-cancel" class="ghost" type="button" hidden>Stop</button></div>
 <p id="prescan-recovery" class="run-step-help" role="status" aria-live="polite"></p>
 <p id="prescan-message" class="run-step-help" role="status" aria-live="polite"></p>
 </li>
 <li id="run-step-handover" class="run-step">
-<p class="run-step-name"><span class="run-step-number">4</span>Hand over</p>
+<p class="run-step-name"><span class="run-step-number">4</span>Send to agent</p>
 <div id="career-surface" class="career-surface">
 <div class="career-surface-control">
-<label for="career-minimum-score" class="run-step-state">Minimum pre-filter score</label>
+<label for="career-minimum-score" class="run-step-state">Minimum score</label>
 <input id="career-minimum-score" type="range" min="0" max="100" step="1" value="60" aria-valuetext="Minimum score 60" aria-describedby="career-surface-sentence" disabled>
 <span id="career-minimum-score-value" class="career-surface-value" aria-hidden="true">60</span>
 </div>
 <p id="career-surface-sentence" class="run-step-help" role="status"></p>
 </div>
-<div class="actions"><button id="copy-review-prompt" class="ghost" type="button">Copy review prompt</button></div>
+<div class="actions"><button id="copy-review-prompt" class="ghost" type="button">Copy prompt</button></div>
 </li>
 </ol>
 </section>
@@ -120,17 +120,19 @@
 <button id="career-category-applications" type="button" class="ghost" data-career-kind="applications" aria-pressed="false" disabled>Applications</button>
 <button id="career-category-blocks" type="button" class="ghost" data-career-kind="blocks" aria-pressed="false" disabled>Blocked</button>
 </div>
-<div class="career-job-actions">
-<label id="career-sort-control" class="career-sort caption" for="career-sort">Sort jobs
-<select id="career-sort" disabled><option value="rank" selected>Rank</option><option value="recent">Newest first</option></select>
-</label>
-<button id="delete-rankings" class="text" type="button" disabled>Clear job assessments</button>
-</div>
 </div>
 <div class="career-panes jobs-panes">
 <section class="career-list panel" aria-label="Saved jobs">
-<div class="panel-head"><p id="career-list-status" role="status">Open local storage to read saved jobs.</p></div>
-<button id="career-list-retry" class="ghost" type="button" hidden>Retry loading jobs</button>
+<div class="panel-head career-list-head">
+<div class="career-list-tools">
+<label id="career-sort-control" class="career-sort caption" for="career-sort">Sort
+<select id="career-sort" disabled><option value="score" selected>Score</option><option value="recent">Newest</option></select>
+</label>
+<button id="delete-rankings" class="text" type="button" disabled>Clear reviews</button>
+</div>
+<p id="career-list-status" role="status">Open local storage to read saved jobs.</p>
+</div>
+<button id="career-list-retry" class="ghost" type="button" hidden>Retry</button>
 <ul id="career-records" class="career-records career-cards" aria-label="Saved jobs" hidden></ul>
 <nav id="career-pagination" class="actions pagination" aria-label="Job pages" hidden>
 <button id="career-previous" class="text" type="button" disabled>Previous</button>
@@ -138,11 +140,11 @@
 </nav>
 </section>
 <section id="career-reader" class="career-reader panel" aria-labelledby="career-reader-title" hidden>
-<button id="career-close" class="back text" type="button">Back to list</button>
+<button id="career-close" class="back text" type="button">Back</button>
 <h2 id="career-reader-title" tabindex="-1"></h2>
 <div class="edge-rule" aria-hidden="true"></div>
 <p id="career-reader-status" class="career-reader-status" role="status"></p>
-<button id="career-reader-retry" class="ghost" type="button" hidden>Retry opening job</button>
+<button id="career-reader-retry" class="ghost" type="button" hidden>Retry</button>
 <div id="career-reader-content" class="career-reader-content"></div>
 </section>
 </div>

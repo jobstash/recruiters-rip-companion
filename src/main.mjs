@@ -725,7 +725,7 @@ async function settingsOperation(op, input) {
       careerViewRevision++;
       result = { cancelled: Boolean(result.cancelled) };
     }
-    else if (op === 'copy-review-prompt') clipboard.writeText('Use the recruiters.rip skill to review the jobs in my next run and show me the best matches.');
+    else if (op === 'copy-review-prompt') clipboard.writeText('Use the recruiters.rip skill to review the jobs sent to you and show me the best matches.');
     else if (op === 'copy-command') clipboard.writeText(setup().command);
     else if (op === 'copy-config') clipboard.writeText(setup().claudeConfig);
     else if (op === 'install-chatgpt') result = await installChatGptPlugin({ directory, root: app.isPackaged ? root.replace(/app\.asar$/, 'app.asar.unpacked') : root, localOnly, command: setup().command });

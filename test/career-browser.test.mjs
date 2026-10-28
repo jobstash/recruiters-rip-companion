@@ -930,7 +930,7 @@ test('job cards show reviewed fit or pre-filter score, a Review switch for candi
   assert.deepEqual(lis.map(li => li.className), ['career-row career-card', 'career-row career-card', 'career-row career-card', 'career-cutoff', 'career-row career-card', 'career-row career-card']);
   assert.equal(ui.byClass(lis[3], 'career-cutoff-text').textContent, 'Below minimum score 75 · skipped');
   assert.equal(ui.nodes['career-list-status'].textContent, '1–5 of 5 · 1 queued for AI review');
-  assert.equal(ui.nodes['career-surface-sentence'].textContent, 'Your AI reviews 1 of 4 jobs and skips the rest.');
+  assert.equal(ui.nodes['career-surface-sentence'].textContent, '1 of 4 jobs go to your AI for full review; the rest are skipped.');
   assert.equal(ui.nodes['career-minimum-score'].value, '75');
   assert.equal(ui.nodes['career-minimum-score'].attributes.get('aria-valuetext'), 'Minimum score 75');
   assert.equal(ui.nodes['career-minimum-score-value'].textContent, '75');
@@ -1096,7 +1096,7 @@ test('ineligible cards show the verdict instead of a number or switch, and an es
   assert.equal(JSON.stringify(side(e)).includes('74'), false);
   assert.equal(e.attributes.get('aria-label').startsWith('Montréal Lead, Far Co, not eligible, Location incompatible, published'), true);
   assert.equal(s.attributes.get('aria-label').startsWith('Gated Role, Gate Co, not eligible, Excluded by a gate, published'), true);
-  assert.equal(ui.nodes['career-surface-sentence'].textContent, 'Your AI reviews 1 of 3 jobs and skips the rest.');
+  assert.equal(ui.nodes['career-surface-sentence'].textContent, '1 of 3 jobs go to your AI for full review; the rest are skipped.');
   // The reader verdict explains both current and established ineligibility; neither has an inclusion control.
   e.fire('click');
   await ui.settle();
@@ -1117,7 +1117,7 @@ test('without a current pre-scan the surface block says AI reviews every job and
   const ui = await rendererFixture(browser, true);
   await ui.window.careerBrowser.refresh();
   await ui.settle();
-  assert.equal(ui.nodes['career-surface-sentence'].textContent, 'Your AI reviews all 2 jobs. Shortlist first to skip poor matches.');
+  assert.equal(ui.nodes['career-surface-sentence'].textContent, 'All 2 jobs go to your AI. Shortlist first to skip poor matches.');
   assert.equal(ui.nodes['career-list-status'].textContent, '1–2 of 2 · 2 queued for AI review');
   assert.equal(ui.nodes['career-minimum-score'].value, '36');
   assert.equal(ui.nodes['career-records'].children.some(li => li.className === 'career-cutoff'), false);

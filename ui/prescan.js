@@ -131,7 +131,7 @@
     handover.classList.toggle('primary', currentStep === 'handover' && !primaryHost);
     handover.classList.toggle('ghost', currentStep !== 'handover' && !primaryHost);
     handover.classList.toggle('text', Boolean(primaryHost));
-    document.getElementById('review-help').textContent = primaryHost ? 'Opens a new conversation with the review prompt filled in. You send it.' : 'Paste the prompt into Codex or Claude with recruiters.rip enabled.';
+    document.getElementById('review-help').textContent = primaryHost ? 'Companion stops here. The review runs in Codex or Claude: a new conversation opens with the prompt filled in, and you send it there.' : 'Companion stops here. The review runs in Codex or Claude: paste the prompt into a new conversation with recruiters.rip enabled.';
     // Blocked jobs stay in the scope total but are never pre-filtered.
     const blockedPart = () => Number.isSafeInteger(preview.blocked) && preview.blocked > 0 ? ` · ${count(preview.blocked)} blocked` : '';
     const scopeLine = () => preview.jobCount === 0 ? `${count(preview.totalCatalogue)} jobs in scope${blockedPart()} · all scored`

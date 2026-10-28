@@ -439,8 +439,8 @@
       if (document.activeElement !== slider) showSliderValue(inclusion.minimumScore);
       const jobs = `${integer(inclusion.candidates)} ${inclusion.candidates === 1 ? 'job' : 'jobs'}`;
       surfaceSentence.textContent = inclusion.scored === null
-        ? `Your AI reviews all ${jobs}. Shortlist first to skip poor matches.`
-        : `Your AI reviews ${integer(inclusion.included)} of ${jobs} and skips the rest${inclusion.stale ? ' · scored before your profile changed; shortlist again' : ''}.`;
+        ? `All ${jobs} go to your AI. Shortlist first to skip poor matches.`
+        : `${integer(inclusion.included)} of ${jobs} go to your AI for full review; the rest are skipped${inclusion.stale ? ' · scored before your profile changed; shortlist again' : ''}.`;
     }
     function renderCutoff(inclusion, index) {
       const divider = document.createElement('li');

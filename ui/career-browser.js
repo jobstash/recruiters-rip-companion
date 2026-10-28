@@ -105,7 +105,7 @@
   }
 
   /** One list + reader pair. `persistentReader` keeps the reader column rendered on wide screens.
-   *  `jobControls` are shown only while the jobs kind is active; sort, the minimum-score slider and Clear are also disabled otherwise. */
+   *  `jobControls` are shown only while the jobs kind is active; sort, the pre-qualification switch and Clear are also disabled otherwise. */
   function createBrowser({ root, prefix, kind: initialKind, persistentReader = false, sortControl = null, surfaceControl = null, deleteRankings = null, jobControls = [] }) {
     const element = name => document.getElementById(`${prefix}-${name}`);
     const categoryButtons = [...root.querySelectorAll('[data-career-kind]')];
@@ -121,8 +121,9 @@
     const readerRetry = element('reader-retry');
     const content = element('reader-content');
     const sortSelect = sortControl ? element('sort') : null;
-    const slider = surfaceControl ? element('minimum-score') : null;
-    const sliderValue = surfaceControl ? element('minimum-score-value') : null;
+    // Pre-qualification is a switch, not a dial: on = the default qualifying score, off = every candidate goes on for review.
+    const QUALIFYING_SCORE = 36;
+    const queueButtons = surfaceControl ? { qualified: element('queue-qualified'), all: element('queue-all') } : null;
     const surfaceSentence = surfaceControl ? element('surface-sentence') : null;
     const persistent = () => persistentReader && sideBySide.matches;
     let enabled = false;
@@ -426,32 +427,34 @@
       for (const control of jobControls) control.hidden = !active;
       if (deleteRankings) deleteRankings.disabled = !enabled || !active;
       if (sortSelect) sortSelect.disabled = !enabled || !active;
-      if (slider) slider.disabled = !enabled || !active;
+      if (queueButtons) for (const button of Object.values(queueButtons)) button.disabled = !enabled || !active;
     }
-    function showSliderValue(value) {
-      slider.value = String(value);
-      slider.setAttribute('aria-valuetext', `Minimum score ${value}`);
-      sliderValue.textContent = String(value);
+    function showQueueMode(value) {
+      const all = value === 0;
+      queueButtons.qualified.setAttribute('aria-pressed', String(!all));
+      queueButtons.all.setAttribute('aria-pressed', String(all));
     }
-    // The surface block states what the slider decides: how many of the unreviewed jobs the agent will receive.
+    // The surface block states what the switch decides: how many of the unreviewed jobs go on for review.
+    let normalising = false;
     function renderSurface(inclusion) {
       minimumScore = inclusion.minimumScore;
-      if (document.activeElement !== slider) showSliderValue(inclusion.minimumScore);
-      const jobs = `${integer(inclusion.candidates)} ${inclusion.candidates === 1 ? 'job' : 'jobs'}`;
+      showQueueMode(inclusion.minimumScore);
+      // A threshold saved by the earlier slider is neither mode; move it to the qualifying score once so the switch tells the truth.
+      if (![0, QUALIFYING_SCORE].includes(inclusion.minimumScore) && !normalising) {
+        normalising = true;
+        request('prescan-threshold', { minimumScore: QUALIFYING_SCORE }).catch(() => {}).finally(() => { normalising = false; });
+      }
+      const total = inclusion.candidates, jobs = `${total} ${total === 1 ? 'job' : 'jobs'}`;
+      const stale = inclusion.stale ? ' Scored before your profile changed; shortlist again.' : '';
       surfaceSentence.textContent = inclusion.scored === null
-        ? `All ${jobs} go to your AI. Shortlist first to skip poor matches.`
-        : `${integer(inclusion.included)} of ${jobs} go to your AI for full review; the rest are skipped${inclusion.stale ? ' · scored before your profile changed; shortlist again' : ''}.`;
+        ? `No shortlist yet: all ${jobs} go on for review.`
+        : inclusion.minimumScore === 0 ? `All ${jobs} go on for review.${stale}`
+          : `${inclusion.included} of ${jobs} found suitable for further review.${stale}`;
     }
     function renderCutoff(inclusion, index) {
       const divider = document.createElement('li');
       divider.className = 'career-cutoff';
-      divider.append(node('span', 'career-cutoff-text', `Below minimum score ${inclusion.minimumScore} · skipped`));
-      if (slider) {
-        const change = node('button', 'text', 'Change');
-        change.type = 'button';
-        change.addEventListener('click', () => slider.focus());
-        divider.append(change);
-      }
+      divider.append(node('span', 'career-cutoff-text', 'Not pre-qualified · skipped'));
       divider.dataset.index = String(index);
       return divider;
     }
@@ -510,7 +513,7 @@
           ? inclusion ? `${range} · ${integer(inclusion.included)} queued for AI review` : range
           : offset ? 'No records on this page. Choose Previous.' : category.empty;
         if (typeof place?.notice === 'string' && place.notice) listStatus.textContent = `${place.notice} · ${listStatus.textContent}`;
-        if (slider && inclusion) renderSurface(inclusion);
+        if (queueButtons && inclusion) renderSurface(inclusion);
         previous.disabled = priorOffsets.length === 0;
         next.disabled = nextOffset === null;
         pagination.hidden = previous.disabled && next.disabled;
@@ -559,18 +562,17 @@
       resetPlace();
       void loadPage();
     });
-    // Dragging only moves the number; the threshold is saved once on change so the list does not reload mid-drag.
-    slider?.addEventListener('input', () => { showSliderValue(Number.parseInt(slider.value, 10)); });
-    slider?.addEventListener('change', () => {
+    // The switch saves the qualifying score (or zero for everything); the list reloads from the saved state.
+    for (const [mode, button] of Object.entries(queueButtons ?? {})) button.addEventListener('click', () => {
       if (!enabled || kind !== 'jobs') return;
-      const value = Number.parseInt(slider.value, 10);
-      if (!Number.isInteger(value) || value < 0 || value > 100) { if (minimumScore !== null) showSliderValue(minimumScore); return; }
+      const value = mode === 'all' ? 0 : QUALIFYING_SCORE;
       if (value === minimumScore) return;
+      showQueueMode(value);
       keepPlace = { offset, priorOffsets: [...priorOffsets], selectedId: selected?.id ?? null, focusId: null };
       request('prescan-threshold', { minimumScore: value }).catch(error => {
         keepPlace = null;
-        if (minimumScore !== null) showSliderValue(minimumScore);
-        listStatus.textContent = `Could not change the minimum score. ${error.message}`;
+        if (minimumScore !== null) showQueueMode(minimumScore);
+        listStatus.textContent = `Could not change which jobs go on for review. ${error.message}`;
       });
     });
     previous.addEventListener('click', () => {

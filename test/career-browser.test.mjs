@@ -430,7 +430,7 @@ test('pre-filter presentation keeps score, freshness and operational failures, a
   assert.equal(merged.sections[0].heading, 'Checks');
   // The pre-filter score appears on both card and verdict, separate from the saved review fit.
   assert.deepEqual(merged.verdict, { kind: 'prefilter', number: 82, numberLabel: 'Score', headline: 'Queued for AI review',
-    detail: `82 is at or above your minimum ${DEFAULT_INCLUSION_MINIMUM_SCORE} · scored before your profile changed`,
+    detail: `82 is at or above the qualifying score ${DEFAULT_INCLUSION_MINIMUM_SCORE} · scored before your profile changed`,
     reason: 'Reviewed at 99 before your profile changed · Saved full-advert review.' });
   assert.equal(merged.card.prefilterScore, 82);
   assert.equal(merged.sections.find(section => section.chart).chart[0].value, 99);
@@ -752,10 +752,9 @@ async function rendererFixture(browser, wide, operations = {}) {
   const names = ['records', 'list-status', 'list-retry', 'pagination', 'previous', 'next', 'reader', 'reader-title',
     'reader-status', 'reader-retry', 'reader-content', 'close'];
   const ids = [...names.flatMap(name => [`career-${name}`, `me-${name}`]), 'career-browser', 'me-browser', 'delete-rankings',
-    'career-sort-control', 'career-sort', 'career-surface', 'career-minimum-score', 'career-minimum-score-value', 'career-surface-sentence', 'run-rail'];
+    'career-sort-control', 'career-sort', 'career-surface', 'career-queue-qualified', 'career-queue-all', 'career-surface-sentence', 'run-rail'];
   const nodes = Object.fromEntries(ids.map(id => [id, new Node()]));
   nodes['career-sort'].value = 'score';
-  nodes['career-minimum-score'].value = '60';
   const category = kind => {
     const node = new Node('button');
     node.dataset.careerKind = kind;
@@ -866,7 +865,7 @@ for (const wide of [false, true]) test(`Jobs paging and sorting keep the reader 
   assert.equal(ui.nodes['career-reader-status'].textContent, wide ? 'Select a job' : '');
 });
 
-test('job cards show reviewed fit or pre-filter score, a Review switch for candidates, a facts line and the minimum-score divider', async () => {
+test('job cards show reviewed fit or pre-filter score, a Review switch for candidates, a facts line and the pre-qualification divider', async () => {
   const { state, browser } = fixture();
   const publishedAt = currentDate();
   state.career.matching = { jobs: {
@@ -928,15 +927,14 @@ test('job cards show reviewed fit or pre-filter score, a Review switch for candi
 
   // The divider sits before the first job ranked below the minimum score; the status line and the surface block count what the agent gets.
   assert.deepEqual(lis.map(li => li.className), ['career-row career-card', 'career-row career-card', 'career-row career-card', 'career-cutoff', 'career-row career-card', 'career-row career-card']);
-  assert.equal(ui.byClass(lis[3], 'career-cutoff-text').textContent, 'Below minimum score 75 · skipped');
+  assert.equal(ui.byClass(lis[3], 'career-cutoff-text').textContent, 'Not pre-qualified · skipped');
+  assert.equal(lis[3].querySelector('button'), null);
   assert.equal(ui.nodes['career-list-status'].textContent, '1–5 of 5 · 1 queued for AI review');
-  assert.equal(ui.nodes['career-surface-sentence'].textContent, '1 of 4 jobs go to your AI for full review; the rest are skipped.');
-  assert.equal(ui.nodes['career-minimum-score'].value, '75');
-  assert.equal(ui.nodes['career-minimum-score'].attributes.get('aria-valuetext'), 'Minimum score 75');
-  assert.equal(ui.nodes['career-minimum-score-value'].textContent, '75');
-  assert.equal(ui.nodes['career-minimum-score'].disabled, false);
-  lis[3].querySelector('button').fire('click');
-  assert.equal(ui.focused(), ui.nodes['career-minimum-score']);
+  assert.equal(ui.nodes['career-surface-sentence'].textContent, '1 of 4 jobs found suitable for further review.');
+  assert.equal(ui.nodes['career-queue-qualified'].attributes.get('aria-pressed'), 'true');
+  assert.equal(ui.nodes['career-queue-all'].attributes.get('aria-pressed'), 'false');
+  assert.equal(ui.nodes['career-queue-qualified'].disabled, false);
+  assert.equal(ui.nodes['career-queue-all'].disabled, false);
 
   // Toggling records the choice without opening the record; the switch never bubbles to the row.
   const openTitle = ui.nodes['career-reader-title'].textContent;
@@ -978,20 +976,13 @@ test('job cards show reviewed fit or pre-filter score, a Review switch for candi
   assert.equal(ui.byClass(chart, 'career-chart-track').attributes.get('aria-hidden'), 'true');
   assert.equal(ui.nodes['career-reader-content'].children.some(section => section.children[0]?.textContent === 'Fit breakdown'), false);
 
-  // Dragging the slider only moves the number; the threshold is saved once on change and an unchanged value sends nothing.
-  const callsBeforeDrag = ui.calls.length;
-  ui.nodes['career-minimum-score'].value = '40';
-  ui.nodes['career-minimum-score'].fire('input');
-  assert.equal(ui.nodes['career-minimum-score-value'].textContent, '40');
-  assert.equal(ui.nodes['career-minimum-score'].attributes.get('aria-valuetext'), 'Minimum score 40');
-  assert.equal(ui.calls.length, callsBeforeDrag);
-  ui.nodes['career-minimum-score'].fire('change');
+  // Queue modes save zero for all jobs and the default qualifying score for pre-qualified jobs.
+  ui.nodes['career-queue-all'].fire('click');
   await ui.settle();
-  assert.deepEqual(ui.calls.at(-1), { operation: 'prescan-threshold', args: { minimumScore: 40 } });
-  const callsBefore = ui.calls.length;
-  ui.nodes['career-minimum-score'].value = '75';
-  ui.nodes['career-minimum-score'].fire('change');
-  assert.equal(ui.calls.length, callsBefore);
+  assert.deepEqual(ui.calls.at(-1), { operation: 'prescan-threshold', args: { minimumScore: 0 } });
+  ui.nodes['career-queue-qualified'].fire('click');
+  await ui.settle();
+  assert.deepEqual(ui.calls.at(-1), { operation: 'prescan-threshold', args: { minimumScore: 36 } });
 
   // An inclusion edit keeps the open record and the toggled switch through the state refresh that follows.
   c.fire('click');
@@ -1009,12 +1000,13 @@ test('job cards show reviewed fit or pre-filter score, a Review switch for candi
   ui.nodes['career-sort'].value = 'recent';
   ui.nodes['career-sort'].fire('change');
   await ui.settle();
-  assert.equal(ui.calls.at(-1).args.sort, 'recent');
+  assert.equal(ui.calls.findLast(call => call.operation === 'career-list').args.sort, 'recent');
   assert.equal(ui.nodes['career-records'].children.some(li => li.className === 'career-cutoff'), false);
   ui.jobCategories.applications.fire('click');
   await ui.settle();
   assert.equal(ui.nodes['run-rail'].hidden, true);
-  assert.equal(ui.nodes['career-minimum-score'].disabled, true);
+  assert.equal(ui.nodes['career-queue-qualified'].disabled, true);
+  assert.equal(ui.nodes['career-queue-all'].disabled, true);
 });
 
 test('requirement rows copy the exact saved requirement and report success or safe failure inline', async () => {
@@ -1096,7 +1088,7 @@ test('ineligible cards show the verdict instead of a number or switch, and an es
   assert.equal(JSON.stringify(side(e)).includes('74'), false);
   assert.equal(e.attributes.get('aria-label').startsWith('Montréal Lead, Far Co, not eligible, Location incompatible, published'), true);
   assert.equal(s.attributes.get('aria-label').startsWith('Gated Role, Gate Co, not eligible, Excluded by a gate, published'), true);
-  assert.equal(ui.nodes['career-surface-sentence'].textContent, '1 of 3 jobs go to your AI for full review; the rest are skipped.');
+  assert.equal(ui.nodes['career-surface-sentence'].textContent, '1 of 3 jobs found suitable for further review.');
   // The reader verdict explains both current and established ineligibility; neither has an inclusion control.
   e.fire('click');
   await ui.settle();
@@ -1110,28 +1102,67 @@ test('ineligible cards show the verdict instead of a number or switch, and an es
   assert.equal(ui.byClass(verdict, 'career-verdict-switch'), null);
 });
 
-test('without a current pre-scan the surface block says AI reviews every job and a failed threshold save restores the slider', async () => {
+test('queue modes restore saved selection, skip unchanged saves and show exact current and stale shortlist counts', async () => {
+  const { state, browser } = fixture();
+  const publishedAt = currentDate();
+  const rows = Array.from({ length: 1000 }, (_, index) => preliminary(`job-${index}`, publishedAt, 80));
+  state.career.matching = { jobs: Object.fromEntries(rows.map(row => [row.id, { ...row }])), scores: {} };
+  savePrescan(state.career, rows);
+  const ui = await rendererFixture(browser, true, {
+    'prescan-threshold': ({ minimumScore }) => {
+      state.career.prescanInclusion = { scale: 2, minimumScore, overrides: {} };
+    },
+  });
+  await ui.window.careerBrowser.refresh();
+  await ui.settle();
+  assert.equal(ui.nodes['career-surface-sentence'].textContent, '1000 of 1000 jobs found suitable for further review.');
+  ui.nodes['career-queue-all'].fire('click');
+  await ui.settle();
+  assert.deepEqual(ui.calls.at(-1), { operation: 'prescan-threshold', args: { minimumScore: 0 } });
+  await ui.window.careerBrowser.refresh();
+  await ui.settle();
+  assert.equal(ui.nodes['career-queue-qualified'].attributes.get('aria-pressed'), 'false');
+  assert.equal(ui.nodes['career-queue-all'].attributes.get('aria-pressed'), 'true');
+  assert.equal(ui.nodes['career-surface-sentence'].textContent, 'All 1000 jobs go on for review.');
+  const callsBefore = ui.calls.length;
+  ui.nodes['career-queue-all'].fire('click');
+  assert.equal(ui.calls.length, callsBefore);
+  state.career.prescan.profileVersion = '1:0';
+  await ui.window.careerBrowser.refresh();
+  await ui.settle();
+  assert.equal(ui.nodes['career-surface-sentence'].textContent, 'All 1000 jobs go on for review. Scored before your profile changed; shortlist again.');
+  ui.nodes['career-queue-qualified'].fire('click');
+  await ui.settle();
+  assert.deepEqual(ui.calls.at(-1), { operation: 'prescan-threshold', args: { minimumScore: 36 } });
+  await ui.window.careerBrowser.refresh();
+  await ui.settle();
+  assert.equal(ui.nodes['career-queue-qualified'].attributes.get('aria-pressed'), 'true');
+  assert.equal(ui.nodes['career-queue-all'].attributes.get('aria-pressed'), 'false');
+  assert.equal(ui.nodes['career-surface-sentence'].textContent, '1000 of 1000 jobs found suitable for further review. Scored before your profile changed; shortlist again.');
+});
+
+test('without a shortlist all jobs go on for review and a failed queue-mode save restores the saved selection', async () => {
   const { state, browser } = fixture();
   const publishedAt = currentDate();
   state.career.matching = { jobs: { a: { title: 'One', company: 'Co', publishedAt }, b: { title: 'Two', company: 'Co', publishedAt } }, scores: {} };
   const ui = await rendererFixture(browser, true);
   await ui.window.careerBrowser.refresh();
   await ui.settle();
-  assert.equal(ui.nodes['career-surface-sentence'].textContent, 'All 2 jobs go to your AI. Shortlist first to skip poor matches.');
+  assert.equal(ui.nodes['career-surface-sentence'].textContent, 'No shortlist yet: all 2 jobs go on for review.');
   assert.equal(ui.nodes['career-list-status'].textContent, '1–2 of 2 · 2 queued for AI review');
-  assert.equal(ui.nodes['career-minimum-score'].value, '36');
+  assert.equal(ui.nodes['career-queue-qualified'].attributes.get('aria-pressed'), 'true');
+  assert.equal(ui.nodes['career-queue-all'].attributes.get('aria-pressed'), 'false');
   assert.equal(ui.nodes['career-records'].children.some(li => li.className === 'career-cutoff'), false);
   ui.window.companion.invoke = async () => ({ ok: false, error: { message: 'Storage is locked.' } });
-  ui.nodes['career-minimum-score'].value = '10';
-  ui.nodes['career-minimum-score'].fire('input');
-  ui.nodes['career-minimum-score'].fire('change');
+  ui.nodes['career-queue-all'].fire('click');
   await ui.settle();
-  assert.equal(ui.nodes['career-minimum-score'].value, '36');
-  assert.equal(ui.nodes['career-minimum-score-value'].textContent, '36');
-  assert.equal(ui.nodes['career-list-status'].textContent, 'Could not change the minimum score. Storage is locked.');
+  assert.equal(ui.nodes['career-queue-qualified'].attributes.get('aria-pressed'), 'true');
+  assert.equal(ui.nodes['career-queue-all'].attributes.get('aria-pressed'), 'false');
+  assert.equal(ui.nodes['career-list-status'].textContent, 'Could not change which jobs go on for review. Storage is locked.');
   ui.window.careerBrowser.clear();
   assert.equal(ui.nodes['career-surface-sentence'].textContent, '');
-  assert.equal(ui.nodes['career-minimum-score'].disabled, true);
+  assert.equal(ui.nodes['career-queue-qualified'].disabled, true);
+  assert.equal(ui.nodes['career-queue-all'].disabled, true);
 });
 
 test('the Jobs list column keeps Previous/Next on its own last grid row regardless of window height', async () => {
@@ -1142,10 +1173,14 @@ test('the Jobs list column keeps Previous/Next on its own last grid row regardle
   const order = ['career-list-status', 'career-list-retry', 'career-records', 'career-pagination', 'career-next'];
   assert.deepEqual(ids.filter(id => order.includes(id)), order);
   assert.match(list.trim(), /<nav id="career-pagination"[\s\S]*<\/nav>$/);
-  // The minimum-score control lives in the run rail's AI review step, above the list, not in the list column.
+  // The queue-mode control lives in the run rail's AI review step, above the list, not in the list column.
   const rail = html.match(/<section id="run-rail"[\s\S]*?<\/section>/)[0];
   assert.match(rail, /<li id="run-step-handover" class="run-step">[\s\S]*<div id="career-surface" class="career-surface">/);
-  assert.match(rail, /<input id="career-minimum-score" type="range" min="0" max="100" step="1" value="60" aria-valuetext="Minimum score 60"/);
+  assert.match(rail, /<div class="career-categories" role="group" aria-label="Jobs that go on for review">/);
+  assert.match(rail, /<button id="career-queue-qualified" type="button" class="ghost" aria-pressed="true" disabled>Pre-qualified only<\/button>/);
+  assert.match(rail, /<button id="career-queue-all" type="button" class="ghost" aria-pressed="false" disabled>All jobs<\/button>/);
+  assert.equal(html.includes('career-minimum-score'), false);
+  assert.equal(html.includes('id="review-help"'), false);
   assert.match(css, /^#career-browser \{ grid-template-rows: auto auto minmax\(0, 1fr\); \}$/m);
   // Four explicit rows, each child pinned to one, so hidden children never let the records take the `auto` row.
   assert.match(css, /^\.career-list \{[^}]*grid-template-rows: auto auto minmax\(0, 1fr\) auto;[^}]*overflow: hidden; \}$/m);

@@ -100,15 +100,13 @@
 <li id="run-step-handover" class="run-step">
 <p class="run-step-name"><span class="run-step-number">3</span>Continue in your AI</p>
 <div id="career-surface" class="career-surface">
-<div class="career-surface-control">
-<label for="career-minimum-score" class="run-step-state">Minimum score</label>
-<input id="career-minimum-score" type="range" min="0" max="100" step="1" value="60" aria-valuetext="Minimum score 60" aria-describedby="career-surface-sentence" disabled>
-<span id="career-minimum-score-value" class="career-surface-value" aria-hidden="true">60</span>
+<div class="career-categories" role="group" aria-label="Jobs that go on for review">
+<button id="career-queue-qualified" type="button" class="ghost" aria-pressed="true" disabled>Pre-qualified only</button>
+<button id="career-queue-all" type="button" class="ghost" aria-pressed="false" disabled>All jobs</button>
 </div>
 <p id="career-surface-sentence" class="run-step-help" role="status"></p>
 </div>
 <div class="actions"><button id="review-codex" class="ghost" type="button" hidden>Continue in Codex</button><button id="review-claude" class="ghost" type="button" hidden>Continue in Claude</button><button id="copy-review-prompt" class="ghost" type="button">Copy prompt</button></div>
-<p id="review-help" class="run-step-help">Companion stops here. The review runs in Codex or Claude: a new conversation opens with the prompt filled in, and you send it there.</p>
 </li>
 </ol>
 </section>

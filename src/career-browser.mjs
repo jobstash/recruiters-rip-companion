@@ -176,7 +176,7 @@ function jobVerdict({ reviewed, prescan }, card, minimumScore) {
   if (card.stage === 'prefilter') {
     const score = prescanScore(prescan);
     return { kind: 'prefilter', number: score, numberLabel: 'Score', headline: included,
-      detail: joinFacts([`${score} is ${score >= minimumScore ? 'at or above' : 'below'} your minimum ${minimumScore}${manual}`,
+      detail: joinFacts([`${score} is ${score >= minimumScore ? 'at or above' : 'below'} the qualifying score ${minimumScore}${manual}`,
         card.stale ? 'scored before your profile changed' : null]),
       reason: staleReview ? joinFacts([staleReview, reason]) : reason };
   }

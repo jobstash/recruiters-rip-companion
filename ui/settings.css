@@ -161,9 +161,6 @@ main { flex: 1; min-height: 0; overflow: auto; padding: var(--spacing-32) var(--
 .career-include:disabled { border-color: var(--color-facet); cursor: not-allowed; }
 /* Hand over: the slider sets the score bound and the sentence states the resulting count. */
 .career-surface { display: grid; gap: var(--spacing-8); }
-.career-surface-control { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "label value" "slider value"; align-items: center; column-gap: var(--spacing-16); }
-.career-surface-control label { grid-area: label; }
-.career-surface-value { grid-area: value; font: 500 32px/1 var(--font-geist-mono); font-variant-numeric: tabular-nums; letter-spacing: -.02em; color: var(--color-ink); min-width: 3ch; text-align: right; }
 #career-minimum-score { grid-area: slider; }
 #career-minimum-score, #prescan-range { width: 100%; min-width: 0; min-height: 44px; margin: 0; accent-color: var(--color-ink); cursor: pointer; }
 #career-minimum-score:focus-visible, #prescan-range:focus-visible { outline: 2px solid var(--color-ink); outline-offset: 2px; box-shadow: var(--shadow-focus-ring); }

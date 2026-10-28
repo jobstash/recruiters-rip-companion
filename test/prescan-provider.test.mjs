@@ -48,9 +48,10 @@ test('fixed registry and documented direct Decisions wire shape preserve complet
     }
     return jsonResponse({ ...responseData(), extra: input.apiKey });
   } });
-  // Certain Strong / Excellent / Partial / Weak → recommend shares 1 / 1 / ½ / 0, weighted .30/.25/.15/.30, discounted by the 5% conflict.
-  assert.equal(calls, 1); assert.deepEqual(result.dimensions, { direction: 100, capability: 100, scope: 50, preferences: 0 });
-  assert.equal(result.fit, 100 * 0.95 * 0.625); assert.equal(result.priority, 59); assert.equal(result.confidence, 0.6);
+  // Certain Strong / Excellent / Partial / Weak → expected levels ¾ / 1 / ½ / ¼, weighted .30/.25/.15/.30 = .625, softened by
+  // each gate's 5% conflict (×0.975 four times).
+  assert.equal(calls, 1); assert.deepEqual(result.dimensions, { direction: 75, capability: 100, scope: 50, preferences: 25 });
+  assert.ok(Math.abs(result.fit - 100 * 0.975 ** 4 * 0.625) < 1e-9); assert.equal(result.priority, 56); assert.equal(result.confidence, 0.6);
   assert.equal(result.conflictProbability, 0.05); assert.equal(result.locationConflict, 0.05);
   assert.deepEqual([result.direction, result.constraints, result.eligibility, result.location], ['aligned', 'aligned', 'aligned', 'aligned']);
   assert.match(provider.policyId, /^[0-9a-f]{16}$/);
@@ -67,10 +68,10 @@ test('refusal is explicit and cannot produce a score or explanation', async () =
   assert.deepEqual(result.answers[0], { name: 'direction', type: 'refusal' });
 });
 
-test('priority is the recommend-share utility of the full distribution, never the mode, discounted by the largest gate conflict', async () => {
+test('priority is the expected level of the full distribution, never the mode, softened by every gate conflict so the list keeps spread', async () => {
   const cases = [
-    // [distribution, mean-based score, expected share]: a Poor/Excellent coin flip is half credit, a 60% Excellent is 75, Weak earns nothing.
-    [[0.5, 0, 0, 0, 0.5], 50], [[0.1, 0.1, 0.1, 0.1, 0.6], 75], [[0.2, 0.2, 0.2, 0.2, 0.2], 50], [[0.1, 0.7, 0.2, 0, 0], 10],
+    // [distribution, expected level as a share]: a Poor/Excellent coin flip is half credit, a 60% Excellent is 75, mostly Weak is 28 — not 0.
+    [[0.5, 0, 0, 0, 0.5], 50], [[0.1, 0.1, 0.1, 0.1, 0.6], 75], [[0.2, 0.2, 0.2, 0.2, 0.2], 50], [[0.1, 0.7, 0.2, 0, 0], 28],
   ];
   for (const [probabilities, share] of cases) {
     const data = responseData();
@@ -80,22 +81,29 @@ test('priority is the recommend-share utility of the full distribution, never th
     assert.deepEqual(result.dimensions, { direction: share, capability: share, scope: share, preferences: share });
     assert.equal(result.priority, share); assert.equal(result.conflictProbability, 0);
   }
-  // The discount takes the largest conflict probability across all four gates; uncertain mass never counts.
+  // Every gate softens the score by half its conflict probability; uncertain mass never counts. The reported conflict is the largest.
   const data = responseData();
   data.answers[1].probabilities = [{ value: 'aligned', probability: 0.3 }, { value: 'uncertain', probability: 0.3 }, { value: 'conflict', probability: 0.4 }];
   data.answers[2].probabilities = [{ value: 'aligned', probability: 0 }, { value: 'uncertain', probability: 0.9 }, { value: 'conflict', probability: 0.1 }];
   const discounted = await assess(data);
-  assert.equal(discounted.conflictProbability, 0.4); assert.equal(discounted.fit, 100 * 0.6 * 0.625); assert.equal(discounted.priority, 38);
+  assert.equal(discounted.conflictProbability, 0.4); assert.equal(discounted.priority, 45);
+  assert.ok(Math.abs(discounted.fit - 100 * 0.975 * 0.8 * 0.95 * 0.975 * 0.625) < 1e-9);
+  // A certain direction conflict halves the score instead of zeroing it: the job ranks low but still ranks.
+  const certain = responseData();
+  certain.answers[0].choice = 'conflict';
+  certain.answers[0].probabilities = [{ value: 'aligned', probability: 0 }, { value: 'uncertain', probability: 0 }, { value: 'conflict', probability: 1 }];
+  const halved = await assess(certain);
+  assert.equal(halved.status, 'scored'); assert.equal(halved.priority, 29);
 });
 
-test('a predicted location conflict at or above one half vetoes the job instead of weighing it', async () => {
-  for (const [conflict, status] of [[0.49, 'scored'], [0.5, 'incompatible_location'], [0.9, 'incompatible_location']]) {
+test('only a near-certain predicted location conflict vetoes the job; below that it weighs like any other gate', async () => {
+  for (const [conflict, status, priority] of [[0.49, 'scored', 44], [0.5, 'scored', 43], [0.84, 'scored', 34], [0.85, 'incompatible_location'], [0.9, 'incompatible_location']]) {
     const data = responseData();
     data.answers[3].choice = conflict >= 0.5 ? 'conflict' : 'aligned';
     data.answers[3].probabilities = [{ value: 'aligned', probability: Number((1 - conflict).toFixed(2)) }, { value: 'uncertain', probability: 0 }, { value: 'conflict', probability: conflict }];
     const result = await assess(data);
     assert.equal(result.status, status); assert.equal(result.locationConflict, conflict);
-    if (status === 'scored') { assert.equal(result.conflictProbability, 0.49); assert.equal(result.priority, Math.round(100 * 0.51 * 0.625)); }
+    if (status === 'scored') { assert.equal(result.conflictProbability, Math.max(conflict, 0.05)); assert.equal(result.priority, priority); }
     else { assert.equal(result.priority, null); assert.equal(result.fit, null); assert.equal(result.dimensions, null); assert.equal(result.location, 'conflict'); }
   }
 });

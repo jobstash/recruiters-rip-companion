@@ -34,8 +34,8 @@
 
   const count = value => Number.isSafeInteger(value) && value >= 0 ? value.toLocaleString() : '—';
   const cost = value => `US$${value.toFixed(2)}`;
-  const recovery = code => {
-    switch (code) {
+  const recovery = (code, detail) => {
+    const text = (() => { switch (code) {
       case 'CANCELLED': return 'Pre-filtering canceled.';
       case 'LOCAL_LOCKED': return 'Unlock local storage before continuing.';
       case 'PROFILE_INCOMPLETE': return 'Add your CV and career profile to start pre-filtering.';
@@ -55,7 +55,8 @@
       case 'PRESCAN_PROVIDER_ERROR': return 'OpenAI could not return a usable result. Try again later.';
       case 'PRESCAN_CANCELLED': return 'Request canceled.';
       default: return 'Check your API key, OpenAI billing and connection before starting again.';
-    }
+    } })();
+    return detail && detail !== text ? `${text} (${detail})` : text;
   };
 
   function render() {
@@ -90,10 +91,14 @@
     }
     element('replace').disabled = !configured || pending;
     element('remove').disabled = !configured || pending;
-    element('start').disabled = !available || pending || running || keyError || (!needsSetup && previewState !== 'ready');
+    // One action at a time: Start while idle, Stop while a run is active. Never a disabled Start beside Cancel.
+    const active = starting || running;
+    element('start').hidden = available && active;
+    element('start').disabled = !available || pending || keyError || (!needsSetup && previewState !== 'ready');
     element('start').textContent = available && !paired ? 'Connect account' : 'Start pre-filtering';
-    element('cancel').hidden = !available || (!starting && !running);
+    element('cancel').hidden = !available || !active;
     element('cancel').disabled = cancelling;
+    element('cancel').textContent = cancelling ? 'Stopping…' : 'Stop pre-filtering';
     element('form').setAttribute('aria-busy', String(pending));
     // The key is setup, not recurring workflow: remove it after a successful save and restore it only when missing or rejected.
     steps.key.hidden = !showKeyStep;
@@ -109,7 +114,8 @@
     keyAction.textContent = configured ? 'Replace key' : 'Add key';
     keyAction.classList.toggle('primary', currentStep === 'key'); keyAction.classList.toggle('ghost', currentStep !== 'key');
     keyAction.disabled = !available;
-    element('start').classList.toggle('primary', currentStep === 'prefilter' && !running); element('start').classList.toggle('ghost', currentStep !== 'prefilter' || running);
+    element('start').classList.toggle('primary', currentStep === 'prefilter'); element('start').classList.toggle('ghost', currentStep !== 'prefilter');
+    element('cancel').classList.toggle('primary', active); element('cancel').classList.toggle('ghost', !active);
     handover.classList.toggle('primary', currentStep === 'handover'); handover.classList.toggle('ghost', currentStep !== 'handover');
     // Blocked jobs stay in the scope total but are never pre-filtered.
     const blockedPart = () => Number.isSafeInteger(preview.blocked) && preview.blocked > 0 ? ` · ${count(preview.blocked)} blocked` : '';
@@ -140,7 +146,7 @@
     element('progress').textContent = running || starting
       ? `Pre-filtering ${count(checked)}/${scope}${spent}` : '';
     let advice = '';
-    if (run.status === 'failed') advice = recovery(run.lastError?.code);
+    if (run.status === 'failed') advice = recovery(run.lastError?.code, run.lastError?.status ? `HTTP ${run.lastError.status}` : undefined);
     if (run.status === 'cancelled' || run.status === 'interrupted') advice = `Scan stopped at ${count(checked)}/${scope}${spent}. Start again to continue.`;
     if (run.status === 'stale') advice = 'Profile changed. Start pre-filtering again.';
     if (run.status === 'completed' && run.unavailable) advice = `${count(run.unavailable)} jobs could not be pre-filtered.`;

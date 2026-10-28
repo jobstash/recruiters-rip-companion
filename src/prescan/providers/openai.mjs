@@ -7,7 +7,7 @@ const MAX_RESPONSE_BYTES = 1024 * 1024;
 const VALUES = ['aligned', 'uncertain', 'conflict'];
 const LABELS = ['Poor', 'Weak', 'Partial', 'Strong', 'Excellent'];
 const safeErrors = new WeakSet();
-const error = (code, message) => { const result = new CareerError(code, message); safeErrors.add(result); return result; };
+const error = (code, message, status) => { const result = new CareerError(code, message); if (status) result.status = status; safeErrors.add(result); return result; };
 const malformed = () => error('PRESCAN_INVALID_RESPONSE', 'OpenAI returned an invalid result.');
 const unit = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1;
 const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -153,9 +153,11 @@ async function assess({ apiKey, candidate, job, signal, fetchImpl = globalThis.f
     }), combined);
     if (!response.ok) {
       response.body?.cancel().catch(() => {});
-      if (response.status === 401 || response.status === 403) throw error('PRESCAN_AUTH', 'OpenAI rejected the API credentials or their permissions. Review the saved key.');
-      if (response.status === 429) throw error('PRESCAN_RATE_LIMIT', 'OpenAI reported a rate or billing limit. Review your OpenAI account before restarting.');
-      throw error('PRESCAN_PROVIDER_ERROR', 'OpenAI could not complete the pre-scan request. You may restart later.');
+      if (response.status === 401 || response.status === 403) throw error('PRESCAN_AUTH', 'OpenAI rejected the API credentials or their permissions. Review the saved key.', response.status);
+      if (response.status === 429) throw error('PRESCAN_RATE_LIMIT', 'OpenAI reported a rate or billing limit. Review your OpenAI account before restarting.', response.status);
+      // A 4xx is specific to this request and will not succeed on retry; a 5xx is OpenAI-side and transient.
+      if (response.status >= 400 && response.status < 500) throw error('PRESCAN_BAD_REQUEST', 'OpenAI rejected this pre-scan request.', response.status);
+      throw error('PRESCAN_PROVIDER_ERROR', 'OpenAI could not complete the pre-scan request. You may restart later.', response.status);
     }
     return normalizeResponse(await readResponse(response, combined));
   } catch (cause) {

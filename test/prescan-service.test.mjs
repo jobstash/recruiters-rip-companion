@@ -24,7 +24,7 @@ const assessment = () => ({ status: 'scored', provider: 'openai', model: 'gpt-6-
   confidence: 0.8, answers: [], inputTokens: 17 });
 
 // Only tests inject this synthetic provider. Production uses the fixed OpenAI adapter registry.
-function fixture({ count = 3, assess = async () => assessment(), batch, catalogueWait,
+function fixture({ count = 3, assess = async () => assessment(), batch, catalogueWait, retryDelaysMs = [0, 0, 0],
   cataloguePageSize = 1000, cataloguePage } = {}) {
   const career = createCareerState();
   Object.assign(career.profile, { headline: 'Software engineer', location: 'Dublin', name: 'PRIVATE NAME',
@@ -84,7 +84,7 @@ function fixture({ count = 3, assess = async () => assessment(), batch, catalogu
       company: { name: 'Synthetic company', stage: 'Established', graph: { unrelated: 'RAW GRAPH' } },
       locationEvidence: ['Work from Dublin office two days weekly'], rawGraph: { unrelated: 'RAW GRAPH' } })), remainingIds: [], unavailableIds: [] };
   };
-  const controller = createPrescanController({ store, credentials, providers, onChange: changed,
+  const controller = createPrescanController({ store, credentials, providers, onChange: changed, retryDelaysMs,
     makeScope: () => ({ ...createScopedAccess(store, { assertAvailable, epoch: () => epoch }), platform }) });
   const waitFor = predicate => new Promise((resolve, reject) => {
     const check = () => {
@@ -391,22 +391,72 @@ test('a stated ceiling below the saved minimum is settled before dispatch; predi
   assert.equal(again.jobCount, 0); assert.equal(again.reused, 3);
 });
 
-test('partial successes are visible immediately; provider failure stops dispatch without automatic retry', async () => {
+test('partial successes are visible immediately; a billing failure stops dispatch and a restart resumes without re-billing', async () => {
   const second = deferred(); let failing = true;
   const f = fixture({ count: 4, assess: async (input, number) => {
-    if (failing && number === 2) { await second.promise; throw new CareerError('PRESCAN_RATE_LIMIT', 'RAW PROVIDER BODY sk-private'); }
+    if (failing && number === 2) { await second.promise; throw Object.assign(new CareerError('PRESCAN_RATE_LIMIT', 'RAW PROVIDER BODY sk-private'), { status: 429 }); }
     return assessment();
   } });
   await f.controller.start(); await f.waitFor(() => f.apiCalls.length === 2);
   assert.equal(f.controller.status().status, 'running'); assert.equal(Object.keys(f.snapshot().career.prescan.rows).length, 1);
   second.resolve(); await terminal(f);
-  assert.equal(f.controller.status().status, 'failed'); assert.equal(f.controller.status().lastError.code, 'PRESCAN_RATE_LIMIT');
+  assert.equal(f.controller.status().status, 'failed');
+  assert.deepEqual(f.controller.status().lastError, { code: 'PRESCAN_RATE_LIMIT', message: 'Check your OpenAI quota and billing, then try again.', status: 429 });
   assert.equal(f.apiCalls.length, 2); assert.equal(Object.keys(f.snapshot().career.prescan.rows).length, 1);
   assert.equal(JSON.stringify(f.controller.status()).includes('RAW PROVIDER'), false);
   failing = false;
   await f.controller.start(); await terminal(f);
   assert.equal(f.apiCalls.filter(input => input.job.id === 'node:0').length, 1);
   assert.equal(Object.keys(f.snapshot().career.prescan.rows).length, 4); assert.equal(f.controller.status().selected, 3);
+});
+
+test('a transient provider failure is retried, then isolated to its job; the run completes and the next start retries only that job', async () => {
+  let failures = 0;
+  const f = fixture({ count: 3, assess: async input => {
+    if (input.job.id === 'node:1') { failures++; throw Object.assign(new CareerError('PRESCAN_PROVIDER_ERROR', 'RAW 502 BODY'), { status: 502 }); }
+    return assessment();
+  } });
+  await f.controller.start(); await terminal(f);
+  const summary = f.controller.status();
+  assert.equal(summary.status, 'completed'); assert.equal(summary.lastError, undefined);
+  assert.equal(failures, 4); // one attempt plus three retries
+  assert.equal(summary.requests, 2 + 4); assert.equal(summary.scored, 2); assert.equal(summary.unavailable, 1);
+  const row = f.snapshot().career.prescan.rows['node:1'];
+  assert.equal(row.status, 'unavailable'); assert.equal(row.priority, null);
+  assert.deepEqual(row.error, { code: 'PRESCAN_PROVIDER_ERROR', message: 'OpenAI could not complete the request. Try again.', status: 502 });
+  assert.equal(JSON.stringify(f.snapshot().career.prescan).includes('RAW 502'), false);
+  // Recovers once the provider does: only the unavailable job is billed again.
+  const preview = await f.controller.preview();
+  assert.equal(preview.jobCount, 1); assert.equal(preview.reused, 2);
+});
+
+test('a transient failure on the second attempt still succeeds within the retry budget and is not recorded as unavailable', async () => {
+  let attempts = 0;
+  const f = fixture({ count: 1, assess: async () => { if (attempts++ === 0) throw new CareerError('PRESCAN_TIMEOUT', 'slow'); return assessment(); } });
+  await f.controller.start(); await terminal(f);
+  assert.equal(f.controller.status().status, 'completed'); assert.equal(attempts, 2);
+  assert.equal(f.snapshot().career.prescan.rows['node:0'].status, 'scored'); assert.equal(f.controller.status().requests, 2);
+});
+
+test('a request-specific rejection is skipped without retry while the run continues', async () => {
+  const f = fixture({ count: 2, assess: async input => {
+    if (input.job.id === 'node:0') throw Object.assign(new CareerError('PRESCAN_BAD_REQUEST', 'raw'), { status: 400 });
+    return assessment();
+  } });
+  await f.controller.start(); await terminal(f);
+  assert.equal(f.controller.status().status, 'completed');
+  assert.equal(f.apiCalls.filter(call => call.job.id === 'node:0').length, 1);
+  assert.equal(f.snapshot().career.prescan.rows['node:0'].error.code, 'PRESCAN_BAD_REQUEST');
+  assert.equal(f.snapshot().career.prescan.rows['node:1'].status, 'scored');
+});
+
+test('cancelling during a retry wait stops the run as cancelled, not as a job failure', async () => {
+  const gate = deferred();
+  const f = fixture({ count: 1, retryDelaysMs: [60000], assess: async () => { gate.resolve(); throw new CareerError('PRESCAN_NETWORK', 'down'); } });
+  await f.controller.start(); await gate.promise;
+  await f.controller.cancel(); await terminal(f);
+  assert.equal(f.controller.status().status, 'cancelled'); assert.equal(f.apiCalls.length, 1);
+  assert.equal(Object.keys(f.snapshot().career.prescan.rows).length, 0);
 });
 
 test('preview and restarts reuse every current successful result; refresh reruns the catalogue without touching final scores', async () => {
@@ -607,14 +657,26 @@ test('MCP preview and reads keep credentials private and only start dispatches p
   assert.equal(f.apiCalls.length, reads); assert.equal(f.platformCalls.length, fetches);
 });
 
-test('authentication, transport and malformed-provider failures stop immediately and expose only safe messages', async () => {
-  for (const code of ['PRESCAN_AUTH', 'PRESCAN_TIMEOUT', 'PRESCAN_NETWORK', 'PRESCAN_PROVIDER_ERROR', 'PRESCAN_INVALID_RESPONSE', undefined]) {
+test('authentication, context and unknown failures stop immediately and expose only safe messages', async () => {
+  for (const code of ['PRESCAN_AUTH', 'PRESCAN_CONTEXT_CHANGED', undefined]) {
     const f = fixture({ assess: async () => { throw Object.assign(new Error('PRIVATE REQUEST AND KEY'), { code }); } });
     await f.controller.start(); await terminal(f);
     assert.equal(f.controller.status().status, 'failed');
     assert.equal(f.controller.status().lastError.code, code ?? 'PRESCAN_FAILED');
     assert.equal(f.apiCalls.length, 1); assert.equal(Object.keys(f.snapshot().career.prescan.rows).length, 0);
     assert.equal(JSON.stringify(f.controller.status()).includes('PRIVATE REQUEST'), false);
+  }
+});
+
+test('transport and malformed-provider failures on every job never stop the run; each job is retried, then recorded unavailable with a safe message', async () => {
+  for (const code of ['PRESCAN_TIMEOUT', 'PRESCAN_NETWORK', 'PRESCAN_PROVIDER_ERROR', 'PRESCAN_INVALID_RESPONSE']) {
+    const f = fixture({ count: 2, assess: async () => { throw Object.assign(new Error('PRIVATE REQUEST AND KEY'), { code }); } });
+    await f.controller.start(); await terminal(f);
+    const summary = f.controller.status();
+    assert.equal(summary.status, 'completed'); assert.equal(summary.unavailable, 2); assert.equal(summary.scored, 0);
+    assert.equal(f.apiCalls.length, 2 * 4);
+    for (const row of Object.values(f.snapshot().career.prescan.rows)) assert.equal(row.error.code, code);
+    assert.equal(JSON.stringify(f.snapshot().career.prescan).includes('PRIVATE REQUEST'), false);
   }
 });
 

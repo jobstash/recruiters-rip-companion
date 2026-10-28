@@ -20,6 +20,7 @@ const messages = {
   PRESCAN_INVALID_RESPONSE: 'OpenAI returned an invalid result. Try again.',
   PRESCAN_INPUT_TOO_LARGE: 'The CV and job advert exceed the provider input limit.',
   PRESCAN_INVALID_INPUT: 'Could not prepare this job for pre-filtering.',
+  PRESCAN_BAD_REQUEST: 'OpenAI rejected this job. It is skipped.',
   PRESCAN_UNSUPPORTED_PROVIDER: 'This provider is not supported.',
   PROFILE_INCOMPLETE: 'Add your CV and career profile to start pre-filtering.',
   PREFERENCES_REQUIRED: 'Tell your agent your target roles, locations, work modes, relocation and travel first; it saves them here.',
@@ -34,13 +35,26 @@ const messages = {
 };
 const safeError = error => {
   const code = Object.hasOwn(messages, error?.code) ? error.code : 'PRESCAN_FAILED';
-  return { code, message: messages[code] };
+  // Only the provider's HTTP status travels with the safe message; raw error text never reaches saved state or the UI.
+  const status = Number.isSafeInteger(error?.status) ? error.status : undefined;
+  return { code, message: messages[code], ...(status ? { status } : {}) };
 };
 const now = () => new Date().toISOString();
 const unscored = { priority: null, fit: null, direction: null, constraints: null, eligibility: null, location: null, dimensions: null,
   confidence: null, conflictProbability: null, locationConflict: null };
 // Rows that already carry a complete verdict for this profile and policy; a restart never re-bills them.
 const settled = new Set(['scored', 'incompatible_location', 'below_minimum']);
+// A single job's transient provider failure must not end a run over a thousand jobs: retry it, then record it as
+// unavailable and move on. Only credentials, billing, cancellation and context changes stop the whole run.
+const transient = new Set(['PRESCAN_PROVIDER_ERROR', 'PRESCAN_TIMEOUT', 'PRESCAN_NETWORK', 'PRESCAN_INVALID_RESPONSE']);
+const perJob = new Set([...transient, 'PRESCAN_INVALID_INPUT', 'PRESCAN_BAD_REQUEST']);
+const RETRY_DELAYS_MS = [1000, 3000, 8000];
+const sleep = (ms, signal) => new Promise((resolve, reject) => {
+  if (signal.aborted) return reject(signal.reason);
+  const timer = setTimeout(() => { signal.removeEventListener('abort', abort); resolve(); }, ms);
+  const abort = () => { clearTimeout(timer); reject(signal.reason); };
+  signal.addEventListener('abort', abort, { once: true });
+});
 const rowFields = ['id', 'title', 'company', 'publishedAt', 'applyUrl', 'salary', 'city', 'location', 'workMode',
   'seniority', 'commitment', 'classification'];
 const rowMetadata = job => Object.fromEntries(rowFields.filter(field => job[field] !== undefined).map(field => [field, job[field]]));
@@ -58,7 +72,7 @@ function assertOptions(args) {
 }
 
 /** One shared controller serves settings and every MCP session. Construction performs no vault reads or inference. */
-export function createPrescanController({ store, makeScope, credentials, onChange = () => {}, providers = decisionProviders }) {
+export function createPrescanController({ store, makeScope, credentials, onChange = () => {}, providers = decisionProviders, retryDelaysMs = RETRY_DELAYS_MS }) {
   let active = null, providerCalls = 0;
   const slots = new Set();
   function notify() {
@@ -208,6 +222,17 @@ export function createPrescanController({ store, makeScope, credentials, onChang
   async function unavailable(run, id, message) {
     await saveRow(run, id, { status: 'unavailable', ...unscored, error: { code: 'PRESCAN_AD_UNAVAILABLE', message } });
   }
+  async function assessWithRetry(run, key, input) {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await run.provider.assess({ apiKey: key.apiKey, candidate: run.candidate, job: input, signal: run.abort.signal });
+      } catch (error) {
+        if (!transient.has(error?.code) || attempt >= retryDelaysMs.length || run.abort.signal.aborted) throw error;
+        await change(run, saved => { saved.requests++; }, { id: input.id });
+        await sleep(retryDelaysMs[attempt], run.abort.signal);
+      }
+    }
+  }
   async function assess(run, job) {
     if (typeof job.ad !== 'string' || !job.ad.trim()) {
       await unavailable(run, job.id, 'Original job advert unavailable.');
@@ -225,14 +250,18 @@ export function createPrescanController({ store, makeScope, credentials, onChang
       current(run, { id: job.id });
       const key = credentials.read(run.provider.id);
       if (key.credentialVersion !== run.credentialVersion) fail('PRESCAN_CONTEXT_CHANGED', messages.PRESCAN_CONTEXT_CHANGED);
-      const answer = await run.provider.assess({ apiKey: key.apiKey, candidate: run.candidate, job: input, signal: run.abort.signal });
+      const answer = await assessWithRetry(run, key, input);
       await saveRow(run, job.id, { status: answer.status, priority: answer.priority, fit: answer.fit, direction: answer.direction,
         constraints: answer.constraints, eligibility: answer.eligibility, location: answer.location, dimensions: answer.dimensions,
         confidence: answer.confidence, conflictProbability: answer.conflictProbability, locationConflict: answer.locationConflict,
         answers: answer.answers, inputTokens: answer.inputTokens });
     } catch (error) {
-      if (error?.code !== 'PRESCAN_INPUT_TOO_LARGE') throw error;
-      await saveRow(run, job.id, { status: 'oversize', ...unscored, error: safeError(error) }, { unsent: true });
+      if (error?.code === 'PRESCAN_INPUT_TOO_LARGE') {
+        await saveRow(run, job.id, { status: 'oversize', ...unscored, error: safeError(error) }, { unsent: true });
+      } else if (perJob.has(error?.code) && !run.abort.signal.aborted) {
+        // Keep the run going; this job is retried on the next start because 'unavailable' is not a settled verdict.
+        await saveRow(run, job.id, { status: 'unavailable', ...unscored, error: safeError(error) });
+      } else throw error;
     } finally { release(); }
   }
   async function worker(run, queue) {

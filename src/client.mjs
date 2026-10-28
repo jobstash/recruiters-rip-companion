@@ -6,7 +6,17 @@ export function canonicalJSON(value) {
   if (value && typeof value === 'object') return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonicalJSON(value[key])}`).join(',')}}`;
   return JSON.stringify(value);
 }
-export function createDeviceClient(store, localOnly) {
+async function rejectionReason(response) {
+  let text = '';
+  try {
+    for await (const chunk of response.body ?? []) { text += Buffer.from(chunk).toString('utf8'); if (text.length > 4096) break; }
+    const body = JSON.parse(text);
+    const reason = typeof body?.message === 'string' ? body.message : typeof body?.error === 'string' ? body.error : '';
+    return reason.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, 200);
+  } catch { return ''; } finally { await response.body?.cancel().catch(() => {}); }
+}
+/** onUnpaired runs when the platform reports that this device identity is no longer active. */
+export function createDeviceClient(store, localOnly, { onUnpaired } = {}) {
   const originAllowed = origin => origin === PRODUCT_ORIGINS[localOnly ? 1 : 0];
   // The CV share carries a ≤5 MiB document as base64 JSON; every other device route stays within 16 KiB.
   const limits = { '/device/activate': 16 * 1024, '/device/heartbeat': 16 * 1024, '/device/platform': 16 * 1024, '/device/cv': 7.5 * 1024 * 1024 };
@@ -27,12 +37,14 @@ export function createDeviceClient(store, localOnly) {
       response = await fetch(`${origin}/api${backendPath}`, { method, redirect: 'error', headers: { 'Content-Type': 'application/json', 'X-Device-Id': state.deviceId, 'X-Device-Time': time, 'X-Device-Nonce': nonce, 'X-Device-Signature': signature }, ...(method === 'POST' ? { body: raw } : {}), signal: options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(timeout)]) : AbortSignal.timeout(timeout) });
     } catch { const error = new Error('Could not reach the platform. Check your connection.'); error.code = 'DEVICE_OFFLINE'; throw error; }
     if (!response.ok) {
-      await response.body?.cancel();
-      const error = new Error(response.status === 403
+      const reason = await rejectionReason(response);
+      const error = new Error(`${response.status === 403
         ? 'Check your membership and account connection.'
         : response.status === 401 ? 'Reconnect your account in companion settings.'
-        : 'The product could not accept this device operation.');
-      error.status = response.status; error.code = response.status === 401 || response.status === 403 ? 'DEVICE_UNAUTHORIZED' : 'DEVICE_REQUEST_FAILED'; throw error;
+        : 'The product could not accept this device operation.'} Platform (${response.status})${reason ? `: ${reason}` : '.'}`);
+      error.status = response.status; error.code = response.status === 401 || response.status === 403 ? 'DEVICE_UNAUTHORIZED' : 'DEVICE_REQUEST_FAILED';
+      if (response.status === 403 && backendPath !== '/device/activate' && /^Device is (?:not active|no longer paired)$/.test(reason)) await onUnpaired?.();
+      throw error;
     }
     let size = 0; const chunks = [];
     for await (const chunk of response.body) { size += chunk.length; if (size > 8 * 1024 * 1024) throw new Error('The device response exceeds the 8 MiB transfer limit.'); chunks.push(chunk); }

@@ -1,13 +1,13 @@
-import { app, BrowserWindow, ipcMain, powerMonitor, Menu, shell, clipboard, dialog } from 'electron';
+import { app, BrowserWindow, ipcMain, powerMonitor, Menu, shell, clipboard, dialog, safeStorage } from 'electron';
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { readFile, writeFile, chmod, unlink, mkdir } from 'node:fs/promises';
-import { watch } from 'node:fs';
+import { watch, existsSync } from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execFile } from 'node:child_process';
-import { createVault, privateDirectory } from './vault.mjs';
+import { createVault, privateDirectory, LEGACY_VAULT } from './vault.mjs';
 import { createDeviceClient } from './client.mjs';
 import { installNative } from './install-native.mjs';
 import { BROWSER_IDENTITIES } from './browser-identity.mjs';
@@ -45,13 +45,14 @@ const localOnly = packageMetadata.localProduct === true || (!app.isPackaged && p
 const browserIdentity = localOnly ? BROWSER_IDENTITIES.local : BROWSER_IDENTITIES.production;
 const productOrigin = browserIdentity.productOrigin;
 app.setName('Recruiters Companion');
-// Local data is plain private JSON; keep Chromium from creating an OS keychain item.
-app.commandLine.appendSwitch('use-mock-keychain');
 // Keep the storage directory name stable across the visible brand rename.
 const directory = path.join(app.getPath('userData'), localOnly ? 'local-device' : 'device');
+// Local data is plain private JSON; keep Chromium from creating an OS keychain item, except to import a 3.4 keychain-encrypted vault once.
+const legacyVault = existsSync(path.join(directory, LEGACY_VAULT));
+if (!legacyVault) app.commandLine.appendSwitch('use-mock-keychain');
 const uiURL = pathToFileURL(path.join(root, 'ui', 'index.html')).href;
-const vault = createVault(directory);
-let window, client, nativeBridge, mcpBridge, documents, files, locked = true, failure = '';
+const vault = createVault(directory, legacyVault ? { decryptLegacy: encrypted => safeStorage.decryptString(encrypted) } : {});
+let window, client, nativeBridge, mcpBridge, documents, files, locked = true, failure = '', mcpClients = [];
 let pendingApproval, confirmation = Promise.resolve(), initializing, exiting = false, screenLocked = false, sleeping = false;
 let heartbeatTimer, heartbeatBusy = false, browserConnection = 'pending', queuedPairing, pairingReturn;
 let sessionEpoch = 0, careerViewRevision = 0;
@@ -148,7 +149,7 @@ function assertAvailable() {
   if (locked || screenLocked || sleeping) fail('LOCAL_LOCKED', 'Open the companion and unlock local storage.');
 }
 function safeFailure(error) {
-  const allowed = new Set(['DEVICE_OFFLINE', 'DEVICE_UNAUTHORIZED', 'DEVICE_REQUEST_FAILED', 'LOCAL_LOCKED', 'LOCAL_BUSY', 'IDENTITY_CHANGED', 'NOT_FOUND', 'INVALID_INPUT', 'PAIRING_REQUIRED', 'CANCELLED', 'HOST_UNAVAILABLE', 'HOST_INSTALL_FAILED', 'UPDATE_MANUAL_OPEN_FAILED']);
+  const allowed = new Set(['DEVICE_OFFLINE', 'DEVICE_UNAUTHORIZED', 'DEVICE_REQUEST_FAILED', 'LOCAL_LOCKED', 'LOCAL_BUSY', 'IDENTITY_CHANGED', 'LEGACY_VAULT_LOCKED', 'NOT_FOUND', 'INVALID_INPUT', 'PAIRING_REQUIRED', 'CANCELLED', 'HOST_UNAVAILABLE', 'HOST_INSTALL_FAILED', 'UPDATE_MANUAL_OPEN_FAILED']);
   const known = error instanceof CareerError || error?.publicUpdateError === true || allowed.has(error?.code);
   return { code: known ? error.code : 'LOCAL_OPERATION_FAILED', message: known ? error.message : 'This action could not be completed. Reopen the companion and try again.' };
 }
@@ -165,9 +166,9 @@ function setup() {
 }
 function localState() {
   const publicState = status();
-  if (locked) return { ...publicState, failure, browserConnection };
+  if (locked) return { ...publicState, failure, browserConnection, mcpClients };
   const state = vault.get();
-  return { ...publicState, account: state.pairing?.account ?? null, origin: state.pairing?.origin ?? null, browserConnection, failure,
+  return { ...publicState, account: state.pairing?.account ?? null, reconnectAccount: state.reconnectAccount ?? null, origin: state.pairing?.origin ?? null, browserConnection, mcpClients, failure,
     setup: setup(), careerViewVersion: `${state.deviceId}:${sessionEpoch}:${careerViewRevision}`,
     prescan: { credentials: prescanCredentials.publicState(), run: prescan.status(),
       contextVersion: `${sessionEpoch}:${careerViewRevision}:${matchingProfileVersion(state.career ?? {})}` },
@@ -233,7 +234,7 @@ async function initialize() {
     vaultOpened = true;
     await vault.update(state => { state.career = upgradeCareer(state.career); });
     if (screenLocked || sleeping) fail('LOCAL_LOCKED', 'Unlock this computer before opening saved career data.');
-    locked = false; failure = ''; client = createDeviceClient(store, localOnly);
+    locked = false; failure = ''; client = createDeviceClient(store, localOnly, { onUnpaired: forgetRevokedPairing });
     files = createDocumentFiles({ directory, store, assertAvailable });
   })();
   try { await initializing; } finally { initializing = undefined; }
@@ -247,17 +248,22 @@ async function pair(payload) {
   const expiry = typeof pairing.expiresAt === 'number' ? pairing.expiresAt : Date.parse(pairing.expiresAt);
   if (payload.productOrigin !== productOrigin || pairing.deviceId !== store.get().deviceId || !Number.isFinite(expiry) || expiry <= Date.now() || expiry > Date.now() + 301000 || typeof pairing.challenge !== 'string' || pairing.challenge.length > 512 || !pairing.account || typeof pairing.account.id !== 'string' || pairing.account.id.length > 200 || typeof pairing.account.label !== 'string' || pairing.account.label.length > 240) fail('INVALID_INPUT', 'The account pairing link is invalid or expired. Start a new connection from local settings.');
   exact(pairing.account, ['id', 'label']);
-  const existing = store.get().pairing;
-  if (existing && (existing.account.id !== pairing.account.id || existing.origin !== payload.productOrigin)) fail('INVALID_INPUT', 'This computer is paired with another account. Sign in with the account shown in the companion.');
+  const existing = store.get().pairing, expected = existing?.account ?? store.get().reconnectAccount;
+  if ((expected && expected.id !== pairing.account.id) || (existing && existing.origin !== payload.productOrigin)) fail('INVALID_INPUT', 'This computer is paired with another account. Sign in with the account shown in the companion.');
   if (!await confirm('Connect this platform account?', `Account: ${JSON.stringify(pairing.account.label)}\nAccount ID: ${pairing.account.id}\nPlatform: ${payload.productOrigin}\n\nAllow this computer to access the job feed.`)) fail('CANCELLED', 'Account connection canceled.');
   const activation = await client.request('POST', '/device/activate', { challenge: pairing.challenge, account: pairing.account }, { origin: payload.productOrigin });
   if (activation.deviceId !== pairing.deviceId || activation.account?.id !== pairing.account.id || activation.account?.label !== pairing.account.label) fail('INVALID_INPUT', 'The activated account does not match the local approval.');
-  await store.update(state => { if (state.deviceId !== pairing.deviceId) fail('INVALID_INPUT', 'The device identity changed during pairing.'); state.pairing = { origin: payload.productOrigin, account: { ...pairing.account } }; });
+  await store.update(state => { if (state.deviceId !== pairing.deviceId) fail('INVALID_INPUT', 'The device identity changed during pairing.'); state.pairing = { origin: payload.productOrigin, account: { ...pairing.account } }; delete state.reconnectAccount; });
   emit(); return status();
   });
 }
+async function forgetRevokedPairing() {
+  await vault.forgetPairing(); emit();
+}
 async function connectAccount() {
-  assertAvailable(false); const state = store.get();
+  assertAvailable(false);
+  if (store.get().reconnectAccount && !store.get().pairing) { browserForms?.cancelAll(); sessionEpoch++; mcpBridge?.disconnect(); await vault.rotateIdentity(); emit(); }
+  const state = store.get();
   const url = new URL('/settings/provider', productOrigin);
   pairingReturn?.close(); pairingReturn = undefined;
   if (!state.pairing) {
@@ -786,8 +792,8 @@ else {
     await showSettings();
     try { await updates.initialize(); } catch { /* The updater retains its actionable error; career access must still open. */ }
     await installConnections(); await startNativeBridge();
-    mcpBridge = await startMcpBroker({ directory, createServer: createSessionServer });
-    try { await initialize(); } catch { failure = 'Local storage is unavailable. Check the companion data folder, then open local storage.'; }
+    mcpBridge = await startMcpBroker({ directory, createServer: createSessionServer, onConnections: clients => { mcpClients = clients; emit(); } });
+    try { await initialize(); } catch (error) { failure = error?.code === 'LEGACY_VAULT_LOCKED' ? error.message : 'Local storage is unavailable. Check the companion data folder, then open local storage.'; }
     heartbeatTimer = setInterval(() => { if (locked || heartbeatBusy || !vault.get().pairing) return; heartbeatBusy = true; void client.request('POST', '/device/heartbeat', {}).catch(() => {}).finally(() => { heartbeatBusy = false; }); }, 30000);
     const lock = () => { browserForms.cancelAll(); void prescan.cancel(); void cancelUpdate().catch(error => { failure = safeFailure(error).message; }); sessionEpoch++; locked = true; pairingReturn?.close(); pendingApproval?.finish(false); mcpBridge.disconnect(); emit(); };
     const unlock = () => { if (screenLocked || sleeping) return; void initialize().then(() => emit()).catch(() => { failure = 'Local storage could not be reopened. Your saved data has not been replaced.'; }); };

@@ -788,7 +788,7 @@ async function rendererFixture(browser, wide, operations = {}) {
 for (const wide of [false, true]) test(`Jobs paging and sorting keep the reader column and pagination stable in ${wide ? 'wide' : 'narrow'} mode`, async () => {
   const { state, browser } = fixture();
   const rows = Array.from({ length: 27 }, (_, index) => preliminary(String(index).padStart(2, '0'),
-    new Date(Date.UTC(2026, 9, 20) - index * 60000).toISOString(), index));
+    new Date(Date.now() - (index + 1) * 60000).toISOString(), index));
   savePrescan(state.career, rows);
   state.career.matching = { jobs: Object.fromEntries(rows.map(row => [row.id, row])), scores: {} };
   state.career.applications.app = { id: 'app', job: { title: 'Applied Role', company: 'Employer' } };

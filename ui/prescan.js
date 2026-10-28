@@ -4,7 +4,7 @@
   const element = name => document.getElementById(`prescan-${name}`);
   const key = element('key');
   const jobsView = document.getElementById('view-jobs');
-  const steps = { key: document.getElementById('run-step-key'), recency: document.getElementById('run-step-recency'),
+  const steps = { key: document.getElementById('run-step-key'),
     prefilter: document.getElementById('run-step-prefilter'), handover: document.getElementById('run-step-handover') };
   const runSteps = document.querySelector('.run-steps');
   const keyAction = document.getElementById('jobs-prescan-settings');
@@ -106,7 +106,7 @@
     // The key is setup, not recurring workflow: remove it after a successful save and restore it only when missing or rejected.
     steps.key.hidden = !showKeyStep;
     runSteps.classList.toggle('has-key-step', showKeyStep);
-    const order = showKeyStep ? ['key', 'recency', 'prefilter', 'handover'] : ['recency', 'prefilter', 'handover'];
+    const order = showKeyStep ? ['key', 'prefilter', 'handover'] : ['prefilter', 'handover'];
     order.forEach((name, index) => { steps[name].querySelector('.run-step-number').textContent = String(index + 1); });
     const currentStep = showKeyStep ? 'key' : run.status === 'completed' ? 'handover' : 'prefilter';
     for (const [name, step] of Object.entries(steps)) {

@@ -23,7 +23,7 @@ async function fixture() {
   const html = await readFile(new URL('../ui/index.html', import.meta.url), 'utf8');
   const ids = [...html.matchAll(/id="([^"]+)"/g)].map(match => match[1]);
   const nodes = Object.fromEntries(ids.map(id => [id, new Node(id)]));
-  for (const id of ['run-step-key', 'run-step-recency', 'run-step-prefilter', 'run-step-handover']) nodes[id].number = new Node();
+  for (const id of ['run-step-key', 'run-step-prefilter', 'run-step-handover']) nodes[id].number = new Node();
   nodes['view-jobs'].hidden = true; // no preview network call in this pure render test
   nodes['view-setup'].hidden = true; nodes.settings.hidden = false;
   const runSteps = new Node(); runSteps.classes.add('run-steps'); runSteps.classes.add('has-key-step');
@@ -48,7 +48,7 @@ test('the API-key setup step disappears after a successful save and the recurrin
   f.window.prescanUI.refresh(f.state(true), true);
   assert.equal(f.nodes['run-step-key'].hidden, true);
   assert.equal(f.runSteps.classList.contains('has-key-step'), false);
-  assert.deepEqual(['recency', 'prefilter', 'handover'].map(name => number(f.nodes, name)), ['1', '2', '3']);
+  assert.deepEqual(['prefilter', 'handover'].map(name => number(f.nodes, name)), ['1', '2']);
   assert.equal(f.nodes['run-step-handover'].attributes.get('aria-current'), 'step');
   assert.equal(f.nodes['jobs-prescan-settings'].textContent, 'Replace key');
 });
@@ -58,7 +58,7 @@ test('the API-key step appears for first setup and after OpenAI rejects a saved 
   f.window.prescanUI.refresh(f.state(false, { status: 'idle' }), true);
   assert.equal(f.nodes['run-step-key'].hidden, false);
   assert.equal(f.runSteps.classList.contains('has-key-step'), true);
-  assert.deepEqual(['key', 'recency', 'prefilter', 'handover'].map(name => number(f.nodes, name)), ['1', '2', '3', '4']);
+  assert.deepEqual(['key', 'prefilter', 'handover'].map(name => number(f.nodes, name)), ['1', '2', '3']);
   assert.equal(f.nodes['run-step-key'].attributes.get('aria-current'), 'step');
   assert.equal(f.nodes['jobs-prescan-settings'].textContent, 'Add key');
 

@@ -34,10 +34,11 @@ if (process.platform === 'win32') {
 if (process.platform === 'linux') env.APPIMAGE_EXTRACT_AND_RUN = '1';
 const execute = promisify(execFile);
 const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
-let child, browser, page, launchError, exit, browserUrl, logs = '';
+let child, main, page, launchError, exit, browserUrl, inspectorUrl, logs = '';
 const append = bytes => {
   logs = (logs + bytes.toString()).slice(-512 * 1024);
   browserUrl ||= /DevTools listening on (ws:\/\/127\.0\.0\.1:\d+\/devtools\/browser\/[^\s]+)/.exec(logs)?.[1];
+  inspectorUrl ||= /Debugger listening on (ws:\/\/127\.0\.0\.1:\d+\/[^\s]+)/.exec(logs)?.[1];
 };
 function alive() {
   if (launchError) throw launchError;
@@ -160,13 +161,14 @@ try {
     executable = path.join(root, 'dist', 'linux', `recruiters-rip-companion-${pkg.version}-linux-x64.AppImage`);
   } else throw new Error('Unsupported packaged smoke platform.');
   await realpath(executable);
-  child = spawn(executable, [`--user-data-dir=${userData}`, '--remote-debugging-address=127.0.0.1', '--remote-debugging-port=0'],
+  child = spawn(executable, [`--user-data-dir=${userData}`, '--remote-debugging-address=127.0.0.1', '--remote-debugging-port=0', '--inspect=127.0.0.1:0'],
     { env, cwd: scratch, stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32' });
   child.stdout.on('data', append); child.stderr.on('data', append);
   child.once('error', error => { launchError = error; });
   child.once('exit', (code, signal) => { exit = { code, signal }; });
   await until(() => browserUrl, 120000, 'packaged Electron CDP endpoint');
-  browser = await connect(browserUrl);
+  await until(() => inspectorUrl, 30000, 'packaged main-process inspector');
+  main = await connect(inspectorUrl);
   const address = new URL(browserUrl);
   const target = await until(async () => {
     const response = await fetch(`http://127.0.0.1:${address.port}/json/list`, { signal: AbortSignal.timeout(5000) });
@@ -191,7 +193,13 @@ try {
   assert.equal(state.failure, '');
   assert.ok(state.setup?.command?.startsWith(`${scratch}${path.sep}`), 'MCP launcher escaped the disposable profile.');
   assert.ok((await readdir(path.dirname(state.setup.command))).includes('native-config.json'));
-  await browser.send('Browser.close').catch(() => {});
+  // Browser.close closes Chromium windows, not this tray application's lifecycle.
+  // Invoke the same app.quit() path as its menu through a CI-only loopback inspector.
+  const quitting = await main.send('Runtime.evaluate', {
+    expression: "process.getBuiltinModule('module').createRequire(process.execPath)('electron').app.quit()",
+  });
+  if (quitting.exceptionDetails) throw new Error(`Packaged quit failed: ${quitting.exceptionDetails.text}`);
+  main.close();
   const deadline = Date.now() + 10000;
   while (!exit && Date.now() < deadline) await delay(100);
   if (!exit) throw new Error('Packaged application did not close after the smoke.');
@@ -223,7 +231,7 @@ try {
   console.error(logs);
   throw error;
 } finally {
-  page?.close(); browser?.close();
+  page?.close(); main?.close();
   if (child?.pid) {
     if (process.platform === 'win32') {
       if (!exit) await execute(path.join(process.env.SYSTEMROOT || process.env.SystemRoot, 'System32', 'taskkill.exe'), ['/PID', String(child.pid), '/T', '/F']).catch(() => {});

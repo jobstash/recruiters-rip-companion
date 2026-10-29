@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createDecisionCredentials } from '../src/decisions/credentials.mjs';
+import { createDecisionCredentials, decisionCredentialStatus } from '../src/decisions/credentials.mjs';
 
 const apiKey = 'sk-test-local-credential-1234567890';
 function fixture() {
@@ -58,4 +58,13 @@ test('failed credential persistence does not notify or claim configured state', 
   const credentials = createDecisionCredentials({ store: { get: () => ({}), async update() { throw new Error('Storage unavailable'); } }, onChange: () => { changed = true; } });
   await assert.rejects(credentials.save({ provider: 'openai', apiKey }));
   assert.equal(changed, false); assert.equal(credentials.publicState().configured, false);
+});
+
+test('public status can use an authorized vault snapshot while work reads are gated', () => {
+  const snapshot = { prescanCredentials: { openai: { apiKey, updatedAt: '2026-10-29T00:00:00Z' } }, prescanCredentialVersion: 3 };
+  const credentials = createDecisionCredentials({ store: { get() { throw Object.assign(new Error('Restore in progress'), { code: 'LOCAL_BUSY' }); } } });
+  assert.throws(() => credentials.publicState(), { code: 'LOCAL_BUSY' });
+  const status = decisionCredentialStatus(snapshot);
+  assert.equal(status.configured, true); assert.equal(status.credentialVersion, 3);
+  assert.equal(JSON.stringify(status).includes(apiKey), false);
 });

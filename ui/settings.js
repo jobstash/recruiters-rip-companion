@@ -8,6 +8,7 @@ const notice = (text, kind = '', sticky = false) => {
   $('notice').textContent = text; noticeKind = kind;
   if (text && !sticky) noticeTimer = setTimeout(() => { if ($('notice').textContent === text) notice(''); }, 5000);
 };
+window.showCompanionNotice = notice;
 // The topbar wraps at narrow widths, so the toast anchors to its measured height rather than a constant.
 new ResizeObserver(([entry]) => document.documentElement.style.setProperty('--topbar-height', `${entry.borderBoxSize[0].blockSize}px`)).observe(document.querySelector('.topbar'));
 async function invoke(op, input = {}) { const response = await window.companion.invoke(op, input); if (!response.ok) throw new Error(response.error.message); return response.result; }
@@ -21,9 +22,39 @@ function showView(next) {
   if (next !== 'setup') window.decisionsUI?.clearInput();
 }
 for (const button of document.querySelectorAll('[data-view]')) button.addEventListener('click', () => showView(button.dataset.view));
+function selectSettingsTab(next, focus = false) {
+  for (const tab of document.querySelectorAll('[data-settings-tab]')) {
+    const selected = tab.dataset.settingsTab === next;
+    tab.setAttribute('aria-selected', String(selected));
+    tab.tabIndex = selected ? 0 : -1;
+    $(tab.getAttribute('aria-controls')).hidden = !selected;
+    if (selected && focus) tab.focus();
+  }
+  if (next !== 'general') window.decisionsUI?.clearInput();
+}
+const settingsTabs = [...document.querySelectorAll('[data-settings-tab]')];
+for (const tab of settingsTabs) {
+  tab.addEventListener('click', () => selectSettingsTab(tab.dataset.settingsTab));
+  tab.addEventListener('keydown', event => {
+    let index = settingsTabs.indexOf(tab);
+    if (event.key === 'ArrowRight') index = (index + 1) % settingsTabs.length;
+    else if (event.key === 'ArrowLeft') index = (index + settingsTabs.length - 1) % settingsTabs.length;
+    else if (event.key === 'Home') index = 0;
+    else if (event.key === 'End') index = settingsTabs.length - 1;
+    else return;
+    event.preventDefault();
+    selectSettingsTab(settingsTabs[index].dataset.settingsTab, true);
+  });
+}
+$('help-backups').addEventListener('click', () => {
+  showView('setup');
+  selectSettingsTab('backups', true);
+});
 function openSettings(target) {
   showView('setup');
+  selectSettingsTab('general');
   const section = $(target);
+  if (!section) return;
   if (['browser-settings', 'decisions', 'sharing-settings'].includes(target)) {
     section.querySelector('details').open = true;
   }
@@ -32,7 +63,6 @@ function openSettings(target) {
 }
 window.openCompanionSettings = openSettings;
 $('me-account').addEventListener('click', () => openSettings('account-settings'));
-$('me-chat-apps').addEventListener('click', () => openSettings('chat-app-settings'));
 $('me-jobs').addEventListener('click', () => showView('jobs'));
 $('setup-next').addEventListener('click', () => {
   const next = $('setup-next').dataset.action;
@@ -127,6 +157,7 @@ async function refresh() {
     state = current;
     if (noticeKind === 'state-unavailable') notice('');
     const locked = state.execution.state === 'locked';
+    window.backupsUI?.refresh(current);
     $('storage').hidden = !locked; $('settings').hidden = locked; $('views').hidden = locked;
     $('storage-message').textContent = state.failure || 'Choose Unlock to open your saved work.';
     if (state.approval && !locked) {
@@ -172,16 +203,18 @@ async function refresh() {
       if (!view) showView('me');
     }
     renderSetup(null);
+    window.backupsUI?.unavailable();
     $('chatgpt-connection').textContent = 'Could not check your connection';
     $('claude-connection').textContent = 'Could not check your connection';
     notice('Could not reach Companion. Choose Retry in Me, or reopen Companion. Your saved work is unchanged.', 'state-unavailable', true);
   }
 }
 async function action(op, success) {
-  if (busy) return;
+  if (busy || window.backupsUI?.isBusy()) return;
   busy = true;
+  window.backupsUI?.setBusy(true);
   // Browser instances manage their own controls; the Jobs toolbar's Copy review prompt is an ordinary action.
-  const controls = [...document.querySelectorAll('button')].filter(button => (!button.closest('#me-browser, #career-browser, #views, #decisions, #update-settings') || ['copy-review-prompt', 'review-codex', 'review-claude'].includes(button.id)) && !['approval-cancel', 'approval-allow'].includes(button.id));
+  const controls = [...document.querySelectorAll('button')].filter(button => (!button.closest('#me-browser, #career-browser, #views, #decisions, #update-settings, #settings-backups, .settings-tabs') || ['copy-review-prompt', 'review-codex', 'review-claude'].includes(button.id)) && !['approval-cancel', 'approval-allow'].includes(button.id));
   const disabled = controls.map(control => control.disabled); controls.forEach(control => { control.disabled = true; });
   try {
     const result = await invoke(op);
@@ -192,7 +225,7 @@ async function action(op, success) {
     notice(typeof success === 'function' ? success(result) : success, op, op === 'connect-account');
   }
   catch (error) { notice(error.message, 'error', true); }
-  finally { busy = false; controls.forEach((control, index) => { control.disabled = disabled[index]; }); await refresh(); }
+  finally { busy = false; controls.forEach((control, index) => { control.disabled = disabled[index]; }); window.backupsUI?.setBusy(false); await refresh(); }
 }
 for (const [id, op, message] of [
   ['connect-account', 'connect-account', result => result.pairingRequired ? 'Complete sign-in in the browser, then choose Open Companion and approve the account on this computer.' : ''],
@@ -210,8 +243,6 @@ for (const [id, op, message] of [
   ['review-claude', 'review-claude', result => result.mode === 'cli' ? 'Claude opened. Press Enter in that window to send the message.' : 'Claude opened. Send the message there to start the review.'],
   ['setup-codex', 'review-codex', result => result.mode === 'cli' ? 'Codex opened. Press Enter in that window to send the message.' : 'Codex opened. Send the message there to start the review.'],
   ['setup-claude', 'review-claude', result => result.mode === 'cli' ? 'Claude opened. Press Enter in that window to send the message.' : 'Claude opened. Send the message there to start the review.'],
-  ['open-exports', 'open-exports', 'Your files folder opened.'],
-  ['backup', 'backup', result => result.exported ? 'Backup saved.' : 'Backup canceled.'],
   ['delete-rankings', 'delete-rankings', 'Job reviews cleared.'],
   ['unlock', 'unlock', 'Your saved work is open.'],
 ]) $(id).addEventListener('click', () => { void action(op, message); });

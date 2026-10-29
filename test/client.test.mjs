@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { generateKeyPairSync, randomUUID } from 'node:crypto';
+import { createHash, generateKeyPairSync, randomUUID, verify } from 'node:crypto';
 import { createDeviceClient } from '../src/client.mjs';
 
 test('local and production clients refuse cross-environment stored origins before network access', async t => {
@@ -71,4 +71,24 @@ test('only a platform report that this device is unpaired triggers recovery', as
     await assert.rejects(client.request('POST', path, {}), { code: status === 403 ? 'DEVICE_UNAUTHORIZED' : 'DEVICE_REQUEST_FAILED' });
     assert.equal(unpaired, expected, `${status} ${message} ${path}`);
   }
+});
+
+test('CV deletion signs the exact backend route and does not describe membership as a deletion requirement', async t => {
+  const original = globalThis.fetch;
+  t.after(() => { globalThis.fetch = original; });
+  const { privateKey, publicKey } = generateKeyPairSync('ed25519');
+  const client = createDeviceClient({ get: () => ({ deviceId: randomUUID(), privateKey, pairing: { origin: 'http://127.0.0.1:3001' } }) }, true);
+  const documentId = randomUUID();
+  globalThis.fetch = async (url, options) => {
+    assert.equal(url, 'http://127.0.0.1:3001/api/device/cv/delete');
+    assert.equal(options.method, 'POST');
+    assert.equal(options.body, JSON.stringify({ documentId }));
+    const canonical = `${options.headers['X-Device-Time']}\n${options.headers['X-Device-Nonce']}\nPOST\n/device/cv/delete\n${createHash('sha256').update(options.body).digest('hex')}`;
+    assert.equal(verify(null, Buffer.from(canonical), publicKey, Buffer.from(options.headers['X-Device-Signature'], 'base64url')), true);
+    return new Response(JSON.stringify({ deleted: true, documentId }));
+  };
+  assert.deepEqual(await client.request('POST', '/device/cv/delete', { documentId }), { deleted: true, documentId });
+  globalThis.fetch = async () => new Response(JSON.stringify({ message: 'Device is not active' }), { status: 403 });
+  await assert.rejects(client.request('POST', '/device/cv/delete', { documentId }), error =>
+    error.code === 'DEVICE_UNAUTHORIZED' && !/membership/i.test(error.message) && /Reconnect/.test(error.message));
 });

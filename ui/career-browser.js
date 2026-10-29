@@ -150,6 +150,33 @@
       button.addEventListener('click', event => { event.stopPropagation(); void onClick(); });
       return button;
     }
+    function renderCvDeletion(detail, item) {
+      if (kind !== 'sources' || !detail.deletion?.contentHash) return null;
+      const section = node('div', 'actions');
+      const button = blockButton('Delete CV', `Delete ${item.title}`, async () => {
+        if (!enabled || button.disabled) return;
+        button.disabled = true;
+        const currentGeneration = generation;
+        const currentRead = readGeneration;
+        readerStatus.textContent = 'Deleting CV…';
+        try {
+          const result = await request('cv-delete', { sourceId: item.id, contentHash: detail.deletion.contentHash });
+          if (!enabled || generation !== currentGeneration || readGeneration !== currentRead) return;
+          if (result.cancelled) { readerStatus.textContent = ''; return; }
+          if (result.deleted !== true) throw new Error('Companion did not confirm removal.');
+          closeReader();
+          await loadPage(true);
+          listStatus.textContent = 'CV deleted.';
+        } catch (error) {
+          if (enabled && generation === currentGeneration && readGeneration === currentRead)
+            readerStatus.textContent = `CV not deleted. ${error.message}`;
+        } finally {
+          button.disabled = false;
+        }
+      }, 'destructive');
+      section.append(button);
+      return section;
+    }
     function removeBlock(item) {
       return changeBlock('job-unblock', { id: item.id }, `Unblocked ${item.title}`);
     }
@@ -187,6 +214,55 @@
       return button;
     }
 
+    function renderDocumentActions(detail, item) {
+      const documents = Array.isArray(detail?.documents) ? detail.documents : [];
+      const hasJobPage = detail?.jobPage === true || Boolean(detail?.header?.applyUrl);
+      if (!hasJobPage && !documents.length && !detail?.documentNotice) return null;
+      const section = node('section', 'career-files');
+      section.append(node('h3', '', hasJobPage ? 'Job and documents' : 'Documents'));
+      const group = node('div', 'career-document-actions');
+      const recordKind = kind;
+      function action(label, actionKind, operation, input, success) {
+        const button = blockButton(label, `${label} for ${item.title}`, async () => {
+          if (!enabled || button.disabled || !button.isConnected || kind !== recordKind || selected?.id !== item.id) return;
+          button.disabled = true;
+          const currentRead = readGeneration;
+          try {
+            await request(operation, { kind: recordKind, id: item.id, ...input });
+            if (enabled && kind === recordKind && selected?.id === item.id && currentRead === readGeneration)
+              window.showCompanionNotice(success, 'document-open');
+          } catch (error) {
+            if (enabled && kind === recordKind && selected?.id === item.id && currentRead === readGeneration)
+              window.showCompanionNotice(error.message, 'error', true);
+          } finally { button.disabled = false; }
+        }, 'ghost');
+        button.dataset.careerAction = actionKind;
+        return button;
+      }
+      if (hasJobPage) {
+        const column = node('div', 'career-document-action');
+        column.append(action('Open job', 'job', 'career-open-job', {}, 'Job page opened.'));
+        group.append(column);
+      }
+      for (const saved of documents) {
+        const column = node('div', 'career-document-action');
+        const date = displayDate(saved.createdAt);
+        if (saved.status === 'saved') {
+          const button = action(saved.kind === 'cv' ? 'Open CV' : 'Open letter', saved.kind, 'career-open-document',
+            { document: saved.kind, token: saved.token }, `${saved.kind === 'cv' ? 'CV' : 'Letter'} opened.`);
+          button.dataset.document = saved.kind;
+          column.append(button, node('span', 'caption', date ? `Saved ${date}` : 'Saved PDF'));
+        } else {
+          column.append(node('span', '', saved.kind === 'cv' ? 'CV' : 'Cover letter'),
+            node('span', 'caption', saved.status === 'missing' ? 'No saved PDF'
+              : [date ? `Saved ${date}` : 'Saved PDF', 'Unavailable'].join(' · ')));
+        }
+        group.append(column);
+      }
+      section.append(group);
+      if (detail.documentNotice) section.append(node('p', 'caption', detail.documentNotice));
+      return section;
+    }
     // The verdict block: the number that placed the job in the list, the rule it was measured against, the agent's reason,
     // and — for jobs the agent has not reviewed — the next-run control itself.
     function renderVerdict(detail, item) {
@@ -207,24 +283,14 @@
       if (typeof verdict.reason === 'string' && verdict.reason) block.append(node('p', 'career-verdict-reason', verdict.reason));
       return block;
     }
-    // The job page sits with identity metadata, never inside the decision.
-    function renderHeader(detail, item) {
+    // Keep company, publication and role facts together before the detail action group.
+    function renderHeader(detail) {
       const header = detail?.header;
       if (!header || typeof header !== 'object') return null;
       const block = node('div', 'career-reader-meta');
       const top = node('div', 'career-reader-meta-top');
       const line = [header.company, header.published].filter(value => typeof value === 'string' && value).join(' · ');
       if (line) top.append(node('p', 'career-reader-line', line));
-      if (typeof header.applyUrl === 'string' && header.applyUrl) {
-        const open = blockButton('Open job', 'Open the job page', async () => {
-          if (!enabled) return;
-          open.disabled = true;
-          try { await request('career-open-job', { id: item.id }); }
-          catch (error) { listStatus.textContent = `Could not open the job page. ${error.message}`; }
-          finally { open.disabled = false; }
-        }, 'text');
-        top.append(open);
-      }
       if (top.childElementCount) block.append(top);
       if (Array.isArray(header.facts) && header.facts.length) block.append(node('p', 'career-reader-facts', header.facts.join(' · ')));
       return block.childElementCount ? block : null;
@@ -277,8 +343,12 @@
       readerTitle.textContent = typeof detail?.heading === 'string' ? detail.heading : typeof detail?.title === 'string' ? detail.title : selected.title;
       const sections = Array.isArray(detail?.sections) ? detail.sections : [];
       content.replaceChildren();
-      const header = renderHeader(detail, item);
+      const cvDeletion = renderCvDeletion(detail, item);
+      if (cvDeletion) content.append(cvDeletion);
+      const header = renderHeader(detail);
       if (header) content.append(header);
+      const documents = renderDocumentActions(detail, item);
+      if (documents && kind !== 'applications') content.append(documents);
       const verdict = renderVerdict(detail, item);
       if (verdict) content.append(verdict);
       for (const section of sections) {
@@ -314,6 +384,7 @@
           block.append(text);
         }
         content.append(block);
+        if (documents && kind === 'applications' && section === sections[0]) content.append(documents);
       }
       const removal = kind === 'blocks' ? renderBlockActions(item) : null;
       if (removal) content.append(removal);
@@ -340,7 +411,7 @@
       readerStatus.textContent = 'Loading saved content…';
       reader.setAttribute('aria-busy', 'true');
       try {
-        const detail = Array.isArray(item.sections)
+        const detail = currentKind !== 'jobs' && Array.isArray(item.sections)
           ? item
           : await request('career-read', { kind: currentKind, id: item.id });
         if (!enabled || currentGeneration !== generation || currentRead !== readGeneration) return;
@@ -462,7 +533,17 @@
         });
         // One DOM write for the page, and only when something actually differs.
         const same = rows.length === records.childElementCount && rows.every((row, index) => row === records.children[index]);
-        if (!same) records.replaceChildren(...rows);
+        if (!same) {
+          const focused = document.activeElement;
+          const focusedRow = [...records.children].find(row => [...row.querySelectorAll('button')].includes(focused));
+          const scrollTop = records.scrollTop;
+          records.replaceChildren(...rows);
+          if (silent && focusedRow) {
+            const replacement = rows.find(row => row.dataset.id === focusedRow.dataset.id);
+            replacement?.querySelector('.career-record')?.focus({ preventScroll: true });
+          }
+          if (silent) records.scrollTop = scrollTop;
+        }
         nextOffset = Number.isInteger(result.nextOffset) && result.nextOffset > offset ? result.nextOffset : null;
         records.hidden = result.items.length === 0;
         const range = `${integer(offset + 1)}–${integer(offset + result.items.length)} of ${integer(result.total)}`;
@@ -509,12 +590,20 @@
       const currentGeneration = generation;
       const currentRead = ++readGeneration;
       try {
-        const detail = Array.isArray(item.sections) ? item : await request('career-read', { kind, id: item.id });
+        const detail = kind !== 'jobs' && Array.isArray(item.sections) ? item : await request('career-read', { kind, id: item.id });
         if (!enabled || currentGeneration !== generation || currentRead !== readGeneration) return;
         const signature = JSON.stringify(detail);
         if (signature === detailSignature) return;
         detailSignature = signature;
+        const focusedAction = [...content.querySelectorAll('button')].includes(document.activeElement)
+          ? document.activeElement.dataset.careerAction : null;
+        const scrollTop = reader.scrollTop;
         renderDetail(detail, item);
+        if (focusedAction) {
+          const target = [...content.querySelectorAll('button')].find(button => button.dataset.careerAction === focusedAction);
+          (target ?? readerTitle).focus({ preventScroll: true });
+        }
+        reader.scrollTop = scrollTop;
       } catch { /* The reader keeps what it showed; the next navigation reports errors. */ }
     }
 

@@ -10,6 +10,7 @@
 <script src="career-browser.js" defer></script>
 <script src="decisions.js" defer></script>
 <script src="updates.js" defer></script>
+<script src="backups.js" defer></script>
 <script src="settings.js" defer></script>
 </head>
 <body>
@@ -46,7 +47,7 @@
 <div><h2 id="setup-next-title">Start a job review</h2><p id="setup-next-description"></p><p id="setup-next-status" class="caption" role="status"></p></div>
 <button id="setup-next" class="primary" type="button">Connect account</button>
 </section>
-<div class="actions"><button id="import-cv" class="ghost" type="button">Import CV</button><button id="me-jobs" class="ghost" type="button">Jobs</button><button id="open-exports" class="text" type="button">Open files</button><button id="backup" class="text" type="button">Back up</button><button id="me-account" class="text" type="button" hidden>Connect account</button><button id="me-chat-apps" class="text" type="button">AI apps</button></div>
+<div class="actions"><button id="import-cv" class="ghost" type="button">Import CV</button><button id="me-jobs" class="ghost" type="button">Jobs</button><button id="me-account" class="text" type="button" hidden>Connect account</button></div>
 </div>
 <div id="me-browser" class="career-browser">
 <div class="career-toolbar">
@@ -124,6 +125,11 @@
 </div>
 </section>
 <section id="view-setup" class="setup-view" aria-label="Settings" hidden>
+<div class="tabs settings-tabs" role="tablist" aria-label="Settings">
+<button id="settings-tab-general" class="tab" type="button" role="tab" aria-controls="settings-general" aria-selected="true" tabindex="0" data-settings-tab="general">General</button>
+<button id="settings-tab-backups" class="tab" type="button" role="tab" aria-controls="settings-backups" aria-selected="false" tabindex="-1" data-settings-tab="backups">Backups</button>
+</div>
+<div id="settings-general" role="tabpanel" aria-labelledby="settings-tab-general">
 <section id="account-settings" class="setup-section account" aria-labelledby="account-title">
 <h2 id="account-title">Account</h2>
 <div class="settings-content"><p id="account-hint">Not connected.</p><button id="connect-account" type="button">Connect account</button>
@@ -206,6 +212,33 @@
 <div class="actions"><button id="update-check" class="ghost" type="button" disabled>Check for updates</button><button id="update-download" class="ghost" type="button" hidden>Download update</button><button id="update-install" class="ghost" type="button" hidden>Install update</button><button id="update-cancel" class="text" type="button" hidden>Cancel update</button></div>
 </div>
 </section>
+</div>
+<div id="settings-backups" role="tabpanel" aria-labelledby="settings-tab-backups" hidden>
+<section class="setup-section" aria-labelledby="backups-title">
+<h2 id="backups-title">Backups</h2>
+<div class="settings-content">
+<p>Save a copy of your profile, CVs, saved documents and jobs. You can restore it here, including on another computer.</p>
+<div class="actions"><button id="backup" class="primary" type="button" disabled>Save backup</button><button id="backup-choose" class="ghost" type="button" disabled>Restore backup</button><button id="backup-open-folder" class="text" type="button" disabled>Open backups</button></div>
+<p class="caption">Backup files aren’t password-protected. Keep them private. Sign-in and API keys aren’t included.</p>
+<p id="backup-availability" role="status">Checking your saved work…</p>
+<p id="backup-status" role="status" aria-live="polite" aria-atomic="true"></p>
+<p id="backup-error" role="alert" hidden></p>
+<ul id="backup-save-warnings" class="backup-warnings" hidden></ul>
+</div>
+</section>
+<section id="backup-preview" class="setup-section" aria-labelledby="backup-preview-title" hidden>
+<h2 id="backup-preview-title" tabindex="-1">Restore profile</h2>
+<div class="settings-content">
+<p id="backup-file" class="caption"></p>
+<label id="backup-profile-field" class="backup-field" for="backup-profile" hidden>Profile<select id="backup-profile"></select></label>
+<p id="backup-profile-name"></p>
+<dl id="backup-counts" class="backup-counts"></dl>
+<ul id="backup-warnings" class="backup-warnings" hidden></ul>
+<p id="backup-consequence">This replaces this app’s current profile, CVs, saved documents, jobs and applications. Your sign-in, API keys and CV sharing choice stay the same. A backup of your current profile is saved first; find it in Open backups.</p>
+<div class="actions"><button id="backup-cancel" class="ghost" type="button">Cancel</button><button id="backup-restore" class="primary" type="button" aria-describedby="backup-consequence">Restore profile</button></div>
+</div>
+</section>
+</div>
 </section>
 <section id="view-help" class="setup-view" aria-label="Help" hidden>
 <section class="setup-section account" aria-labelledby="help-start-title">
@@ -213,13 +246,17 @@
 <div class="settings-content"><ol id="help-steps" class="help-steps">
 <li>Choose Connect account in Settings and finish connecting in your browser.</li>
 <li>Choose Import CV in Me and select your CV.</li>
-<li>In Settings → AI apps, choose Get Codex or Get Claude if you need to install an app. Then choose Set up.</li>
+<li>In Settings → General → AI apps, choose Get Codex or Get Claude if you need to install an app. Then choose Set up.</li>
 <li>Open Jobs and choose Continue in Codex or Continue in Claude. Send the message in that app, or press Enter in the text window that opens.</li>
 </ol></div>
 </section>
 <section class="setup-section" aria-labelledby="help-flow-title">
 <h2 id="help-flow-title">In your AI app</h2>
 <div class="settings-content"><p>To start in a conversation you already have open, paste and send:</p><pre id="help-prompt" class="command" tabindex="0">Use the recruiters.rip skill to find me a job.</pre><p>You can add help with browser forms, GitHub or CV sharing later. Your CV and saved jobs are still available without an account or internet connection.</p></div>
+</section>
+<section class="setup-section" aria-labelledby="help-backups-title">
+<h2 id="help-backups-title">Backups</h2>
+<div class="settings-content"><p>In Settings → Backups, choose Save backup to keep a copy, or Restore backup to use one you saved earlier. You can review it before replacing your current profile.</p><button id="help-backups" class="text" type="button">View backups</button></div>
 </section>
 <section class="setup-section" aria-labelledby="help-links-title">
 <h2 id="help-links-title">Links</h2>

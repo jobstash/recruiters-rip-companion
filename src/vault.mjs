@@ -22,11 +22,11 @@ export function createVault(directory, { decryptLegacy } = {}) {
   const filename = path.join(directory, 'vault.json');
   const legacyFilename = path.join(directory, LEGACY_VAULT);
   let state, writes = Promise.resolve();
-  async function persist(value) {
+  async function persist(value, beforeCommit = () => {}) {
     const json = JSON.stringify(value);
     if (Buffer.byteLength(json) > 128 * 1024 * 1024) throw Object.assign(new Error('Local career storage is full. Export a backup before adding more documents.'), { code: 'STORAGE_LIMIT' });
     const temp = `${filename}.${randomUUID()}.tmp`;
-    try { await writeFile(temp, json, { mode: 0o600, flag: 'wx' }); await rename(temp, filename); }
+    try { await writeFile(temp, json, { mode: 0o600, flag: 'wx' }); beforeCommit(); await rename(temp, filename); }
     finally { await unlink(temp).catch(error => { if (error.code !== 'ENOENT') throw error; }); }
   }
   /** Version 3.4 kept the same envelope encrypted with the OS keychain; import it once and keep the original as vault.bin.imported. */
@@ -64,10 +64,10 @@ export function createVault(directory, { decryptLegacy } = {}) {
       state = loaded;
     },
     get() { if (!state) throw new Error('Local storage is locked.'); return structuredClone(state); },
-    update(change) {
+    update(change, { beforeCommit } = {}) {
       const pending = writes.then(async () => {
         if (!state) throw new Error('Local storage is locked.');
-        const next = structuredClone(state); await change(next); await persist(next); state = next;
+        const next = structuredClone(state); await change(next); await persist(next, beforeCommit); state = next;
       });
       writes = pending.catch(() => {}); return pending;
     },

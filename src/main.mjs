@@ -7,12 +7,14 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createVault, privateDirectory, LEGACY_VAULT } from './vault.mjs';
+import { createBackups } from './backup.mjs';
 import { createDeviceClient } from './client.mjs';
 import { installNative } from './install-native.mjs';
 import { BROWSER_IDENTITIES, nativeBrowser } from './browser-identity.mjs';
 import { claimInstance } from './instance-lock.mjs';
 import { endpoint, launcherScript, mcpCommand, protectPrivatePath, createAuthenticationChallenge, verifyAuthenticationProof, prepareBridgeRuntime, persistBrowserExtension } from './platform-runtime.cjs';
 import { createIntroductionTools, introductionsStatus, setSharingConsent } from './mcp/introduction-tools.mjs';
+import { deleteCv } from './mcp/cv-deletion.mjs';
 import { openEmploymentProfile } from './employment-browser.mjs';
 import { openJobPage, requirementContextPrompt } from './career-browser.mjs';
 import { CareerError, createCareerState, fail, hash, upgradeCareer } from './mcp/state.mjs';
@@ -27,7 +29,7 @@ import { matchingProfileVersion } from './mcp/assessment-policy.mjs';
 import { addBlock, removeBlock } from './mcp/blocklist.mjs';
 import { installChatGptPlugin, mcpInvocation } from './host-setup.mjs';
 import { createCareerBrowser } from './career-browser.mjs';
-import { createDecisionCredentials } from './decisions/credentials.mjs';
+import { createDecisionCredentials, decisionCredentialStatus } from './decisions/credentials.mjs';
 import { savedPublicationRange, setPublicationRange } from './mcp/review-queue.mjs';
 import { startPairingReturn } from './pairing-return.mjs';
 import { createJobTools, importCapturedJobs } from './mcp/job-tools.mjs';
@@ -60,16 +62,20 @@ const sockets = new Set();
 const mutations = new Set(), formRequests = new Set();
 let updateInstalling = false, quitReady = false, quitDraining = false, vaultOpened = false, updateApprovalAbort;
 let browserForms, updates;
+let restoringBackup = false;
 const identityKey = state => JSON.stringify([state.deviceId, state.pairing?.origin, state.pairing?.account?.id]);
 const store = {
   get() { assertAvailable(false); return vault.get(); },
   update(change) {
     assertAvailable(false);
+    const generation = sessionEpoch;
     return vault.update(async state => {
       assertAvailable(false);
+      if (generation !== sessionEpoch) fail('IDENTITY_CHANGED', 'The profile changed. Reopen it before saving.');
       const identity = identityKey(state);
       await change(state);
       assertAvailable(false);
+      if (generation !== sessionEpoch) fail('IDENTITY_CHANGED', 'The profile changed. Reopen it before saving.');
       if (identityKey(state) !== identity) { browserForms?.cancelAll(); sessionEpoch++; }
     });
   },
@@ -85,12 +91,41 @@ function assertPaidWorkAllowed() {
 }
 async function mutation(action) {
   assertWorkAllowed();
-  const pending = Promise.resolve().then(action);
+  const pending = Promise.resolve().then(() => action(pending));
   mutations.add(pending);
   try { return await pending; } finally { mutations.delete(pending); }
 }
 const decisionCredentials = createDecisionCredentials({ store, onChange: async () => { browserForms?.cancelAll(); emit(); } });
 browserForms = createBrowserForms({ store, credentials: decisionCredentials, assertAvailable });
+const backups = createBackups({
+  directory, store: vault, assertAvailable: assertStorageAvailable, epoch: () => sessionEpoch,
+  selectBackup: async () => {
+    const selected = await dialog.showOpenDialog(window, { title: 'Restore backup', properties: ['openFile'], filters: [{ name: 'Profile backup', extensions: ['json'] }] });
+    return selected.canceled ? null : selected.filePaths[0];
+  },
+  selectDestination: async defaultPath => {
+    const selected = await dialog.showSaveDialog(window, { title: 'Save backup', defaultPath, filters: [{ name: 'Profile backup', extensions: ['json'] }] });
+    return selected.canceled ? null : selected.filePath;
+  },
+  openFolder: async folder => { if (await shell.openPath(folder)) fail('BACKUP_FOLDER_UNAVAILABLE', 'The backups folder could not be opened. Try again.'); },
+  exclusive: async (action, ownMutation) => {
+    assertWorkAllowed();
+    restoringBackup = true;
+    try {
+      browserForms.cancelAll(); pendingApproval?.finish(false);
+      await Promise.allSettled([...mutations].filter(pending => pending !== ownMutation));
+      await vault.flush();
+      assertStorageAvailable();
+      return await action();
+    } finally { restoringBackup = false; emit(); }
+  },
+  onRestored: () => {
+    browserForms.cancelAll(); sessionEpoch++; careerViewRevision++;
+    browserSessions.clear(); applicationSockets.clear();
+    for (const waiting of browserReplies.values()) waiting.reject(waiting.failure('The profile was restored. Read this page again.'));
+    browserReplies.clear(); mcpBridge?.disconnect();
+  },
+});
 updates = createUpdateController({
   version: packageMetadata.version, platform: process.platform, arch: process.arch,
   directory: path.join(app.getPath('userData'), localOnly ? 'local-updates' : 'updates'),
@@ -127,8 +162,12 @@ async function updateAction(op) {
     return updates.state();
   } finally { updateApprovalAbort?.abort(); updateApprovalAbort = undefined; updateInstalling = false; emit(); }
 }
-function assertAvailable() {
+function assertStorageAvailable() {
   if (locked || screenLocked || sleeping) fail('LOCAL_LOCKED', 'Open the companion and unlock local storage.');
+}
+function assertAvailable() {
+  assertStorageAvailable();
+  if (restoringBackup) fail('LOCAL_BUSY', 'A profile is being restored. Wait for it to finish.');
 }
 function safeFailure(error) {
   const allowed = new Set(['DEVICE_OFFLINE', 'DEVICE_UNAUTHORIZED', 'DEVICE_REQUEST_FAILED', 'LOCAL_LOCKED', 'LOCAL_BUSY', 'IDENTITY_CHANGED', 'LEGACY_VAULT_LOCKED', 'NOT_FOUND', 'INVALID_INPUT', 'PAIRING_REQUIRED', 'CANCELLED', 'HOST_UNAVAILABLE', 'HOST_INSTALL_FAILED', 'UPDATE_MANUAL_OPEN_FAILED']);
@@ -140,7 +179,7 @@ function status() {
   const state = vault.get();
   return { installed: true, mode: 'local_mcp', deviceId: state.deviceId, publicKey: state.publicKey, label: state.label,
     hasCv: Object.values(state.career?.sources ?? {}).some(source => source.purpose === 'cv' && !source.archived && typeof source.text === 'string' && source.text.trim().length > 0),
-    paired: Boolean(state.pairing), decisionApiConfigured: decisionCredentials.publicState().configured, connections: [], execution: { state: state.pairing ? 'ready' : 'needs_connection' } };
+    paired: Boolean(state.pairing), decisionApiConfigured: decisionCredentialStatus(state).configured, connections: [], execution: { state: state.pairing ? 'ready' : 'needs_connection' } };
 }
 function setup() {
   const command = mcpCommand(directory);
@@ -163,7 +202,7 @@ function localState() {
   const state = vault.get();
   return { ...publicState, account: state.pairing?.account ?? null, reconnectAccount: state.reconnectAccount ?? null, origin: state.pairing?.origin ?? null, browserConnection, browserIntegration, mcpClients, failure,
     setup: setup(), careerViewVersion: `${state.deviceId}:${sessionEpoch}:${careerViewRevision}`,
-    decisions: { credentials: decisionCredentials.publicState() },
+    decisions: { credentials: decisionCredentialStatus(state) },
     publicationRange: savedPublicationRange(state.career ?? {}),
     updates: { ...updates.state(), blocked: paidWorkActive() || updateInstalling },
     review: { hosts: reviewHosts, hostInfo: reviewHostInfo, preferredHost: ['claude', 'codex'].includes(state.browserPreferences?.applicationHost) ? state.browserPreferences.applicationHost : reviewHosts.codex ? 'codex' : 'claude' },
@@ -363,6 +402,7 @@ function createSessionServer() {
     ...createJobTools({ store: scoped.store }),
     ...createFormTools({ store: scoped.store, browser: browserBridge }),
     ...createIntroductionTools({ store: scoped.store, platform: scopedPlatform,
+      getAccountId: () => scoped.store.get().pairing?.account?.id,
       shareCv: async body => {
         scoped.assertAvailable(false);
         if (!store.get().pairing) fail('PAIRING_REQUIRED', 'Connect your account in companion settings.');
@@ -597,13 +637,48 @@ async function startNativeBridge() {
   await writeFile(path.join(directory, 'bridge.json'), JSON.stringify({ socket: socketPath, token }), { mode: 0o600 });
   protectPrivatePath(path.join(directory, 'bridge.json'));
 }
-async function settingsOperation(op, input) {
+async function settingsOperation(op, input, ownMutation) {
   try {
     if (op === 'state') return { ok: true, result: localState() };
-    if (op === 'career-list' || op === 'career-read') {
+    if (['backup', 'backup-preview', 'backup-restore', 'backup-cancel', 'backup-open-folder'].includes(op)) {
+      assertWorkAllowed();
+      exact(input, op === 'backup-restore' ? ['restoreId', 'profileId'] : []);
+      if (op === 'backup-restore' && (typeof input.restoreId !== 'string' || typeof input.profileId !== 'string')) fail('INVALID_INPUT', 'Choose a backup and a profile before restoring.');
+      const result = op === 'backup' ? await backups.save()
+        : op === 'backup-preview' ? await backups.preview()
+        : op === 'backup-restore' ? await backups.restore(input, ownMutation)
+        : op === 'backup-cancel' ? backups.cancel() : await backups.openFolder();
+      emit(); return { ok: true, result };
+    }
+    if (op === 'cv-delete') {
+      assertWorkAllowed(); exact(input, ['sourceId', 'contentHash']);
+      if (typeof input.sourceId !== 'string' || input.sourceId.length > 100 || typeof input.contentHash !== 'string' || !/^[a-f0-9]{64}$/.test(input.contentHash)) fail('INVALID_INPUT', 'Choose the saved CV again before deleting it.');
       const scoped = createScopedAccess(store, { assertAvailable, epoch: () => sessionEpoch });
-      const reader = createCareerBrowser({ store: scoped.store });
-      const result = await (op === 'career-list' ? reader.list(input) : reader.read(input));
+      const source = scoped.store.get().career?.sources?.[input.sourceId];
+      if (!source || source.purpose !== 'cv' || source.contentHash !== input.contentHash) fail('CV_CHANGED', 'This CV changed. Choose it again before deleting it.');
+      const choice = await dialog.showMessageBox(window, { type: 'warning', buttons: ['Cancel', 'Delete CV'], defaultId: 0, cancelId: 0,
+        message: 'Delete this CV?', detail: 'Delete this CV from Companion and remove its shared copy from JobStash? Existing backup files are not deleted.' });
+      scoped.assertAvailable(false);
+      if (choice.response !== 1) return { ok: true, result: { cancelled: true } };
+      const result = await deleteCv({ store: scoped.store, ...input,
+        getAccountId: () => scoped.store.get().pairing?.account?.id,
+        deleteRemote: async body => {
+          scoped.assertAvailable(false);
+          if (!scoped.store.get().pairing) fail('PAIRING_REQUIRED', 'Connect your account before removing the shared CV.');
+          const result = await client.request('POST', '/device/cv/delete', body);
+          scoped.assertAvailable(false);
+          return result;
+        },
+      });
+      scoped.assertAvailable(false); careerViewRevision++; browserForms.cancelAll(); emit();
+      return { ok: true, result };
+    }
+    if (['career-list', 'career-read', 'career-open-document'].includes(op)) {
+      const scoped = createScopedAccess(store, { assertAvailable, epoch: () => sessionEpoch });
+      const localFiles = createDocumentFiles({ directory, store: scoped.store, assertAvailable: scoped.assertAvailable });
+      const reader = createCareerBrowser({ store: scoped.store, files: localFiles,
+        openPath: filename => { scoped.assertAvailable(false); return shell.openPath(filename); } });
+      const result = await (op === 'career-list' ? reader.list(input) : op === 'career-read' ? reader.read(input) : reader.openDocument(input));
       scoped.assertAvailable(false);
       return { ok: true, result };
     }
@@ -629,9 +704,9 @@ async function settingsOperation(op, input) {
       return { ok: true, result };
     }
     if (op === 'career-open-job') {
-      assertAvailable(false); exact(input, ['id']);
+      assertAvailable(false); exact(input, ['kind', 'id']);
       const scoped = createScopedAccess(store, { assertAvailable, epoch: () => sessionEpoch });
-      const result = await openJobPage({ store: scoped.store, openExternal: url => shell.openExternal(url) }, input);
+      const result = await openJobPage({ store: scoped.store, openExternal: url => { scoped.assertAvailable(false); return shell.openExternal(url); } }, input);
       scoped.assertAvailable(false);
       return { ok: true, result };
     }
@@ -743,12 +818,6 @@ async function settingsOperation(op, input) {
       if (error) fail('HOST_INSTALL_FAILED', `The ${browser} extension folder could not be opened. Reinstall the complete companion and try again.`);
       result = { opened: true };
     }
-    else if (op === 'open-exports') { const dir = files.exportDirectory(); await privateDirectory(dir); const error = await shell.openPath(dir); if (error) throw new Error(error); }
-    else if (op === 'backup') {
-      const target = await dialog.showSaveDialog(window, { title: 'Export local career backup', defaultPath: 'recruiters-career-backup.json', filters: [{ name: 'Career data', extensions: ['json'] }] });
-      if (!target.canceled && target.filePath) { assertAvailable(false); const state = store.get(); const backups = Object.entries(state.identityArchives ?? {}).map(([deviceId, archived]) => ({ deviceId, account: archived.pairing?.account, career: archived.career })); await writeFile(target.filePath, JSON.stringify({ version: 1, exportedAt: new Date().toISOString(), account: state.pairing?.account, career: state.career, archives: backups }, null, 2), { mode: 0o600 }); protectPrivatePath(target.filePath); }
-      result = { exported: !target.canceled };
-    }
     else fail('INVALID_INPUT', 'This settings action is unavailable.');
     emit(); return { ok: true, result };
   } catch (error) { return { ok: false, error: safeFailure(error) }; }
@@ -756,8 +825,8 @@ async function settingsOperation(op, input) {
 ipcMain.handle('local-settings', async (event, op, input = {}) => {
   if (event.sender !== window?.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== uiURL) throw new Error('Local settings only.');
   try {
-    if (['decisions-key-save', 'decisions-key-remove', 'publication-range-set', 'import-cv', 'delete-rankings', 'connect-account', 'backup'].includes(op))
-      return await mutation(() => settingsOperation(op, input));
+    if (['decisions-key-save', 'decisions-key-remove', 'publication-range-set', 'import-cv', 'cv-delete', 'delete-rankings', 'connect-account', 'backup', 'backup-preview', 'backup-restore'].includes(op))
+      return await mutation(ownMutation => settingsOperation(op, input, ownMutation));
     return await settingsOperation(op, input);
   } catch (error) { return { ok: false, error: safeFailure(error) }; }
 });
@@ -798,7 +867,7 @@ else {
     try { await initialize(); } catch (error) { failure = error?.code === 'LEGACY_VAULT_LOCKED' ? error.message : 'Local storage is unavailable. Check the companion data folder, then open local storage.'; }
     await refreshReviewHosts();
     heartbeatTimer = setInterval(() => { if (locked || heartbeatBusy || !vault.get().pairing) return; heartbeatBusy = true; void client.request('POST', '/device/heartbeat', {}).catch(() => {}).finally(() => { heartbeatBusy = false; }); }, 30000);
-    const lock = () => { browserForms.cancelAll(); void cancelUpdate().catch(error => { failure = safeFailure(error).message; }); sessionEpoch++; locked = true; pairingReturn?.close(); pendingApproval?.finish(false); mcpBridge.disconnect(); emit(); };
+    const lock = () => { backups.cancel(); browserForms.cancelAll(); void cancelUpdate().catch(error => { failure = safeFailure(error).message; }); sessionEpoch++; locked = true; pairingReturn?.close(); pendingApproval?.finish(false); mcpBridge.disconnect(); emit(); };
     const unlock = () => { if (screenLocked || sleeping) return; void initialize().then(() => emit()).catch(() => { failure = 'Local storage could not be reopened. Your saved data has not been replaced.'; }); };
     powerMonitor.on('lock-screen', () => { screenLocked = true; lock(); }); powerMonitor.on('suspend', () => { sleeping = true; lock(); });
     powerMonitor.on('unlock-screen', () => { screenLocked = false; unlock(); }); powerMonitor.on('resume', () => { sleeping = false; unlock(); });

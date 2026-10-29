@@ -17,20 +17,21 @@ function increment(state) {
   state.prescanCredentialVersion = current + 1;
 }
 
+/** Public credential metadata from an already-authorized local snapshot; no key material is returned. */
+export function decisionCredentialStatus(state) {
+  const { id: provider, model, inputUsdPerMillion } = decisionProviders.openai;
+  const saved = state.prescanCredentials?.openai;
+  const configured = validKey(saved?.apiKey);
+  return { provider, model, configured, credentialVersion: version(state), inputUsdPerMillion,
+    savedAt: configured && typeof saved.updatedAt === 'string' ? saved.updatedAt : null,
+    keyHint: configured ? saved.apiKey.slice(-4) : null,
+    providers: Object.values(decisionProviders).map(({ id, label, model, inputUsdPerMillion }) => ({ id, label, model, inputUsdPerMillion })) };
+}
+
 // Main-process only. Expose publicState to UI; never expose read via IPC/MCP. The vault fields keep their historical
 // `prescan*` names so saved keys survive the removal of job pre-scanning.
 export function createDecisionCredentials({ store, onChange = () => {} }) {
-  function publicState() {
-    const state = store.get();
-    const { id: provider, model, inputUsdPerMillion } = decisionProviders.openai;
-    const saved = state.prescanCredentials?.openai;
-    const configured = validKey(saved?.apiKey);
-    // The UI names the saved key by its last four characters and save date; the secret itself never leaves the main process.
-    return { provider, model, configured, credentialVersion: version(state), inputUsdPerMillion,
-      savedAt: configured && typeof saved.updatedAt === 'string' ? saved.updatedAt : null,
-      keyHint: configured ? saved.apiKey.slice(-4) : null,
-      providers: Object.values(decisionProviders).map(({ id, label, model, inputUsdPerMillion }) => ({ id, label, model, inputUsdPerMillion })) };
-  }
+  const publicState = () => decisionCredentialStatus(store.get());
   return {
     publicState,
     async save(args) {

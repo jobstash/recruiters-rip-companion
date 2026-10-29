@@ -4,11 +4,11 @@ import { createCareerState, hash } from '../src/mcp/state.mjs';
 import { createIntroductionTools } from '../src/mcp/introduction-tools.mjs';
 
 const pdf = Buffer.from('%PDF-1.7 synthetic cv bytes').toString('base64');
-function fixture({ share = async () => ({ documentId: 'doc-1', attached: true, employment: 2 }), platform = async () => ({ results: [] }) } = {}) {
+function fixture({ share = async ({ documentId }) => ({ documentId, attached: true, employment: 2 }), platform = async () => ({ results: [] }) } = {}) {
   const career = createCareerState();
   career.sources.cv = { id: 'cv', name: 'Jane Doe CV.pdf', purpose: 'cv', archived: false, mediaType: 'application/pdf',
     originalBase64: pdf, text: 'Senior Engineer, Example Labs, 2021–2024.', contentHash: hash('Senior Engineer, Example Labs, 2021–2024.') };
-  let state = { career };
+  let state = { career, deviceId: 'synthetic-device', pairing: { account: { id: '123' } } };
   const store = { get: () => structuredClone(state), update: async change => { const next = structuredClone(state); await change(next); state = next; } };
   const calls = { platform: [], share: [], github: 0 };
   const tools = new Map(createIntroductionTools({ store,
@@ -31,7 +31,7 @@ test('a CV moves from needs_extraction to shared under standing consent alone, a
   await assert.rejects(f.call('career_cv_share', { sourceId: 'cv' }), { code: 'CONSENT_REQUIRED' });
   await f.call('career_introductions_update', { consent: true });
   const result = await f.call('career_cv_share', { sourceId: 'cv' });
-  assert.deepEqual([result.shared, result.documentId, result.roles], [true, 'doc-1', 2]);
+  assert.deepEqual([result.shared, result.documentId, result.roles], [true, f.calls.share[0].documentId, 2]);
   const sent = f.calls.share[0];
   assert.deepEqual(sent.document, { filename: 'Jane Doe CV.pdf', mediaType: 'application/pdf', contentBase64: pdf });
   assert.deepEqual(sent.employment.map(item => Object.keys(item).sort()), [['current', 'endDate', 'ref', 'startDate', 'title'], ['current', 'endDate', 'ref', 'startDate', 'title']]);

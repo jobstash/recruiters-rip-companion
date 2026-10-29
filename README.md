@@ -94,6 +94,34 @@ Ask your connected AI to prepare an application for a specific job. If you also 
 
 Your AI app may be able to fill the form for you. If it cannot, use the saved documents and answers yourself. Complete any security checks on the website. The application is only submitted when the employer confirms it.
 
+## Back up or restore your profile
+
+Open **Settings → Backups**.
+
+- **Save backup** saves your profile, CVs, saved documents, jobs and applications to a file. Keep it somewhere private.
+- **Restore backup** lets you choose a backup file. Check the profile name and contents, then choose **Restore profile**.
+- **Open backups** shows the default backup folder, including the copy saved before a restore.
+
+Restoring replaces the current profile in Companion. Your account connection, API keys and CV sharing choice stay unchanged. Companion saves a backup of your current profile before replacing it.
+
+You can use a backup on another computer. If a file contains several saved profiles, choose the one you want to restore. Other saved profiles already on this computer are not replaced.
+
+The JSON files created by the earlier **Export backup** action can also be selected. They may not include saved PDFs; the preview explains which files need to be created again. Your saved CV text and original uploaded CV files remain part of the profile.
+
+If the profile changes while you review the backup, select the file again before restoring. An invalid file does not replace your current profile.
+
+## Delete a CV
+
+In **Me → CVs**, open the CV and choose **Delete CV** at the top.
+
+If it was shared with JobStash, its shared copies are removed before it is deleted from Companion. If JobStash cannot confirm removal, the CV stays in Companion so you can try again. Other CVs, applications and backup files stay unchanged.
+
+Some older uploads have no recorded owner. These need ownership verification before JobStash can remove them. A CV shared through another account must be managed through that account.
+
+## Open a generated CV or letter
+
+Open **Jobs**, select a job, then choose **Open CV** or **Open letter** in its **Job and documents** section. **Open job** sits with them. The same actions are available when you select an item under **Applications**. These open saved files; they do not create new documents.
+
 ## Developer setup
 
 <details>
@@ -199,7 +227,11 @@ Say **“Reassess roles.”** The host performs one ranking reset, then reviews 
 
 The companion's **Clear reviews** action and `career_rankings_delete` clear rankings, pairwise comparisons and cached jobs. They preserve profile, preferences, CVs, facts, job applications, account data and API credentials. A reset invalidates in-flight writers so deleted results cannot reappear. `career_match_jobs.profileVersion` binds profile changes and ranking resets; bounded saved-job reassessments can read it as `career_profile_read.matchingProfileVersion`.
 
-Navigation is **Me / Jobs / Settings / Help**; Me opens by default. A compact first-use prompt offers the next account, CV or AI-app action from actual state; it does not disable local work. CV readiness requires a current imported source, and AI connection requires a live session rather than a setup click. Me keeps **Import CV**, **Jobs**, **Open files**, **Back up** and **AI apps** above **CVs / Facts / Preferences / Career**. Jobs keeps its publication slider and Codex/Claude handoff. Settings separates **Account**, **AI apps**, optional **Browser extensions**, **CV sharing**, **Form filling** and **Updates**; manual configuration is under **Advanced**. Help follows the same setup sequence. Import uses the native picker/extractor and revision-checked source API, never a renderer-supplied path. OS-lock protection, account approval and update approval remain enforced.
+Navigation is **Me / Jobs / Settings / Help**; Me opens by default. Me keeps **Import CV** and **Jobs**, with account/setup guidance when needed, above **CVs / Facts / Preferences / Career**. The CV detail starts with **Delete CV**; a red border distinguishes this destructive action. Generated files belong to their jobs and applications through **Open CV / Open letter**, not to a global file button in Me. Settings has **General / Backups** subtabs: General holds account, app, browser, sharing, form and update controls; Backups holds save, preview, restore and folder actions. Manual connection details stay under **Advanced**. Import and restore use native file pickers, never renderer-supplied paths. Locked storage, account connection, update approval and explicit CV deletion confirmation retain their boundaries.
+
+Backup JSON version 2 contains profile records and content-addressed document bytes, limited to 128 MiB per file, 100 profiles and 2,000 saved documents. Original CV files are limited to 5 MiB and saved documents to 12 MiB each. Current career-schema-2 records in version-1 exports remain importable; unsupported career schemas fail rather than passing through the destructive schema upgrade. Missing historical files are disclosed. Restores retain sign-in, device identity, credentials, other identity archives and current sharing consent, while clearing runtime receipts and invalidating stale operations. Failed restores roll back newly created files without removing preexisting exports. Shared-CV references remain untrusted provenance for server-authorized deletion, not permission or proof of current sharing.
+
+CV removal uses signed `POST /device/cv/delete` with an immutable `documentId`. The server establishes ownership; the client retains the CV until all recorded copies confirm erasure. New upload IDs are recorded before sending, and storage-level deletion fences stop delayed writes from restoring deleted bytes. The middleware migration and coordinated writer deployment described in its README are required before the online part is available. Backups cannot confer ownership of another account's shared CV.
 
 A job's reader can block the job, every job of its company or every job of its category (classification). Employer comparisons recognize slug/display-name separators, so `flow-traders` and `Flow Traders` match the same block. Blocks are saved locally in `career.blocklist` and survive **Clear reviews**. Discovery, direct job reads, batch fetches, recommendations, assessment archives/exports, reranking and application preparation all enforce the block; an old ID or existing draft is not an exemption. Operations recheck after asynchronous fetches and before releasing prepared form values. The agent rereads `career_application_context` before acting on a saved application and immediately before final submission through its host's computer-use tools. Blocked application work fails with `JOB_BLOCKED`; existing drafts remain stored, and the agent must not bypass the block through another tool. **Blocked** lists exclusions and **Unblock** removes one.
 

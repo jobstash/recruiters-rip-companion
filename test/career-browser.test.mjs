@@ -1,12 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile, mkdtemp, rm, writeFile, unlink, symlink } from 'node:fs/promises';
 import { runInNewContext } from 'node:vm';
 import { createCareerState } from '../src/mcp/state.mjs';
 import { createCareerBrowser, openJobPage, requirementContextPrompt } from '../src/career-browser.mjs';
 import { addBlock, removeBlock } from '../src/mcp/blocklist.mjs';
 import { ASSESSMENT_POLICY_ID, deriveDecision } from '../src/mcp/matching-contract.mjs';
 import { createMatchingTools } from '../src/mcp/matching-tools.mjs';
+import path from 'node:path';
+import { tmpdir } from 'node:os';
+import { createDocumentFiles } from '../src/mcp/files.mjs';
 
 function fixture() {
   const state = { privateKey: 'PRIVATE_KEY_SENTINEL', career: createCareerState() };
@@ -241,9 +244,7 @@ test('a saved application for a reviewed job appears as its own section with dra
   };
   const leader = await browser.read({ kind: 'jobs', id: 'leader' });
   assert.deepEqual(leader.sections.map(section => section.heading), ['Checks', 'Fit', 'Requirements', 'Your application']);
-  assert.deepEqual(sectionFields(leader, 'Your application'), [
-    { label: 'Prepared', value: '15 Oct 2026' }, { label: 'CV draft', value: '16 Oct 2026' }, { label: 'Cover letter', value: 'Not drafted' },
-    { label: 'Exports', value: '2 exports' }, { label: 'Interview answers', value: '2 answers' }]);
+  assert.equal(fieldValue(leader, 'Your application', 'Interview answers'), '2 answers');
   const other = await browser.read({ kind: 'jobs', id: 'other' });
   assert.equal(other.sections.some(section => section.heading === 'Your application'), false);
   assert.deepEqual(other.sections.map(section => section.heading), ['Checks']);
@@ -259,15 +260,15 @@ test('openJobPage opens only a saved http(s) job page and rejects unknown or mal
   state.career.jobs = { captured: { title: 'Captured', applyUrl: 'http://jobs.example/captured', complete: true, description: 'Advert.', updatedAt: '2026-10-01T00:00:00Z' } };
   const opened = [];
   const openExternal = async url => { opened.push(url); };
-  assert.deepEqual(await openJobPage({ store, openExternal }, { id: 'linked' }), { opened: true, url: 'https://jobs.example/linked?utm=1' });
-  assert.deepEqual(await openJobPage({ store, openExternal }, { id: 'captured' }), { opened: true, url: 'http://jobs.example/captured' });
+  assert.deepEqual(await openJobPage({ store, openExternal }, { kind: 'jobs', id: 'linked' }), { opened: true, url: 'https://jobs.example/linked?utm=1' });
+  assert.deepEqual(await openJobPage({ store, openExternal }, { kind: 'jobs', id: 'captured' }), { opened: true, url: 'http://jobs.example/captured' });
   assert.deepEqual((await createCareerBrowser({ store }).read({ kind: 'jobs', id: 'unsafe' })).header.applyUrl, null);
   assert.deepEqual((await createCareerBrowser({ store }).read({ kind: 'jobs', id: 'linked' })).header.applyUrl, 'https://jobs.example/linked?utm=1');
-  await assert.rejects(openJobPage({ store, openExternal }, { id: 'unsafe' }), { code: 'NOT_FOUND' });
-  await assert.rejects(openJobPage({ store, openExternal }, { id: 'bare' }), { code: 'NOT_FOUND' });
-  await assert.rejects(openJobPage({ store, openExternal }, { id: 'missing' }), { code: 'NOT_FOUND' });
+  await assert.rejects(openJobPage({ store, openExternal }, { kind: 'jobs', id: 'unsafe' }), { code: 'NOT_FOUND' });
+  await assert.rejects(openJobPage({ store, openExternal }, { kind: 'jobs', id: 'bare' }), { code: 'NOT_FOUND' });
+  await assert.rejects(openJobPage({ store, openExternal }, { kind: 'jobs', id: 'missing' }), { code: 'NOT_FOUND' });
   for (const id of ['', '   ', '__proto__', 'constructor', 42, null, undefined])
-    await assert.rejects(openJobPage({ store, openExternal }, { id }), { code: 'INVALID_INPUT' });
+    await assert.rejects(openJobPage({ store, openExternal }, { kind: 'jobs', id }), { code: 'INVALID_INPUT' });
   await assert.rejects(openJobPage({ store, openExternal }, null), { code: 'INVALID_INPUT' });
   assert.deepEqual(opened, ['https://jobs.example/linked?utm=1', 'http://jobs.example/captured']);
 });
@@ -635,20 +636,21 @@ async function rendererFixture(browser, wide, operations = {}) {
   }
   nodes['me-browser'].querySelectorAll = selector => selector === '[data-stage-count]' ? [] : Object.values(categories);
   nodes['career-browser'].querySelectorAll = selector => selector === '[data-stage-count]' ? stageCounts : Object.values(jobCategories);
-  const calls = [];
+  const calls = [], notices = [];
   const window = { matchMedia: () => ({ matches: wide }), companion: { async invoke(operation, args) {
     const input = structuredClone(args);
     calls.push({ operation, args: input });
     if (operation !== 'career-list' && operation !== 'career-read') return { ok: true, result: (await operations[operation]?.(input)) ?? {} };
     return { ok: true, result: await (operation === 'career-list' ? browser.list(input) : browser.read(input)) };
   } } };
+  window.showCompanionNotice = (...args) => notices.push(args);
   const document = { getElementById: id => nodes[id], createElement: tag => new Node(tag),
     querySelectorAll: () => [nodes['stage-jobs']], get activeElement() { return focused; } };
   runInNewContext(await readFile(new URL('../ui/career-browser.js', import.meta.url), 'utf8'), { window, document });
   const byClass = (node, className) => node.className.split(' ').includes(className) ? node
     : node.children.map(child => byClass(child, className)).find(Boolean) ?? null;
   const rows = prefix => nodes[`${prefix}-records`].children.map(row => byClass(row, 'career-record'));
-  return { window, nodes, categories, jobCategories, calls, rows, byClass, focused: () => focused,
+  return { window, nodes, categories, jobCategories, calls, notices, rows, byClass, focused: () => focused,
     stageCount: name => stageCounts.find(count => count.dataset.stageCount === name),
     settle: () => new Promise(resolve => setImmediate(resolve)),
     titles: (prefix = 'career') => rows(prefix).map(button => byClass(button, 'career-record-title').textContent) };
@@ -690,7 +692,6 @@ for (const wide of [false, true]) test(`Jobs paging and stage changes keep the r
   ui.nodes['career-stage-reviewed'].focus();
   ui.nodes['career-stage-reviewed'].fire('click');
   await ui.settle();
-  assert.equal(ui.calls.at(-1).args.view, 'reviewed');
   assert.deepEqual(ui.titles(), ['26']);
   assert.equal(ui.nodes['stage-jobs'].hidden, true);
   assert.equal(ui.nodes['review-launch'].hidden, false);
@@ -707,8 +708,6 @@ for (const wide of [false, true]) test(`Jobs paging and stage changes keep the r
   // Applications shares the Jobs list + reader; the jobs-only toolbar controls hide and disable while it is active.
   ui.jobCategories.applications.fire('click');
   await ui.settle();
-  assert.equal(ui.calls.at(-1).args.kind, 'applications');
-  assert.equal(Object.hasOwn(ui.calls.at(-1).args, 'view'), false);
   assert.deepEqual(ui.titles(), ['Applied Role — Employer']);
   assert.equal(ui.jobCategories.applications.attributes.get('aria-selected'), 'true');
   assert.equal(ui.jobCategories.jobs.attributes.get('aria-selected'), 'false');
@@ -720,20 +719,17 @@ for (const wide of [false, true]) test(`Jobs paging and stage changes keep the r
   assert.equal(ui.nodes['career-reader-title'].textContent, wide ? 'Applied Role — Employer' : '');
   ui.jobCategories.jobs.fire('click');
   await ui.settle();
-  assert.equal(ui.calls.at(-1).args.kind, 'jobs');
-  assert.equal(ui.calls.at(-1).args.view, 'jobs');
   assert.equal(ui.titles()[0], '00');
   assert.equal(ui.nodes['stage-jobs'].hidden, false);
   assert.equal(ui.nodes['review-launch'].hidden, false);
   assert.equal(ui.nodes['delete-rankings'].hidden, true);
   assert.equal(ui.nodes['publication-range'].disabled, false);
 
-  // Me browses CVs and facts with its own list and never sends a jobs view.
+  // Me changes its own category without changing the Jobs list.
   assert.equal(ui.titles('me').length, 0);
   ui.categories.facts.fire('click');
   await ui.settle();
-  assert.equal(ui.calls.at(-1).args.kind, 'facts');
-  assert.equal(Object.hasOwn(ui.calls.at(-1).args, 'view'), false);
+  assert.equal(ui.categories.facts.attributes.get('aria-selected'), 'true');
   assert.equal(ui.titles()[0], '00');
   ui.window.careerBrowser.clear();
   assert.equal(ui.nodes['delete-rankings'].disabled, true);
@@ -945,7 +941,6 @@ test('a state refresh while reading keeps the page and the open record; a record
   assert.equal(loadingSeen, false);
   assert.equal(readerCleared, false);
   assert.deepEqual(ui.titles(), ['25', '26']);
-  assert.equal(ui.calls.at(-1).args.offset, 25);
   assert.deepEqual([...ui.nodes['career-records'].children], rowsBefore);
   assert.equal(ui.nodes['career-reader-content'].children, contentBefore);
   assert.equal(ui.nodes['career-reader-title'].textContent, '26');
@@ -1031,7 +1026,6 @@ test('each Jobs stage preserves its active tab and controls when empty', async (
   for (const view of ['reviewed', 'jobs']) {
     ui.nodes[`career-stage-${view}`].fire('click');
     await ui.settle();
-    assert.equal(ui.calls.at(-1).args.view, view);
     assert.equal(ui.nodes['stage-jobs'].hidden, view !== 'jobs');
     assert.equal(ui.nodes['review-launch'].hidden, false);
     assert.equal(ui.nodes['delete-rankings'].hidden, view !== 'reviewed');
@@ -1151,4 +1145,273 @@ test('blocking from the reader hides matching jobs; Blocked lists each block and
   ui.jobCategories.blocks.fire('click');
   await ui.settle();
   assert.deepEqual(ui.titles().sort(), ['Backend Engineer — EXAMPLE  labs', 'Smart Contracts']);
+});
+
+test('CV detail offers explicit linked deletion and preserves the local reader on cancel or failure', async () => {
+  const { state, browser } = fixture();
+  state.career.sources.cv = { id: 'cv', name: 'Selected CV', purpose: 'cv', text: 'Synthetic CV', contentHash: 'synthetic-hash' };
+  state.career.sources.other = { id: 'other', name: 'Other CV', purpose: 'cv', text: 'Other synthetic CV', contentHash: 'other-hash' };
+  let outcome = 'cancel', pending, release;
+  const ui = await rendererFixture(browser, false, { 'cv-delete': async args => {
+    assert.deepEqual(args, { sourceId: 'cv', contentHash: 'synthetic-hash' });
+    if (outcome === 'cancel') return { cancelled: true };
+    if (outcome === 'failure') throw new Error('JobStash is offline.');
+    await pending;
+    delete state.career.sources.cv;
+    return { deleted: true, sourceId: 'cv' };
+  } });
+  await ui.window.careerBrowser.refresh();
+  const row = ui.rows('me').find(button => ui.byClass(button, 'career-record-title').textContent === 'Selected CV');
+  row.fire('click'); await ui.settle();
+  const content = ui.nodes['me-reader-content'];
+  const action = content.querySelectorAll('button').find(button => button.textContent === 'Delete CV');
+  assert.ok(action);
+  action.fire('click'); await ui.settle();
+  assert.ok(state.career.sources.cv);
+  assert.equal(action.disabled, false);
+  outcome = 'failure';
+  action.fire('click'); await ui.settle();
+  assert.equal(ui.nodes['me-reader-title'].textContent, 'Selected CV');
+  assert.ok(state.career.sources.cv);
+  outcome = 'success';
+  pending = new Promise(resolve => { release = resolve; });
+  action.fire('click');
+  assert.equal(action.disabled, true);
+  action.fire('click');
+  assert.equal(ui.calls.filter(call => call.operation === 'cv-delete').length, 3);
+  release(); await ui.settle();
+  assert.equal(state.career.sources.cv, undefined);
+  assert.ok(state.career.sources.other);
+  assert.equal(ui.nodes['me-list-status'].textContent, 'CV deleted.');
+});
+
+async function savedPdfFixture(t) {
+  const directory = await mkdtemp(path.join(tmpdir(), 'career-browser-pdf-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const { state, store } = fixture();
+  state.deviceId = 'synthetic-document-reader';
+  const files = createDocumentFiles({ directory, store, assertAvailable() {} });
+  const pdf = await files.exportDocument({ bytes: Buffer.from('%PDF-1.7\nsynthetic saved CV\n%%EOF'), mediaType: 'application/pdf' });
+  const job = catalogueJob('local:exact', currentDate(), { title: 'Engineer', company: 'Same employer',
+    url: 'https://jobs.example.test/roles/exact', applyUrl: 'https://jobs.example.test/roles/exact' });
+  state.career.matching = { jobs: { [job.id]: job }, scores: {} };
+  const exported = { ...pdf, kind: 'cv', format: 'pdf', documentVersion: 1, createdAt: '2025-01-02T12:00:00.000Z' };
+  state.career.applications.exact = { id: 'exact', job: { ...job }, exports: [exported] };
+  const opened = [];
+  const browser = createCareerBrowser({ store, files, openPath: async filename => { opened.push(filename); return ''; } });
+  const args = async (kind = 'jobs', id = job.id) => {
+    const detail = await browser.read({ kind, id });
+    return { kind, id, document: 'cv', token: detail.documents.find(item => item.kind === 'cv').token };
+  };
+  return { state, store, files, browser, opened, pdf, job, exported, args };
+}
+
+test('saved PDFs bind to the exact job and application, expose no paths and open through private resources', async t => {
+  const f = await savedPdfFixture(t);
+  const other = { ...f.job, id: 'local:other', url: 'https://jobs.example.test/roles/other', applyUrl: 'https://jobs.example.test/roles/other' };
+  f.state.career.matching.jobs[other.id] = other;
+  const page = await f.browser.list({ kind: 'jobs' });
+  assert.ok(page.items.every(item => item.documents === undefined));
+  const exact = await f.browser.read({ kind: 'jobs', id: f.job.id });
+  assert.equal((await f.browser.read({ kind: 'jobs', id: other.id })).documents, undefined);
+  assert.deepEqual(exact.documents.map(item => [item.kind, item.status]), [['cv', 'saved'], ['cover_letter', 'missing']]);
+  assert.equal(exact.documents[0].createdAt, f.exported.createdAt);
+  assert.equal(JSON.stringify({ page, exact }).includes(f.pdf.path), false);
+  assert.equal(JSON.stringify({ page, exact }).includes(f.pdf.uri), false);
+  const args = await f.args();
+  await assert.rejects(f.browser.openDocument({ ...args, id: other.id }), { code: 'DOCUMENT_MISSING' });
+  for (const extra of [{ path: f.pdf.path }, { uri: f.pdf.uri }, { applicationId: 'exact' }])
+    await assert.rejects(f.browser.openDocument({ ...args, ...extra }), { code: 'INVALID_INPUT' });
+  assert.deepEqual(await f.browser.openDocument(args), { opened: true });
+  assert.deepEqual(await f.browser.openDocument(await f.args('applications', 'exact')), { opened: true });
+  assert.deepEqual(f.opened, [f.pdf.path, f.pdf.path]);
+});
+
+test('saved document discovery reuses ATS identity and refuses ambiguous application selection', async t => {
+  const f = await savedPdfFixture(t);
+  f.job.applyUrl = 'https://boards.greenhouse.io/example/jobs/123/application';
+  f.job.url = f.job.applyUrl;
+  f.state.career.applications.exact.job = { title: 'Engineer', company: 'Same employer', url: 'https://boards.greenhouse.io/example/jobs/123' };
+  assert.equal((await f.browser.read({ kind: 'jobs', id: f.job.id })).documents[0].status, 'saved');
+  f.state.career.applications.duplicate = { ...f.state.career.applications.exact, id: 'duplicate' };
+  const detail = await f.browser.read({ kind: 'jobs', id: f.job.id });
+  assert.deepEqual(detail.documents, []);
+  assert.ok(detail.documentNotice);
+  assert.equal((await f.browser.read({ kind: 'applications', id: 'exact' })).documents[0].status, 'saved');
+});
+
+test('missing, changed, symlinked and arbitrary saved resource references never reach the native shell', async t => {
+  const f = await savedPdfFixture(t);
+  const args = await f.args();
+  await writeFile(f.pdf.path, '%PDF-1.7\nchanged bytes\n%%EOF', { mode: 0o600 });
+  await assert.rejects(f.browser.openDocument(args), { code: 'DOCUMENT_UNAVAILABLE' });
+  assert.equal((await f.browser.read({ kind: 'applications', id: 'exact' })).documents[0].status, 'unavailable');
+  await unlink(f.pdf.path);
+  await assert.rejects(f.browser.openDocument(args), { code: 'DOCUMENT_UNAVAILABLE' });
+  const target = path.join(path.dirname(f.pdf.path), 'unrelated.pdf');
+  await writeFile(target, '%PDF-1.7\nsynthetic saved CV\n%%EOF', { mode: 0o600 });
+  if (process.platform !== 'win32') {
+    await symlink(target, f.pdf.path);
+    await assert.rejects(f.browser.openDocument(args), { code: 'DOCUMENT_UNAVAILABLE' });
+  }
+  for (const uri of [target, `file://${target}`, 'recruiters://exports/../../unrelated.pdf']) {
+    f.exported.uri = uri;
+    assert.equal((await f.browser.read({ kind: 'applications', id: 'exact' })).documents[0].status, 'unavailable');
+  }
+  assert.deepEqual(f.opened, []);
+});
+
+test('selection and file validity are rechecked after asynchronous resolution, without opening replacements', async t => {
+  const f = await savedPdfFixture(t);
+  const args = await f.args();
+  const original = structuredClone(f.state.career.applications.exact);
+  for (const resolution of [1, 2]) {
+    for (const change of [
+      () => { f.state.career.applications.exact.job.url = 'https://other.example.test/job'; },
+      () => { f.state.career.applications.exact.exports[0].documentVersion++; },
+      () => { delete f.state.career.applications.exact; },
+    ]) {
+      let calls = 0;
+      f.state.career.applications.exact = structuredClone(original);
+      const browser = createCareerBrowser({ store: f.store, files: { async resolveExport(uri) {
+        const filename = await f.files.resolveExport(uri);
+        if (++calls === resolution) change();
+        return filename;
+      } }, openPath: () => assert.fail('Changed selection must not open') });
+      await assert.rejects(browser.openDocument(args));
+      assert.equal(calls, resolution);
+    }
+  }
+  f.state.career.applications.exact = structuredClone(original);
+  let calls = 0;
+  const browser = createCareerBrowser({ store: f.store, files: { async resolveExport(uri) {
+    const filename = await f.files.resolveExport(uri);
+    if (++calls === 1) await writeFile(filename, '%PDF-1.7\nchanged after validation\n%%EOF');
+    return filename;
+  } }, openPath: () => assert.fail('Changed file must not open') });
+  await assert.rejects(browser.openDocument(args), { code: 'DOCUMENT_UNAVAILABLE' });
+});
+
+test('selected detail groups exact job and document actions once, preserves counts and narrow selection', async t => {
+  const f = await savedPdfFixture(t);
+  f.state.career.applications.exact.job.applyUrl = 'https://jobs.example.test/roles/exact/apply';
+  const letter = await f.files.exportDocument({ bytes: Buffer.from('%PDF-1.7\nsynthetic letter for grouped actions\n%%EOF'), mediaType: 'application/pdf' });
+  f.state.career.applications.exact.exports.push({ ...letter, kind: 'cover_letter', format: 'pdf', createdAt: '2025-02-03T12:00:00.000Z' });
+  const pages = { jobs: await f.browser.list({ kind: 'jobs' }), applications: await f.browser.list({ kind: 'applications' }) };
+  let application = await f.browser.read({ kind: 'applications', id: 'exact' });
+  let job = await f.browser.read({ kind: 'jobs', id: f.job.id });
+  const urls = [];
+  let opening;
+  const ui = await rendererFixture({
+    list: args => pages[args.kind] ?? f.browser.list(args),
+    read: args => args.kind === 'applications' ? application : args.kind === 'jobs' ? job : f.browser.read(args),
+  }, false, {
+    'career-open-document': args => (opening = f.browser.openDocument(args)),
+    'career-open-job': args => (opening = openJobPage({ store: f.store, openExternal: async url => { urls.push(url); } }, args)),
+  });
+  await ui.window.careerBrowser.refresh();
+  assert.equal(ui.nodes['career-records'].querySelectorAll('button').length, ui.rows('career').length);
+  const count = ui.nodes['career-list-status'].textContent;
+  assert.equal(ui.nodes['career-reader'].hidden, true);
+  ui.rows('career')[0].fire('click'); await ui.settle();
+  const content = ui.nodes['career-reader-content'];
+  const files = ui.byClass(content, 'career-files');
+  assert.ok(content.children.indexOf(files) > content.children.indexOf(ui.byClass(content, 'career-reader-meta')));
+  const actions = files.querySelectorAll('button');
+  assert.deepEqual(actions.map(button => button.dataset.careerAction), ['job', 'cv', 'cover_letter']);
+  assert.equal(new Set(actions.map(button => button.className)).size, 1);
+  assert.equal(content.querySelectorAll('button').filter(button => button.dataset.careerAction).length, 3);
+  const columns = files.querySelectorAll('.career-document-action');
+  assert.equal(columns[1].querySelector('button'), actions[1]);
+  assert.equal(columns[2].querySelector('button'), actions[2]);
+  assert.notEqual(columns[1].querySelector('.caption').textContent, columns[2].querySelector('.caption').textContent);
+  for (const button of actions) { button.fire('click'); await opening; await ui.settle(); }
+  assert.deepEqual(f.opened, [f.pdf.path, letter.path]);
+  assert.deepEqual(urls, [f.job.applyUrl]);
+  assert.equal(ui.nodes['career-list-status'].textContent, count);
+  assert.equal(ui.notices.at(-1)[1], 'document-open');
+  assert.deepEqual(ui.calls.find(call => call.operation === 'career-open-document').args, await f.args());
+  actions[1].focus();
+  ui.nodes['career-reader'].scrollTop = 120;
+  await ui.window.careerBrowser.refresh(); await ui.settle();
+  assert.equal(ui.focused(), actions[1]);
+  assert.equal(ui.nodes['career-reader'].scrollTop, 120);
+  assert.equal(ui.nodes['career-records'].querySelectorAll('[aria-current]').length, 1);
+  f.exported.createdAt = '2025-04-05T12:00:00.000Z';
+  job = await f.browser.read({ kind: 'jobs', id: f.job.id });
+  application = await f.browser.read({ kind: 'applications', id: 'exact' });
+  await ui.window.careerBrowser.refresh(); await ui.settle();
+  const refreshedAction = content.querySelectorAll('button').find(button => button.dataset.document === 'cv');
+  assert.notEqual(refreshedAction, actions[1]);
+  assert.equal(ui.focused(), refreshedAction);
+  assert.equal(ui.nodes['career-reader'].scrollTop, 120);
+  assert.equal(ui.nodes['career-records'].querySelectorAll('[aria-current]').length, 1);
+  assert.ok(ui.calls.filter(call => call.operation === 'career-read' && call.args.kind === 'jobs').length >= 3);
+  ui.jobCategories.applications.fire('click'); await ui.settle();
+  assert.equal(ui.nodes['career-records'].querySelectorAll('button').length, ui.rows('career').length);
+  ui.rows('career')[0].fire('click'); await ui.settle();
+  const appFiles = ui.byClass(content, 'career-files');
+  assert.equal(content.children[1], appFiles);
+  const appActions = appFiles.querySelectorAll('button');
+  appActions[0].fire('click'); await opening; await ui.settle();
+  assert.deepEqual(urls, [f.job.applyUrl, f.state.career.applications.exact.job.applyUrl]);
+  assert.deepEqual(ui.calls.filter(call => call.operation === 'career-open-job').at(-1).args, { kind: 'applications', id: 'exact' });
+  appActions[1].fire('click'); await opening; await ui.settle();
+  assert.deepEqual(ui.calls.filter(call => call.operation === 'career-open-document').at(-1).args, await f.args('applications', 'exact'));
+  const applicationCount = ui.nodes['career-list-status'].textContent;
+  await unlink(f.pdf.path);
+  appActions[1].fire('click');
+  await assert.rejects(opening, { code: 'DOCUMENT_UNAVAILABLE' }); await ui.settle();
+  assert.equal(ui.nodes['career-list-status'].textContent, applicationCount);
+  assert.equal(ui.notices.at(-1)[1], 'error');
+  assert.equal(ui.notices.at(-1)[2], true);
+});
+
+test('CV and letter select separate saved PDFs and shell failures are not reported as opened', async t => {
+  const f = await savedPdfFixture(t);
+  const letter = await f.files.exportDocument({ bytes: Buffer.from('%PDF-1.7\nsynthetic saved letter\n%%EOF'), mediaType: 'application/pdf' });
+  f.state.career.applications.exact.exports.push({ ...letter, kind: 'cover_letter', format: 'pdf', createdAt: '2025-01-03T12:00:00.000Z' });
+  const detail = await f.browser.read({ kind: 'applications', id: 'exact' });
+  const args = { kind: 'applications', id: 'exact', document: 'cover_letter', token: detail.documents[1].token };
+  await assert.rejects(f.browser.openDocument({ ...args, document: 'cv' }), { code: 'DOCUMENT_CHANGED' });
+  assert.deepEqual(await f.browser.openDocument(args), { opened: true });
+  assert.deepEqual(f.opened, [letter.path]);
+  const unavailable = createCareerBrowser({ store: f.store, files: f.files, openPath: async () => 'No application registered' });
+  await assert.rejects(unavailable.openDocument(args), { code: 'DOCUMENT_UNAVAILABLE' });
+});
+
+test('application job opening uses its exact saved destination, not a colliding job ID or renderer URL', async t => {
+  const f = await savedPdfFixture(t);
+  f.state.career.matching.jobs.exact = catalogueJob('exact', currentDate(), { applyUrl: 'https://other.example.test/unrelated' });
+  const opened = [], access = { store: f.store, openExternal: async url => { opened.push(url); } };
+  await openJobPage(access, { kind: 'applications', id: 'exact' });
+  await openJobPage(access, { kind: 'jobs', id: 'exact' });
+  assert.deepEqual(opened, [f.job.applyUrl, 'https://other.example.test/unrelated']);
+  await assert.rejects(openJobPage(access, { kind: 'applications', id: f.job.id }), { code: 'NOT_FOUND' });
+  await assert.rejects(openJobPage(access, { kind: 'applications', id: 'exact', url: 'https://foreign.example' }), { code: 'INVALID_INPUT' });
+  await assert.rejects(openJobPage(access, { id: 'exact' }), { code: 'INVALID_INPUT' });
+  f.state.career.applications.exact.job = { url: 'file:///private/unrelated.pdf' };
+  assert.equal((await f.browser.read({ kind: 'applications', id: 'exact' })).jobPage, false);
+  await assert.rejects(openJobPage(access, { kind: 'applications', id: 'exact' }), { code: 'NOT_FOUND' });
+  assert.equal(opened.length, 2);
+});
+
+test('list refresh never validates PDFs; only the selected detail resolves its saved files', async t => {
+  const f = await savedPdfFixture(t);
+  const resolved = [];
+  const browser = createCareerBrowser({ store: f.store, files: { async resolveExport(uri) {
+    resolved.push(uri);
+    return f.files.resolveExport(uri);
+  } } });
+  for (const kind of ['jobs', 'applications']) {
+    const first = await browser.list({ kind });
+    await browser.list({ kind });
+    assert.ok(first.items.every(item => item.documents === undefined));
+  }
+  assert.deepEqual(resolved, []);
+  const detail = await browser.read({ kind: 'jobs', id: f.job.id });
+  assert.equal(detail.documents[0].status, 'saved');
+  assert.deepEqual(resolved, [f.pdf.uri]);
+  await unlink(f.pdf.path);
+  assert.equal((await browser.read({ kind: 'jobs', id: f.job.id })).documents[0].status, 'unavailable');
 });

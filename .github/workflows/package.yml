@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   package:
     strategy:
@@ -41,11 +45,20 @@ jobs:
           node-version: 22.12.0
           architecture: ${{ matrix.arch }}
           cache: pnpm
+      - name: Install Linux desktop smoke dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install --yes xvfb libfuse2 libgtk-3-0 libnss3 libasound2 libgbm1
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - run: pnpm check
       - run: pnpm test
       - run: pnpm ${{ matrix.command }}
+      - name: Launch installed Windows or macOS application with a disposable profile
+        if: runner.os != 'Linux'
+        run: node scripts/smoke-package.mjs
+      - name: Launch AppImage with Chromium sandbox and a disposable profile
+        if: runner.os == 'Linux'
+        run: xvfb-run --auto-servernum node scripts/smoke-package.mjs
       - name: Package unsigned browser upload archives
         run: |
           node browser-extension/build.mjs production --browser=chrome --zip

@@ -60,8 +60,8 @@ function launcherScript({ executable, script, args = [], forwardArgs = false, pl
 }
 
 // Windows mode bits do not represent privacy. Inspect/enforce the actual NTFS DACL,
-// allowing only this account and the OS administrators/SYSTEM. Never accept a
-// foreign owner, symbolic link/junction, public ACE, or a filesystem without ACLs.
+// allowing only this account and the OS administrators/SYSTEM. Never accept an
+// owner outside those principals, symbolic link/junction, public ACE, or a filesystem without ACLs.
 function windowsAcl(filename, protect, directory, { env = process.env, run = execFileSync } = {}) {
   const root = env.SYSTEMROOT || env.SystemRoot;
   if (!root || !path.win32.isAbsolute(root)) throw new Error('Windows system directory is unavailable.');
@@ -69,9 +69,11 @@ function windowsAcl(filename, protect, directory, { env = process.env, run = exe
   // Use .NET ACL APIs directly: Get-Acl/Set-Acl trigger PowerShell module
   // discovery, which can hang or load incompatible modules from a host shell.
   const kind = directory ? 'Directory' : 'File';
-  const script = `$ErrorActionPreference='Stop';$p=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${target}'));$sid=[Security.Principal.WindowsIdentity]::GetCurrent().User;$a=[IO.${kind}]::GetAccessControl($p);if($a.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $sid.Value){throw 'Foreign owner'};` +
+  // Elevated tokens can create Administrators-owned objects. These OS principals
+  // already have full DACL access; arbitrary other user/group owners remain invalid.
+  const script = `$ErrorActionPreference='Stop';$p=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${target}'));$sid=[Security.Principal.WindowsIdentity]::GetCurrent().User;$allowed=@($sid.Value,'S-1-5-18','S-1-5-32-544');$a=[IO.${kind}]::GetAccessControl($p);if($a.GetOwner([Security.Principal.SecurityIdentifier]).Value -notin $allowed){throw 'Foreign owner'};` +
     (protect ? `$a.SetAccessRuleProtection($true,$false);foreach($r in @($a.Access)){$a.RemoveAccessRuleSpecific($r)};$inherit=[Security.AccessControl.InheritanceFlags]::${directory ? 'ContainerInherit -bor [Security.AccessControl.InheritanceFlags]::ObjectInherit' : 'None'};foreach($s in @($sid.Value,'S-1-5-18','S-1-5-32-544')){$r=[Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.SecurityIdentifier]::new($s),[Security.AccessControl.FileSystemRights]::FullControl,$inherit,[Security.AccessControl.PropagationFlags]::None,[Security.AccessControl.AccessControlType]::Allow);$a.AddAccessRule($r)};[IO.${kind}]::SetAccessControl($p,$a);$a=[IO.${kind}]::GetAccessControl($p);` : '') +
-    `$allowed=@($sid.Value,'S-1-5-18','S-1-5-32-544');$own=$false;foreach($r in $a.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])){if($r.AccessControlType -eq 'Allow'){if($r.IdentityReference.Value -notin $allowed){throw 'Public access'};if($r.IdentityReference.Value -eq $sid.Value){$own=$true}}};if(-not $own){throw 'Missing owner access'}`;
+    `$own=$false;foreach($r in $a.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])){if($r.AccessControlType -eq 'Allow'){if($r.IdentityReference.Value -notin $allowed){throw 'Public access'};if($r.IdentityReference.Value -eq $sid.Value){$own=$true}}};if(-not $own){throw 'Missing owner access'}`;
   run(path.win32.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { env: restrictedEnvironment(env, 'win32'), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], timeout: 15000 });
 }
 function assertPrivatePath(filename, { directory = false, maxSize = Infinity, platform = process.platform, info = fs.lstatSync(filename), ...options } = {}) {
@@ -164,5 +166,41 @@ async function prepareBridgeRuntime({ executable, appPath, directory, packaged, 
   }
   return { executable: image, appPath: cached, runtimeRoot: cached };
 }
+async function persistBrowserExtension({ source, directory, browser, packaged, platform = process.platform, env = process.env, rename = fs.promises.rename }) {
+  if (platform !== 'linux' || !packaged || !env.APPIMAGE) return source;
+  if (!['chrome', 'firefox'].includes(browser) || !path.posix.isAbsolute(env.APPIMAGE)) throw new Error('Invalid browser extension installation.');
+  const base = path.join(directory, 'browser-extensions'), destination = path.join(base, browser);
+  for (const entry of [directory, base]) {
+    await fs.promises.mkdir(entry, { recursive: true, mode: 0o700 });
+    protectPrivatePath(entry, { directory: true });
+  }
+  let existing = false;
+  try { assertPrivatePath(destination, { directory: true }); existing = true; }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  const nonce = randomBytes(12).toString('hex'), staged = path.join(base, `.${browser}-${nonce}.tmp`), backup = path.join(base, `.${browser}-${nonce}.previous`);
+  async function copyTree(from, to) {
+    const info = await fs.promises.lstat(from);
+    if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('Invalid bundled extension directory.');
+    await fs.promises.mkdir(to, { mode: 0o700 });
+    for (const entry of await fs.promises.readdir(from, { withFileTypes: true })) {
+      const input = path.join(from, entry.name), output = path.join(to, entry.name);
+      if (entry.isSymbolicLink()) throw new Error('Bundled extensions cannot contain symbolic links.');
+      if (entry.isDirectory()) await copyTree(input, output);
+      else if (entry.isFile()) { await fs.promises.copyFile(input, output, fs.constants.COPYFILE_EXCL); await fs.promises.chmod(output, 0o600); }
+      else throw new Error('Invalid bundled extension file.');
+    }
+  }
+  let moved = false, installed = false;
+  try {
+    await copyTree(source, staged);
+    if (existing) { await rename(destination, backup); moved = true; }
+    try { await rename(staged, destination); installed = true; }
+    catch (error) { if (moved) await rename(backup, destination); throw error; }
+    return destination;
+  } finally {
+    await fs.promises.rm(staged, { recursive: true, force: true });
+    if (installed && moved) await fs.promises.rm(backup, { recursive: true, force: true });
+  }
+}
 module.exports = { restrictedEnvironment, supportDirectory, deviceDirectory, endpoint, mcpCommand, launcherScript, assertPrivatePath, protectPrivatePath, privateJSON,
-  createAuthenticationChallenge, verifyAuthenticationProof, connectAuthenticated, prepareBridgeRuntime };
+  createAuthenticationChallenge, verifyAuthenticationProof, connectAuthenticated, prepareBridgeRuntime, persistBrowserExtension };

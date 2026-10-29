@@ -11,7 +11,7 @@ import { createDeviceClient } from './client.mjs';
 import { installNative } from './install-native.mjs';
 import { BROWSER_IDENTITIES, nativeBrowser } from './browser-identity.mjs';
 import { claimInstance } from './instance-lock.mjs';
-import { endpoint, launcherScript, mcpCommand, protectPrivatePath, createAuthenticationChallenge, verifyAuthenticationProof } from './platform-runtime.cjs';
+import { endpoint, launcherScript, mcpCommand, protectPrivatePath, createAuthenticationChallenge, verifyAuthenticationProof, prepareBridgeRuntime, persistBrowserExtension } from './platform-runtime.cjs';
 import { createIntroductionTools, introductionsStatus, setSharingConsent } from './mcp/introduction-tools.mjs';
 import { openEmploymentProfile } from './employment-browser.mjs';
 import { openJobPage, requirementContextPrompt } from './career-browser.mjs';
@@ -384,16 +384,17 @@ function createSessionServer() {
 }
 async function installConnections() {
   await privateDirectory(directory);
-  const launch = { executable: process.execPath, args: [...(app.isPackaged ? [] : [app.getAppPath()]), ...(localOnly ? ['--local-product'] : [])], localOnly };
+  const runtime = await prepareBridgeRuntime({ executable: process.execPath, appPath: app.getAppPath(), directory, packaged: app.isPackaged, version: packageMetadata.version });
+  const launch = { executable: runtime.executable, args: [...(app.isPackaged ? [] : [runtime.appPath]), ...(localOnly ? ['--local-product'] : [])], localOnly };
   await writeFile(path.join(directory, 'mcp-launch.json'), JSON.stringify(launch), { mode: 0o600 });
   protectPrivatePath(path.join(directory, 'mcp-launch.json'));
-  const script = path.join(app.isPackaged ? app.getAppPath().replace(/app\.asar$/, 'app.asar.unpacked') : app.getAppPath(), 'src', 'generated', 'mcp-host.cjs');
-  await writeFile(setup().command, launcherScript({ executable: process.execPath, script, args: localOnly ? ['--local-product'] : [] }), { mode: 0o700 });
+  const script = path.join(runtime.runtimeRoot, 'src', 'generated', 'mcp-host.cjs');
+  await writeFile(setup().command, launcherScript({ executable: runtime.executable, script, args: localOnly ? ['--local-product'] : [] }), { mode: 0o700 });
   protectPrivatePath(setup().command, { mode: 0o700 });
   try { await unlink(path.join(directory, 'recruiters-mcp')); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   if (app.isPackaged && !localOnly) app.setAsDefaultProtocolClient('recruiters-companion');
   try {
-    const result = await installNative({ executable: process.execPath, appPath: app.getAppPath(), directory, packaged: app.isPackaged, localOnly });
+    const result = await installNative({ executable: runtime.executable, appPath: runtime.appPath, directory, packaged: app.isPackaged, localOnly });
     browserRegistrations = result.browsers; browserConnection = result.installed ? 'installed' : 'unavailable';
   } catch { browserConnection = 'unavailable'; }
 }
@@ -721,11 +722,12 @@ async function settingsOperation(op, input) {
     }
     else if (op === 'open-extension-folder' || op === 'open-firefox-extension-folder') {
       const firefox = op === 'open-firefox-extension-folder', browser = firefox ? 'Firefox' : 'Chrome';
-      const folder = path.join(app.isPackaged ? root.replace(/app\.asar$/, 'app.asar.unpacked') : root, 'browser-extension', 'dist', `${firefox ? 'firefox-' : ''}${localOnly ? 'local' : 'production'}`);
+      let folder = path.join(app.isPackaged ? root.replace(/app\.asar$/, 'app.asar.unpacked') : root, 'browser-extension', 'dist', `${firefox ? 'firefox-' : ''}${localOnly ? 'local' : 'production'}`);
       let manifest;
       try { manifest = JSON.parse(await readFile(path.join(folder, 'manifest.json'), 'utf8')); }
       catch { fail('HOST_INSTALL_FAILED', app.isPackaged ? `The bundled ${browser} extension is missing. Reinstall the complete companion.` : `Build the companion before opening its ${browser} extension folder.`); }
       if (manifest.version !== packageMetadata.version || (firefox ? manifest.browser_specific_settings?.gecko?.id !== browserIdentity.firefoxExtensionId : manifest.key !== browserIdentity.key)) fail('HOST_INSTALL_FAILED', `The bundled ${browser} extension does not match this companion. Rebuild or reinstall the complete companion.`);
+      folder = await persistBrowserExtension({ source: folder, directory, browser: firefox ? 'firefox' : 'chrome', packaged: app.isPackaged });
       const error = await shell.openPath(folder);
       if (error) fail('HOST_INSTALL_FAILED', `The ${browser} extension folder could not be opened. Reinstall the complete companion and try again.`);
       result = { opened: true };

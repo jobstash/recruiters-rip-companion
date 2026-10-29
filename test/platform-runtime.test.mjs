@@ -102,3 +102,36 @@ test('private storage uses OS permissions and rejects exposed files', async t =>
   } else await chmod(file, 0o644);
   assert.throws(() => assertPrivatePath(file));
 });
+
+test('Windows ACL subprocess closes unused input and retains diagnostic output without credentials', async t => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'rr-acl-process-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  let calls = 0;
+  protectPrivatePath(directory, { platform: 'win32', directory: true,
+    env: { SystemRoot: 'C:\\Windows', USERPROFILE: 'C:\\Profile', OPENAI_API_KEY: 'synthetic-secret' },
+    run(executable, args, options) {
+      calls++;
+      assert.equal(executable, 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe');
+      assert.ok(args.includes('-NonInteractive'));
+      assert.deepEqual(options.stdio, ['ignore', 'pipe', 'pipe']);
+      assert.equal(options.env.OPENAI_API_KEY, undefined);
+      assert.equal(options.env.SystemRoot, 'C:\\Windows');
+    },
+  });
+  assert.equal(calls, 1);
+});
+
+test('POSIX launchers do not turn absent temporary-directory variables into empty values', { skip: process.platform === 'win32' }, async t => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'rr-unset-environment-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const script = path.join(directory, 'environment.cjs'), launcher = path.join(directory, 'launcher');
+  await writeFile(script, "process.stdout.write(JSON.stringify({tmp:process.env.TMPDIR??null,home:process.env.HOME}));");
+  await writeFile(launcher, launcherScript({ executable: process.execPath, script, platform: 'linux' }), { mode: 0o700 });
+  for (const temporary of [undefined, '', '/tmp/space and $literal']) {
+    const env = { ...process.env, HOME: directory }; delete env.TMPDIR;
+    if (temporary !== undefined) env.TMPDIR = temporary;
+    const { stdout } = await run(launcher, [], { env });
+    assert.deepEqual(JSON.parse(stdout), { tmp: temporary || null, home: directory });
+    assert.equal(restrictedEnvironment(env, 'linux').TMPDIR, temporary || undefined);
+  }
+});

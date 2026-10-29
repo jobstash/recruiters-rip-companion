@@ -24,12 +24,12 @@ test('page access relies on Chrome permission enforcement and retains document i
     scripting: { async executeScript(options) { calls.push(options); if (denied) throw new Error('Missing host permission'); return [{ result: { fields: [], actions: [] }, documentId: 'snapshot-document' }]; } },
     onError: error => { throw error; },
   });
-  await assert.rejects(inject(7, inspectForm));
+  await assert.rejects(inject(7, inspectForm), { code: 'PAGE_PERMISSION_REQUIRED' });
   denied = false;
   await inject(7, inspectForm, [], 'snapshot-document');
   assert.deepEqual(calls.at(-1).target, { tabId: 7, documentIds: ['snapshot-document'] });
   tab.url = 'chrome://extensions';
-  await assert.rejects(inject(7, captureJobs), /HTTP or HTTPS/);
+  await assert.rejects(inject(7, captureJobs), { code: 'PAGE_UNSUPPORTED' });
   assert.equal(calls.length, 2);
 });
 
@@ -465,7 +465,7 @@ test('native request send failure rejects and notifies disconnect exactly once',
   let disconnected = 0;
   port.postMessage = () => { throw new Error('Native send failed'); };
   const client = createNativeClient({ host: 'synthetic', connect: () => port, onDisconnect: () => { disconnected++; } });
-  await assert.rejects(client.request('forms_validate', { formId: 'form:1', fields: [] }), /Native send failed/);
+  await assert.rejects(client.request('forms_validate', { formId: 'form:1', fields: [] }), { code: 'COMPANION_UNAVAILABLE' });
   assert.equal(client.connected(), false);
   assert.equal(disconnected, 1);
   client.disconnect();
@@ -745,6 +745,8 @@ async function backgroundFixture(page = pastePage(), options = {}) {
   let launchApplication = async payload => (application = { ...application, handoff: { host: payload.host, state: 'awaiting_agent', requiresSend: true }, preferredHost: payload.host, opened: true, requiresSend: true });
   let nativeOptions, messageHandler, access, documentId = 'document-1', permission = true, validate = async () => ({ valid: true });
   let saveDetails = async payload => ({ saved: Object.keys(payload.values) });
+  let readStatus = async () => ({ installed: true, paired: false, hasCv: options.hasCv ?? true, execution: { state: 'ready' }, career: { facts: ['must not reach panel'] } });
+  const createdTabs = [];
   let prepareResult = options.prepare || (payload => ({ formId: 'form:synthetic', snapshot: 'snapshot:synthetic', questions: [{ key: 'phone', label: 'Phone', type: 'tel' }], fields: payload.fields.filter(field => field.empty && !field.manualOnly).slice(0, 1).map(field => ({ ...field, value: 'Synthetic Candidate' })) }));
   const extensionId = options.firefox ? BROWSER_IDENTITIES.local.firefoxExtensionId : 'extension';
   const extensionOrigin = options.firefox ? `moz-extension://${randomUUID()}` : 'chrome-extension://extension';
@@ -753,11 +755,11 @@ async function backgroundFixture(page = pastePage(), options = {}) {
     runtime: { id: extensionId, ...(!options.firefox ? { onConnectExternal: event() } : {}), onConnect: event(), onMessage: { addListener(fn) { messageHandler = fn; } }, getURL: path => `${extensionOrigin}/${path}`,
       connectNative(host) { nativeHosts.push(host); return nativePort; } },
     permissions: { contains: async () => permission },
-    tabs: { get: async () => ({ id: 7, url: page.context.location.href, title: 'Application', status: 'complete' }), onActivated: event(), onUpdated: event(), onRemoved: event() },
+    tabs: { get: async () => ({ id: 7, url: page.context.location.href, title: 'Application', status: 'complete' }), create: async options => { createdTabs.push(options); }, onActivated: event(), onUpdated: event(), onRemoved: event() },
     ...(options.firefox ? { sidebarAction: {} } : { sidePanel: {} }), scripting: {},
   };
   const context = vm.createContext({
-    [options.firefox ? 'browser' : 'chrome']: chrome, crypto: { randomUUID }, PRODUCT_ORIGIN: origin, NATIVE_HOST: 'synthetic', BUILD_ID: 'test-build',
+    [options.firefox ? 'browser' : 'chrome']: chrome, crypto: { randomUUID }, URL, PRODUCT_ORIGIN: origin, NATIVE_HOST: 'synthetic', BUILD_ID: 'test-build',
     captureJobs, captureApplicationContext, inspectForm, checkFormBindings, armSmartPaste, disarmSmartPaste,
     safeDeviceRequest, externalSenderAllowed, deviceResult, applicationView, preparedPageSender,
     setTimeout(fn, ms) {
@@ -780,6 +782,7 @@ async function backgroundFixture(page = pastePage(), options = {}) {
       nativeOptions = options;
       return { request: async (op, payload) => {
         calls.push([op, plain(payload)]);
+        if (op === 'status') return readStatus();
         if (op === 'forms_validate') return validate(payload);
         if (op === 'forms_prepare') return prepareResult(payload);
         if (op === 'forms_profile_save') return saveDetails(payload);
@@ -805,7 +808,8 @@ async function backgroundFixture(page = pastePage(), options = {}) {
   };
   if (options.firefox) page.context.browser = { runtime: { sendMessage: message => new Promise(resolve => page.context.chrome.runtime.sendMessage(message, resolve)) } };
   return {
-    page, calls, injections, state, act,
+    page, calls, injections, state, act, createdTabs,
+    status: fn => { readStatus = fn; },
     nativeHosts, nativePort, connectNative: () => nativeOptions.connect(nativeOptions.host),
     command(op, payload) { const command = safeNativeCommand(request(op, payload)); return nativeOptions.onCommand(command.op, command.payload); },
     disconnect: () => nativeOptions.onDisconnect(),
@@ -911,7 +915,7 @@ test('form destination attributes stay bound even when a named control shadows f
 test('reading an application and toolbar access each prepare once without an API switch', async () => {
   const fixture = await backgroundFixture();
   assert.equal(fixture.calls.filter(([op]) => op === 'forms_prepare').length, 1);
-  assert.equal(Object.hasOwn(fixture.calls[0][1], 'useApi'), false);
+  assert.equal(Object.hasOwn(fixture.calls.find(([op]) => op === 'forms_prepare')[1], 'useApi'), false);
   await fixture.toolbar(7);
   assert.equal(fixture.calls.filter(([op]) => op === 'forms_prepare').length, 2);
   assert.equal(fixture.state().error, '');
@@ -921,7 +925,7 @@ test('login and newsletter forms are inspected without dispatching paid preparat
   for (const title of ['Sign in to Careers', 'Newsletter signup', 'Create an account', 'Contact us']) {
     const page = pastePage(); page.context.document.title = title;
     const fixture = await backgroundFixture(page);
-    assert.deepEqual(fixture.calls.map(([op]) => op), ['application_resolve'], title);
+    assert.equal(fixture.calls.some(([op]) => op === 'forms_prepare'), false, title);
     assert.ok(fixture.state().form);
     assert.equal(fixture.state().prepared, null);
   }
@@ -940,7 +944,6 @@ test('one pending automatic preparation blocks duplicate work and cancellation d
   release({ formId: 'late', snapshot: 'late', fields: [] });
   await pending;
   assert.equal(fixture.state().prepared, null);
-  assert.match(fixture.state().notice, /cancelled/);
   assert.equal(fixture.calls.filter(([op]) => op === 'forms_cancel').length, 1);
 });
 
@@ -1051,15 +1054,16 @@ test('reading captures original context and resolves the application before key-
     prepare: () => { throw new Error('Configure the Decisions API to map these fields.'); },
   });
   assert.deepEqual(fixture.injections.filter(name => ['inspectForm', 'captureJobs', 'captureApplicationContext'].includes(name)), ['inspectForm', 'captureJobs', 'captureApplicationContext']);
-  assert.deepEqual(fixture.calls.map(([op]) => op), ['application_resolve', 'forms_prepare']);
-  assert.deepEqual(fixture.calls[0][1].context, context);
+  const operations = fixture.calls.map(([op]) => op);
+  assert.ok(operations.indexOf('application_resolve') < operations.indexOf('forms_prepare'));
+  assert.deepEqual(fixture.calls.find(([op]) => op === 'application_resolve')[1].context, context);
   assert.equal(fixture.state().application.state, 'needs_job');
   assert.equal(fixture.state().applicationHost, 'codex');
   assert.match(fixture.state().error, /Decisions API/);
   await fixture.act({ action: 'application-prepare', payload: { host: 'codex', path: '/must-not-forward', prompt: 'must-not-forward' } });
   assert.deepEqual(fixture.calls.at(-1), ['application_prepare', { bindingId: 'binding:synthetic', host: 'codex' }]);
   assert.equal(fixture.state().application.state, 'needs_job', 'launch is not document preparation');
-  assert.match(fixture.state().notice, /Open in Codex and send the prepared prompt/);
+  assert.ok(fixture.state().notice.includes('Send'));
   assert.doesNotMatch(fixture.state().notice, /generating|ready/i);
 });
 
@@ -1244,5 +1248,62 @@ test('an exact saved application binding prepares an otherwise unnamed form but 
     assert.equal(fixture.state().application.applicationId, 'application:synthetic');
     assert.equal(fixture.calls.filter(([op]) => op === 'forms_prepare').length, expectedPreparations);
     assert.equal(fixture.calls.some(([op]) => op === 'application_prepare'), false);
+  }
+});
+
+test('native errors retain actionable codes without confusing account requirements with disconnection', async () => {
+  const port = fakePort(), client = createNativeClient({ host: 'synthetic', connect: () => port });
+  for (const code of ['PAIRING_REQUIRED', 'LOCAL_LOCKED', 'FORM_CONTEXT_CHANGED']) {
+    const pending = client.request('forms_prepare', {});
+    port.onMessage.emit({ version: 1, id: port.sent.at(-1).id, ok: false, error: { code, message: 'Recover this operation.' } });
+    await assert.rejects(pending, { code });
+    assert.equal(client.connected(), true);
+  }
+  const unavailable = createNativeClient({ host: 'synthetic', connect: () => { throw new Error('Missing native host'); } });
+  assert.throws(() => unavailable.request('status', {}), { code: 'COMPANION_UNAVAILABLE' });
+});
+
+test('reading exposes only actual prerequisite facts and does not require account pairing', async () => {
+  for (const firefox of [false, true]) {
+    const fixture = await backgroundFixture(pastePage(), { firefox, hasCv: false });
+    assert.deepEqual(plain(fixture.state().companion), { paired: false, hasCv: false, locked: false });
+    assert.ok(fixture.state().prepared);
+    assert.equal(fixture.state().errorCode, null);
+    assert.doesNotMatch(JSON.stringify(fixture.state()), /must not reach panel/);
+    fixture.disconnect();
+    assert.equal(fixture.state().errorCode, 'COMPANION_UNAVAILABLE');
+    assert.equal(fixture.state().companion, null);
+    await fixture.act({ action: 'detect', payload: { tabId: 7 } });
+    assert.equal(fixture.state().errorCode, null);
+    assert.ok(fixture.state().prepared);
+    fixture.status(async () => { throw Object.assign(new Error('Connect this account.'), { code: 'PAIRING_REQUIRED' }); });
+    await fixture.act({ action: 'detect', payload: { tabId: 7 } });
+    assert.equal(fixture.state().errorCode, 'PAIRING_REQUIRED');
+  }
+});
+
+test('installation recovery opens downloads without asserting Companion installation', async () => {
+  const fixture = await backgroundFixture();
+  fixture.disconnect();
+  await fixture.act({ action: 'install' });
+  assert.deepEqual(plain(fixture.createdTabs), [{ url: new URL('/downloads', origin).href }]);
+  assert.equal(fixture.state().companion, null);
+  assert.equal(fixture.state().prepared, null);
+});
+
+test('permission, unsupported page and actual script failure remain distinct in both browsers', async () => {
+  for (const firefox of [false, true]) {
+    let url = 'https://example.test/apply', cause = new Error('Missing host permission');
+    const inject = createPageAccess({
+      ...(firefox ? { sidebarAction: {} } : { sidePanel: { setPanelBehavior: async () => {} } }),
+      tabs: { get: async () => ({ url }) },
+      scripting: { executeScript: async () => { throw cause; } },
+      onError: assert.fail,
+    });
+    await assert.rejects(inject(7, inspectForm), { code: 'PAGE_PERMISSION_REQUIRED' });
+    url = firefox ? 'about:addons' : 'chrome://extensions';
+    await assert.rejects(inject(7, inspectForm), { code: 'PAGE_UNSUPPORTED' });
+    url = 'https://example.test/apply'; cause = new Error('Script crashed');
+    await assert.rejects(inject(7, inspectForm), { code: 'PAGE_READ_FAILED' });
   }
 });

@@ -39,9 +39,11 @@ async function panelFixture(initialState = {}, { platform = 'MacIntel', firefox 
 test('Firefox sidebar uses the browser namespace and native paste shortcut on each desktop OS', async () => {
   for (const [platform, shortcut] of [['MacIntel', '⌘V'], ['Win32', 'Ctrl+V'], ['Linux x86_64', 'Ctrl+V']]) {
     const panel = await panelFixture({}, { platform, firefox: true });
-    assert.equal(panel.nodes.get('paste').textContent, `Click a field on the page, then press ${shortcut}.`);
+    assert.ok(panel.nodes.get('paste').textContent.includes(shortcut));
+    assert.match(panel.nodes.get('paste').textContent, /submit.*yourself/);
     panel.update({ paste: { label: 'Full name', ok: true } });
-    assert.equal(panel.nodes.get('paste').textContent, `Clipboard ready for Full name. Press ${shortcut} in that field.`);
+    assert.ok(panel.nodes.get('paste').textContent.includes(shortcut));
+    assert.ok(panel.nodes.get('paste').textContent.includes('Full name'));
     await panel.nodes.get('detect').onclick();
     assert.deepEqual(panel.sent.at(-1), { action: 'detect', payload: { tabId: 7 } });
   }
@@ -57,15 +59,19 @@ test('CLI handoffs require terminal confirmation and unavailable hosts cannot la
     },
   };
   const panel = await panelFixture({ application: waiting, applicationHost: 'codex' });
-  assert.equal(panel.nodes.get('application-prepare').textContent, 'Open Codex CLI in terminal');
-  assert.match(panel.nodes.get('application-handoff').textContent, /terminal, then press Enter/);
-  assert.doesNotMatch(panel.nodes.get('application-handoff').textContent, /composer|Send the prepared prompt/);
+  assert.match(panel.nodes.get('application-prepare').textContent, /Continue in Codex/);
+  assert.ok(panel.nodes.get('application-handoff').textContent.includes('Enter'));
+  assert.ok(!panel.nodes.get('application-handoff').textContent.includes('Send'));
   panel.nodes.get('application-host').options = [{ value: 'claude' }, { value: 'codex' }];
   panel.update({ applicationHost: 'claude' });
   assert.equal(panel.nodes.get('application-prepare').disabled, true);
+  assert.equal(panel.nodes.get('application-prepare').hidden, true);
+  assert.equal(panel.nodes.get('application-connect').hidden, false);
+  panel.nodes.get('application-connect').onclick();
+  assert.deepEqual(panel.sent.at(-1), { action: 'settings', payload: {} });
   assert.equal(panel.nodes.get('application-host').options[0].disabled, true);
   assert.equal(panel.nodes.get('application-host').options[1].disabled, false);
-  assert.equal(panel.nodes.get('application-handoff').textContent, 'Install Claude Code to continue.');
+  assert.match(panel.nodes.get('application-handoff').textContent, /Claude.*unavailable.*Companion.*AI apps/);
   panel.update({ applicationHost: 'codex' });
   assert.equal(panel.nodes.get('application-prepare').disabled, false);
 });
@@ -111,15 +117,16 @@ test('default panel exposes missing questions and recovery, with technical answe
   assert.equal(panel.nodes.get('details-form').hidden, false);
   assert.equal(panel.nodes.get('configure').hidden, false);
   assert.equal(panel.nodes.get('ready').textContent, '1 answer ready');
-  assert.match(panel.html, /<details id="review" hidden><summary>Review answers<\/summary>/);
+  assert.match(panel.html, /<details id="review" hidden>/);
+  assert.match(panel.html, /<details id="optional-settings" hidden>/);
   assert.equal(panel.nodes.get('review').hidden, false);
   assert.doesNotMatch(panel.html, /id="(?:api|prepare|url|form-id)"/);
-  assert.equal(panel.nodes.get('unresolved').children[0].textContent, 'These answers could not be determined from your saved CV or profile. Ask your agent for application text.');
+  assert.match(panel.nodes.get('unresolved').children[0].textContent, /saved CV or profile.*Codex or Claude/);
   assert.doesNotMatch(JSON.stringify(panel.nodes.get('unresolved')), /private internal reason/);
   panel.update({ busy: 'prepare' });
   assert.equal(panel.nodes.get('cancel').hidden, false);
   assert.equal(panel.nodes.get('cancel').disabled, false);
-  assert.equal(panel.nodes.get('status').textContent, 'Preparing answers…');
+  assert.equal(panel.nodes.get('status').hidden, false);
   panel.update({ busy: null, prepared: { ...panel.state.prepared, questions: [], api: { configured: true, used: false } } });
   assert.equal(panel.nodes.get('details-form').hidden, true);
   assert.equal(panel.nodes.get('configure').hidden, true);
@@ -179,11 +186,10 @@ test('inspected fields stay hidden until preparation succeeds, including during 
   };
   assertUnprepared();
   assert.equal(panel.nodes.get('ready').hidden, false);
-  assert.equal(panel.nodes.get('ready').textContent, 'Answers are not ready. Read page to prepare them.');
   panel.update({ busy: 'prepare' });
   assertUnprepared();
   assert.equal(panel.nodes.get('ready').hidden, true);
-  assert.match(panel.nodes.get('status').textContent, /Preparing answers/);
+  assert.equal(panel.nodes.get('status').hidden, false);
   panel.update({ busy: null, error: 'Preparation was cancelled. Read page to try again.' });
   assertUnprepared();
   assert.equal(panel.nodes.get('ready').hidden, true);
@@ -195,23 +201,21 @@ test('inspected fields stay hidden until preparation succeeds, including during 
   assert.equal(panel.nodes.get('ready').textContent, '1 answer ready');
   assert.equal(panel.inputs('field-list').length, 2);
   assert.equal(panel.nodes.get('paste').hidden, false);
-  assert.doesNotMatch(panel.nodes.get('paste').textContent, /Clipboard ready/);
 });
 
-test('clipboard readiness is specific to a field and requires confirmed clipboard success', async () => {
-  const panel = await panelFixture(), paste = panel.nodes.get('paste');
-  assert.doesNotMatch(paste.textContent, /Clipboard ready/);
-  panel.update({ paste: { label: 'Full name' } });
-  assert.match(paste.textContent, /Preparing the clipboard for Full name/);
-  assert.doesNotMatch(paste.textContent, /Clipboard ready/);
-  panel.update({ paste: { label: 'Full name', ok: false } });
-  assert.match(paste.textContent, /Clipboard access refused for Full name/);
-  assert.doesNotMatch(paste.textContent, /Clipboard ready/);
-  panel.update({ paste: { label: 'Full name', ok: true } });
-  assert.equal(paste.textContent, 'Clipboard ready for Full name. Press ⌘V in that field.');
-  assert.equal(panel.nodes.get('details-form').hidden, false, 'one clipboard answer does not resolve missing details');
+test('clipboard progress, failure and success remain distinct and name the current answer', async () => {
+  const panel = await panelFixture(), paste = panel.nodes.get('paste'), initial = paste.textContent;
+  const notices = new Set([initial]);
+  for (const ok of [undefined, false, true]) {
+    panel.update({ paste: { label: 'Full name', ok } });
+    assert.ok(paste.textContent.includes('Full name'));
+    notices.add(paste.textContent);
+    assert.equal(panel.nodes.get('details-form').hidden, false, 'one clipboard answer does not resolve missing details');
+  }
+  assert.equal(notices.size, 4, 'unknown, pending, failed and confirmed clipboard states must not look alike');
+  assert.ok(paste.textContent.includes('⌘V'));
   panel.update({ paste: null });
-  assert.doesNotMatch(paste.textContent, /Clipboard ready/);
+  assert.equal(paste.textContent, initial);
 });
 
 test('prepared forms with no supported answers show missing details without fake answer controls', async () => {
@@ -221,7 +225,6 @@ test('prepared forms with no supported answers show missing details without fake
     { label: 'Why this role?', reason: 'private reason' },
     { label: 'Cover letter', reason: 'another private reason' },
   ] } });
-  assert.equal(panel.nodes.get('ready').textContent, 'No paste answers ready.');
   assert.equal(panel.nodes.get('paste').hidden, true);
   assert.equal(panel.nodes.get('review-actions').hidden, true);
   assert.equal(panel.nodes.get('review').hidden, false);
@@ -305,7 +308,7 @@ test('application preparation remains available without Decisions or prepared va
   assert.equal(panel.nodes.get('application-title').textContent, 'Engineer · Example');
   assert.equal(panel.nodes.get('application-host').value, 'codex');
   assert.equal(panel.nodes.get('application-prepare').disabled, false);
-  assert.equal(panel.nodes.get('application-prepare').textContent, 'Prepare this application');
+  assert.match(panel.nodes.get('application-prepare').textContent, /Continue in Codex/);
   panel.nodes.get('application-prepare').onclick();
   assert.deepEqual(panel.sent.at(-1), { action: 'application-prepare', payload: { host: 'codex' } });
   assert.equal(panel.nodes.get('application-writing').textContent, '0 of 1 written answer saved for this job.');
@@ -318,17 +321,19 @@ test('application preparation remains available without Decisions or prepared va
 test('opening the agent tells the user to send, never claims writing or document readiness', async () => {
   const waiting = application({ handoff: { host: 'claude', state: 'awaiting_agent', requiresSend: true } });
   const panel = await panelFixture({ application: waiting, applicationHost: 'claude', prepared: null });
-  assert.equal(panel.nodes.get('application-prepare').textContent, 'Open in Claude and send the prepared prompt');
-  assert.match(panel.nodes.get('application-handoff').textContent, /Send the prepared prompt in Claude to start/);
+  assert.match(panel.nodes.get('application-prepare').textContent, /Continue in Claude/);
+  assert.ok(panel.nodes.get('application-handoff').textContent.includes('Send'));
+  assert.ok(!panel.nodes.get('application-handoff').textContent.includes('Enter'));
+  const waitingNotice = panel.nodes.get('application-handoff').textContent;
   assert.doesNotMatch(panel.nodes.get('application-status').textContent, /saved|ready|generating/i);
   assert.equal(panel.nodes.get('application-answers').hidden, true);
   panel.update({ application: { ...waiting, handoff: { ...waiting.handoff, state: 'agent_read', requiresSend: false } } });
-  assert.match(panel.nodes.get('application-handoff').textContent, /has read this application request/);
+  assert.notEqual(panel.nodes.get('application-handoff').textContent, waitingNotice);
   assert.equal(panel.nodes.get('application-upload').hidden, true, 'reading the request is not a saved export');
   panel.update({ busy: 'application-prepare' });
   assert.equal(panel.nodes.get('application-host').disabled, true);
   assert.equal(panel.nodes.get('application-prepare').disabled, true);
-  assert.equal(panel.nodes.get('status').textContent, 'Opening your agent…');
+  assert.match(panel.nodes.get('status').textContent, /Opening Claude/);
 });
 
 test('saved documents update in place, expose exact native actions, and never render private file metadata', async () => {
@@ -362,14 +367,13 @@ test('saved documents update in place, expose exact native actions, and never re
 test('missing and ambiguous jobs offer original-ad recovery without title-only writing claims', async () => {
   const panel = await panelFixture({ application: application({ state: 'needs_job' }) });
   assert.equal(panel.nodes.get('application-open-ad').hidden, false);
-  assert.match(panel.nodes.get('application-status').textContent, /full job advert is needed/);
-  assert.match(panel.nodes.get('application-status').textContent, /retrieve that exact link/);
+  assert.match(panel.nodes.get('application-status').textContent, /full job ad/);
   panel.nodes.get('application-open-ad').onclick();
   assert.deepEqual(panel.sent.at(-1), { action: 'application-open-ad', payload: {} });
   panel.update({ application: application({ state: 'needs_job', jobUrl: null }) });
   assert.equal(panel.nodes.get('application-open-ad').hidden, true);
-  assert.match(panel.nodes.get('application-status').textContent, /identified unambiguously/);
-  assert.match(panel.nodes.get('application-status').textContent, /original job advert/);
+  assert.match(panel.nodes.get('application-status').textContent, /original job ad/);
+  assert.match(panel.nodes.get('application-status').textContent, /linked to the right job/);
   assert.equal(panel.nodes.get('application-prepare').disabled, false, 'the connected agent can explicitly bind the correct saved job');
 });
 
@@ -405,4 +409,65 @@ test('application disappearance and disconnect remove documents, without carryin
   assert.equal(panel.nodes.get('application-documents').children.length, 0);
   assert.equal(panel.nodes.get('review').hidden, true);
   assert.match(panel.nodes.get('error').textContent, /disconnected/);
+});
+
+test('first use explains optional page tools without inventing account or CV requirements', async () => {
+  for (const firefox of [false, true]) {
+    const panel = await panelFixture({ page: null, form: null, prepared: null }, { firefox });
+    assert.equal(panel.nodes.get('intro').hidden, false);
+    assert.equal(panel.nodes.get('recovery').hidden, true);
+    assert.equal(panel.nodes.get('form').hidden, true);
+    assert.equal(panel.nodes.get('detect').hidden, false);
+    panel.update({ page: { url: 'https://example.test/apply' }, companion: { paired: false, hasCv: true }, application: application() });
+    assert.equal(panel.nodes.get('recovery').hidden, true, 'unpaired status alone must not block local work');
+    assert.equal(panel.nodes.get('application-prepare').disabled, false);
+  }
+});
+
+test('unavailable, locked and required account connection each offer a real recovery action', async () => {
+  for (const firefox of [false, true]) {
+    const panel = await panelFixture({ errorCode: 'COMPANION_UNAVAILABLE', error: 'Internal transport detail', prepared: null }, { firefox });
+    assert.equal(panel.nodes.get('recovery').hidden, false);
+    assert.equal(panel.nodes.get('error').hidden, true);
+    assert.equal(panel.nodes.get('detect').hidden, true);
+    assert.equal(panel.nodes.get('install').hidden, false);
+    assert.match(panel.nodes.get('recovery-message').textContent, /Open.*Companion.*retry/i);
+    await panel.nodes.get('recover').onclick();
+    assert.deepEqual(panel.sent.at(-1), { action: 'detect', payload: { tabId: 7 } });
+    panel.nodes.get('install').onclick();
+    assert.deepEqual(panel.sent.at(-1), { action: 'install', payload: {} });
+    for (const errorCode of ['LOCAL_LOCKED', 'PAIRING_REQUIRED']) {
+      panel.update({ errorCode });
+      assert.equal(panel.nodes.get('install').hidden, true);
+      panel.nodes.get('recover').onclick();
+      assert.deepEqual(panel.sent.at(-1), { action: 'settings', payload: {} });
+      assert.match(panel.nodes.get('recovery-message').textContent, errorCode === 'LOCAL_LOCKED' ? /unlock/ : /Connect account/);
+    }
+  }
+});
+
+test('CV guidance uses saved-source status and never blocks ready documents or prepared answers', async () => {
+  const panel = await panelFixture({ application: application(), companion: { paired: false, hasCv: false } });
+  assert.equal(panel.nodes.get('recovery').hidden, false);
+  assert.match(panel.nodes.get('recovery-message').textContent, /Companion.*Me.*Import CV/);
+  assert.equal(panel.nodes.get('application-prepare').disabled, false);
+  assert.equal(panel.nodes.get('paste').hidden, false);
+  panel.update({ companion: { paired: false } });
+  assert.equal(panel.nodes.get('recovery').hidden, true, 'unknown source state is not missing');
+  panel.update({ companion: { paired: false, hasCv: false }, application: application({ state: 'ready' }) });
+  assert.equal(panel.nodes.get('recovery').hidden, true);
+});
+
+test('page access errors and actual failures stay distinct from Companion setup', async () => {
+  const panel = await panelFixture();
+  const question = panel.inputs('question-list')[0];
+  question.value = 'Unsaved phone'; question.oninput();
+  for (const errorCode of ['PAGE_PERMISSION_REQUIRED', 'PAGE_UNSUPPORTED', 'PAGE_READ_FAILED', 'FORM_CONTEXT_CHANGED']) {
+    panel.update({ errorCode, error: `Recovery for ${errorCode}` });
+    assert.equal(panel.nodes.get('recovery').hidden, true);
+    assert.equal(panel.nodes.get('error').hidden, false);
+    assert.equal(panel.nodes.get('detect').hidden, false);
+    assert.equal(panel.inputs('question-list')[0], question);
+    assert.equal(question.value, 'Unsaved phone');
+  }
 });

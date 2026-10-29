@@ -6,7 +6,10 @@ import { createPageAccess, preparedPageSender } from './page-access.mjs';
 const chrome = globalThis.browser ?? globalThis.chrome;
 const firefox = !!chrome.sidebarAction;
 
-const native = createNativeClient({ host: NATIVE_HOST, onCommand: command, onDisconnect: () => { void expirePrepared('Companion disconnected. Inspect and prepare this form again after reconnecting.'); }, connect: host => {
+const native = createNativeClient({ host: NATIVE_HOST, onCommand: command, onDisconnect: () => {
+  state.companion = null; state.errorCode = 'COMPANION_UNAVAILABLE'; state.error = '';
+  void expirePrepared('');
+}, connect: host => {
   const port = chrome.runtime.connectNative(host);
   port.onDisconnect.addListener(() => { void chrome.runtime.lastError; });
   return port;
@@ -31,7 +34,7 @@ chrome.runtime.onConnectExternal?.addListener(port => {
 // Memory only: a native port keeps the worker alive, and panel reconnection can
 // recover a completed request. No candidate values are persisted to browser disk.
 let state = { buildId: BUILD_ID, busy: null, error: '', notice: '', tabId: null, documentId: null, page: null, jobs: [], form: null, prepared: null, edits: {}, selected: [], paste: null,
-  application: null, applicationHost: 'claude', applicationNotice: '', applicationAnswersPending: false, answersStale: false };
+  application: null, applicationHost: 'claude', applicationNotice: '', applicationAnswersPending: false, answersStale: false, companion: null, errorCode: null };
 let generation = 0, preparingRequest = null, pasteSession = null, automaticPreparation = false;
 let pollTimer = null, pollEpoch = 0, pollInFlight = false, pollsRemaining = 0;
 const answerAttempts = new Set();
@@ -69,7 +72,7 @@ async function pollApplication() {
     const result = await native.request('application_status', { bindingId });
     if (!current()) return;
     const view = applicationView(result);
-    if (view.bindingId !== bindingId) throw new Error('Application context changed. Read page again.');
+    if (view.bindingId !== bindingId) throw new Error('The application changed. Choose Read page again.');
     const previousVersion = state.application.answerVersion;
     setApplication(view); state.applicationNotice = '';
     if (state.prepared && (previousVersion !== view.answerVersion || view.state === 'needs_refresh')) {
@@ -101,7 +104,7 @@ const clearForm = () => { pasteSession = null; state.prepared = null; state.sele
 async function arm(active) {
   pasteSession = null;
   if (!Number.isInteger(state.tabId) || !state.documentId) return;
-  if (active && !await chrome.permissions.contains({ permissions: ['clipboardWrite'] })) throw new Error('Allow clipboard writing for Recruiters.rip before using smart paste.');
+  if (active && !await chrome.permissions.contains({ permissions: ['clipboardWrite'] })) throw new Error('In your browser’s extension settings, allow recruiters.rip to copy text so you can paste answers.');
   const session = active ? crypto.randomUUID() : null;
   try {
     await inject(state.tabId, active ? armSmartPaste : disarmSmartPaste, active ? [{ session }] : [], state.documentId);
@@ -141,7 +144,10 @@ async function detect(tabId, token) {
   try { context = (await inject(tabId, captureApplicationContext, [], documentId)).page; } catch { /* The agent can retrieve the exact advert when available. */ }
   if (generation !== token) return;
   state = { ...state, tabId, documentId, page: { url: form.url, title: form.title }, jobs, form: form.fields.length ? form : null,
-    notice: form.fields.length ? 'This page is not recognized as a job application. Answer its fields on the page.' : jobs.length ? `${jobs.length} jobs detected.` : 'No application form or job posting found.' };
+    notice: form.fields.length ? 'This is not a recognized application form. Open the job’s application page, then choose Read page.' : jobs.length ? `${jobs.length} jobs detected.` : 'No job advert or application form found. Open the job page, then choose Read page.' };
+  const companion = await native.request('status', {});
+  if (generation !== token) return;
+  state.companion = { paired: companion?.paired === true, hasCv: typeof companion?.hasCv === 'boolean' ? companion.hasCv : null, locked: companion?.execution?.state === 'locked' };
   const result = await native.request('application_resolve', { requestId: crypto.randomUUID(), page: form, jobs, context });
   if (generation !== token) return;
   if (isApplication(form) || jobs.length || context.original || context.jobLinks?.length || result.applicationId) {
@@ -153,13 +159,13 @@ async function detect(tabId, token) {
   }
 }
 async function prepare(token, automatic = false) {
-  if (!state.form || !isApplication(state.form, !!state.application?.applicationId)) throw new Error('Read a job application page to prepare answers.');
+  if (!state.form || !isApplication(state.form, !!state.application?.applicationId)) throw new Error('Open a job application form, then choose Read page.');
   state.busy = 'prepare'; publish();
   await arm(false);
   if (generation !== token || (automatic && !panels.size)) return;
   const { page: binding } = await inject(state.tabId, checkFormBindings, [{ url: state.form.url, fields: state.form.fields, actions: state.form.actions ?? [] }], state.documentId);
   if (generation !== token || (automatic && !panels.size)) return;
-  if (!binding.attached) { await expirePrepared('The inspected page changed. Read page to prepare this application again.'); return; }
+  if (!binding.attached) { await expirePrepared('The page changed. Choose Read page to find current answers.'); return; }
   preparingRequest = crypto.randomUUID();
   const result = await native.request('forms_prepare', { requestId: preparingRequest, ...state.form });
   if (generation !== token || (automatic && !panels.size)) return;
@@ -186,13 +192,13 @@ async function act(message) {
   if (action === 'cancel') {
     if (!preparingRequest) return;
     const requestId = preparingRequest; preparingRequest = null; const cancelledGeneration = ++generation;
-    state = { ...state, busy: null, error: '', notice: 'Preparation cancelled. Read page to try again.' }; publish();
+    state = { ...state, busy: null, error: '', errorCode: null, notice: 'Cancelled. Choose Read page to try again.' }; publish();
     try { await native.request('forms_cancel', { requestId }); } catch (error) { if (generation === cancelledGeneration) { state.error = error.message; publish(); } }
     return;
   }
   if (state.busy) return;
   const token = ++generation;
-  state = { ...state, busy: action, error: '', notice: '' }; publish();
+  state = { ...state, busy: action, error: '', errorCode: null, notice: '' }; publish();
   try {
     if (action === 'detect' || action === 'capture' || action === 'inspect') {
       await arm(false);
@@ -203,26 +209,26 @@ async function act(message) {
       const bindingId = state.application.bindingId;
       const result = await native.request('application_prepare', { bindingId, host: payload.host });
       if (generation !== token) return;
-      if (result.bindingId !== bindingId) throw new Error('Application context changed. Read page again.');
+      if (result.bindingId !== bindingId) throw new Error('The application changed. Choose Read page again.');
       setApplication(result);
       state.applicationHost = payload.host;
       state.notice = result.opened === true && result.requiresSend === true
-        ? result.mode === 'cli' ? 'Review the prepared request in the terminal, then press Enter to start your agent.'
-          : `Open in ${payload.host === 'codex' ? 'Codex' : 'Claude'} and send the prepared prompt.`
-        : 'Review the application request in your agent.';
+        ? result.mode === 'cli' ? `In the ${payload.host === 'codex' ? 'Codex' : 'Claude'} window that opened, check the message, then press Enter to start.`
+          : `In ${payload.host === 'codex' ? 'Codex' : 'Claude'}, check the message and click Send to start.`
+        : `Continue in ${payload.host === 'codex' ? 'Codex' : 'Claude'} to review your message.`;
       pollsRemaining = 240;
     } else if (action === 'application-document') {
       if (!state.application || !['cv', 'cover_letter'].includes(payload.kind) || !['open', 'reveal'].includes(payload.action) ||
-        !state.application.documents.some(doc => doc.kind === payload.kind && doc.ready)) throw new Error('That document is not ready. Prepare this application first.');
+        !state.application.documents.some(doc => doc.kind === payload.kind && doc.ready)) throw new Error('That document is not ready. Continue in Codex or Claude to finish it.');
       await native.request('application_document', { bindingId: state.application.bindingId, kind: payload.kind, action: payload.action });
-      if (generation === token) state.notice = payload.action === 'reveal' ? 'Document shown in your file manager. Upload it on the application page yourself.' : 'Document opened. Upload it on the application page yourself.';
+      if (generation === token) state.notice = payload.action === 'reveal' ? 'Document folder opened. Upload the document on the application page yourself.' : 'Document opened. Upload it on the application page yourself.';
     } else if (action === 'application-open-ad') {
       if (!state.application?.jobUrl) throw new Error('No job advert link was found. Open the original advert and click Read page.');
       await native.request('application_open_ad', { bindingId: state.application.bindingId });
-      if (generation === token) state.notice = 'Job advert opened. Read that page to capture the full description.';
+      if (generation === token) state.notice = 'Job ad opened. Choose Read page on that tab to read the full description.';
     } else if (action === 'application-answers') {
       const key = answerKey();
-      if (!key || !state.form) throw new Error('Written answers are not ready. Finish preparation in your agent first.');
+      if (!key || !state.form) throw new Error('Written answers are not ready. Continue in Codex or Claude to finish them.');
       if (payload.automatic && answerAttempts.has(key)) return;
       markAnswerAttempt(key);
       state.applicationAnswersPending = true;
@@ -230,7 +236,7 @@ async function act(message) {
       try { await prepare(token, automaticPreparation); } finally { automaticPreparation = false; }
     } else if (action === 'save') {
       const indexes = [...new Set(payload.indexes || [])].filter(i => Number.isInteger(i) && i >= 0 && i < state.jobs.length);
-      if (!indexes.length) throw new Error('Select at least one detected job.');
+      if (!indexes.length) throw new Error('Select at least one job to save.');
       const result = await native.request('capture_jobs', { requestId: crypto.randomUUID(), sourceUrl: state.page.url, jobs: indexes.map(i => state.jobs[i]) });
       state.notice = `Saved ${result.added} new jobs; updated ${result.updated}. Open Jobs in the companion to review.`;
     } else if (action === 'profile-save') {
@@ -256,10 +262,13 @@ async function act(message) {
     } else if (action === 'settings') {
       await native.request('open_settings', {}); state.notice = 'Companion settings opened.';
     } else if (action === 'configure') {
-      await native.request('open_decisions_settings', {}); state.notice = 'Decisions API settings opened in Companion.';
+      await native.request('open_decisions_settings', {}); state.notice = 'Form filling settings opened in Companion.';
+    } else if (action === 'install') {
+      await chrome.tabs.create({ url: new URL('/downloads', PRODUCT_ORIGIN).href });
+      state.notice = 'Install and open Companion, then return here and choose Read page.';
     } else throw new Error('Unknown panel action.');
   } catch (error) {
-    if (generation === token) state.error = error.message || 'The request failed. Try again.';
+    if (generation === token) { state.error = error.message || 'The request failed. Try again.'; state.errorCode = error.code || null; }
   } finally {
     if (generation === token) { preparingRequest = null; state.busy = null; publish(); schedulePoll(); }
   }
@@ -273,10 +282,10 @@ async function command(op, payload = {}) {
     try {
       const { page } = await inject(state.tabId, checkFormBindings, [{ url: state.form.url, fields: state.form.fields, actions: state.form.actions ?? [] }], state.documentId);
       if (prepared !== state.prepared || token !== generation) return { formId: payload.formId, attached: false };
-      if (!page.attached) { await expirePrepared('The inspected page changed. Inspect and prepare the form again.'); return { formId: payload.formId, attached: false }; }
+      if (!page.attached) { await expirePrepared('The page changed. Choose Read page to find current answers.'); return { formId: payload.formId, attached: false }; }
       return { formId: payload.formId, attached: true, url: state.form.url, title: state.page?.title ?? '', prepared: state.prepared.fields.length, actions: (state.form.actions ?? []).map(({ id, label, kind, signature }) => ({ id, label, kind, signature })) };
     } catch {
-      if (prepared === state.prepared && token === generation) await expirePrepared('The browser could not find the inspected page. Inspect and prepare the form again.');
+      if (prepared === state.prepared && token === generation) await expirePrepared('The browser could not find that page. Open the application form, then choose Read page.');
       return { formId: payload.formId, attached: false };
     }
   }
@@ -298,7 +307,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
       if (validated?.valid !== true) throw new Error('The prepared form context changed.');
       respond({ value: live() ? preparedValue(field) : null });
     }).catch(() => {
-      if (prepared === state.prepared && pasteSession === session) void expirePrepared('Prepared values are no longer available. Unlock the companion, then inspect and prepare the form again.');
+      if (prepared === state.prepared && pasteSession === session) void expirePrepared('Answers are no longer available. Open Companion, then return here and choose Read page.');
       try { respond({ value: null }); } catch { /* The page disconnected. */ }
     });
     return true;
@@ -331,11 +340,11 @@ function leavePage(notice) {
   return expired;
 }
 chrome.tabs.onActivated.addListener(({ tabId }) => {
-  if (state.tabId !== null && tabId !== state.tabId) void leavePage('Read page on this tab to prepare its application.');
+  if (state.tabId !== null && tabId !== state.tabId) void leavePage('Choose Read page to read this tab.');
 });
 chrome.tabs.onUpdated.addListener((tabId, change) => {
   if (tabId === state.tabId && (change.status === 'loading' || (change.url && change.url !== state.page?.url)))
-    void leavePage('The page changed. Read page to prepare this application.');
+    void leavePage('The page changed. Choose Read page to read it again.');
 });
 chrome.tabs.onRemoved.addListener(tabId => {
   if (tabId === state.tabId) void leavePage('Open an application tab, then click Read page.');

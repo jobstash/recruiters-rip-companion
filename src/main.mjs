@@ -136,9 +136,10 @@ function safeFailure(error) {
   return { code: known ? error.code : 'LOCAL_OPERATION_FAILED', message: known ? error.message : 'This action could not be completed. Reopen the companion and try again.' };
 }
 function status() {
-  if (locked) return { installed: true, mode: 'local_mcp', paired: false, decisionApiConfigured: false, connections: [], execution: { state: 'locked' } };
+  if (locked) return { installed: true, mode: 'local_mcp', paired: false, hasCv: false, decisionApiConfigured: false, connections: [], execution: { state: 'locked' } };
   const state = vault.get();
   return { installed: true, mode: 'local_mcp', deviceId: state.deviceId, publicKey: state.publicKey, label: state.label,
+    hasCv: Object.values(state.career?.sources ?? {}).some(source => source.purpose === 'cv' && !source.archived && typeof source.text === 'string' && source.text.trim().length > 0),
     paired: Boolean(state.pairing), decisionApiConfigured: decisionCredentials.publicState().configured, connections: [], execution: { state: state.pairing ? 'ready' : 'needs_connection' } };
 }
 function setup() {
@@ -712,6 +713,16 @@ async function settingsOperation(op, input) {
       await refreshReviewHosts();
     }
     else if (op === 'copy-command') clipboard.writeText(setup().command);
+    else if (op === 'get-codex' || op === 'get-claude') {
+      const codex = op === 'get-codex', cli = process.platform === 'linux';
+      const url = codex
+        ? cli ? 'https://developers.openai.com/codex/cli' : 'https://chatgpt.com/download/'
+        : cli ? 'https://code.claude.com/docs/en/quickstart' : 'https://claude.ai/download';
+      await shell.openExternal(url);
+      result = { opened: true, destination: codex
+        ? cli ? 'OpenAI’s Codex setup page' : 'OpenAI’s desktop download page'
+        : cli ? 'Anthropic’s Claude Code setup page' : 'Anthropic’s Claude download page' };
+    }
     else if (op === 'copy-config') clipboard.writeText(setup().claudeConfig);
     else if (op === 'install-chatgpt') result = await installChatGptPlugin({ directory, root: app.isPackaged ? root.replace(/app\.asar$/, 'app.asar.unpacked') : root, localOnly, command: setup().command });
     else if (op === 'install-claude') {

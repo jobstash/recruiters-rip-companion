@@ -231,7 +231,7 @@ summary::-webkit-details-marker { display: none; }
 summary::before { content: ""; flex: none; width: 6px; height: 6px; border-right: 1.25px solid currentColor; border-bottom: 1.25px solid currentColor; transform: rotate(45deg); }
 details[open] summary::before { transform: rotate(-135deg); }
 summary:hover { color: var(--color-ink); }
-.app-details > :not(summary) { margin-top: var(--spacing-16); }
+.app-details > :not(summary) + *, details > :not(summary) { margin-top: var(--spacing-16); }
 .command { display: block; margin: 0; padding: var(--spacing-16); background: var(--color-surface); border: 1px solid var(--color-facet); font: 400 13px/1.6 var(--font-geist-mono); color: var(--color-ink); white-space: pre-wrap; overflow-wrap: anywhere; }
 #decisions-form, .decisions-key-entry { display: grid; gap: var(--spacing-16); min-width: 0; }
 /* The key state reads as body copy, not a caption: it is the section's primary fact. */
@@ -243,6 +243,9 @@ summary:hover { color: var(--color-ink); }
 .decisions-field input:focus-visible { box-shadow: var(--shadow-focus-ring), var(--shadow-input-focus); }
 .decisions-field input:disabled { border-color: var(--color-facet); color: var(--color-dust); cursor: not-allowed; }
 .me-actions { display: grid; gap: var(--spacing-16); padding-bottom: var(--spacing-24); }
+.setup-next { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--spacing-24); padding-bottom: var(--spacing-16); border-bottom: 1px solid var(--color-facet); }
+.setup-next > div { display: grid; gap: var(--spacing-8); min-width: 0; }
+.setup-next h2 { font-size: 28px; }
 .publication-window { display: grid; gap: var(--spacing-8); min-width: 0; }
 #decisions-key-message:empty { display: none; }
 
@@ -250,7 +253,7 @@ summary:hover { color: var(--color-ink); }
 #update-progress { width: 100%; max-width: var(--reading); accent-color: var(--color-ink); }
 #update-status, #update-error { white-space: pre-wrap; }
 
-/* Help is a short ledger: the starting prompt, four steps, two plain-text URLs and the version. */
+/* Help follows the actual setup sequence, then the conversation handoff and reference links. */
 .help-steps { margin: 0; padding-left: 1.25em; display: grid; gap: var(--spacing-8); color: var(--color-ink-2); line-height: 1.6; max-width: var(--reading); }
 .help-links code { font: 400 14px/1.6 var(--font-geist-mono); color: var(--color-ink); user-select: all; }
 
@@ -272,6 +275,7 @@ dialog::backdrop { background: color-mix(in oklab, var(--color-void) 80%, transp
   .career-reader .back { display: inline-flex; }
   .app-row { grid-template-columns: minmax(0, 1fr); grid-template-areas: "name" "status" "action" "details"; }
   .setup-section { grid-template-columns: minmax(0, 1fr); gap: var(--spacing-24); }
+  .setup-next { grid-template-columns: minmax(0, 1fr); gap: var(--spacing-16); }
   .me-actions button { padding-inline: var(--spacing-8); }
   .career-reader-content dl { grid-template-columns: minmax(0, 1fr); gap: var(--spacing-8); }
   .career-reader-content dd + dt { margin-top: var(--spacing-8); }

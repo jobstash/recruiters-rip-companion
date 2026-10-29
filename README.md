@@ -1,14 +1,107 @@
 # Recruiters.rip Companion
 
-The companion keeps CVs, career facts, captured jobs and application drafts on your computer. Claude or Codex handles assessment and writing. Chrome and Firefox extensions save job adverts and prepare answers for native paste.
+Companion keeps your CVs and applications on your computer. Use Codex or Claude to find suitable jobs and write tailored applications. An optional Chrome or Firefox extension helps with application forms.
 
-See [AGENTS.md](AGENTS.md) for ownership and safety boundaries, and [design.md](design.md) for the shared interface rules.
 
-## Install and connect
+## Start here
 
-Companion targets macOS Apple Silicon, Windows x64 and Linux x64. Connect a supported Claude or Codex desktop app or CLI. The available host determines computer-use support; Companion does not provide those tools.
+You need Companion, a CV, and Codex or Claude. The browser extension is optional.
 
-### Run from source
+### 1. Install Companion
+
+Choose your computer at [Downloads](https://recruiters.rip/downloads), then open **Recruiters.rip Companion**.
+
+| Computer | What to do |
+| --- | --- |
+| Mac with an M1 chip or newer | Open the download and move **Recruiters.rip Companion** to **Applications**. |
+| Windows 10 or newer | Open the downloaded installer and follow its steps. |
+| Linux | Allow the downloaded file to run as a program, then open it. |
+
+The Windows and Linux downloads are for 64-bit Intel or AMD computers.
+
+<details>
+<summary>If your computer will not open the app</summary>
+
+- **Mac:** if macOS blocks the official download, open **System Settings → Privacy & Security → Open Anyway**.
+- **Windows:** you may see a warning because the publisher has not been verified. Check that the file came from recruiters.rip or its [official releases](https://github.com/jobstash/recruiters-rip-companion/releases). If your workplace blocks it, ask your IT team.
+- **Linux:** you may need extra software called FUSE 2 to open the download. Ask whoever manages your computer to install it. Keep the app in a permanent folder.
+</details>
+
+### 2. Connect your account
+
+In **Companion**, choose **Connect account**. Sign in on the website, confirm the connection, then return to Companion and approve the named account.
+
+A membership lets you browse new jobs. Your CV, saved work and jobs you add yourself remain available without it.
+
+### 3. Import your CV
+
+In **Companion → Me**, choose **Import CV** and select a PDF, Word document or text file. Use a document with selectable text, not a scanned image.
+
+### 4. Connect Codex or Claude
+
+In **Companion → Settings → AI apps**, choose **Set up** for Codex or Claude. If you do not have the app, choose **Get Codex** or **Get Claude** first. You only need one.
+
+Then open **Jobs** and select **Continue in Codex** or **Continue in Claude**. Send the message in that app. If a terminal window opens instead, press **Enter** there.
+
+Your AI will ask which roles and locations you want if you have not saved those preferences yet. You do not need an API key or browser extension to review jobs.
+
+<details>
+<summary>If your AI app cannot find Companion</summary>
+
+Keep Companion open. In **Settings → AI apps**, follow the instructions for your app, then start a new conversation with recruiters.rip enabled. Ask: **Use recruiters.rip to find me a job.**
+
+Choose **Continue in Codex** or **Continue in Claude**, then send the message there. Companion will show **Connected now** when the connection is working.
+</details>
+
+## Add the browser extension — optional
+
+Use it to save job adverts and help fill application forms. You can find and review jobs without it.
+
+Keep Companion open. In **Settings → Browser extensions**, choose **Open folder** for your browser, then:
+
+<details>
+<summary>Chrome</summary>
+
+1. Open `chrome://extensions`.
+2. Turn on **Developer mode**.
+3. Choose **Load unpacked** and select the Chrome folder Companion opened.
+4. Open a job page and choose **recruiters.rip** from Chrome’s **Extensions** menu, or click its **rr** icon.
+</details>
+
+<details>
+<summary>Firefox</summary>
+
+1. Open `about:debugging` and choose **This Firefox**.
+2. Choose **Load Temporary Add-on**.
+3. Select `manifest.json` in the Firefox folder Companion opened.
+4. Open a job page and choose **recruiters.rip** from Firefox’s **Extensions** menu, or click its **rr** icon.
+
+You will need to load this version again after closing Firefox.
+</details>
+
+### Fill an application
+
+1. On the application page, click **rr**, then **Read page** if needed.
+2. If you want extra help filling forms, open **Companion → Settings → Form filling**. This optional feature uses a separately billed OpenAI API key. It is not needed to find jobs.
+3. Click an empty answer box and paste with **⌘V** on Mac or **Ctrl+V** on Windows/Linux. Check the answer before moving on. Existing text is not replaced automatically.
+4. Use **Review answers** to edit or copy an answer. Use the document controls to open your tailored CV or find it for an upload.
+
+Your AI writes the tailored CV, cover letter and job-specific answers. The extension prepares saved answers for paste; it does not submit applications.
+
+### Apply with Codex or Claude
+
+Ask your connected AI to prepare an application for a specific job. If you also want it submitted, include that in your request. It uses your current CV and preferences and saves the documents in Companion.
+
+Your AI app may be able to fill the form for you. If it cannot, use the saved documents and answers yourself. Complete any security checks on the website. The application is only submitted when the employer confirms it.
+
+## Developer setup
+
+<details>
+<summary>Build from source and package extensions</summary>
+
+See [AGENTS.md](AGENTS.md) for ownership and safety boundaries, and [design.md](design.md) for the interface rules.
+
+Use Node 22.12 or newer and pnpm 10.28.0:
 
 ```sh
 git clone https://github.com/jobstash/recruiters-rip-companion.git
@@ -17,63 +110,15 @@ pnpm install --frozen-lockfile
 pnpm start
 ```
 
-Use Node 22.12 or newer and pnpm 10.28.0. `pnpm start` builds the local tools, document engine and Chrome/Firefox extensions before opening Electron. For isolated development, run `pnpm start:local`.
+`pnpm start` builds the tools, document engine and browser extensions before opening Electron. Use `pnpm start:local` for isolated development, never a user's vault.
 
-Install only artifacts actually published in the [official releases](https://github.com/jobstash/recruiters-rip-companion/releases):
+`pnpm build:browser` builds Chrome `browser-extension/dist/{production,local}` and Firefox `browser-extension/dist/{firefox-production,firefox-local}`. Create upload archives with `node browser-extension/build.mjs production --browser=chrome --zip` or `--browser=firefox --zip`. Firefox permanent distribution requires Mozilla signing.
 
-| Platform | Installer | Installation |
-| --- | --- | --- |
-| macOS Apple Silicon | ZIP or DMG | Move **Recruiters.rip Companion.app** to Applications. Ad-hoc builds are not notarized. |
-| Windows x64 | NSIS `.exe` | Run the per-user installer. Unsigned builds may trigger SmartScreen; no administrator-wide native-host registration is required. |
-| Linux x64 | `.AppImage` | Save the file, make it executable and run it in a graphical desktop session. Install the distribution's FUSE 2 compatibility library and allow access to `/dev/fuse`; do not disable the Chromium sandbox globally. |
+Chrome uses `sidePanel`; Firefox uses `sidebarAction`. Both use `nativeMessaging`, `activeTab`, `scripting` and `clipboardWrite`; production and local identities remain separate. Account connection returns through Companion, not through a browser extension.
 
-The website shell installer is for macOS only. Firefox source ZIPs are development builds, not permanently installable signed add-ons.
+Job capture uses `career_job_import` and `career_jobs`. Complete local originals can be reviewed with `career_match_jobs({localOnly:true})` without catalogue access. Native paste and Undo remain browser operations; the extension never injects field writes, upload actions or submission clicks.
+</details>
 
-### Connect your account and AI app
-
-1. Choose **Connect account**. Sign in in the browser window it opens, create the pairing request, and choose **Confirm account on this computer**.
-2. In the companion, approve the named account. Current membership enables the platform job feed; captured jobs and saved local records work without feed access.
-3. In **Settings → Chat apps**, install the Codex plugin or configure Claude. Detected CLI hosts use an application workspace and a visible terminal; press Enter there to send the prepared request. Desktop hosts open a prefilled conversation. Start a new task with Recruiters.rip enabled after updating the plugin.
-4. On **Me**, choose **Import CV**. The companion extracts PDF, DOCX or text locally; your connected agent reads the source and builds the profile.
-
-Model authentication stays in your AI app. Normal setup collects no OpenAI/Anthropic API key or chat login token. The optional Decisions key is entered only in companion settings. Scanned/image-only CVs need readable text; import does not perform model inference or OCR.
-
-## Capture jobs and prepare form values
-
-1. Keep Companion open. In **Settings → Chat apps**, choose the extension folder for your browser.
-2. **Chrome 125+:** open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**, and select the Chrome folder.
-3. **Firefox 128+:** for development, open `about:debugging` → **This Firefox** → **Load Temporary Add-on**, then select `manifest.json` in the Firefox folder. This installation lasts until Firefox closes. Permanent distribution requires a Mozilla-signed XPI; the build command does not obtain signing credentials or publish to AMO.
-4. On the job or application tab, click the **rr** toolbar icon. This grants temporary access and opens Chrome's side panel or Firefox's sidebar. Selecting a browser sidebar alone does not grant page access. **Read page** captures public job context and prepares known form answers without all-sites permissions.
-
-Captures appear in **Jobs** before assessment. They live outside the replaceable matching cache and survive ranking resets. Detail/apply URL aliases deduplicate repeat captures; page provenance alone never merges different jobs. A listing card without the full advert remains **Needs full advert**: open the original and capture it before asking for assessment or a CV. Publication dates remain unknown unless the page provides one.
-
-**Read page** uses explicit profile values first, then lets Companion's Decisions API select source-backed contact details from the saved CV and other known answers. It chooses existing text, including supported name components, rather than inventing facts or writing new prose. No approval dialog is shown; credentials stay in Companion. Only details still missing or uncertain become questions. **Save details** stores explicit answers locally for later applications, preserving unrelated profile values. Values typed on an employer's page are not silently collected. Job-specific prose remains the connected agent's work.
-
-When the extension starts a read without a configured Decisions key, Companion opens **Settings → Optional Decisions API** and focuses the key field before any preparation request. After saving the key, choose **Read page** again. With a configured key, preparation and the paid API request run immediately.
-
-Clicking or tabbing into an inspected empty text control puts its prepared answer on the system clipboard; ⌘V and undo are native browser operations. **Review answers** holds secondary edit and copy controls. **For this job** shows the exact application's documents and written-answer status. Personal summaries and cover letters are written by the connected agent for that application, not saved as generic profile details. The default panel omits technical IDs, file paths and repeated failure explanations; populated/protected controls stay manual.
-
-An inspected page is not a prepared page: the panel shows readiness explicitly and hides the answer review until preparation completes. In source builds, panel/worker build IDs must match; an outdated worker offers **Reload extension** rather than displaying a mixture of old behavior and new controls.
-
-Moving between fields by click or Tab refreshes the clipboard for each prepared answer, including multiline text. Element-to-element blur is not treated as leaving the browser window; native paste, undo and redo remain intact. Browser verification covers all seven demo fields in sequence, rather than testing the name alone.
-
-Clicking an already focused empty control refreshes its prepared answer too, including after an agent updates it. Clearing a mistaken paste in an eligible prepared control refreshes the clipboard without changing focus; the next native ⌘V pastes that control's answer. Existing text is never replaced automatically. If a control was already populated when the page was read, clear it and read the page again before preparing its answer.
-
-### Apply with Codex or Claude
-
-1. Ask your connected agent to prepare or apply to a specific job. It creates or reuses that job's saved application, reads the full advert and current career context, and saves and exports the tailored CV and cover letter. Asking for documents alone does not ask it to submit.
-2. For applying, the agent opens the saved application link in your own Chrome. It needs its host app's computer-use tools to see the screen and use the mouse, keyboard and file picker. Companion does not provide those tools. If the host lacks them, the agent tells you what is missing; your documents and prepared answers remain available for you to use.
-3. Use the black **rr** toolbar icon and **Read page** to prepare known answers. The agent saves job-specific writing in Companion. It enters answers with the host's mouse and keyboard, including ordinary paste from the prepared clipboard, and attaches the exported PDFs through the site's upload button and your computer's file picker. It checks the values and attachment names shown on the page. Unknown or protected answers and security challenges remain yours to handle.
-4. Before working on a saved application, and again immediately before clicking the final **Submit**, the agent rereads its current context from Companion. A job you blocked stays blocked, including in an already-open browser tab. Changed documents or answers must be brought up to date before proceeding.
-5. If your task includes submitting, the agent uses the host's mouse or keyboard and checks the actual result on the page. A click, navigation or generic thanks message is not a receipt. Rejection, a CAPTCHA problem, validation errors or an unclear result are reported as such, never as a completed application. It does not automatically retry or send a duplicate.
-
-Application input uses ordinary browser controls, not scripts that fill fields, press buttons or send application data directly. This is for input compatibility, not avoiding detection; neither Companion nor native input guarantees acceptance by a site's anti-spam system. Host access permissions still apply.
-
-Decisions selects known values; it does not write application prose. **Prepare this application** opens Claude Code or Codex with a prefilled local request. The user sends that prompt; the agent reads the complete original advert, writes the tailored CV/cover letter and job-specific form answers, and saves them through Companion. The panel refreshes saved status and releases newly ready form values automatically. Opening a host is not reported as generation or submission.
-
-MCP job imports use `career_job_import`; `career_jobs` lists captures. `career_job_read` and `career_application_create({jobId})` resolve local originals without a platform request. Use `career_match_jobs({localOnly:true})` to assess complete captures offline; the selected publication range applies only to platform jobs.
-
-`pnpm build:browser` builds four folders: Chrome `browser-extension/dist/{production,local}` and Firefox `browser-extension/dist/{firefox-production,firefox-local}`. Each build includes fonts and brand assets. Chrome uses `sidePanel`; Firefox uses `sidebarAction` and `browser_specific_settings.gecko.id`. Both use `nativeMessaging`, `activeTab`, `scripting` and `clipboardWrite`, with separate production/local native hosts. Firefox has no website external-message bridge; account pairing uses Companion's loopback flow. To create archives, run `node browser-extension/build.mjs production --browser=chrome --zip` or `--browser=firefox --zip`.
 
 ## Public releases and updates
 
@@ -113,7 +158,7 @@ The slider sets the publication window: **Today, Yesterday, Past 3 days, Past we
 
 Cards show the company mark (logo when the catalogue supplies one) and three lines. A reviewed row shows **Fit** on the right, an ineligible row shows the verdict word, an open row shows nothing there. The reader shows the verdict only for reviewed and ineligible jobs; there is no metadata section. A reviewed assessment keeps its own overall fit, gates, requirements and reason. In a job reader, each saved requirement has **Add context**: it copies a bounded prompt for the connected agent to create/reuse the application, ask one focused material-gap question, save the answer as a reusable fact and reassess that job. The requirement must exactly match the saved assessment; the Companion never creates an unsupported fact directly.
 
-The optional OpenAI key in **Settings → Optional Decisions API** serves one thing: Chrome **Read page** known-value mapping (`src/decisions/form-mapping.mjs`, `POST /v1/decisions`). It never assesses jobs. The section states whether a key is saved (by its last four characters and save date) before any control. Enter the key and choose **Save key**; a saved key offers **Replace key** (the old key stays active until the new one is saved) and **Remove key**. Unsaved input clears on save or navigation. Saving a key sends no API request, and normal agent work needs none. Key changes, locks and career-context changes invalidate prepared form values. The vault keeps the key under `prescanCredentials`/`prescanCredentialVersion`. See [Decisions documentation](https://developers.openai.com/api/docs/guides/decisions) and [API reference](https://developers.openai.com/api/reference/resources/decisions).
+The optional OpenAI key in **Settings → Form filling** serves one thing: Chrome/Firefox **Read page** known-value mapping (`src/decisions/form-mapping.mjs`, `POST /v1/decisions`). It never assesses jobs. The section states whether a key is saved (by its last four characters and save date) before any control. Enter the key and choose **Save key**; a saved key offers **Replace key** (the old key stays active until the new one is saved) and **Remove key**. Unsaved input clears on save or navigation. Saving a key sends no API request, and normal agent work needs none. Key changes, locks and career-context changes invalidate prepared form values. The vault keeps the key under `prescanCredentials`/`prescanCredentialVersion`. See [Decisions documentation](https://developers.openai.com/api/docs/guides/decisions) and [API reference](https://developers.openai.com/api/reference/resources/decisions).
 
 ## Onboarding and companion memory
 
@@ -127,7 +172,7 @@ Purpose: JobStash keeps the candidate's CV and CV-derived work history on their 
 
 1. `career_employment_status` lists each current CV as `needs_extraction`, `ready_to_share` or `shared` (keyed by the CV's content hash). The connected agent reads the CV, extracts employers, titles and `YYYY`/`YYYY-MM` dates, and calls `career_employer_search`. That is the `employer_search` platform operation, which returns up to five JobStash candidates per employer, profiles first.
 2. The agent keeps only confident matches and saves them locally with `career_employment_save`. Unmatched employers are dropped and never sent.
-3. Consent is asked once (`career_introductions_update({consent})`) and is shown and changeable in **Settings → JobStash profile**. Withdrawing stops future uploads only; anything already on JobStash stays, and consent can be granted again.
+3. Consent is controlled in **Settings → CV sharing**. Withdrawing stops future uploads only; anything already on JobStash stays, and consent can be granted again. The agent does not add a separate consent question to onboarding.
 4. `career_cv_share` checks consent, CV bytes and matched roles, then sends `POST /device/cv` without a further dialog. The paired device signs the request; the recruiters.rip proxy forwards those bytes unchanged (up to 7.5 MiB). Middleware resolves the existing Privy-linked User from the device, stores the PDF/DOCX or text in the existing JobStash R2 resume bucket, replaces the profile's CV showcase link, and replaces its `CV_EMPLOYMENT` edges in one database transaction. Any unknown entity reference rejects the whole upload; a failed database transaction removes the newly uploaded object. No `candidate_documents` table or new migration is needed on production `main`.
 5. GitHub is optional: `account_github_connect` opens `recruiters.rip/account#github`, where developers link GitHub through Privy. `account_status` reports `platform.github.login` once middleware has synchronized it. The link is what makes warm intros possible.
 6. **Me → Career** shows the saved matches: employer, title and dates per role, newest first, with **Go to {company}’s profile**. That action sends the saved entity ref to the `employer_profile` platform operation (pairing required, membership not), which returns `{kind, slug, name}`: the Organization or Project `normalizedName` that keys its ecosystem.vision page (a profile resolves through its single linked child; several children or none is a 404). The companion opens `https://ecosystem.vision/organizations/names/<slug>` or `/projects/names/<slug>` and never builds a URL from a display name. Entries whose CV changed since extraction say so until the agent refreshes them.
@@ -154,7 +199,7 @@ Say **“Reassess roles.”** The host performs one ranking reset, then reviews 
 
 The companion's **Clear reviews** action and `career_rankings_delete` clear rankings, pairwise comparisons and cached jobs. They preserve profile, preferences, CVs, facts, job applications, account data and API credentials. A reset invalidates in-flight writers so deleted results cannot reappear. `career_match_jobs.profileVersion` binds profile changes and ranking resets; bounded saved-job reassessments can read it as `career_profile_read.matchingProfileVersion`.
 
-Navigation is **Me / Jobs / Settings / Help**; Me opens by default. Me exposes **Import CV**, **Open exports**, **Export backup** and **Connect your agent** above **CVs / Facts / Preferences / Career**. Preferences makes matching direction and constraints inspectable in the app. Jobs switches between **Jobs**, **Reviewed**, **Applications** and **Blocked**, with the publication slider and the Codex/Claude/Copy prompt handoff above the list. Help shows the starting prompt, a four-step overview, the docs and downloads URLs and the running version. Import uses the existing native picker/extractor and revision-checked source API; it never accepts a renderer path. Settings has separate Account, Chat apps and Optional Decisions API groups, with ChatGPT and Claude nested together. OS-lock protection and account approval remain enforced; the companion retains approval dialogs for pairing and update installation. Browser input permissions belong to the host app.
+Navigation is **Me / Jobs / Settings / Help**; Me opens by default. A compact first-use prompt offers the next account, CV or AI-app action from actual state; it does not disable local work. CV readiness requires a current imported source, and AI connection requires a live session rather than a setup click. Me keeps **Import CV**, **Jobs**, **Open files**, **Back up** and **AI apps** above **CVs / Facts / Preferences / Career**. Jobs keeps its publication slider and Codex/Claude handoff. Settings separates **Account**, **AI apps**, optional **Browser extensions**, **CV sharing**, **Form filling** and **Updates**; manual configuration is under **Advanced**. Help follows the same setup sequence. Import uses the native picker/extractor and revision-checked source API, never a renderer-supplied path. OS-lock protection, account approval and update approval remain enforced.
 
 A job's reader can block the job, every job of its company or every job of its category (classification). Employer comparisons recognize slug/display-name separators, so `flow-traders` and `Flow Traders` match the same block. Blocks are saved locally in `career.blocklist` and survive **Clear reviews**. Discovery, direct job reads, batch fetches, recommendations, assessment archives/exports, reranking and application preparation all enforce the block; an old ID or existing draft is not an exemption. Operations recheck after asynchronous fetches and before releasing prepared form values. The agent rereads `career_application_context` before acting on a saved application and immediately before final submission through its host's computer-use tools. Blocked application work fails with `JOB_BLOCKED`; existing drafts remain stored, and the agent must not bypass the block through another tool. **Blocked** lists exclusions and **Unblock** removes one.
 
@@ -189,7 +234,7 @@ Subsequent evaluation uses these explanations where relevant: they can change re
 
 For an agent-led application, export both current PDFs before `career_application_open({applicationId})` opens its saved URL in the user's default browser. Use Chrome or Firefox with the corresponding extension. Reading the application page links its questions back to that application; the active agent discovers them in `career_application_context.forms`, stages the short personal summary and other narrative answers, and the panel refreshes. Reopening the job reuses current outputs rather than regenerating them.
 
-For a web-led application, **For this job → Prepare this application** creates a durable preparation request. `career_application_preparation_read({preparationId})` supplies the original or exact source link and captured questions. If no full job is saved, the host retrieves that advert, creates the application and calls `career_application_preparation_bind`. It then uses the same document/answer tools as the agent-led path. Narrative answers are bound to the application, exact question/type/options and career context; they cannot leak into another employer's form. The browser exposes current PDFs through **Open**/**Show in folder** for native file selection; no automatic upload is claimed.
+For a web-led application, choose an AI app under **For this job**, then **Continue in Codex** or **Continue in Claude** to create a durable preparation request. `career_application_preparation_read({preparationId})` supplies the original or exact source link and captured questions. If no full job is saved, the host retrieves that advert, creates the application and calls `career_application_preparation_bind`. It then uses the same document/answer tools as the agent-led path. Narrative answers are bound to the application, exact question/type/options and career context; they cannot leak into another employer's form. The browser exposes current PDFs through **Open**/**Show in folder** for native file selection; no automatic upload is claimed.
 
 Desktop host links carry only the preparation UUID and fixed instructions, never CV text or keys. Claude uses documented `claude://code/new?q=…&folder=…`; the installed ChatGPT/Codex route is `codex://threads/new?prompt=…&path=…&mode=codex`. Both prefill the composer without sending. CLI handoff instead opens a detected terminal with the exact prompt and waits for Enter before starting the interactive host. A product-owned workspace supplies the Companion MCP configuration, preserving normal host trust prompts and unrelated user configuration. Readiness derives from saved, current artifacts and verified local files, not a successful launch. Metadata polling stops when the panel closes or changes page and pauses after twenty minutes until **Read page** resumes it.
 

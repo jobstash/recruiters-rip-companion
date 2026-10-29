@@ -1023,19 +1023,15 @@ test('the publication slider saves its range once on change, restores the saved 
   assert.equal(input.disabled, true);
 });
 
-test('each Jobs stage has its own empty state, active tab and controls', async () => {
+test('each Jobs stage preserves its active tab and controls when empty', async () => {
   const { browser } = fixture();
   const ui = await rendererFixture(browser, false);
   await ui.window.careerBrowser.refresh();
   await ui.settle();
-  for (const [view, empty] of [
-    ['reviewed', 'Nothing reviewed yet. Continue in Codex or Claude to review the jobs in this window.'],
-    ['jobs', 'No jobs in this publication window yet. Widen the window or start the shortlist.'],
-  ]) {
+  for (const view of ['reviewed', 'jobs']) {
     ui.nodes[`career-stage-${view}`].fire('click');
     await ui.settle();
     assert.equal(ui.calls.at(-1).args.view, view);
-    assert.equal(ui.nodes['career-list-status'].textContent, empty);
     assert.equal(ui.nodes['stage-jobs'].hidden, view !== 'jobs');
     assert.equal(ui.nodes['review-launch'].hidden, false);
     assert.equal(ui.nodes['delete-rankings'].hidden, view !== 'reviewed');

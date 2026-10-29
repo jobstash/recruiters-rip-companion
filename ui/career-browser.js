@@ -1,13 +1,13 @@
 'use strict';
 (() => {
   const categories = {
-    sources: { title: 'CVs', empty: 'No saved CVs or supporting documents. Use Import CV to add one.', locked: 'Open local storage to read saved records.', select: 'Select a record' },
-    facts: { title: 'Facts', empty: 'No saved career facts.', locked: 'Open local storage to read saved records.', select: 'Select a record' },
-    preferences: { title: 'Preferences', empty: 'No preferences saved. Tell your connected agent what you want and what you want to avoid.', locked: 'Open local storage to read saved preferences.', select: 'Select a preference group' },
-    career: { title: 'Career', empty: 'No work history yet. Your agent extracts employers from your CV and links the ones it confidently matches to JobStash.', locked: 'Open local storage to read your work history.', select: 'Select an employer' },
-    jobs: { title: 'Jobs', empty: 'No jobs in this publication window yet. Widen the window or start the shortlist.', locked: 'Open local storage to read saved jobs.', select: 'Select a job' },
-    applications: { title: 'Job Applications', empty: 'No saved applications.', locked: 'Open local storage to read saved applications.', select: 'Select an application' },
-    blocks: { title: 'Blocked jobs', empty: 'Nothing blocked. Open a job to block it, its company or its category.', locked: 'Open local storage to read blocked jobs.', select: 'Select a block' },
+    sources: { title: 'CVs', empty: 'No CV added yet. Choose Import CV to add yours.', locked: 'Unlock to see your saved work.', select: 'Select a document' },
+    facts: { title: 'Facts', empty: 'No details saved yet. Tell your AI app about your experience.', locked: 'Unlock to see your saved work.', select: 'Select an answer' },
+    preferences: { title: 'Preferences', empty: 'No preferences saved. Tell your AI app what you want and what you want to avoid.', locked: 'Unlock to see your saved preferences.', select: 'Select a preference group' },
+    career: { title: 'Career', empty: 'No work history saved yet. Ask your AI app to read your CV and add your previous jobs.', locked: 'Unlock to see your work history.', select: 'Select an employer' },
+    jobs: { title: 'Jobs', empty: 'No jobs for these dates. Choose a longer date range or continue in Codex or Claude. To connect an AI app, open Settings → AI apps.', locked: 'Unlock to see your saved jobs.', select: 'Select a job' },
+    applications: { title: 'Job Applications', empty: 'No saved applications.', locked: 'Unlock to see your saved applications.', select: 'Select an application' },
+    blocks: { title: 'Blocked jobs', empty: 'Nothing blocked. Open a job to block it, its company or its category.', locked: 'Unlock to see your blocked jobs.', select: 'Select a block' },
   };
   const dateFormat = new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium', timeZone: 'UTC' });
   const displayDate = value => typeof value === 'string' && Number.isFinite(Date.parse(value)) ? dateFormat.format(new Date(value)) : null;

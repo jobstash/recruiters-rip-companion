@@ -61,15 +61,16 @@ export function applicationView(result) {
 // `{version, id, op, payload}` and are answered with `{version, id, ok, result|error}`.
 export function createNativeClient({ connect, host, onCommand = null, onDisconnect = null, randomUUID = () => crypto.randomUUID(), timeoutMs = 180000, maxPending = 4 }) {
   let port; const pending = new Map();
+  const unavailable = () => Object.assign(new Error('Companion is unavailable. Open Recruiters.rip Companion, then read this page again.'), { code: 'COMPANION_UNAVAILABLE' });
   const failAll = () => {
     const wasConnected = Boolean(port); port = null;
-    for (const task of pending.values()) { clearTimeout(task.timer); task.reject(new Error('Open Recruiters.rip Companion, then try again.')); }
+    for (const task of pending.values()) { clearTimeout(task.timer); task.reject(unavailable()); }
     pending.clear();
     if (wasConnected) { try { onDisconnect?.(); } catch { /* Disconnect cleanup must not strand requests. */ } }
   };
   function open() {
     if (port) return port;
-    port = connect(host);
+    try { port = connect(host); } catch { throw unavailable(); }
     const active = port, commands = new Set(), seenCommands = new Set();
     const send = reply => {
       if (port !== active) return;
@@ -103,7 +104,9 @@ export function createNativeClient({ connect, host, onCommand = null, onDisconne
       const task = pending.get(message?.id); if (!task) return;
       pending.delete(message.id); clearTimeout(task.timer);
       if (message.version === 1 && message.ok === true) task.resolve(message.result);
-      else task.reject(new Error(typeof message?.error?.message === 'string' ? message.error.message.slice(0, 400) : 'The companion did not authorize this operation. Try again.'));
+      else task.reject(Object.assign(new Error(typeof message?.error?.message === 'string' ? message.error.message.slice(0, 400) : 'Companion could not complete this request. Try again.'), {
+        code: typeof message?.error?.code === 'string' ? message.error.code.slice(0, 80) : null,
+      }));
     });
     active.onDisconnect.addListener(() => { if (port === active) failAll(); });
     return active;
@@ -120,7 +123,7 @@ export function createNativeClient({ connect, host, onCommand = null, onDisconne
         op === 'forms_validate' ? Math.min(timeoutMs, 5000) : op === 'application_status' ? Math.min(timeoutMs, 10000) : timeoutMs);
       pending.set(id, { resolve, reject, timer });
       try { port.postMessage(message); } catch (error) {
-        pending.delete(id); clearTimeout(timer); reject(error);
+        pending.delete(id); clearTimeout(timer); reject(unavailable());
         const active = port; failAll(); try { active?.disconnect(); } catch { /* Already disconnected. */ }
       }
     });

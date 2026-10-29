@@ -24,12 +24,23 @@ for (const button of document.querySelectorAll('[data-view]')) button.addEventLi
 function openSettings(target) {
   showView('setup');
   const section = $(target);
+  if (['browser-settings', 'decisions', 'sharing-settings'].includes(target)) {
+    section.querySelector('details').open = true;
+  }
   section.scrollIntoView({ block: 'start' });
-  section.querySelector('input:not(:disabled), button:not(:disabled)')?.focus({ preventScroll: true });
+  [...section.querySelectorAll('input:not(:disabled), button:not(:disabled), summary')].find(control => control.getClientRects().length)?.focus({ preventScroll: true });
 }
 window.openCompanionSettings = openSettings;
 $('me-account').addEventListener('click', () => openSettings('account-settings'));
 $('me-chat-apps').addEventListener('click', () => openSettings('chat-app-settings'));
+$('me-jobs').addEventListener('click', () => showView('jobs'));
+$('setup-next').addEventListener('click', () => {
+  const next = $('setup-next').dataset.action;
+  if (next === 'account') $('connect-account').click();
+  else if (next === 'cv') $('import-cv').click();
+  else if (next === 'ai') openSettings('chat-app-settings');
+  else if (next === 'retry') void refresh();
+});
 // Help reads the running package version from the same state snapshot Settings → Updates renders.
 window.helpUI = {
   refresh(current) { $('help-version').textContent = typeof current?.updates?.version === 'string' ? `Version ${current.updates.version}` : ''; },
@@ -37,6 +48,30 @@ window.helpUI = {
 };
 // Live local MCP sessions, named by the clientInfo each app declared when it connected.
 const chatApps = { chatgpt: /chatgpt|codex|openai/i, claude: /claude/i };
+let setupSignature = '';
+function renderSetup(current) {
+  const connected = current?.mcpClients?.some(name => Object.values(chatApps).some(pattern => pattern.test(name))) === true;
+  const signature = JSON.stringify(current ? [current.paired, current.hasCv, connected] : null);
+  if (signature === setupSignature) return;
+  setupSignature = signature;
+  const next = !current ? 'retry' : !current.paired ? 'account' : !current.hasCv ? 'cv' : !connected ? 'ai' : null;
+  $('me-setup').hidden = !next;
+  $('me-account').hidden = Boolean(current?.paired) || next === 'account';
+  if (!next) return;
+  const copy = {
+    account: ['Connect your account', 'Connect recruiters.rip to see new jobs. You can import your CV now, even without an account.', 'Connect account'],
+    cv: ['Import your CV', 'Add your CV so Codex or Claude can find jobs that fit your experience.', 'Import CV'],
+    ai: ['Connect your AI app', 'Choose Codex or Claude in Settings → AI apps, then start a conversation.', 'AI apps'],
+    retry: ['Companion is unavailable', 'Your saved work is unchanged. Retry, or reopen Companion.', 'Retry'],
+  }[next];
+  $('setup-next-title').textContent = copy[0];
+  $('setup-next-description').textContent = copy[1];
+  $('setup-next-status').textContent = current
+    ? `${current.paired ? 'Account connected' : 'Account not connected'} · ${current.hasCv ? 'CV added' : 'No CV added'} · ${connected ? 'AI app connected now' : 'AI app not connected'}`
+    : 'Could not check your connection';
+  $('setup-next').textContent = copy[2];
+  $('setup-next').dataset.action = next;
+}
 function renderConnections(clients = []) {
   const counts = { chatgpt: 0, claude: 0 }, other = new Set();
   for (const name of clients) {
@@ -45,17 +80,34 @@ function renderConnections(clients = []) {
     if (key) counts[key]++; else other.add(name);
   }
   for (const [key, count] of Object.entries(counts))
-    $(`${key}-connection`).textContent = count ? `Connected now${count > 1 ? ` · ${count} sessions` : ''}` : 'Not connected';
+    $(`${key}-connection`).textContent = count ? 'Connected now' : 'Not connected';
   $('other-connections').hidden = !other.size;
   $('other-connections').textContent = other.size ? `Also connected: ${[...other].join(', ')}` : '';
 }
 function renderIntegrations(current) {
   const hosts = current.review?.hostInfo ?? {};
-  $('codex-host-label').textContent = hosts.codex?.label || 'Codex';
-  $('claude-host-label').textContent = hosts.claude?.label || 'Claude';
-  $('install-chatgpt').disabled = busy || hosts.codex?.available === false;
-  $('install-claude').textContent = hosts.claude?.mode === 'cli' ? 'Connect Claude Code' : 'Install Claude extension';
-  $('install-claude').disabled = busy || hosts.claude?.available === false;
+  $('codex-host-label').textContent = 'Codex';
+  $('claude-host-label').textContent = hosts.claude?.mode === 'cli' ? 'Claude Code' : 'Claude';
+  $('install-chatgpt').disabled = busy || !hosts.codex?.available;
+  $('install-claude').disabled = busy || !hosts.claude?.available;
+  for (const host of ['codex', 'claude']) {
+    const info = hosts[host];
+    $(`${host}-setup-detail`).textContent = info?.reason || '';
+    $(`${host}-setup-detail`).hidden = !info?.reason;
+    const missing = info?.available === false;
+    $(host === 'codex' ? 'install-chatgpt' : 'install-claude').hidden = missing;
+    $(`get-${host}`).hidden = !missing;
+    $(`get-${host}`).disabled = busy;
+    $(`setup-${host}`).hidden = !info?.available;
+    $(`setup-${host}`).disabled = busy || !info?.available;
+    $(`${host}-setup-help`).textContent = info?.available === false
+      ? `${host === 'codex' ? 'Codex' : 'Claude'} is not ready to open from Companion. Choose Get ${host === 'codex' ? 'Codex' : 'Claude'} for setup steps, then reopen Companion. If it is already installed, see Advanced below.`
+      : !info ? 'Checking which AI apps are available…'
+        : !['cli', 'desktop'].includes(info.mode) ? 'Choose Set up and follow the prompts in your AI app, then choose Continue below.'
+        : host === 'codex'
+          ? `Choose Set up to add recruiters.rip. Then Continue in Codex and ${info.mode === 'cli' ? 'press Enter in the text window that opens' : 'send the message in Codex'}.`
+          : `Choose Set up to add recruiters.rip. Then Continue in Claude and ${info.mode === 'cli' ? 'press Enter in the text window that opens' : 'send the message in Claude'}.`;
+  }
   $('claude-config-help').textContent = hosts.claude?.mode === 'cli'
     ? 'Use this MCP entry in Claude Code. Continue in Claude also configures the application workspace.'
     : 'Merge this entry into Claude Desktop’s MCP configuration.';
@@ -63,8 +115,8 @@ function renderIntegrations(current) {
     const connected = current.browserIntegration?.connected?.includes(browser);
     const registered = current.browserIntegration?.registered?.[browser];
     $(`${browser}-native-status`).textContent = connected ? 'Connected now.'
-      : registered ? 'Native bridge registered. Load the extension to connect.'
-        : 'Native bridge registration unavailable. Reopen Companion and check local installation permissions.';
+      : registered ? 'Companion is ready. Load the extension and open it on a job page to connect.'
+        : 'Could not connect to your browser. Reopen Companion and try again.';
   }
 }
 async function refresh() {
@@ -73,9 +125,10 @@ async function refresh() {
     const current = await invoke('state');
     if (request !== stateRequest) return;
     state = current;
+    if (noticeKind === 'state-unavailable') notice('');
     const locked = state.execution.state === 'locked';
     $('storage').hidden = !locked; $('settings').hidden = locked; $('views').hidden = locked;
-    $('storage-message').textContent = state.failure || 'Open local storage to see your saved career data.';
+    $('storage-message').textContent = state.failure || 'Choose Unlock to open your saved work.';
     if (state.approval && !locked) {
       $('approval-title').textContent = state.approval.title; $('approval-detail').textContent = state.approval.detail;
       $('approval-cancel').disabled = false; $('approval-allow').disabled = false;
@@ -92,9 +145,9 @@ async function refresh() {
     $('connect-account').textContent = state.paired ? 'Open account' : 'Connect account';
     $('connect-account').classList.toggle('primary', !state.paired);
     $('connect-account').classList.toggle('ghost', state.paired);
-    $('account-hint').textContent = state.paired ? 'Connected'
-      : state.reconnectAccount ? `Unpaired on recruiters.rip. Connect ${state.reconnectAccount.label} again to restore job access.` : 'Not connected';
-    $('me-account').hidden = state.paired;
+    $('account-hint').textContent = state.paired ? 'Account connected. A paid membership is needed for new jobs. You can still use your saved work without a membership.'
+      : state.reconnectAccount ? `This computer was disconnected from recruiters.rip. Connect ${state.reconnectAccount.label} again to see new jobs. Your saved work is still available.` : 'Not connected. Connect to see new jobs, or keep working with your CV and saved jobs.';
+    renderSetup(state);
     renderSharing(state.introductions);
     syncGithub(state.paired);
     if (!view) showView('me');
@@ -114,11 +167,14 @@ async function refresh() {
     if (state.failure) notice(state.failure, 'error', true);
   } catch {
     if (request !== stateRequest) return;
-    window.careerBrowser?.clear(); careerViewVersion = undefined;
-    window.decisionsUI?.clear();
-    window.updatesUI?.clear();
-    window.helpUI.clear();
-    notice('Could not load settings. Reopen the companion.', 'error', true);
+    if (!state) {
+      $('settings').hidden = false; $('views').hidden = false;
+      if (!view) showView('me');
+    }
+    renderSetup(null);
+    $('chatgpt-connection').textContent = 'Could not check your connection';
+    $('claude-connection').textContent = 'Could not check your connection';
+    notice('Could not reach Companion. Choose Retry in Me, or reopen Companion. Your saved work is unchanged.', 'state-unavailable', true);
   }
 }
 async function action(op, success) {
@@ -139,21 +195,25 @@ async function action(op, success) {
   finally { busy = false; controls.forEach((control, index) => { control.disabled = disabled[index]; }); await refresh(); }
 }
 for (const [id, op, message] of [
-  ['connect-account', 'connect-account', result => result.pairingRequired ? 'Complete sign-in and device pairing in the browser, then choose “Confirm account on this computer” to return here for approval.' : ''],
-  ['install-chatgpt', 'install-chatgpt', result => `Recruiters.rip plugin configuration installed. ${result.conversationRequired}`],
+  ['connect-account', 'connect-account', result => result.pairingRequired ? 'Complete sign-in in the browser, then choose Open Companion and approve the account on this computer.' : ''],
+  ['get-codex', 'get-codex', result => `${result.destination} opened in your browser.`],
+  ['get-claude', 'get-claude', result => `${result.destination} opened in your browser.`],
+  ['install-chatgpt', 'install-chatgpt', 'Codex setup saved. Choose Continue in Codex to start a conversation.'],
   ['copy-command', 'copy-command', 'MCP command copied.'],
   ['copy-config', 'copy-config', 'Configuration copied.'],
-  ['install-claude', 'install-claude', result => result?.configured ? 'Claude Code workspace configured. Use Continue in Claude to start a conversation.' : 'Approve the extension installation in Claude Desktop.'],
-  ['open-extension-folder', 'open-extension-folder', 'Extension folder opened. In Chrome’s Manage extensions, enable Developer mode and choose Load unpacked.'],
+  ['install-claude', 'install-claude', result => result?.configured ? 'Claude setup saved. Choose Continue in Claude to start a conversation.' : 'Finish adding recruiters.rip in the Claude window that opened.'],
+  ['open-extension-folder', 'open-extension-folder', 'Folder opened. In Chrome, open chrome://extensions, enable Developer mode, choose Load unpacked and select this folder.'],
   ['open-firefox-extension-folder', 'open-firefox-extension-folder', 'Extension folder opened. In Firefox, use about:debugging → This Firefox → Load Temporary Add-on and select manifest.json.'],
   ['import-cv', 'import-cv', result => result.cancelled ? 'Import canceled.' : 'CV imported.'],
-  ['copy-review-prompt', 'copy-review-prompt', 'Copied. Paste into Codex or Claude.'],
-  ['review-codex', 'review-codex', result => result.mode === 'cli' ? 'Request ready in the Codex terminal. Press Enter there to send.' : 'Codex opened with the review prompt. Send it there to start the review.'],
-  ['review-claude', 'review-claude', result => result.mode === 'cli' ? 'Request ready in the Claude terminal. Press Enter there to send.' : 'Claude opened with the review prompt. Send it there to start the review.'],
-  ['open-exports', 'open-exports', 'Export folder opened.'],
-  ['backup', 'backup', result => result.exported ? 'Backup exported.' : 'Export canceled.'],
-  ['delete-rankings', 'delete-rankings', 'Job assessments cleared.'],
-  ['unlock', 'unlock', 'Local storage is open.'],
+  ['copy-review-prompt', 'copy-review-prompt', 'Copied. Paste into your connected Codex or Claude conversation and send.'],
+  ['review-codex', 'review-codex', result => result.mode === 'cli' ? 'Codex opened. Press Enter in that window to send the message.' : 'Codex opened. Send the message there to start the review.'],
+  ['review-claude', 'review-claude', result => result.mode === 'cli' ? 'Claude opened. Press Enter in that window to send the message.' : 'Claude opened. Send the message there to start the review.'],
+  ['setup-codex', 'review-codex', result => result.mode === 'cli' ? 'Codex opened. Press Enter in that window to send the message.' : 'Codex opened. Send the message there to start the review.'],
+  ['setup-claude', 'review-claude', result => result.mode === 'cli' ? 'Claude opened. Press Enter in that window to send the message.' : 'Claude opened. Send the message there to start the review.'],
+  ['open-exports', 'open-exports', 'Your files folder opened.'],
+  ['backup', 'backup', result => result.exported ? 'Backup saved.' : 'Backup canceled.'],
+  ['delete-rankings', 'delete-rankings', 'Job reviews cleared.'],
+  ['unlock', 'unlock', 'Your saved work is open.'],
 ]) $(id).addEventListener('click', () => { void action(op, message); });
 // Sharing consent is standing but reversible: stopping blocks future uploads, and allowing again re-enables them.
 const sharingDate = value => typeof value === 'string' && Number.isFinite(Date.parse(value))
@@ -161,7 +221,7 @@ const sharingDate = value => typeof value === 'string' && Number.isFinite(Date.p
 function renderSharing(introductions) {
   const granted = introductions?.consent?.granted === true;
   const since = sharingDate(introductions?.consent?.at);
-  $('sharing-status').textContent = granted ? `CV sharing is on${since ? ` since ${since}` : ''}. Ready CVs are sent when the agent shares them.`
+  $('sharing-status').textContent = granted ? `CV sharing is on${since ? ` since ${since}` : ''}. Your AI app can send your CV to JobStash.`
     : 'CV sharing is off.';
   const shared = (introductions?.sources ?? []).filter(source => source.sharedAt).sort((a, b) => b.sharedAt.localeCompare(a.sharedAt))[0];
   $('sharing-shared').hidden = !shared;
@@ -178,9 +238,9 @@ function renderGithub() {
   if (!github.paired) return;
   const text = {
     loading: 'Checking your GitHub link…',
-    linked: `Linked as @${github.login}. Your AI can find people you know at hiring companies for warm introductions.`,
-    unlinked: 'Not linked. Optional: developers with open-source work can link GitHub so your AI can find people you already know at hiring companies and ask them for an introduction instead of a recruiter.',
-    offline: 'Could not reach the platform to check your GitHub link. Check your connection.',
+    linked: `Linked as @${github.login}. Your AI app can help find people you know at companies that are hiring.`,
+    unlinked: 'Not linked. If you use GitHub, connect it to help your AI app find people you know at companies that are hiring.',
+    offline: 'Could not check your GitHub connection. Check your internet connection and try again.',
     reconnect: 'Reconnect your account to check your GitHub link.',
     unknown: '',
   };

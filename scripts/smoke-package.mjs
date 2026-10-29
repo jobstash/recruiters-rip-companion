@@ -134,6 +134,7 @@ async function exchange(executable, args, request, native) {
           if (input.length > 1024 * 1024) throw new Error('Packaged bridge response exceeded its bound.');
           for (;;) {
             const length = native ? input.length >= 4 ? input.readUInt32LE(0) : -1 : input.indexOf(10);
+            if (native && length > 1024 * 1024) throw new Error(`Invalid native frame header: ${JSON.stringify(input.subarray(0, 128).toString('utf8'))}`);
             if (length < 0 || (native && input.length < length + 4)) break;
             const value = JSON.parse(input.subarray(native ? 4 : 0, native ? length + 4 : length).toString('utf8'));
             input = input.subarray(native ? length + 4 : length + 1);
@@ -185,7 +186,15 @@ try {
   }, 30000, 'packaged settings renderer');
   page = await connect(target.webSocketDebuggerUrl);
   const state = await until(async () => {
-    const result = await page.send('Runtime.evaluate', { expression: 'typeof window.companion === "object" ? window.companion.invoke("state") : null', awaitPromise: true, returnByValue: true });
+    let result;
+    try {
+      result = await page.send('Runtime.evaluate', { expression: 'document.readyState === "complete" && typeof window.companion === "object" ? window.companion.invoke("state") : null', awaitPromise: true, returnByValue: true });
+    } catch (error) {
+      // Storage initialization replaces the recovery document. Reattach to its
+      // next execution context; IPC and initialization errors remain failures.
+      if (error.message === 'Execution context was destroyed.') return null;
+      throw error;
+    }
     if (result.exceptionDetails) throw new Error(`Settings state IPC failed: ${result.exceptionDetails.text}`);
     const response = result.result?.value;
     if (response?.ok === false) throw new Error(`Settings state IPC failed: ${response.error?.message || 'unknown error'}`);

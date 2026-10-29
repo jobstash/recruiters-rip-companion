@@ -3,7 +3,8 @@
 import assert from 'node:assert/strict';
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdtemp, mkdir, readFile, readdir, realpath, rm } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { access, mkdtemp, mkdir, readFile, readdir, realpath, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -31,7 +32,6 @@ if (process.platform === 'win32') {
   env.HOMEDRIVE = path.parse(home).root.replace(/[\\/]$/, '');
   env.HOMEPATH = home.slice(env.HOMEDRIVE.length);
 }
-if (process.platform === 'linux') env.APPIMAGE_EXTRACT_AND_RUN = '1';
 const execute = promisify(execFile);
 const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
 let child, main, page, launchError, exit, browserUrl, inspectorUrl, logs = '';
@@ -167,6 +167,11 @@ try {
     await execute(installer, ['/S', `/D=${installDirectory}`], { env, timeout: 180000, windowsVerbatimArguments: true });
     executable = path.join(installDirectory, `${pkg.build.productName}.exe`);
   } else if (process.platform === 'linux') {
+    // Extract-and-run prints archive entries to stdout and corrupts native/MCP
+    // framing. Exercise the supported FUSE path, without filtering protocol data.
+    if (!(await stat('/dev/fuse')).isCharacterDevice()) throw new Error('AppImage smoke requires the /dev/fuse character device.');
+    await access('/dev/fuse', constants.R_OK | constants.W_OK);
+    console.log('AppImage FUSE preflight: /dev/fuse is readable and writable.');
     executable = path.join(root, 'dist', 'linux', `recruiters-rip-companion-${pkg.version}-linux-x64.AppImage`);
   } else throw new Error('Unsupported packaged smoke platform.');
   await realpath(executable);

@@ -25,7 +25,7 @@ Install only artifacts actually published in the [official releases](https://git
 | --- | --- | --- |
 | macOS Apple Silicon | ZIP or DMG | Move **Recruiters.rip Companion.app** to Applications. Ad-hoc builds are not notarized. |
 | Windows x64 | NSIS `.exe` | Run the per-user installer. Unsigned builds may trigger SmartScreen; no administrator-wide native-host registration is required. |
-| Linux x64 | `.AppImage` | Save the file, make it executable and run it in a graphical desktop session. Install the distribution's AppImage/FUSE dependencies when required; do not disable the Chromium sandbox globally. |
+| Linux x64 | `.AppImage` | Save the file, make it executable and run it in a graphical desktop session. Install the distribution's FUSE 2 compatibility library and allow access to `/dev/fuse`; do not disable the Chromium sandbox globally. |
 
 The website shell installer is for macOS only. Firefox source ZIPs are development builds, not permanently installable signed add-ons.
 
@@ -96,6 +96,8 @@ Local records use plain `vault.json`, without keychain storage or at-rest encryp
 Installed identity stays `rip.recruiters.companion`, displayed app **Recruiters.rip Companion**, storage name **Recruiters Companion**, protocol `recruiters-companion://`. Vault paths are `~/Library/Application Support/Recruiters Companion/device/vault.json` on macOS, `%APPDATA%\\Recruiters Companion\\device\\vault.json` on Windows, and `${XDG_CONFIG_HOME:-~/.config}/Recruiters Companion/device/vault.json` on Linux. Local builds use `local-device`. Never test against real user data.
 
 AppImage launchers retain the installed AppImage path, not its temporary mount. Native and MCP scripts are cached under the private device directory in `bridge-runtime/<version>`. Revealing an unpacked extension copies its validated files to the stable `browser-extensions/chrome` or `browser-extensions/firefox` directory; replacing the AppImage does not invalidate the browser's loaded extension path. Reload the extension after updating its files.
+
+AppImage bridge launchers use FUSE, not `APPIMAGE_EXTRACT_AND_RUN`. The bundled runtime's extraction output corrupts native-messaging/stdin-stdout protocols, and concurrent extraction processes share a cleanup directory. The extraction flag is not forwarded to bridge processes.
 
 Account connection returns through a short-lived HTTP listener bound only to `127.0.0.1` on a random port, so source runs and installed apps do not depend on macOS selecting the right custom-protocol handler. The return carries its one-time state and pairing payload in the URL fragment, which the local page removes from browser history before sending a same-origin POST. Foreign origins, rebound hosts, invalid state and replayed requests are rejected. Only native account approval and successful signed platform activation produce success; the browser receives no career data or API key. The listener closes after five minutes, when starting another connection, on OS lock or on quit. Existing `recruiters-companion://` entrypoints remain supported.
 

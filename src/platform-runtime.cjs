@@ -11,8 +11,7 @@ const windowsKeys = ['SYSTEMROOT', 'WINDIR', 'APPDATA', 'LOCALAPPDATA', 'TEMP', 
 function restrictedEnvironment(env = process.env, platform = process.platform) {
   const allowed = new Set([...environmentKeys, ...(platform === 'win32' ? windowsKeys : [])]);
   return Object.fromEntries(Object.entries(env).filter(([key, value]) =>
-    (allowed.has(platform === 'win32' ? key.toUpperCase() : key) && typeof value === 'string' && value.length > 0) ||
-    (platform === 'linux' && key === 'APPIMAGE_EXTRACT_AND_RUN' && value === '1')));
+    allowed.has(platform === 'win32' ? key.toUpperCase() : key) && typeof value === 'string' && value.length > 0));
 }
 function supportDirectory({ platform = process.platform, env = process.env, home = os.homedir() } = {}) {
   const paths = platform === 'win32' ? path.win32 : path.posix;
@@ -55,8 +54,9 @@ function launcherScript({ executable, script, args = [], forwardArgs = false, pl
   }
   const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
   const env = environmentKeys.map(key => `\${${key}:+"${key}=$${key}"}`).join(' ');
-  const extraction = platform === 'linux' ? 'appimage_mode=\nif [ "${APPIMAGE_EXTRACT_AND_RUN-}" = 1 ]; then appimage_mode=APPIMAGE_EXTRACT_AND_RUN=1; fi\n' : '';
-  return `#!/bin/sh\n${extraction}exec /usr/bin/env -i ${env}${platform === 'linux' ? ' $appimage_mode' : ''} ELECTRON_RUN_AS_NODE=1 ${values.map(quote).join(' ')}${forwardArgs ? ' "$@"' : ''}\n`;
+  // AppImage extraction mode can print filenames to stdout. Native/MCP bridges
+  // require the ordinary FUSE runtime, with stdout reserved for protocol frames.
+  return `#!/bin/sh\nexec /usr/bin/env -i ${env} ELECTRON_RUN_AS_NODE=1 ${values.map(quote).join(' ')}${forwardArgs ? ' "$@"' : ''}\n`;
 }
 
 // Windows mode bits do not represent privacy. Inspect/enforce the actual NTFS DACL,

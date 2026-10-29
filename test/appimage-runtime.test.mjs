@@ -56,7 +56,7 @@ test('non-AppImage installations retain existing executable and application path
   }
 });
 
-test('Linux bridges preserve only explicitly enabled AppImage extraction mode', { skip: process.platform === 'win32' }, async t => {
+test('Linux bridges discard extraction-mode controls that can corrupt protocol stdout', { skip: process.platform === 'win32' }, async t => {
   const home = await mkdtemp(path.join(tmpdir(), 'rr-appimage-environment-'));
   t.after(() => rm(home, { recursive: true, force: true }));
   const script = path.join(home, 'environment.cjs'), launcher = path.join(home, 'launcher');
@@ -65,10 +65,10 @@ test('Linux bridges preserve only explicitly enabled AppImage extraction mode', 
   for (const value of ['1', '0', '']) {
     const env = { ...process.env, APPIMAGE_EXTRACT_AND_RUN: value, APPIMAGE: '/stale/image', APPDIR: '/stale/mount', OPENAI_API_KEY: 'synthetic-secret' };
     const sanitized = restrictedEnvironment(env, 'linux');
-    assert.equal(sanitized.APPIMAGE_EXTRACT_AND_RUN, value === '1' ? '1' : undefined);
+    assert.equal(sanitized.APPIMAGE_EXTRACT_AND_RUN, undefined);
     assert.equal(sanitized.APPIMAGE, undefined); assert.equal(sanitized.APPDIR, undefined); assert.equal(sanitized.OPENAI_API_KEY, undefined);
     const { stdout } = await promisify(execFile)(launcher, [], { env });
-    assert.equal(stdout, value === '1' ? '1' : 'unset');
+    assert.equal(stdout, 'unset');
   }
 });
 

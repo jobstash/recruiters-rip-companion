@@ -109,7 +109,15 @@ async function stopIsolatedLinuxProcesses() {
   assert.deepEqual(await isolatedLinuxProcesses(), [], 'Disposable AppImage processes did not exit.');
 }
 async function exchange(executable, args, request, native) {
-  const helper = spawn(executable, args, { env, cwd: scratch, stdio: ['pipe', 'pipe', 'pipe'] });
+  const options = { env, cwd: scratch, stdio: ['pipe', 'pipe', 'pipe'] };
+  let helper;
+  if (process.platform === 'win32') {
+    const values = [executable, ...args];
+    if (values.some(value => /["%!\r\n]/.test(value))) throw new Error('Unsafe Windows smoke command argument.');
+    const command = `"${values.map(value => `"${value}"`).join(' ')}"`;
+    helper = spawn(path.join(env.SYSTEMROOT || env.SystemRoot, 'System32', 'cmd.exe'),
+      ['/d', '/s', '/c', command], { ...options, windowsVerbatimArguments: true, windowsHide: true });
+  } else helper = spawn(executable, args, options);
   const bytes = Buffer.from(JSON.stringify(request) + (native ? '' : '\n'));
   const header = Buffer.alloc(4); header.writeUInt32LE(bytes.length);
   let input = Buffer.alloc(0);
@@ -193,6 +201,18 @@ try {
   assert.equal(state.failure, '');
   assert.ok(state.setup?.command?.startsWith(`${scratch}${path.sep}`), 'MCP launcher escaped the disposable profile.');
   assert.ok((await readdir(path.dirname(state.setup.command))).includes('native-config.json'));
+  const liveConfig = JSON.parse(await readFile(path.join(path.dirname(state.setup.command), 'native-config.json'), 'utf8'));
+  const liveManifest = JSON.parse(await readFile(liveConfig.firefoxManifest, 'utf8'));
+  for (const args of [[`chrome-extension://${BROWSER_IDENTITIES.production.extensionId}/`], [liveConfig.firefoxManifest, BROWSER_IDENTITIES.production.firefoxExtensionId]]) {
+    const reply = await exchange(liveManifest.path, args, { version: 1, id: 'running-status', op: 'status', payload: {} }, true);
+    assert.equal(reply.ok, true);
+    assert.equal(reply.result.installed, true);
+    assert.equal(reply.result.paired, false);
+  }
+  const initialized = await exchange(state.setup.command, [], { jsonrpc: '2.0', id: 1, method: 'initialize',
+    params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'packaged-ci-smoke', version: '1.0.0' } } }, false);
+  assert.equal(initialized.error, undefined);
+  assert.equal(typeof initialized.result?.serverInfo?.name, 'string');
   // Browser.close closes Chromium windows, not this tray application's lifecycle.
   // Invoke the same app.quit() path as its menu through a CI-only loopback inspector.
   const quitting = await main.send('Runtime.evaluate', {
@@ -226,7 +246,8 @@ try {
   console.log(JSON.stringify({ packagedSmoke: 'passed', platform: process.platform, version: pkg.version,
     installedFrom: process.platform === 'win32' ? 'NSIS' : process.platform === 'linux' ? 'AppImage' : 'app bundle',
     execution: state.execution.state, browserRegistrations: state.browserIntegration.registered,
-    isolatedProfile: true, ...(process.platform === 'linux' ? { postQuitNativeChrome: true, postQuitNativeFirefox: true, postQuitMcpInitialize: true } : {}) }));
+    isolatedProfile: true, nativeChrome: true, nativeFirefox: true, mcpInitialize: true,
+    ...(process.platform === 'linux' ? { postQuitNativeChrome: true, postQuitNativeFirefox: true, postQuitMcpInitialize: true } : {}) }));
 } catch (error) {
   console.error(logs);
   throw error;

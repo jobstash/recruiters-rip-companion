@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { createCareerState, fail, readCareer } from './state.mjs';
+import { assertJobNotBlocked } from './blocklist.mjs';
 
 // CV sharing with JobStash. The connected agent extracts employers, titles and dates from a saved CV, matches them to
 // JobStash profiles/organizations/projects through the companion's signed relay (unmatched employers are dropped), and,
@@ -120,7 +121,12 @@ export function createIntroductionTools({ store, platform, shareCv, openGithub }
           fail('INVALID_INPUT', 'Provide 1–10 platform job IDs.');
         if (args.jobIds.some(id => typeof id !== 'string' || !PLATFORM_JOB_ID.test(id)))
           fail('INVALID_INPUT', 'Intro paths exist only for platform jobs (node:<id>).');
-        return platform('intro_paths', { jobIds: args.jobIds });
+        const before = readCareer(store);
+        for (const id of args.jobIds) assertJobNotBlocked(before, id);
+        const result = await platform('intro_paths', { jobIds: args.jobIds });
+        const current = readCareer(store);
+        for (const id of args.jobIds) assertJobNotBlocked(current, id);
+        return result;
       },
     },
     {

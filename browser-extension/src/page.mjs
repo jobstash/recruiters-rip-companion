@@ -89,9 +89,8 @@ export function captureJobs() {
   return { url: location.href, title: clean(document.title, 500), jobs };
 }
 
-// Passing a snapshot with values invokes fill; without one this only inspects.
-// The alias below has the same self-contained body when serialized by Chrome.
-export function inspectForm(request = null) {
+// Inspect controls without writing values or activating page actions.
+export function inspectForm() {
   const clean = value => String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, 500);
   let pageUrl;
   try { pageUrl = new URL(location.href); } catch { throw new Error('Open an HTTP or HTTPS application page.'); }
@@ -158,8 +157,7 @@ export function inspectForm(request = null) {
     const signatures = group.map(controlSignature);
     schema.push(field); nodes.set(field.id, { el, group, signatures, check: () => group.every((node, i) => node.isConnected && visible(node) && controlSignature(node) === signatures[i]) && (nativeType !== 'radio' || sameMembers(radioGroup(el), group)) });
   }
-  // Submit and next controls are inspected alongside the fields so the user's AI can name the exact
-  // button later; pressing one is a separate, approved operation and never part of filling.
+  // Submit and next controls are read-only context for the host's computer-use tools.
   const actions = [], actionNodes = new Map();
   const actionLabel = el => clean(el.tagName === 'INPUT' ? el.value : el.textContent) || clean(el.getAttribute('aria-label'));
   const actionSignature = el => JSON.stringify([identities.document, location.href, document.baseURI, identity(el), el.tagName, el.type, el.id, el.name, el.value, actionLabel(el), !!disabled(el), el.getAttribute('onclick'),
@@ -177,16 +175,16 @@ export function inspectForm(request = null) {
     const signature = actionSignature(el);
     let binding = identities.actionBindings.get(el);
     if (!binding || binding.signature !== signature) {
-      binding = { el, signature, approvedSignature: crypto.randomUUID(), consumed: false, label, check: () => actionSignature(el), available: () => el.isConnected && visible(el) && !disabled(el) };
+      binding = { signature, snapshotSignature: crypto.randomUUID(), check: () => actionSignature(el), available: () => el.isConnected && visible(el) && !disabled(el) };
       identities.actionBindings.set(el, binding);
     }
-    const action = { id: `action-${index}`, label, kind, signature: binding.approvedSignature };
+    const action = { id: `action-${index}`, label, kind, signature: binding.snapshotSignature };
     actions.push(action); actionNodes.set(action.id, binding);
   }
   // Bind each control to the complete current schema, URL and native constraints.
   const snapshot = hash(JSON.stringify([identities.document, location.href, schema, controls.map(controlSignature)]));
   for (const field of schema) { field.signature = `${snapshot}:${hash(JSON.stringify(field))}`; nodes.get(field.id).fieldSignature = field.signature; }
-  // Keep the live bindings for smart paste and approved submit presses; values never live here.
+  // Keep live bindings for attachment checks and smart paste; values never live here.
   identities.url = location.href;
   identities.controls = nodes;
   identities.fields = new Map(schema.filter(field => !field.options).map(field => {
@@ -194,52 +192,8 @@ export function inspectForm(request = null) {
     return [field.id, { el, signature: field.signature, check: () => identities.url === location.href && el.isConnected && visible(el) && !field.manualOnly && field.empty && !disabled(el) && el.value === '' && controlSignature(el) === signatures[0] }];
   }));
   identities.actions = actionNodes;
-  if (!request) return { url: location.href, title: clean(document.title) || pageUrl.hostname, fields: schema, actions };
-  if (request.url !== location.href || !Array.isArray(request.fields) || request.fields.length > 64) throw new Error('The page changed. Inspect the form again.');
-  const current = new Map(schema.map(f => [f.id, f]));
-  const selected = new Set();
-  for (const field of request.fields) {
-    const fresh = current.get(field.id);
-    if (!fresh || fresh.signature !== field.signature || selected.has(field.id)) throw new Error('The form changed. Inspect it again before filling.');
-    selected.add(field.id);
-  }
-  const filled = [], skipped = [];
-  for (const field of request.fields) {
-    const fresh = current.get(field.id), { el, group, signatures } = nodes.get(field.id), value = field.value;
-    if (location.href !== request.url || group.some((node, i) => !visible(node) || controlSignature(node) !== signatures[i])) { skipped.push(field.id); continue; }
-    if (fresh.manualOnly || !fresh.empty || typeof value !== 'string' || !value || value.length > 20000 || (fresh.options && !fresh.options.some(o => o.value === value))) { skipped.push(field.id); continue; }
-    if (fresh.type === 'radio') {
-      const live = radioGroup(el);
-      if (!sameMembers(live, group) || live.some(node => node.checked)) { skipped.push(field.id); continue; }
-    }
-    const target = fresh.type === 'radio' ? group.find(n => n.value === value) : el;
-    if (!target || !target.isConnected || disabled(target) || (fresh.type === 'radio' ? group.some(n => n.checked) : target.value !== '')) { skipped.push(field.id); continue; }
-    if (fresh.type !== 'radio' && fresh.type !== 'select') {
-      if (target.validity?.customError || (target.maxLength >= 0 && value.length > target.maxLength) || (target.minLength > 0 && value.length < target.minLength)) { skipped.push(field.id); continue; }
-      const probe = target.cloneNode(false);
-      probe.value = value;
-      if (probe.value !== value || (probe.validity && !probe.validity.valid)) { skipped.push(field.id); continue; }
-    }
-    const prototype = fresh.type === 'textarea' ? HTMLTextAreaElement.prototype : fresh.type === 'select' ? HTMLSelectElement.prototype : HTMLInputElement.prototype;
-    const property = fresh.type === 'radio' ? 'checked' : 'value';
-    const setter = Object.getOwnPropertyDescriptor(prototype, property)?.set;
-    if (!setter) { skipped.push(field.id); continue; }
-    setter.call(target, fresh.type === 'radio' ? true : value);
-    target.dispatchEvent(new Event('input', { bubbles: true })); target.dispatchEvent(new Event('change', { bubbles: true }));
-    const retained = target.isConnected && location.href === request.url && (fresh.type === 'radio' ? target.checked : target.value === value);
-    if (retained) filled.push(field.id); else skipped.push(field.id);
-  }
-  // A later field handler may also reset an earlier field.
-  const retained = filled.filter(id => {
-    const fresh = current.get(id), { el, group } = nodes.get(id), value = request.fields.find(field => field.id === id).value;
-    const target = fresh.type === 'radio' ? group.find(node => node.value === value) : el;
-    const valid = target?.isConnected && location.href === request.url && (fresh.type === 'radio' ? sameMembers(radioGroup(el), group) && target.checked : target.value === value);
-    if (!valid) skipped.push(id);
-    return valid;
-  });
-  return { filled: retained, skipped };
+  return { url: location.href, title: clean(document.title) || pageUrl.hostname, fields: schema, actions };
 }
-export const fillForm = inspectForm;
 
 export function checkFormBindings(request) {
   const identities = globalThis[Symbol.for('recruiters.form-controls.v1')];
@@ -250,7 +204,7 @@ export function checkFormBindings(request) {
   });
   const actionsMatch = request.actions.every(action => {
     const bound = identities.actions.get(action.id);
-    return bound?.approvedSignature === action.signature && bound.available() && bound.check() === bound.signature;
+    return bound?.snapshotSignature === action.signature && bound.available() && bound.check() === bound.signature;
   });
   return { attached: fieldsMatch && actionsMatch };
 }
@@ -331,34 +285,6 @@ export function disarmSmartPaste() {
   const arm = globalThis[Symbol.for('recruiters.smart-paste.v1')];
   if (arm) { arm.active = false; arm.session = null; arm.epoch++; arm.selection = null; }
   return { armed: false };
-}
-
-// Consume the exact inspected action before clicking: an uncertain result must not be retried.
-export function pressAction(request) {
-  const identities = globalThis[Symbol.for('recruiters.form-controls.v1')];
-  const bound = identities?.actions?.get(request?.actionId);
-  if (!bound || identities.url !== location.href || request.url !== location.href) throw new Error('The page changed. Inspect the form again before submitting.');
-  if (request.actionSignature !== bound.approvedSignature || !bound.available() || bound.check() !== bound.signature) throw new Error('The submit control changed. Inspect the form again before submitting.');
-  if (bound.consumed) throw new Error('This approved control has already been pressed. Check the page; it will not be pressed again.');
-  bound.consumed = true;
-  bound.el.click();
-  return { clicked: true, label: bound.label, url: location.href };
-}
-
-// Page text is evidence to review, not proof that the site accepted an application.
-export function observePage() {
-  const identities = globalThis[Symbol.for('recruiters.form-controls.v1')];
-  const fields = identities?.fields ? [...identities.fields.values()] : [];
-  const clean = value => String(value ?? '').replace(/\s+/g, ' ').trim();
-  const visible = el => el.isConnected && !el.closest('[hidden],[aria-hidden="true"],inert') && el.getClientRects().length > 0 && getComputedStyle(el).display !== 'none' && getComputedStyle(el).visibility !== 'hidden';
-  const visibleFields = fields.filter(field => visible(field.el)).length;
-  const observedText = clean(document.body?.innerText).slice(0, 30000);
-  const confirmationCandidates = [...observedText.matchAll(/[^.!?]{0,80}(?:thank you|thanks for applying|application (?:has been |was |is )?(?:received|submitted|sent|complete)|we(?:'ve| have) received|successfully (?:submitted|applied))[^.!?]{0,80}/gi)]
-    .slice(0, 5).map(match => match[0].trim().slice(0, 240));
-  const alerts = [...document.querySelectorAll('[role="alert"],[aria-invalid="true"],.error,.field-error')].slice(0, 20).filter(visible)
-    .map(el => clean(el.getAttribute('aria-label') || el.textContent || el.validationMessage)).filter(Boolean).slice(0, 5).map(item => item.slice(0, 200));
-  return { url: location.href, title: clean(document.title).slice(0, 300), fieldsInspected: fields.length, fieldsVisible: visibleFields,
-    observedText, confirmationCandidates, outcome: 'unknown', alerts };
 }
 
 // Capture only public job context. Entered form values are deliberately excluded.

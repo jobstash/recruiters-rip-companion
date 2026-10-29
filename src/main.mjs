@@ -489,7 +489,7 @@ async function nativeOperation(op, payload, socket = null) {
   }
   finally { formRequests.delete(payload.requestId); emit(); }
 }
-// The extension that prepared a form keeps its socket; the user's AI fills or submits through it.
+// The extension that prepared a form keeps its socket for read-only attachment checks.
 const browserSessions = new Map(), browserReplies = new Map(), applicationSockets = new Map();
 function browserSession(formId, expected) {
   assertWorkAllowed();
@@ -504,18 +504,17 @@ function browserSession(formId, expected) {
     fail('FORM_CONTEXT_CHANGED', 'Career evidence or the API credential changed. Choose Read page before acting.');
   return session;
 }
-const browserOutcomeUnknown = detail => new CareerError('FORM_ACTION_UNKNOWN', `${detail} The action may already have happened. Check Chrome yourself; do not automatically repeat it.`);
-function browserCommand(session, formId, op, payload, timeoutMs = 45000) {
+function browserStatus(session, formId) {
   browserSession(formId, session);
-  const { socket } = session, id = randomUUID(), bytes = encode({ version: 1, id, op, payload });
+  const { socket } = session, id = randomUUID(), bytes = encode({ version: 1, id, op: 'forms_status', payload: { formId } });
   return new Promise((resolve, reject) => {
     const finish = (callback, value) => {
       if (browserReplies.get(id) !== waiting) return;
       browserReplies.delete(id); clearTimeout(waiting.timer); callback(value);
     };
     const waiting = { socket, resolve: value => finish(resolve, value), reject: error => finish(reject, error), timer: null,
-      failure: detail => op === 'forms_status' ? new CareerError('UNAVAILABLE', detail) : browserOutcomeUnknown(detail) };
-    waiting.timer = setTimeout(() => waiting.reject(waiting.failure('Chrome did not confirm the operation in time.')), timeoutMs);
+      failure: detail => new CareerError('UNAVAILABLE', detail) };
+    waiting.timer = setTimeout(() => waiting.reject(waiting.failure('Chrome did not confirm the attachment in time.')), 5000);
     browserReplies.set(id, waiting);
     try { socket.write(bytes, error => { if (error) waiting.reject(waiting.failure('The Chrome connection failed before confirmation.')); }); }
     catch { waiting.reject(waiting.failure('The command could not be confirmed by Chrome.')); }
@@ -524,23 +523,9 @@ function browserCommand(session, formId, op, payload, timeoutMs = 45000) {
 const browserBridge = {
   async status(formId) {
     const session = browserSession(formId);
-    const result = await browserCommand(session, formId, 'forms_status', { formId }, 5000);
+    const result = await browserStatus(session, formId);
     browserSession(formId, session);
     return result?.attached === true;
-  },
-  async fill(draft, answers, { requestId, revalidate }) {
-    const session = browserSession(draft.formId);
-    revalidate();
-    return browserCommand(session, draft.formId, 'forms_fill', { requestId, formId: draft.formId, answers,
-      fields: draft.fields.map(({ id, signature }) => ({ id, signature })) });
-  },
-  async submit(draft, action, { requestId, revalidate }) {
-    const session = browserSession(draft.formId);
-    const destination = new URL(draft.url).origin;
-    if (!await confirm('Let your AI submit this application?', `${destination}\n${draft.title}\n\nPresses “${action.label}” in your Chrome tab. Check the page yourself before allowing this; the page's own result is reported back, nothing more.`))
-      fail('FORM_NOT_AUTHORIZED', 'Submission was not approved. Nothing was pressed.');
-    revalidate();
-    return browserCommand(session, draft.formId, 'forms_submit', { requestId, formId: draft.formId, actionId: action.id, actionSignature: action.signature }, 30000);
   },
 };
 function encode(value) { const data = Buffer.from(JSON.stringify(value)); if (data.length > 1024 * 1024 - 1024) throw new Error('Native response too large.'); const header = Buffer.allocUnsafe(4); header.writeUInt32LE(data.length); return Buffer.concat([header, data]); }

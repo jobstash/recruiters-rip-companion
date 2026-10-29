@@ -24,7 +24,7 @@ export async function packageMcp() {
     skills: './skills/', mcpServers: './.mcp.json',
     interface: {
       displayName: 'Recruiters.rip', shortDescription: 'Find good jobs and prepare tailored applications.',
-      longDescription: 'Match jobs to your career and preferences, create persuasive tailored CVs and cover letters, and complete authorized applications in your subscription app. Career data stays in the local companion.',
+      longDescription: 'Match jobs to your career and preferences and prepare tailored CVs, cover letters and answers. Apply in your own Chrome when your subscription app provides computer-use tools, using its mouse, keyboard and file picker. Companion does not provide browser input; documents and prepared answers remain usable without it. Career data stays in the local companion.',
       developerName: 'JobStash', category: 'Productivity', capabilities: ['Read', 'Write'],
       defaultPrompt: ['Use Recruiters.rip. Show my current recommendations with salary, city/location, work mode and JobStash publication date. Keep the complete assessment archive and CSV available separately; do not present unreviewed or unsuitable archive rows as recommendations. Do not start new scoring unless I ask.'],
     },
@@ -39,7 +39,7 @@ export async function packageMcp() {
       const manifest = {
         manifest_version: '0.3', name, display_name: 'Recruiters.rip', version,
         description: 'Complete saved rankings and grounded CareerCup CV preparation. Requires Recruiters.rip Companion.',
-        long_description: 'Review jobs and prepare tailored application documents in your subscription app. An optional OpenAI Decisions key, entered only in local companion settings and separately billed, maps known values into application forms. Keys are never exposed to chat. No web-job-search fallback.',
+        long_description: 'Review jobs and prepare tailored application documents in your subscription app. When the host provides computer-use tools, use its native mouse, keyboard and file picker in your own Chrome; Companion does not provide browser input. An optional OpenAI Decisions key, entered only in local companion settings and separately billed, selects known form values for native paste. Keys are never exposed to chat. No web-job-search fallback.',
         author: { name: 'JobStash' },
         server: { type: 'node', entry_point: 'server/index.cjs', mcp_config: { command: 'node', args: ['${__dirname}/server/index.cjs', ...(local ? ['--local-product'] : [])] } },
         tools_generated: true, prompts_generated: true,

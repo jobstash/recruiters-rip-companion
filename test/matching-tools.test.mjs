@@ -1244,3 +1244,101 @@ test('discovery and batches refuse to start until the basic preferences are answ
   await f.store.update(state => { Object.assign(state.career.profile.preferences, { travel: 'any', workModes: ['remote'] }); });
   assert.equal((await f.call('career_match_jobs')).jobIds.length, 3);
 });
+
+test('slug company blocks survive display-name refresh across recommendations, archive, rerank and CSV', async () => {
+  let csv;
+  const jobs = [{ ...job('flow'), company: 'flow-traders' }, { ...job('allowed'), company: 'Allowed Company' },
+    { ...job('second'), company: 'Second Company' }, { ...job('direct'), company: 'Other Company' }];
+  const f = fixture({ jobs, exportDocument: async ({ bytes }) => { csv = String(bytes); return { uri: 'recruiters://synthetic.csv' }; } });
+  const planned = await f.call('career_match_jobs');
+  await f.save(jobs.map(({ id }) => assessment(id.slice(5), 80, 'not_required')), planned.profileVersion);
+  await f.store.update(state => {
+    addBlock(state.career, { id: 'node:flow', kind: 'company' });
+    addBlock(state.career, { id: 'node:direct', kind: 'job' });
+  });
+  f.setCatalogue([{ ...jobs[0], company: 'Flow Traders' }, ...jobs.slice(1), { ...job('new'), company: 'FLOW_TRADERS' }]);
+  const discovered = await f.call('career_match_jobs');
+  assert.deepEqual(discovered.jobIds, []);
+  assert.equal(discovered.blocked, 1, 'the unassessed role at the blocked company is not offered');
+  const expected = ['node:allowed', 'node:second'];
+  for (const [name, field] of [['career_recommendations', 'recommendations'], ['career_matches', 'matches'], ['career_rerank_pairs', 'candidates']])
+    assert.deepEqual((await f.call(name))[field].map(row => row.id).sort(), expected);
+  assert.equal((await f.call('career_matches_export')).total, 2);
+  assert.match(csv, /Engineer allowed/);
+  assert.doesNotMatch(csv, /Engineer (?:flow|direct|new)/);
+  await assert.rejects(f.save([assessment('flow', 80, 'not_required')], planned.profileVersion), { code: 'JOB_BLOCKED' });
+  await assert.rejects(f.call('career_rerank_save', { profileVersion: planned.profileVersion, policyId: ASSESSMENT_POLICY_ID,
+    comparisons: [comparison('flow', 'allowed', 'a')] }), { code: 'JOB_BLOCKED' });
+  assert.equal(Object.keys(f.store.get().career.matching.scores).length, 4, 'blocked assessments are preserved');
+});
+
+test('stale batch IDs cannot bypass company or direct job blocks and allowed jobs still load', async () => {
+  const f = fixture({ jobs: [{ ...job('a'), company: 'flow-traders' }, job('b'), job('c')] });
+  await f.call('career_match_jobs');
+  await f.store.update(state => {
+    addBlock(state.career, { id: 'node:a', kind: 'company' });
+    addBlock(state.career, { id: 'node:b', kind: 'job' });
+  });
+  const before = f.calls.length;
+  for (const id of ['node:a', 'node:b'])
+    await assert.rejects(f.call('career_match_batch', { ids: [id] }), { code: 'JOB_BLOCKED' });
+  assert.equal(f.calls.length, before, 'blocked batches do not fetch adverts');
+  assert.deepEqual((await f.call('career_match_batch', { ids: ['node:c'] })).jobs.map(job => job.id), ['node:c']);
+});
+
+test('batch metadata and blocks arriving while fetching are checked before persistence or release', async () => {
+  let release, started;
+  const waiting = new Promise(resolve => { started = resolve; });
+  const response = new Promise(resolve => { release = resolve; });
+  const f = fixture({ batch: async () => { started(); return response; } });
+  await f.call('career_match_jobs');
+  const pending = f.call('career_match_batch', { ids: ['node:a'] });
+  await waiting;
+  await f.store.update(state => { addBlock(state.career, { id: 'node:a', kind: 'job' }); });
+  release({ jobs: [{ ...job('a'), title: 'Must not replace the saved title', company: { name: 'Company' }, ad: 'Full advert' }], remainingIds: [], unavailableIds: [] });
+  await assert.rejects(pending, { code: 'JOB_BLOCKED' });
+  assert.equal(f.store.get().career.matching.jobs['node:a'].title, 'Engineer a');
+
+  const fresh = fixture({ batch: async () => ({ jobs: [{ ...job('a'), company: { name: 'Flow Traders' }, ad: 'Full advert' }], remainingIds: [], unavailableIds: [] }) });
+  await fresh.call('career_match_jobs');
+  await fresh.store.update(state => { state.career.blocklist = { company: { kind: 'company', value: 'flow-traders' } }; });
+  await assert.rejects(fresh.call('career_match_batch', { ids: ['node:a'] }), { code: 'JOB_BLOCKED' });
+  assert.equal(fresh.store.get().career.matching.jobs['node:a'].company, 'Company');
+});
+
+test('a block arriving during CSV export prevents release of the obsolete download', async () => {
+  let release, started;
+  const waiting = new Promise(resolve => { started = resolve; });
+  const exported = new Promise(resolve => { release = resolve; });
+  const f = fixture({ exportDocument: async () => { started(); return exported; } });
+  const planned = await f.call('career_match_jobs');
+  await f.save([assessment('a', 80, 'not_required')], planned.profileVersion);
+  const pending = f.call('career_matches_export');
+  await waiting;
+  await f.store.update(state => { addBlock(state.career, { id: 'node:a', kind: 'job' }); });
+  release({ uri: 'recruiters://synthetic.csv' });
+  await assert.rejects(pending, { code: 'JOB_BLOCKED' });
+});
+
+test('discovery applies a company block added while the catalogue is loading', async () => {
+  const jobs = [{ ...job('flow'), company: 'flow-traders' }, { ...job('allowed'), company: 'Allowed Company' }];
+  const f = fixture({ jobs });
+  await f.call('career_match_jobs');
+  let release, started;
+  const waiting = new Promise(resolve => { started = resolve; });
+  const fetched = new Promise(resolve => { release = resolve; });
+  const tools = createMatchingTools({ store: f.store, platform: async (operation, args) => {
+    assert.equal(operation, 'matching_catalogue');
+    started();
+    await fetched;
+    return { jobs: [{ ...jobs[0], company: 'Flow Traders' }, jobs[1]], total: 2, nextOffset: null,
+      publicationWindow: { range: args.publicationRange, since: args.since, until: args.until } };
+  } });
+  const pending = tools.find(tool => tool.name === 'career_match_jobs').invoke({});
+  await waiting;
+  await f.store.update(state => { addBlock(state.career, { id: 'node:flow', kind: 'company' }); });
+  release();
+  const discovered = await pending;
+  assert.deepEqual(discovered.jobIds, ['node:allowed']);
+  assert.equal(discovered.blocked, 1);
+});

@@ -303,3 +303,89 @@ test('saved different originals sharing a generic apply URL remain ambiguous', a
   assert.equal(view.applicationId, null);
   assert.equal(Object.keys(f.store.get().career.applications).length, 0);
 });
+
+test('blocked packages reject preparation, open and receipt replay while retaining drafts and bindings', async () => {
+  const f = fixture(), created = await f.create({ ...job, company: 'Flow Traders' });
+  await f.documents(created.applicationId);
+  const input = { requestId: randomUUID(), page: page(), jobs: [], context: { original: { url: advert, title: job.title, text: job.description, complete: true } } };
+  const view = await f.workflow.resolve(input);
+  const preparation = await f.workflow.prepare({ bindingId: view.bindingId, host: 'claude' });
+  await f.store.update(state => { state.career.blocklist = { company: { kind: 'company', value: 'flow-traders' } }; });
+  const before = f.store.get();
+  for (const operation of [
+    () => f.workflow.status({ bindingId: view.bindingId }),
+    () => f.workflow.prepare({ bindingId: view.bindingId, host: 'claude' }),
+    () => f.workflow.launched({ preparationId: preparation.preparationId, host: 'claude' }),
+    () => f.workflow.readPreparation({ preparationId: preparation.preparationId }),
+    () => f.workflow.bindPreparation({ preparationId: preparation.preparationId, applicationId: created.applicationId }),
+    () => f.workflow.document({ bindingId: view.bindingId, kind: 'cv' }),
+    () => f.call('career_application_open', { applicationId: created.applicationId }),
+    () => f.workflow.resolve(input),
+  ]) await assert.rejects(operation, { code: 'JOB_BLOCKED' });
+  assert.throws(() => f.workflow.jobUrl({ bindingId: view.bindingId }), { code: 'JOB_BLOCKED' });
+  assert.deepEqual(f.opened, []);
+  assert.deepEqual(f.store.get(), before);
+});
+
+test('a fresh blocked capture cannot create a browser-led package or overwrite an existing one', async () => {
+  const f = fixture();
+  await f.store.update(state => { state.career.blocklist = { company: { kind: 'company', value: 'flow-traders' } }; });
+  await assert.rejects(f.resolve({ jobs: [{ ...job, company: 'Flow Traders', complete: true }] }), { code: 'JOB_BLOCKED' });
+  assert.deepEqual(f.store.get().career.applications, {});
+  assert.equal(f.store.get().career.applicationBindings, undefined);
+  const allowed = await f.resolve({ jobs: [{ ...job, complete: true }] });
+  assert.ok(allowed.applicationId);
+});
+
+test('URL-only preparation bindings become blocked when their known job is blocked', async () => {
+  const f = fixture();
+  const view = await f.resolve({ context: { original: { url: advert, title: job.title, text: '', complete: false } } });
+  const preparation = await f.workflow.prepare({ bindingId: view.bindingId, host: 'claude' });
+  await f.store.update(state => {
+    state.career.matching = { jobs: { 'node:1': { id: 'node:1', title: job.title, company: job.company, applyUrl: advert } } };
+    state.career.blocklist = { direct: { kind: 'job', value: 'node:1' } };
+  });
+  await assert.rejects(f.workflow.readPreparation({ preparationId: preparation.preparationId }), { code: 'JOB_BLOCKED' });
+  assert.equal(Object.keys(f.store.get().career.applications).length, 0);
+});
+
+test('document validation cannot release readiness or open a package blocked during the await', async () => {
+  for (const operation of ['status', 'document', 'open']) {
+    let active = false, release, started;
+    const waiting = new Promise(resolve => { started = resolve; });
+    const validated = new Promise(resolve => { release = resolve; });
+    const f = fixture({ validateExport: async () => {
+      if (active) { started(); await validated; }
+      return true;
+    } });
+    const created = await f.create();
+    await f.documents(created.applicationId);
+    const view = await f.resolve();
+    active = true;
+    const pending = operation === 'open' ? f.call('career_application_open', { applicationId: created.applicationId })
+      : operation === 'document' ? f.workflow.document({ bindingId: view.bindingId, kind: 'cv' }) : f.workflow.status({ bindingId: view.bindingId });
+    await waiting;
+    await f.store.update(state => { state.career.blocklist = { company: { kind: 'company', value: 'example' } }; });
+    release();
+    await assert.rejects(pending, { code: 'JOB_BLOCKED' });
+    assert.deepEqual(f.opened, []);
+    assert.equal(f.store.get().career.applications[created.applicationId].exports.length, 2);
+  }
+});
+
+test('an allowed bound application stays usable when a blocked role shares its generic form URL', async () => {
+  const f = fixture(), generic = 'https://example.test/apply';
+  const blocked = await f.create({ ...job, company: 'Blocked Company', url: 'https://example.test/jobs/blocked', applyUrl: generic });
+  const allowed = await f.create({ ...job, company: 'Allowed Company', url: 'https://example.test/jobs/allowed', applyUrl: generic });
+  await f.documents(allowed.applicationId);
+  const view = await f.resolve({ page: page(generic), context: { original: {
+    url: 'https://example.test/jobs/allowed', title: job.title, text: job.description, complete: true,
+  } } });
+  assert.equal(view.applicationId, allowed.applicationId);
+  await f.store.update(state => {
+    state.career.applications[blocked.applicationId].job.id = 'node:blocked';
+    state.career.blocklist = { direct: { kind: 'job', value: 'node:blocked' } };
+  });
+  assert.equal((await f.workflow.status({ bindingId: view.bindingId })).applicationId, allowed.applicationId);
+  assert.ok((await f.workflow.prepare({ bindingId: view.bindingId, host: 'claude' })).preparationId);
+});

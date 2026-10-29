@@ -1,11 +1,11 @@
-import { CareerError, createCareerState, fail, hash, mutateCareer, mutationSchema, readCareer } from './state.mjs';
+import { createCareerState, fail, hash, mutateCareer, mutationSchema, readCareer } from './state.mjs';
 import { applicationContextFingerprint, applicationQuestionKey, isApplicationWritingField } from '../application-workflow.mjs';
+import { assertJobNotBlocked } from './blocklist.mjs';
 
 const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const text = (value, max) => typeof value === 'string' && value.length <= max && Boolean(value.trim());
 const object = (properties, required = Object.keys(properties)) => ({ type: 'object', additionalProperties: false, properties, required });
 const string = maxLength => ({ type: 'string', minLength: 1, maxLength });
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const TYPES = ['text', 'email', 'tel', 'url', 'textarea', 'select', 'radio', 'number', 'date'];
 const FIELD_KEYS = ['id', 'label', 'type', 'signature', 'autocomplete', 'required', 'options', 'empty', 'manualOnly', 'maxLength'];
 // Defense in depth: page inspection is not an authority to enable sensitive controls.
@@ -60,9 +60,15 @@ export function validFormValue(field, value) {
   if (field.type === 'date') return /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(value));
   return true;
 }
+function assertFormNotBlocked(career, draft) {
+  if (!draft) return;
+  const job = career.applications?.[draft.applicationId]?.job;
+  assertJobNotBlocked(career, job?.id ?? null, job ?? { url: draft.url });
+}
 export function currentForm(career, formId) {
   const draft = career.formDrafts?.[formId];
   if (!draft) fail('NOT_FOUND', 'Form not found. Inspect and prepare the application form in Chrome first.');
+  assertFormNotBlocked(career, draft);
   if (draft.evidenceRevision !== (career.evidenceRevision ?? 0) || draft.evidence !== formEvidence(career))
     fail('FORM_CONTEXT_CHANGED', 'Career evidence changed. Prepare the form again before staging answers.');
   if (draft.applicationId) {
@@ -84,47 +90,6 @@ function boundForm(store, formId) {
   } };
 }
 
-// Persist before browser dispatch. A crash, disconnect or failed result save
-// leaves a consumed request, never permission to repeat a possibly completed submission.
-async function formAction(store, args, operation, invoke) {
-  const requestId = args.requestId.toLowerCase();
-  const inputHash = hash({ operation, input: { ...args, requestId } });
-  let previous;
-  await store.update(state => {
-    const career = state.career ??= createCareerState();
-    career.receipts ??= {};
-    const receipt = career.receipts[requestId];
-    if (receipt) {
-      if (receipt.operation !== operation || receipt.inputHash !== inputHash)
-        fail('REQUEST_CONFLICT', 'This request ID was already used with different content. Read the form before choosing a new action.');
-      previous = structuredClone(receipt);
-      return;
-    }
-    career.receipts[requestId] = { operation, inputHash, status: 'pending', createdAt: new Date().toISOString() };
-  });
-  if (previous) {
-    if (previous.status === 'completed') return structuredClone(previous.result);
-    if (previous.status === 'failed') throw new CareerError(previous.error.code, previous.error.message);
-    fail('FORM_ACTION_UNKNOWN', 'This request already started and its outcome is not confirmed. Check Chrome yourself; this request will not be dispatched again.');
-  }
-  const settle = outcome => store.update(state => {
-    const receipt = state.career?.receipts?.[requestId];
-    if (!receipt || receipt.operation !== operation || receipt.inputHash !== inputHash || receipt.status !== 'pending')
-      fail('REQUEST_CONFLICT', 'The saved browser action changed. Check Chrome before taking another action.');
-    Object.assign(receipt, outcome);
-  });
-  try {
-    const result = await invoke(requestId);
-    await settle({ status: 'completed', result: structuredClone(result) });
-    return result;
-  } catch (error) {
-    const failure = error instanceof CareerError ? error : new CareerError('FORM_ACTION_UNKNOWN', 'The browser action outcome could not be saved or confirmed. Check Chrome yourself; do not automatically repeat the action.');
-    // If the scoped session is gone, the durable pending receipt still blocks replay.
-    await settle({ status: 'failed', error: { code: failure.code, message: failure.message } }).catch(() => {});
-    throw failure;
-  }
-}
-
 /** `browser` reaches the Chrome extension that inspected the form; absent in tests and when no panel is attached. */
 export function createFormTools({ store, browser = null }) {
   const attached = async formId => { try { return Boolean(await browser?.status(formId)); } catch { return false; } };
@@ -139,39 +104,7 @@ export function createFormTools({ store, browser = null }) {
       const career = readCareer(store);
       return structuredClone({ revision: career.revision, formId: draft.formId, snapshot: draft.snapshot, evidenceRevision: draft.evidenceRevision,
         applicationId: draft.applicationId ?? null, url: draft.url, title: draft.title, fields: draft.fields, actions: draft.actions ?? [], answers: draft.answers,
-        browser: isAttached ? { attached: true } : { attached: false, reason: 'Open the Recruiters.rip panel on the application tab in Chrome and prepare values; then fill or submit becomes possible.' } });
-    },
-  }, {
-    name: 'career_form_fill', readOnly: false, idempotent: true, openWorld: true,
-    description: 'Fill the inspected application form in the candidate\'s own Chrome tab with the prepared values and staged answers: only empty, non-protected controls, without any further approval. Nothing is submitted. Returns which controls were filled or skipped; read the page result before going further. Reuse requestId only to retrieve the same attempt, never to dispatch it again. On an unknown outcome, inspect Chrome before another action.',
-    inputSchema: object({ requestId: mutationSchema.requestId, formId: string(100) }),
-    async invoke(args) {
-      if (!record(args) || Object.keys(args).some(key => !['requestId', 'formId'].includes(key)) || typeof args.requestId !== 'string' || !UUID.test(args.requestId) || !text(args.formId, 100)) fail('INVALID_INPUT', 'Provide a request UUID and the formId from Chrome preparation.');
-      return formAction(store, args, 'career_form_fill', requestId => {
-        if (!browser) fail('UNAVAILABLE', 'Chrome form filling is unavailable in this companion.');
-        const { draft, revalidate } = boundForm(store, args.formId);
-        const answers = Object.entries(draft.answers ?? {}).map(([id, answer]) => {
-          const field = draft.fields.find(field => field.id === id);
-          if (!field || !validFormValue(field, answer.value)) fail('FORM_CONTEXT_CHANGED', 'A staged answer no longer matches an available field. Prepare the form again.');
-          if (isApplicationWritingField(field) && !draft.applicationId) fail('APPLICATION_REQUIRED', 'Bind this form to its exact saved application before releasing narrative answers.');
-          return { id, value: answer.value, signature: field.signature };
-        });
-        return browser.fill(draft, answers, { requestId, revalidate });
-      });
-    },
-  }, {
-    name: 'career_form_submit', readOnly: false, idempotent: true, openWorld: true,
-    description: 'Press one inspected submit or next control of the application form in the candidate\'s own Chrome tab, after the companion\'s native approval. Call only when the candidate explicitly asked to submit this application and the form has been filled and checked. Returns what the page showed afterwards (confirmation text, validation alerts, navigation); never report a submission the result does not show. A request UUID is consumed even on errors or unknown outcomes. Never automatically retry submission with a new UUID; inspect Chrome and ask the candidate first.',
-    inputSchema: object({ requestId: mutationSchema.requestId, formId: string(100), actionId: string(200) }),
-    async invoke(args) {
-      if (!record(args) || Object.keys(args).some(key => !['requestId', 'formId', 'actionId'].includes(key)) || typeof args.requestId !== 'string' || !UUID.test(args.requestId) || !text(args.formId, 100) || !text(args.actionId, 200)) fail('INVALID_INPUT', 'Provide a request UUID, formId and the actionId of an inspected submit control.');
-      return formAction(store, args, 'career_form_submit', requestId => {
-        if (!browser) fail('UNAVAILABLE', 'Chrome submission is unavailable in this companion.');
-        const { draft, revalidate } = boundForm(store, args.formId);
-        const action = (draft.actions ?? []).find(item => item.id === args.actionId);
-        if (!action) fail('NOT_FOUND', 'That submit control was not inspected on this form. Read the form for its actions.');
-        return browser.submit(draft, action, { requestId, revalidate });
-      });
+        browser: isAttached ? { attached: true } : { attached: false, reason: 'Open the Recruiters.rip panel on the application tab in Chrome and choose Read page to prepare clipboard values.' } });
     },
   }, {
     name: 'career_form_answers_save', readOnly: false,
@@ -184,7 +117,9 @@ export function createFormTools({ store, browser = null }) {
           !Array.isArray(args.answers) || args.answers.length < 1 || args.answers.length > 64 ||
           args.answers.some(answer => !record(answer) || Object.keys(answer).some(key => !['id', 'value'].includes(key)) || !text(answer.id, 200) || !text(answer.value, 10000)) ||
           new Set(args.answers.map(answer => answer.id)).size !== args.answers.length) fail('INVALID_INPUT', 'Provide unique field answers and the current form snapshot and evidenceRevision.');
-      return mutateCareer(store, args, 'career_form_answers_save', args, career => {
+      const career = readCareer(store);
+      assertFormNotBlocked(career, career.formDrafts?.[args.formId]);
+      const result = await mutateCareer(store, args, 'career_form_answers_save', args, career => {
         const draft = currentForm(career, args.formId);
         if (args.snapshot !== draft.snapshot || args.evidenceRevision !== draft.evidenceRevision) fail('FORM_CONTEXT_CHANGED', 'The form or career evidence changed. Read the current form before saving.');
         for (const answer of args.answers) {
@@ -205,6 +140,9 @@ export function createFormTools({ store, browser = null }) {
         draft.updatedAt = new Date().toISOString();
         return { formId: draft.formId, snapshot: draft.snapshot, saved: args.answers.map(answer => answer.id) };
       });
+      const current = readCareer(store);
+      assertFormNotBlocked(current, current.formDrafts?.[args.formId]);
+      return result;
     },
   }];
 }

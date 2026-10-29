@@ -4,7 +4,7 @@ import { createCareerState, hash } from '../src/mcp/state.mjs';
 import { createIntroductionTools } from '../src/mcp/introduction-tools.mjs';
 
 const pdf = Buffer.from('%PDF-1.7 synthetic cv bytes').toString('base64');
-function fixture({ share = async () => ({ documentId: 'doc-1', attached: true, employment: 2 }) } = {}) {
+function fixture({ share = async () => ({ documentId: 'doc-1', attached: true, employment: 2 }), platform = async () => ({ results: [] }) } = {}) {
   const career = createCareerState();
   career.sources.cv = { id: 'cv', name: 'Jane Doe CV.pdf', purpose: 'cv', archived: false, mediaType: 'application/pdf',
     originalBase64: pdf, text: 'Senior Engineer, Example Labs, 2021–2024.', contentHash: hash('Senior Engineer, Example Labs, 2021–2024.') };
@@ -12,7 +12,7 @@ function fixture({ share = async () => ({ documentId: 'doc-1', attached: true, e
   const store = { get: () => structuredClone(state), update: async change => { const next = structuredClone(state); await change(next); state = next; } };
   const calls = { platform: [], share: [], github: 0 };
   const tools = new Map(createIntroductionTools({ store,
-    platform: async (operation, args) => { calls.platform.push({ operation, args }); return { results: [] }; },
+    platform: async (operation, args) => { calls.platform.push({ operation, args }); return platform(operation, args); },
     shareCv: async body => { calls.share.push(body); return share(body); },
     openGithub: async () => { calls.github++; },
   }).map(tool => [tool.name, tool]));
@@ -103,3 +103,28 @@ test('employer search and intro paths relay through the platform; GitHub onboard
   assert.equal((await f.call('career_employment_status')).github, 'skipped');
 });
 
+
+test('introduction paths reject blocked company and job IDs without calling the platform', async () => {
+  const f = fixture();
+  f.set(career => {
+    career.matching = { jobs: { 'node:1': { company: 'Flow Traders' }, 'node:2': { company: 'Other Company' }, 'node:3': { company: 'Allowed Company' } } };
+    career.blocklist = { company: { kind: 'company', value: 'flow-traders' }, direct: { kind: 'job', value: 'node:2' } };
+  });
+  for (const id of ['node:1', 'node:2'])
+    await assert.rejects(f.call('career_intro_paths', { jobIds: [id] }), { code: 'JOB_BLOCKED' });
+  assert.deepEqual(f.calls.platform, []);
+  assert.deepEqual(await f.call('career_intro_paths', { jobIds: ['node:3'] }), { results: [] });
+  assert.equal(f.calls.platform.length, 1);
+});
+
+test('introduction paths are not released when their job is blocked while loading', async () => {
+  let release, started;
+  const waiting = new Promise(resolve => { started = resolve; });
+  const response = new Promise(resolve => { release = resolve; });
+  const f = fixture({ platform: async () => { started(); return response; } });
+  const pending = f.call('career_intro_paths', { jobIds: ['node:1'] });
+  await waiting;
+  f.set(career => { career.blocklist = { direct: { kind: 'job', value: 'node:1' } }; });
+  release({ results: [{ jobId: 'node:1', paths: [] }] });
+  await assert.rejects(pending, { code: 'JOB_BLOCKED' });
+});

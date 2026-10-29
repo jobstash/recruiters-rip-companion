@@ -15,7 +15,7 @@ Preserve `rip.recruiters.companion`, **Recruiters.rip Companion**, **Recruiters 
 | Electron lifecycle, permissions and settings IPC | `src/main.mjs`, `src/preload.cjs`, `ui/` |
 | Local persistence and mutation receipts | `src/vault.mjs`, `src/mcp/state.mjs`, `src/mcp/scope.mjs` |
 | Browser identity and native transport | `src/browser-identity.mjs`, `src/install-native.mjs`, `src/native-host.cjs` |
-| Chrome panel, page capture and guarded filling | `browser-extension/src/`, `browser-extension/manifest.mjs`, `browser-extension/build.mjs` |
+| Chrome panel, page capture and prepared clipboard values | `browser-extension/src/`, `browser-extension/manifest.mjs`, `browser-extension/build.mjs` |
 | Durable captured jobs | `src/mcp/job-tools.mjs`, with integrations in matching, application tools and `src/career-browser.mjs` |
 | Form snapshots, agent answers and preparation | `src/mcp/form-tools.mjs`, `src/browser-forms.mjs`, `src/decisions/form-mapping.mjs` |
 | Matching rubric and policy fingerprints | `src/mcp/matching-contract.mjs`, `src/mcp/matching-tools.mjs` |
@@ -41,13 +41,19 @@ Incomplete listing cards are visible but require the full original before assess
 
 ## Chrome and forms
 
-The extension uses a stable native side panel and minimal `nativeMessaging`, `activeTab`, `scripting` and `sidePanel` permissions. Opening uses Chrome's native action behavior. Missing `tabs.Tab.url` metadata is not itself proof of denied page access: scripting enforces the grant and injected functions validate the actual location. Do not add blanket host permissions to work around test tooling.
+The extension uses a stable native side panel and minimal `nativeMessaging`, `activeTab`, `scripting`, `sidePanel` and `clipboardWrite` permissions. Opening uses Chrome's native action behavior. Missing `tabs.Tab.url` metadata is not itself proof of denied page access: scripting enforces the grant and injected inspection functions validate the actual location. Do not add blanket host permissions to work around test tooling.
 
 External website requests remain limited to status, pairing and opening settings. Capture/form capabilities require the extension's own panel sender. Production and local keys/IDs/hosts come from `BROWSER_IDENTITIES`; preserve the production identity.
 
-The page functions are self-contained for `chrome.scripting` serialization. They treat page data as untrusted, exclude protected/populated controls, bind the document and actual nodes, and revalidate live schema and radio membership before filling. Page handlers can synchronously change another control or reject a value, so report retained values rather than setter calls. Never submit, click Next, upload files or fill consent/password/payment/government-ID/demographic controls.
+The page-inspection functions are self-contained for `chrome.scripting` serialization. They treat page data as untrusted, exclude protected/populated controls from prepared values and bind the document, actual nodes and live schema. Field-aware clipboard assistance remains: focusing an eligible empty control selects its prepared value; native paste, undo and redo belong to the browser. **Review answers** keeps editing and Copy, not a script-driven Fill action. No extension code writes application controls or presses Next/Submit.
 
-`createBrowserForms` gates private-value release through native approval. The agent reads `career_form_read` and stages text with `career_form_answers_save`; staged answers bind to the snapshot and career evidence. Preserve fact qualifications and contact ownership. Unknown answers remain manual. The one optional Decisions key serves known-value mapping only.
+The agent reads `career_form_read` and stages text with `career_form_answers_save`; staged answers bind to the snapshot and career evidence. `forms_status` retains attachment, snapshot/field inspection, prepared clipboard values and application identity. Known-value preparation and release do not show a native approval dialog. Preserve exact job/application identity, fact qualifications, contact ownership, context invalidation and block checks across reads, saves and preparation, including after asynchronous work and before private-value release. Unknown/protected answers remain user-controlled. The optional Decisions key serves known-value mapping only.
+
+For an application task, the host creates/reuses the job-bound application, saves and exports current CV/letter PDFs, opens the saved URL with `career_application_open` and inspects the user's own Chrome. It uses its actual computer-use tools for native mouse/keyboard/clipboard input and the native file selector, then verifies retained values, attachment names and the actual page receipt. Companion exposes no browser-input or submission API. Do not reintroduce injected setters/clicks, `page.evaluate`, `element.click`, `form.submit`, `requestSubmit` or direct application network submission. If the host lacks computer-use capability, state that limitation and preserve the usable documents/answers; no JavaScript fallback.
+
+The agent must reread `career_application_context` through Companion before acting on a saved job/application and immediately before the final native Submit action. `JOB_BLOCKED` stops that application even if its tab is already open; never change IDs or use another tool around the block. Reconcile changed career/document context first. Submission requires the candidate's application task, not a document-only request. A click/navigation/generic thanks is not a receipt; rejected, challenged, validation-failed, pending or uncertain results are not successful submissions. No automatic retries, duplicates, fingerprint spoofing or challenge bypass. Native input is an input-compatibility choice, not an anti-detection guarantee.
+
+Companion settings consent governs its own tools, never host/tool permissions. Keep host browser/workspace access rules and prompts intact without adding conversational confirmation ceremony. Native companion approvals remain for account pairing and update installation; there is no companion submit approval.
 
 ## Updates and packages
 
@@ -67,7 +73,7 @@ pnpm test
 pnpm package:local
 ```
 
-Use synthetic temporary data for real Chrome/native capture, form preparation, stale/hostile DOM cases and updater filesystem checks. A custom Chrome QA profile needs its own native-host registration. Do not overwrite a production registration or relax permission boundaries to make automation pass. Test normal Quit, actual local bundle protocol metadata, signature validity, private-value approval and update startup confirmation.
+Use synthetic temporary data for real Chrome/native capture, form preparation, stale/hostile DOM cases and updater filesystem checks. Exercise host-native mouse/keyboard/paste/file selection on a synthetic local form and check trusted input events and retained values; do not substitute injected writes for that smoke or submit real applications. A custom Chrome QA profile needs its own native-host registration. Do not overwrite a production registration or relax permission boundaries to make automation pass. Test normal Quit, actual local bundle protocol metadata, signature validity, context/block-gated private-value release and update startup confirmation.
 
 `pnpm package:adhoc` is the release build: explicitly unnotarized, production-origin, with checksum metadata. There is no Apple Developer ID and `pnpm package:release` is unused. The repository is public; publish each version as a stable GitHub release (ZIP, DMG, Chrome extension ZIP, `SHA256SUMS.txt`) so the in-app updater and the website's `curl | sh` installer discover it, then mirror the ZIPs to the website host and restart its container. Coordinate the frontend's guide with artifact rollout; a legacy hosted pairing ZIP does not provide capture/form support.
 

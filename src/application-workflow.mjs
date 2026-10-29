@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { fail, hash, mutateCareer, readCareer } from './mcp/state.mjs';
 import { canonicalJobUrl } from './mcp/job-tools.mjs';
 import { formEvidence, formFingerprint, unavailableField, validFormValue, validateFormSnapshot } from './mcp/form-tools.mjs';
+import { assertJobNotBlocked } from './mcp/blocklist.mjs';
 
 const now = () => new Date().toISOString();
 const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -58,10 +59,12 @@ export function applicationContextFingerprint(career, app) {
     evidenceRevision: career.evidenceRevision ?? 0, profile, facts: career.facts ?? {}, sources: career.sources ?? {} });
 }
 export function upsertApplication(career, job) {
+  assertJobNotBlocked(career, job.id, job);
   const matches = Object.values(career.applications).filter(app => sameApplicationJob(app.job, job));
   if (matches.length > 1) fail('AMBIGUOUS_APPLICATION', 'More than one saved application matches this exact job. Choose the application explicitly before preparing documents.');
   let app = matches[0];
   if (app) {
+    assertJobNotBlocked(career, app.job.id, app.job);
     const previous = currentApplicationJob(career, app);
     if (originalText(previous.description) === originalText(job.description)) job = { ...job, description: previous.description };
   }
@@ -84,6 +87,7 @@ export const applicationQuestionKey = field => hash({ label: normalized(field.la
   options: (field.options ?? []).map(option => ({ value: option.value, label: normalized(option.label) })), maxLength: field.maxLength ?? null });
 export function reusableApplicationAnswer(career, applicationId, field, fingerprint) {
   const app = career.applications?.[applicationId];
+  if (app) assertJobNotBlocked(career, app.job.id, app.job);
   const answer = app?.formAnswers?.[applicationQuestionKey(field)];
   return answer && answer.contextFingerprint === (fingerprint ?? applicationContextFingerprint(career, app)) && validFormValue(field, answer.value) ? answer : null;
 }
@@ -92,6 +96,7 @@ export function isApplicationWritingField(field) {
   return !plainContact && !unavailableField(field) && (field.type === 'textarea' || /\b(?:summary|cover letter|motivation|why|describe|tell us|tell me|experience|achievement|additional information)\b/i.test(field.label));
 }
 export function currentApplicationExport(career, app, kind) {
+  assertJobNotBlocked(career, app.job.id, app.job);
   const draft = kind === 'cv' ? app.cv : app.coverLetter;
   const fingerprint = applicationContextFingerprint(career, app);
   if (!draft || draft.contextFingerprint !== fingerprint) return null;
@@ -120,14 +125,44 @@ function capturedJob(input) {
     originalUrl: safeUrl(input.url), aliases: [safeUrl(input.url), safeUrl(input.applyUrl)].filter(Boolean),
     ...(typeof input.location === 'string' ? { location: input.location.slice(0, 300) } : {}) };
 }
-const getBinding = (career, id) => career.applicationBindings?.[id] ?? fail('NOT_FOUND', 'Read this application page again to prepare its package.');
-const getPreparation = (career, id) => career.applicationPreparations?.[id] ?? fail('NOT_FOUND', 'This preparation request was not found. Prepare the application again in Chrome.');
+const getBinding = (career, id) => {
+  const binding = career.applicationBindings?.[id] ?? fail('NOT_FOUND', 'Read this application page again to prepare its package.');
+  const app = career.applications[binding.applicationId];
+  if (app) assertJobNotBlocked(career, app.job.id, app.job);
+  else for (const url of [binding.context?.original?.url ?? binding.page?.url, ...(binding.context?.jobLinks ?? []).map(link => link.url)])
+    if (url) assertJobNotBlocked(career, null, { url });
+  return binding;
+};
+const getPreparation = (career, id) => {
+  const preparation = career.applicationPreparations?.[id] ?? fail('NOT_FOUND', 'This preparation request was not found. Prepare the application again in Chrome.');
+  getBinding(career, preparation.bindingId);
+  return preparation;
+};
 
 /** Metadata polling never fetches jobs, writes state, launches a model or releases field values. */
 export function createApplicationWorkflow({ store, assertAvailable = () => {}, validateExport = async () => false }) {
   const check = () => { assertAvailable(); return readCareer(store); };
-  const mutation = (operation, input, change, requestId = randomUUID()) => mutateCareer(store,
-    { requestId, revision: check().revision }, operation, input, (career, state) => { assertAvailable(); return change(career, state); });
+  const guard = (career, input) => {
+    if (input.bindingId) getBinding(career, input.bindingId);
+    if (input.preparationId) getPreparation(career, input.preparationId);
+    const app = input.applicationId && career.applications[input.applicationId];
+    if (app) assertJobNotBlocked(career, app.job.id, app.job);
+    for (const url of [input.context?.original?.url ?? input.page?.url, ...(input.context?.jobLinks ?? []).map(link => link.url)])
+      if (url) assertJobNotBlocked(career, null, { url });
+  };
+  const mutation = async (operation, input, change, requestId = randomUUID()) => {
+    const before = check();
+    guard(before, input);
+    const result = await mutateCareer(store, { requestId, revision: before.revision }, operation, input, (career, state) => {
+      assertAvailable();
+      guard(career, input);
+      return change(career, state);
+    });
+    const current = check();
+    guard(current, input);
+    guard(current, result);
+    return result;
+  };
   async function exported(career, app, kind) {
     const item = app && currentApplicationExport(career, app, kind);
     if (!item) return null;
@@ -186,6 +221,7 @@ export function createApplicationWorkflow({ store, assertAvailable = () => {}, v
       const distinct = [...originals.values()];
       let app = matches.length === 1 && distinct.length <= 1 ? matches[0] : null;
       if (distinct.length === 1 && matches.length <= 1) app = upsertApplication(career, distinct[0]);
+      if (app) assertJobNotBlocked(career, app.job.id, app.job);
       if (app && context.original?.complete && context.original.text.trim() && sameApplicationJob(app.job, { url: context.original.url }))
         app = upsertApplication(career, { ...app.job, description: context.original.text, originalUrl: context.original.url });
       if (app && page.fields.length) app.job.applyUrl = page.url;
@@ -243,6 +279,7 @@ export function createApplicationWorkflow({ store, assertAvailable = () => {}, v
     return mutation('application_preparation_bind', { preparationId, applicationId }, career => {
       const preparation = getPreparation(career, preparationId), binding = getBinding(career, preparation.bindingId);
       const app = career.applications[applicationId] ?? fail('NOT_FOUND', 'Application not found.');
+      assertJobNotBlocked(career, app.job.id, app.job);
       const urls = [binding.page?.url, binding.context?.original?.url, ...(binding.context?.jobLinks ?? []).map(link => link.url)].filter(Boolean);
       if (!urls.some(url => sameApplicationJob(app.job, { url }))) fail('APPLICATION_MISMATCH', 'The application must contain the exact captured job or application URL, not another job at the same company.');
       binding.applicationId = app.id;
@@ -273,12 +310,14 @@ export function createApplicationWorkflow({ store, assertAvailable = () => {}, v
   }
   async function openApplication({ applicationId }, openInChrome) {
     const career = check(), app = career.applications[applicationId] ?? fail('NOT_FOUND', 'Application not found.');
+    assertJobNotBlocked(career, app.job.id, app.job);
     const fingerprint = applicationContextFingerprint(career, app);
     if (!(await exported(career, app, 'cv')) || !(await exported(career, app, 'cover_letter')))
       fail('DOCUMENT_NOT_CURRENT', 'Save and export both the current CV and cover letter PDFs before opening this application.');
     const url = safeUrl(app.job.applyUrl ?? app.job.url) ?? fail('FULL_AD_REQUIRED', 'This application has no saved exact application URL.');
     if (typeof openInChrome !== 'function') fail('UNAVAILABLE', 'Opening an application in Chrome is unavailable.');
     const current = check(), latest = current.applications[applicationId];
+    if (latest) assertJobNotBlocked(current, latest.job.id, latest.job);
     if (!latest || applicationContextFingerprint(current, latest) !== fingerprint || hash(latest) !== hash(app)) fail('APPLICATION_CONTEXT_CHANGED', 'The application changed. Read it before opening.');
     await openInChrome(url);
     return { applicationId, opened: true, requiresPageRead: true, message: 'Read the application page in the Recruiters.rip Chrome panel to bind its questions. Upload documents manually.' };

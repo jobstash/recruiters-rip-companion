@@ -4,6 +4,7 @@ import { FORM_DECISIONS, mapFormValues } from './decisions/form-mapping.mjs';
 import { CONTACT_FIELDS, patchProfile, validateProfilePatch } from './mcp/profile-fields.mjs';
 import { contactCandidates } from './form-contact-candidates.mjs';
 import { applicationContextFingerprint, isApplicationWritingField, reusableApplicationAnswer } from './application-workflow.mjs';
+import { assertJobNotBlocked } from './mcp/blocklist.mjs';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const PRICE_NOTE = 'Separate OpenAI API billing, not your ChatGPT subscription. Base rate per million input tokens; regional or long-context premiums may apply. Already dispatched requests may be billed after cancellation.';
@@ -136,6 +137,12 @@ function questionFor(field, index, bank) {
     choices: [{ value: 'unknown', description: 'Unknown, unsupported, ambiguous or not appropriate to fill.' }, ...options.map(({ value, description }) => ({ value, description }))] } };
 }
 
+function assertFormJobAllowed(career, formId, url) {
+  const draft = career.formDrafts?.[formId];
+  const job = career.applications?.[draft?.applicationId]?.job;
+  assertJobNotBlocked(career, job?.id, job ?? { url: url ?? draft?.url });
+}
+
 /** Main-process only. Construction never reads credentials or the vault. */
 export function createBrowserForms({ store, credentials, assertAvailable, fetchImpl }) {
   const active = new Map();
@@ -143,6 +150,7 @@ export function createBrowserForms({ store, credentials, assertAvailable, fetchI
   function cancelAll() { for (const run of active.values()) run.abort.abort(new CareerError('FORM_CANCELLED', 'Form preparation canceled.')); }
   function check(run, state) {
     assertAvailable();
+    assertFormJobAllowed(state.career ?? {}, run.formId, run.url);
     if (run.abort.signal.aborted || active.get(run.requestId) !== run) fail('FORM_CANCELLED', 'Form preparation canceled.');
     if (identity(state) !== run.identity || formEvidence(state.career ?? {}) !== run.evidence ||
         credentialVersion(state) !== run.credentialVersion || answersHash(state.career ?? {}, run.formId) !== run.answersHash)
@@ -161,7 +169,8 @@ export function createBrowserForms({ store, credentials, assertAvailable, fetchI
     assertAvailable();
     if (active.has(args.requestId)) fail('REQUEST_CONFLICT', 'This preparation is already pending. Wait or cancel it before preparing again.');
     const state = store.get(), career = readCareer(store), evidence = formEvidence(career);
-    const run = { requestId: args.requestId, formId, identity: identity(state), evidence, credentialVersion: credentialVersion(state),
+    assertFormJobAllowed(career, formId, snapshot.url);
+    const run = { requestId: args.requestId, formId, url: snapshot.url, identity: identity(state), evidence, credentialVersion: credentialVersion(state),
       answersHash: answersHash(career, formId), abort: new AbortController(), key: null };
     active.set(args.requestId, run);
     try {
@@ -267,10 +276,13 @@ export function createBrowserForms({ store, credentials, assertAvailable, fetchI
     if (Object.entries(profilePatch).some(([key, value]) => !Object.hasOwn(CONTACT_FIELDS, key) || typeof value !== 'string'))
       fail('INVALID_INPUT', 'Only explicit reusable profile details can be saved from this form.');
     assertAvailable();
+    const career = readCareer(store);
+    assertFormJobAllowed(career, args.formId);
     const result = await mutateCareer(store, { requestId: args.requestId, revision: readCareer(store).revision },
       'forms_profile_save', args, (career, state) => {
         assertAvailable();
         const draft = career.formDrafts?.[args.formId], binding = draft?.profileCollection;
+        assertFormJobAllowed(career, args.formId);
         if (!binding || binding.snapshot !== args.snapshot || identity(state) !== binding.identity ||
             formEvidence(career) !== binding.evidence || draft.evidence !== binding.evidence ||
             answersHash(career, args.formId) !== binding.answersHash)

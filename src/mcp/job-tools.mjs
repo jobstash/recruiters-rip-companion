@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { fail, mutateCareer, mutationSchema, readCareer } from './state.mjs';
+import { assertJobNotBlocked, blockFilter } from './blocklist.mjs';
 
 const object = (properties, required = Object.keys(properties)) => ({ type: 'object', properties, required, additionalProperties: false });
 const text = maxLength => ({ type: 'string', minLength: 1, maxLength, pattern: '\\S' });
@@ -63,6 +64,7 @@ export function localJobMetadata(job) {
 export function localJobOriginal(career, id, requireComplete = false) {
   const job = localJob(career, id);
   if (!job) fail('UNKNOWN_JOB', 'This local job was not found. Read career_jobs and use a saved job ID.');
+  assertJobNotBlocked(career, id, job);
   if (requireComplete && !job.complete) fail('FULL_AD_REQUIRED', 'This capture contains only a listing. Open the original job, capture its full advert and save it before assessment or application drafting.');
   return { ...localJobMetadata(job), description: job.description ?? '', ad: job.description ?? '',
     capturedAt: job.capturedAt, updatedAt: job.updatedAt };
@@ -74,8 +76,14 @@ const compactJob = job => ({ id: job.id, title: job.title, company: job.company 
 
 export async function importCapturedJobs({ store, requestId, revision, sourceUrl, jobs }) {
   const capture = validateCapture(sourceUrl, jobs);
+  const check = career => {
+    for (const input of capture.jobs) assertJobNotBlocked(career,
+      `local:${createHash('sha256').update(input.applyUrl ?? input.url).digest('hex')}`, input);
+  };
+  check(readCareer(store));
   // Receipts fingerprint the original request, not its canonical projection.
-  return mutateCareer(store, { requestId, revision }, 'career_job_import', { sourceUrl, jobs }, career => {
+  const result = await mutateCareer(store, { requestId, revision }, 'career_job_import', { sourceUrl, jobs }, career => {
+    check(career);
     const saved = career.jobs ??= {};
     const previousIds = new Set(Object.keys(saved));
     const imported = new Map();
@@ -99,6 +107,8 @@ export async function importCapturedJobs({ store, requestId, revision, sourceUrl
           url: input.url, applyUrl: input.applyUrl ?? original.applyUrl ?? input.url, complete: input.complete,
           sourceUrl: capture.sourceUrl } : {}),
         id, aliases: [...aliases], sourceUrls: [...new Set([...matches.flatMap(job => job.sourceUrls ?? [job.sourceUrl]).filter(Boolean), capture.sourceUrl])], updatedAt: stamp };
+      assertJobNotBlocked(career, id, job);
+      for (const match of matches) assertJobNotBlocked(career, match.id, match);
       const changed = existing && ['title', 'company', 'location', 'publishedAt', 'description', 'complete'].some(key => existing[key] !== job[key]);
       if (changed) {
         originalsChanged = true;
@@ -124,6 +134,8 @@ export async function importCapturedJobs({ store, requestId, revision, sourceUrl
     const added = [...imported.keys()].filter(id => !previousIds.has(id)).length;
     return { added, updated: imported.size - added, jobs: [...imported.values()] };
   });
+  check(readCareer(store));
+  return result;
 }
 
 export function createJobTools({ store }) {
@@ -137,7 +149,8 @@ export function createJobTools({ store }) {
         assertObject(args, ['limit', 'offset']);
         const { limit = 25, offset = 0 } = args;
         if (!Number.isInteger(limit) || limit < 1 || limit > 100 || !Number.isSafeInteger(offset) || offset < 0) fail('INVALID_INPUT', 'Use limit 1–100 and a nonnegative integer offset.');
-        const career = readCareer(store), rows = Object.values(career.jobs ?? {}).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id));
+        const career = readCareer(store), blocked = blockFilter(career);
+        const rows = Object.values(career.jobs ?? {}).filter(job => !blocked(job)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id));
         const jobs = rows.slice(offset, offset + limit).map(job => ({ ...localJobMetadata(job), status: job.complete ? 'saved' : 'needs_full_advert' }));
         return { revision: career.revision, jobs, total: rows.length, nextOffset: offset + jobs.length < rows.length ? offset + jobs.length : null };
       } },

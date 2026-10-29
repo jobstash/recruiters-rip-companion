@@ -8,7 +8,7 @@ import {
 } from './matching-contract.mjs';
 import { compareFacts } from './facts.mjs';
 import { reviewInclusion, savedPublicationRange } from './review-queue.mjs';
-import { blockFilter } from './blocklist.mjs';
+import { assertJobNotBlocked, blockFilter } from './blocklist.mjs';
 import { completeLocalJobs, localJob, localJobMetadata, localJobOriginal } from './job-tools.mjs';
 import { publicationInWindow, publicationWindowForRange } from './publication-range.mjs';
 
@@ -392,6 +392,7 @@ export function createMatchingTools({ store, platform, exportDocument }) {
         // Every batch carries the saved candidate, so reviewers in a new session or after compaction assess against the
         // companion's current CV, facts and preferences rather than remembered ones. It also refuses unanswered basics.
         const candidate = candidateContext(before), profileVersion = currentProfileVersion(before);
+        for (const id of args.ids) assertJobNotBlocked(before, id);
         for (const id of args.ids) if (id.startsWith('local:')) localJobOriginal(before, id, true);
         assertKnown(saved.jobs, args.ids);
         assertCurrentWindow(saved.jobs, args.ids, publicationScope());
@@ -407,6 +408,7 @@ export function createMatchingTools({ store, platform, exportDocument }) {
         if (result.jobs.length) await store.update(state => {
           if (rankingVersion(state.career) !== fetchVersion)
             fail('RANKINGS_CHANGED', 'Rankings were deleted while job details were loading. Discarded jobs were not restored.');
+          for (const job of result.jobs) assertJobNotBlocked(state.career, job.id, job);
           const saved = writableMatching(state.career ??= createCareerState());
           for (const job of result.jobs) {
             const metadata = saved.jobs[job.id] ??= { id: job.id, title: null, company: null, publishedAt: null, applyUrl: null };
@@ -417,6 +419,9 @@ export function createMatchingTools({ store, platform, exportDocument }) {
             Object.assign(metadata, displayTerms(job));
           }
         });
+        const current = readCareer(store);
+        for (const id of args.ids) assertJobNotBlocked(current, id);
+        for (const job of [...result.jobs, ...local]) assertJobNotBlocked(current, job.id, job);
         return { ...result, jobs: [...result.jobs, ...local], candidate, profileVersion };
       },
     },
@@ -436,6 +441,7 @@ export function createMatchingTools({ store, platform, exportDocument }) {
         const host = client && typeof client.name === 'string' ? { name: client.name, version: typeof client.version === 'string' ? client.version : null } : null;
         await store.update(state => {
           const career = state.career ??= createCareerState();
+          for (const id of ids) assertJobNotBlocked(career, id);
           assertProfile(career, args.profileVersion);
           const saved = writableMatching(career);
           const allJobs = matching(career).jobs;
@@ -521,6 +527,10 @@ export function createMatchingTools({ store, platform, exportDocument }) {
         let result;
         await store.update(state => {
           const career = state.career ??= createCareerState();
+          for (const { a, b } of args.comparisons) {
+            assertJobNotBlocked(career, a);
+            assertJobNotBlocked(career, b);
+          }
           assertProfile(career, args.profileVersion);
           const saved = writableMatching(career);
           const members = new Set(rerankSet(career, publicationScope()).candidates.map(row => row.id));
@@ -551,6 +561,8 @@ export function createMatchingTools({ store, platform, exportDocument }) {
         const rows = rankedRows(career, profileVersion);
         const coverage = counts(saved.jobs, saved.scores, profileVersion);
         const exported = await exportDocument({ bytes: rankingCSV(rows), mediaType: 'text/csv' });
+        const current = readCareer(store);
+        for (const row of rows) assertJobNotBlocked(current, row.id, row);
         return { view: 'assessment_archive', total: rows.length, ...coverage, export: { ...exported, mediaType: 'text/csv' } };
       },
     },

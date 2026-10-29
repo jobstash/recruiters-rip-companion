@@ -5,6 +5,7 @@ import { introductionsStatus } from './introduction-tools.mjs';
 import { FACT_KINDS, compareFacts, factInputSchema, factKey, needsDetail, normalizeFact } from './facts.mjs';
 import { chatText, formAnswers, formRequest, parseReply, prepareQuestions, questionSchema } from './interview.mjs';
 import { patchProfile, profileFields } from './profile-fields.mjs';
+import { assertJobNotBlocked } from './blocklist.mjs';
 
 const MAX_TEXT = 100_000;
 const MAX_FILE = 5 * 1024 * 1024;
@@ -310,6 +311,10 @@ export function createProfileTools({ store, selectSourceFile, extractFile, inter
     let result;
     return store.update(async state => { result = await change(state.career ??= createCareerState()); }).then(() => result);
   };
+  const assertInterviewAllowed = (career, interview) => {
+    const job = career.applications?.[interview.applicationId]?.job ?? interview.job;
+    assertJobNotBlocked(career, job?.id, job);
+  };
   tool('career_interview_ask', 'Ask 1–5 brief gap questions while reviewing a saved application listing for submission after matching. Requires applicationId. Reuse answers by subject or explicit factId; shallow positives need a concise explanation. Use followUp to deepen a saved answer. Present pending text.', object({ applicationId: uuid, title: string(200), questions: { type: 'array', items: questionSchema, minItems: 1, maxItems: 5 } }, ['applicationId', 'questions']), false, async args => {
     const prepared = prepareQuestions(args.questions);
     const alreadyKnown = [];
@@ -318,6 +323,7 @@ export function createProfileTools({ store, selectSourceFile, extractFile, inter
       const application = career.applications[args.applicationId];
       if (!application?.job || !['title', 'company', 'description'].every(field => typeof application.job[field] === 'string' && application.job[field].trim()))
         fail('INVALID_INPUT', 'The saved application needs a job title, company and description before asking gap questions.');
+      assertJobNotBlocked(career, application.job.id, application.job);
       const job = { title: application.job.title, company: application.job.company,
         ...(application.job.url ? { url: application.job.url } : {}) };
       const known = new Map(Object.values(career.facts).map(fact => [factKey(fact), fact]));
@@ -343,21 +349,24 @@ export function createProfileTools({ store, selectSourceFile, extractFile, inter
     const applyForm = async (result, questions) => saveToCareer(career => {
       const pending = career.interviews?.[interview.id];
       if (!pending) fail('NOT_FOUND', 'This interview is no longer open.');
+      assertInterviewAllowed(career, pending);
       if (hash(pending.questions) !== hash(questions)) fail('FACT_CHANGED', 'The interview changed while the form was open. Use the current pending questions.');
       if (result.action !== 'accept') return { saved: [], declined: true, ...pendingResult(pending) };
       return saveAnswers(career, pending, formAnswers(result.content, questions));
     });
     if (interaction?.canElicit()) {
+      assertInterviewAllowed(readCareer(store), interview);
       const startedWithDetail = interview.questions.some(question => question.stage === 'detail');
       const result = await interaction.elicit(formRequest(args.title, interview.questions));
-      readCareer(store); // Recheck scoped lock/identity even when elicitation falls back to chat.
+      assertInterviewAllowed(readCareer(store), interview);
       if (result) {
         let output = await applyForm(result, interview.questions);
         // One extra form at most, only for newly requested explanations.
         if (!output.declined && output.followUps?.length && !startedWithDetail) {
           const pending = readCareer(store).interviews[interview.id];
+          assertInterviewAllowed(readCareer(store), pending);
           const next = await interaction.elicit(formRequest(args.title, output.followUps));
-          readCareer(store);
+          assertInterviewAllowed(readCareer(store), pending);
           if (next) {
             const subsequent = await applyForm(next, pending.questions);
             const saved = new Map([...output.saved, ...subsequent.saved].map(fact => [fact.id, fact]));
@@ -367,11 +376,13 @@ export function createProfileTools({ store, selectSourceFile, extractFile, inter
         return { mode: 'form', ...output, alreadyKnown };
       }
     }
+    assertInterviewAllowed(readCareer(store), interview);
     return { mode: 'chat', ...pendingResult(interview), alreadyKnown };
   });
   tool('career_interview_answer', 'Save a literal interview reply. Use numbered choices, number: explanation for details, or plain text for one detail question. Positive shallow answers remain pending; present returned text. skip or cancel ends open questions without inventing detail.', object({ interviewId: uuid, reply: string(8000) }, ['interviewId', 'reply']), false, async args => saveToCareer(career => {
     const interview = career.interviews?.[args.interviewId];
     if (!interview) fail('NOT_FOUND', 'This interview is not open. Ask again with career_interview_ask.');
+    assertInterviewAllowed(career, interview);
     const answers = parseReply(args.reply, interview.questions);
     return { ...saveAnswers(career, interview, answers), ...(/^\s*cancel\s*$/i.test(args.reply) ? { cancelled: true } : {}) };
   }));

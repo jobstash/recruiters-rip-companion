@@ -9,6 +9,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createCareerState, fail } from '../src/mcp/state.mjs';
 import { createScopedAccess } from '../src/mcp/scope.mjs';
 import { createProfileTools } from '../src/mcp/profile-tools.mjs';
+import { createFormTools } from '../src/mcp/form-tools.mjs';
 import { createMcpServer, createPlatformTools } from '../src/mcp/server.mjs';
 import { createDocumentFiles, readSelectedSource } from '../src/mcp/files.mjs';
 import { createMatchingTools } from '../src/mcp/matching-tools.mjs';
@@ -56,6 +57,27 @@ test('locking rejects an in-progress mutation before its encrypted transaction c
 
 test('a previous socket stays invalid after lock and unlock even if the identity is unchanged', () => {
   const f = fixture(); f.lockAndUnlock(); assert.throws(() => f.scoped.store.get(), { code: 'IDENTITY_CHANGED' });
+});
+
+test('public form registry exposes only inspection and staging and rejects removed browser actions', async t => {
+  const f = fixture();
+  const forbidden = () => assert.fail('Removed browser action must not dispatch');
+  const tools = createFormTools({ store: f.scoped.store, browser: { status: forbidden, fill: forbidden, submit: forbidden } });
+  const server = createMcpServer({ tools, assertAvailable: f.scoped.assertAvailable,
+    readResource: forbidden, listResources: () => [] });
+  const client = new Client({ name: 'form-capability-consumer', version: '1.0.0' });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverTransport); await client.connect(clientTransport);
+  t.after(async () => { await client.close(); await server.close(); });
+  const registry = await client.listTools();
+  assert.deepEqual(registry.tools.map(tool => tool.name), ['career_form_read', 'career_form_answers_save']);
+  const before = f.store.get();
+  for (const name of ['career_form_fill', 'career_form_submit']) {
+    const result = await client.callTool({ name, arguments: { requestId: randomUUID(), formId: 'form:synthetic', actionId: 'send' } });
+    assert.equal(result.isError, true);
+    assert.equal(JSON.parse(result.content[0].text).error.code, 'UNKNOWN_TOOL');
+  }
+  assert.deepEqual(f.store.get(), before);
 });
 
 test('MCP denies arbitrary fields and hides filesystem paths in tool and resource errors', async t => {

@@ -43,7 +43,6 @@ $('settings').onclick = () => send('settings');
 $('configure').onclick = () => send('configure');
 $('cancel').onclick = () => send('cancel');
 $('save').onclick = () => send('save', { indexes: [...document.querySelectorAll('[data-job]:checked')].map(n => Number(n.dataset.job)) });
-$('fill').onclick = () => send('fill');
 $('application-host').onchange = () => send('application-host', { host: $('application-host').value });
 $('application-prepare').onclick = () => send('application-prepare', { host: $('application-host').value });
 $('application-open-ad').onclick = () => send('application-open-ad');
@@ -142,7 +141,7 @@ function render() {
     return;
   }
   $('cancel').hidden = state.busy !== 'prepare'; $('cancel').disabled = false;
-  const working = { prepare: 'Preparing answers…', 'profile-save': 'Saving details…', detect: 'Reading page…', save: 'Saving jobs…', settings: 'Opening Companion…', fill: 'Filling reviewed answers…', forms_fill: 'Filling prepared answers…', forms_submit: 'Checking the page after the submit action…',
+  const working = { prepare: 'Preparing answers…', 'profile-save': 'Saving details…', detect: 'Reading page…', save: 'Saving jobs…', settings: 'Opening Companion…',
     'application-prepare': 'Opening your agent…', 'application-document': 'Opening the saved document…', 'application-open-ad': 'Opening the job advert…' };
   $('status').textContent = busy ? working[state.busy] || 'Working…' : state.notice;
   $('status').hidden = !$('status').textContent;
@@ -175,7 +174,7 @@ function render() {
   $('review-actions').hidden = !state.prepared?.fields.length;
   $('review').hidden = !state.prepared;
   $('ready').hidden = !state.prepared && (busy || !!state.error);
-  $('ready').textContent = state.answersStale ? 'Saved answers changed. Use the current saved answers before copying or filling.'
+  $('ready').textContent = state.answersStale ? 'Saved answers changed. Use the current saved answers before copying or pasting.'
     : !state.prepared ? 'Answers are not ready. Read page to prepare them.'
     : state.prepared.fields.length ? `${state.prepared.fields.length} ${state.prepared.fields.length === 1 ? 'answer' : 'answers'} ready`
     : 'No paste answers ready.';
@@ -199,7 +198,7 @@ function render() {
   }
   for (const input of questionInputs.values()) input.disabled = busy;
   const fields = state.prepared?.fields || [];
-  // Paste/approval status updates must not replace focused controls or discard typed drafts.
+  // Clipboard status updates must not replace focused controls or discard typed drafts.
   const nextFields = JSON.stringify([state.prepared?.formId, state.prepared?.snapshot, fields]);
   if (fieldKey !== nextFields) {
     fieldKey = nextFields; reviewInputs.clear(); const list = $('field-list'); list.replaceChildren();
@@ -224,6 +223,6 @@ function render() {
     input.disabled = check.disabled = busy || manual;
     check.checked = state.selected.includes(id);
   }
-  $('copy').disabled = $('fill').disabled = busy || !!state.answersStale;
+  $('copy').disabled = busy || !!state.answersStale;
 }
 connect();

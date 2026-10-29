@@ -346,7 +346,6 @@ test('current package readiness does not pretend old clipboard values are ready 
   assert.equal(panel.nodes.get('application-answers').hidden, false);
   assert.equal(panel.nodes.get('paste').hidden, true);
   assert.equal(panel.nodes.get('copy').disabled, true);
-  assert.equal(panel.nodes.get('fill').disabled, true);
   panel.nodes.get('application-answers').onclick();
   assert.deepEqual(panel.sent.at(-1), { action: 'application-answers', payload: {} });
   panel.update({ busy: 'prepare' });

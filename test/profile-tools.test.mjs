@@ -439,6 +439,27 @@ test('form interviews save explicit selections and retain pending questions on d
 const capabilityQuestion = { subject: 'Wallet integration', prompt: 'What is your wallet integration experience?', kind: 'capability',
   context: 'The role needs someone to ship a wallet connection.' };
 
+test('a blocked employer cannot start gap questions from an existing application', async () => {
+  let elicited = false;
+  const f = fixture({ interaction: { canElicit: () => true, elicit: async () => { elicited = true; } } });
+  await f.store.update(state => { state.career.blocklist = { employer: { kind: 'company', value: 'ACME' } }; });
+  await assert.rejects(f.call('career_interview_ask', { questions: [capabilityQuestion] }), { code: 'JOB_BLOCKED' });
+  assert.equal(elicited, false);
+  assert.deepEqual(f.store.get().career.interviews ?? {}, {});
+});
+
+test('a block added while gap questions are open prevents saving answers or returning more questions', async () => {
+  const f = fixture({ interaction: { canElicit: () => true, elicit: async () => {
+    await f.store.update(state => { state.career.blocklist = { employer: { kind: 'company', value: 'Acme' } }; });
+    return { action: 'accept', content: { q1: 'Hands-on' } };
+  } } });
+  await assert.rejects(f.call('career_interview_ask', { questions: [capabilityQuestion] }), { code: 'JOB_BLOCKED' });
+  assert.deepEqual(f.store.get().career.facts, {});
+  const interviewId = Object.keys(f.store.get().career.interviews)[0];
+  await assert.rejects(f.call('career_interview_answer', { interviewId, reply: '1b' }), { code: 'JOB_BLOCKED' });
+  assert.deepEqual(f.store.get().career.facts, {});
+});
+
 test('shallow positive answers retain context, deepen after reload, and reuse the completed answer', async () => {
   const f = fixture();
   const asked = await f.call('career_interview_ask', { questions: [capabilityQuestion] });

@@ -6,7 +6,7 @@ import vm from 'node:vm';
 import { BROWSER_IDENTITIES } from '../src/browser-identity.mjs';
 import { createManifest } from '../browser-extension/manifest.mjs';
 import { safeDeviceRequest, externalSenderAllowed, deviceResult, createNativeClient, safeNativeCommand, applicationView } from '../browser-extension/src/protocol.mjs';
-import { captureJobs, captureApplicationContext, inspectForm, fillForm, checkFormBindings, armSmartPaste, disarmSmartPaste, pressAction, observePage } from '../browser-extension/src/page.mjs';
+import { captureJobs, captureApplicationContext, inspectForm, checkFormBindings, armSmartPaste, disarmSmartPaste } from '../browser-extension/src/page.mjs';
 import { createPageAccess } from '../browser-extension/src/page-access.mjs';
 
 const origin = BROWSER_IDENTITIES.production.productOrigin;
@@ -15,18 +15,18 @@ const event = () => { const listeners = []; return { addListener(fn) { listeners
 const fakePort = () => ({ onMessage: event(), onDisconnect: event(), sent: [], postMessage(message) { this.sent.push(message); }, disconnect() { this.onDisconnect.emit(); } });
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 
-test('page access relies on Chrome permission enforcement and retains document identity on fill', async () => {
+test('page access relies on Chrome permission enforcement and retains document identity on inspection', async () => {
   let denied = true;
   const calls = [], tab = { id: 7 };
   const inject = createPageAccess({
     sidePanel: { setPanelBehavior: async () => {} },
     tabs: { async get() { return tab; } },
-    scripting: { async executeScript(options) { calls.push(options); if (denied) throw new Error('Missing host permission'); return [{ result: { filled: [], skipped: [] }, documentId: 'snapshot-document' }]; } },
+    scripting: { async executeScript(options) { calls.push(options); if (denied) throw new Error('Missing host permission'); return [{ result: { fields: [], actions: [] }, documentId: 'snapshot-document' }]; } },
     onError: error => { throw error; },
   });
-  await assert.rejects(inject(7, fillForm));
+  await assert.rejects(inject(7, inspectForm));
   denied = false;
-  await inject(7, fillForm, [{ url: 'https://jobs.example.test/apply', fields: [] }], 'snapshot-document');
+  await inject(7, inspectForm, [], 'snapshot-document');
   assert.deepEqual(calls.at(-1).target, { tabId: 7, documentIds: ['snapshot-document'] });
   tab.url = 'chrome://extensions';
   await assert.rejects(inject(7, captureJobs), /HTTP or HTTPS/);
@@ -142,37 +142,12 @@ test('inspection excludes protected controls and never includes entered values',
   assert.equal(JSON.stringify(snapshot).includes('already-entered'), false);
 });
 
-test('fill validates complete snapshot before writes and never overwrites or submits', () => {
+test('inspection cannot write controls even when passed values from a previous snapshot', () => {
   const page = pageContext(), snapshot = page.invoke(inspectForm);
-  const result = page.invoke(fillForm, { url: snapshot.url, fields: snapshot.fields.map(f => ({ ...f, value: 'Synthetic Candidate' })) });
-  assert.deepEqual(Array.from(result.filled), [snapshot.fields[0].id]);
-  assert.deepEqual(Array.from(result.skipped), [snapshot.fields[1].id]);
-  assert.equal(page.controls[0].value, 'Synthetic Candidate');
+  page.invoke(inspectForm, { url: snapshot.url, fields: snapshot.fields.map(field => ({ ...field, value: 'Must not write' })) });
+  assert.equal(page.controls[0].value, '');
   assert.equal(page.controls[1].value, 'already-entered@example.test');
-  assert.deepEqual(page.controls[0].events, ['input','change']);
-  const changed = pageContext(), old = changed.invoke(inspectForm);
-  changed.controls[0].name = 'Changed field';
-  assert.throws(() => changed.invoke(fillForm, { url: old.url, fields: [{ ...old.fields[0], value: 'Must not write' }] }), /form changed/);
-  assert.equal(changed.controls[0].value, '');
-  changed.context.location.href = 'https://jobs.example.test/other';
-  assert.throws(() => changed.invoke(fillForm, { url: old.url, fields: [] }), /page changed/);
-  const replaced = pageContext(), beforeReplacement = replaced.invoke(inspectForm);
-  replaced.controls[0] = new replaced.context.HTMLInputElement('Full name');
-  assert.throws(() => replaced.invoke(fillForm, { url: beforeReplacement.url, fields: [{ ...beforeReplacement.fields[0], value: 'Must not write' }] }), /form changed/);
-  assert.equal(replaced.controls[0].value, '');
-});
-
-test('synchronous page handlers cannot turn a later reviewed control into password or consent', () => {
-  for (const mutation of [control => { control.type = 'password'; }, control => { control.name = 'I agree to the privacy terms'; }]) {
-    const page = pageContext(); page.controls[1].value = '';
-    const snapshot = page.invoke(inspectForm);
-    page.controls[0].dispatchEvent = event => { page.controls[0].events.push(event.type); if (event.type === 'input') mutation(page.controls[1]); };
-    const result = page.invoke(fillForm, { url: snapshot.url, fields: snapshot.fields.map(f => ({ ...f, value: 'Synthetic answer' })) });
-    assert.deepEqual(Array.from(result.filled), [snapshot.fields[0].id]);
-    assert.deepEqual(Array.from(result.skipped), [snapshot.fields[1].id]);
-    assert.equal(page.controls[1].value, '');
-    assert.deepEqual(page.controls[1].events, []);
-  }
+  assert.deepEqual(page.controls.flatMap(control => control.events), []);
 });
 
 function contactPage(legend = 'Preferred contact method') {
@@ -192,50 +167,33 @@ function contactPage(legend = 'Preferred contact method') {
   return { ...page, other, radio };
 }
 
-test('contact method radio groups are fillable while contact consent stays protected', () => {
+test('contact method radio groups are inspected while contact consent stays protected', () => {
   const page = contactPage(), snapshot = page.invoke(inspectForm);
   const radio = snapshot.fields.find(field => field.type === 'radio');
   assert.equal(radio.label, 'Preferred contact method');
   assert.deepEqual(Array.from(radio.options, option => option.value), ['email', 'phone']);
-  const result = page.invoke(fillForm, { url: snapshot.url, fields: [{ ...radio, value: 'email' }] });
-  assert.deepEqual(Array.from(result.filled), [radio.id]);
-  assert.equal(page.controls[1].checked, true);
-  assert.equal(page.other.checked, false);
   assert.equal(contactPage('Contact me').invoke(inspectForm).fields.some(field => field.type === 'radio'), false);
 });
 
-test('a newly populated live radio member prevents writing the reviewed cached group', () => {
-  const page = contactPage(), other = page.other;
-  const snapshot = page.invoke(inspectForm), radio = snapshot.fields.find(field => field.type === 'radio');
-  let inserted;
-  page.controls[0].dispatchEvent = event => {
-    if (event.type !== 'input') return;
-    inserted = page.radio('existing', 'Existing choice');
-    inserted.checked = true;
-    page.controls.push(inserted);
-  };
-  const result = page.invoke(fillForm, { url: snapshot.url, fields: [{ ...snapshot.fields[0], value: 'Synthetic Candidate' }, { ...radio, value: 'email' }] });
-  assert.deepEqual(Array.from(result.filled), [snapshot.fields[0].id]);
-  assert.deepEqual(Array.from(result.skipped), [radio.id]);
+test('new radio members invalidate the inspected binding without changing values', () => {
+  const page = contactPage(), snapshot = page.invoke(inspectForm);
+  const inserted = page.radio('existing', 'Existing choice');
+  inserted.checked = true;
+  page.controls.push(inserted);
+  assert.equal(page.invoke(checkFormBindings, snapshot).attached, false);
   assert.equal(inserted.checked, true);
   assert.equal(page.controls[1].checked, false);
-  assert.equal(other.checked, false);
-  assert.deepEqual(page.controls[1].events, []);
+  assert.equal(page.other.checked, false);
 });
 
-test('choice filling accepts only actual inspected options', () => {
+test('choice inspection exposes only actual nonempty options without selecting one', () => {
   const page = pageContext(), select = page.controls[0];
   select.name = 'Work mode'; select.tagName = 'SELECT'; select.type = 'select';
   select.options = [{ value: '', label: '' }, { value: 'remote', label: 'Remote' }, { value: 'office', label: 'Office' }];
   const snapshot = page.invoke(inspectForm), field = snapshot.fields[0];
   assert.equal(field.options.length, 2);
   assert.equal(field.options.some(option => option.value === ''), false);
-  const denied = page.invoke(fillForm, { url: snapshot.url, fields: [{ ...field, value: 'invented-choice' }] });
-  assert.deepEqual(Array.from(denied.filled), []);
   assert.equal(select.value, '');
-  const allowed = page.invoke(fillForm, { url: snapshot.url, fields: [{ ...field, value: 'remote' }] });
-  assert.deepEqual(Array.from(allowed.filled), [field.id]);
-  assert.equal(select.value, 'remote');
 });
 
 function inertTemplate() {
@@ -250,14 +208,6 @@ test('JSON-LD collection is bounded and preserves original metadata without inve
   assert.equal(result.jobs[0].company, 'Synthetic employer');
   assert.equal(result.jobs[0].publishedAt, undefined);
   assert.ok(new TextEncoder().encode(JSON.stringify(result)).length <= 1024 * 1024);
-});
-
-test('a reset or rejected control is skipped rather than reported as filled', () => {
-  const page = pageContext(), snapshot = page.invoke(inspectForm);
-  page.controls[0].dispatchEvent = event => { if (event.type === 'change') page.controls[0].value = ''; };
-  const result = page.invoke(fillForm, { url: snapshot.url, fields: [{ ...snapshot.fields[0], value: 'Rejected answer' }] });
-  assert.deepEqual(Array.from(result.filled), []);
-  assert.deepEqual(Array.from(result.skipped), [snapshot.fields[0].id]);
 });
 
 function captureFixture({ metadata = [], original = null, cards = [] } = {}) {
@@ -302,43 +252,83 @@ test('visible listing cards remain partial captures and never inherit input cont
   assert.equal(result.jobs[0].description.includes('private entered answer'), false);
 });
 
-test('companion commands arrive on the native port and are answered in place', async () => {
+test('companion attachment commands arrive on the native port and are answered in place', async () => {
   const seen = [];
-  const port = fakePort(), client = createNativeClient({ host: 'synthetic', connect: () => port, onCommand: async (op, payload) => { seen.push([op, payload]); if (op === 'forms_submit') throw new Error('The page changed.'); return { filled: ['control-0'], skipped: [] }; } });
+  const port = fakePort(), client = createNativeClient({ host: 'synthetic', connect: () => port, onCommand: async (op, payload) => {
+    seen.push([op, payload]);
+    if (payload.formId === 'missing') throw new Error('The page changed.');
+    return { attached: true };
+  } });
   const status = client.request('status', {});
-  const fill = request('forms_fill', { requestId: randomUUID(), formId: 'form:1', fields: [], answers: [] });
-  const submit = request('forms_submit', { requestId: randomUUID(), formId: 'form:1', actionId: 'action-3', actionSignature: randomUUID() });
-  port.onMessage.emit(fill); port.onMessage.emit(submit);
+  const attached = request('forms_status', { formId: 'form:1' }), missing = request('forms_status', { formId: 'missing' });
+  port.onMessage.emit(attached); port.onMessage.emit(missing);
   await tick();
-  assert.deepEqual(seen, [['forms_fill', fill.payload], ['forms_submit', submit.payload]]);
+  assert.deepEqual(seen, [['forms_status', attached.payload], ['forms_status', missing.payload]]);
   const replies = port.sent.filter(message => Object.hasOwn(message, 'ok'));
-  assert.deepEqual(replies[0], { version: 1, id: fill.id, ok: true, result: { filled: ['control-0'], skipped: [] } });
-  assert.deepEqual(replies[1], { version: 1, id: submit.id, ok: false, error: { message: 'The page changed.' } });
-  port.onMessage.emit(fill);
+  assert.deepEqual(replies[0], { version: 1, id: attached.id, ok: true, result: { attached: true } });
+  assert.deepEqual(replies[1], { version: 1, id: missing.id, ok: false, error: { message: 'The page changed.' } });
+  port.onMessage.emit(attached);
   await tick();
   assert.equal(seen.length, 2);
   assert.match(port.sent.at(-1).error.message, /already received/);
   port.onMessage.emit({ version: 1, id: port.sent[0].id, ok: true, result: { installed: true } });
   assert.deepEqual(await status, { installed: true });
+  client.disconnect();
 });
 
-test('native commands reject unknown, oversized, duplicate and unsigned inputs', () => {
-  const field = { id: 'control-0', signature: 'inspected' };
-  const fill = request('forms_fill', { requestId: randomUUID(), formId: 'form:1', fields: [field], answers: [{ ...field, value: 'Answer' }] });
-  assert.deepEqual(safeNativeCommand(fill), { op: fill.op, payload: fill.payload });
+test('duplicate in-flight attachment commands wait for the original asynchronous result', async () => {
+  const port = fakePort();
+  let release, calls = 0;
+  const client = createNativeClient({ host: 'synthetic', connect: () => port, onCommand: () => { calls++; return new Promise(resolve => { release = resolve; }); } });
+  const status = client.request('status', {});
+  const command = request('forms_status', { formId: 'form:1' });
+  port.onMessage.emit(command);
+  await tick();
+  port.onMessage.emit(command);
+  assert.equal(port.sent.filter(message => message.id === command.id).length, 0);
+  release({ attached: true });
+  await tick();
+  assert.equal(calls, 1);
+  assert.deepEqual(port.sent.filter(message => message.id === command.id).map(message => message.result.attached), [true]);
+  port.onMessage.emit({ version: 1, id: port.sent[0].id, ok: true, result: {} });
+  await status;
+  client.disconnect();
+});
+
+test('native commands reject unknown, oversized and malformed attachment requests', () => {
+  const status = request('forms_status', { formId: 'form:1' });
+  assert.deepEqual(safeNativeCommand(status), { op: status.op, payload: status.payload });
   for (const message of [
-    { ...fill, op: 'evaluate' },
-    { ...fill, id: 'not-a-uuid' },
-    { ...fill, extra: true },
-    { ...fill, payload: { ...fill.payload, script: 'bad' } },
-    { ...fill, payload: { ...fill.payload, fields: [field, field] } },
-    { ...fill, payload: { ...fill.payload, answers: [fill.payload.answers[0], fill.payload.answers[0]] } },
-    { ...fill, payload: { ...fill.payload, answers: [{ id: field.id, value: 'No signature' }] } },
-    { ...fill, payload: { ...fill.payload, answers: [{ ...field, value: 'x'.repeat(10001) }] } },
-    { ...fill, payload: { ...fill.payload, fields: Array.from({ length: 65 }, (_, i) => ({ ...field, id: `control-${i}` })) } },
-    { ...fill, payload: { ...fill.payload, formId: 'x'.repeat(1024 * 1024) } },
-    request('forms_submit', { requestId: randomUUID(), formId: 'form:1', actionId: 'action-0' }),
+    { ...status, op: 'evaluate' },
+    { ...status, id: 'not-a-uuid' },
+    { ...status, extra: true },
+    { ...status, payload: { ...status.payload, script: 'bad' } },
+    { ...status, payload: {} },
+    { ...status, payload: { formId: '' } },
+    { ...status, payload: { formId: 1 } },
+    { ...status, payload: { formId: 'x'.repeat(101) } },
+    { ...status, payload: { formId: 'x'.repeat(1024 * 1024) } },
   ]) assert.throws(() => safeNativeCommand(message));
+});
+
+test('unsupported native commands are rejected before dispatch', async () => {
+  const port = fakePort(), client = createNativeClient({ host: 'synthetic', connect: () => port, onCommand: () => assert.fail('Unsupported command dispatched') });
+  const status = client.request('status', {});
+  const commands = [
+    request('forms_fill', { requestId: randomUUID(), formId: 'form:1', fields: [], answers: [] }),
+    request('forms_submit', { requestId: randomUUID(), formId: 'form:1', actionId: 'send', actionSignature: 'signature' }),
+    request('evaluate', { script: 'document.forms[0].submit()' }),
+  ];
+  for (const command of commands) port.onMessage.emit(command);
+  await tick();
+  for (const command of commands) {
+    const reply = port.sent.find(message => message.id === command.id);
+    assert.equal(reply.ok, false);
+    assert.match(reply.error.message, /invalid or unavailable/);
+  }
+  port.onMessage.emit({ version: 1, id: port.sent[0].id, ok: true, result: {} });
+  await status;
+  client.disconnect();
 });
 
 test('native command concurrency is bounded and reply send failures disconnect safely', async () => {
@@ -379,10 +369,13 @@ function pastePage() {
     click() { this.clicks++; }
   }
   const buttons = [new Button('Submit application'), new Button('Cancel', 'button'), new Button('Next step', 'button')];
-  const listeners = {}, windowCapture = {}, messages = [], clipboard = [];
+  const listeners = {}, windowCapture = {}, messages = [], clipboard = [], alerts = [], frames = [], busy = [];
   let responder = () => ({ value: null });
-  page.context.document.querySelectorAll = selector => selector.startsWith('button') ? buttons : selector.includes('alert') ? [] : page.controls;
+  page.context.document.querySelectorAll = selector => selector.startsWith('button') ? buttons
+    : selector === 'iframe' ? frames : selector === '[aria-busy="true"]' ? busy
+      : selector.includes('alert') ? [...alerts, ...page.controls.filter(el => el.attrs['aria-invalid'] === 'true')] : page.controls;
   page.context.document.addEventListener = (type, fn) => { listeners[type] = fn; };
+  page.context.document.removeEventListener = (type, fn) => { if (listeners[type] === fn) delete listeners[type]; };
   page.context.addEventListener = (type, fn, options) => {
     listeners[`window:${type}`] = fn;
     windowCapture[type] = options === true || options?.capture === true;
@@ -408,7 +401,7 @@ function pastePage() {
     page.context.document.activeElement = el;
     listeners.focusin({ target: el, isTrusted: trusted });
   };
-  return { ...page, buttons, listeners, messages, clipboard, focus, respond: fn => { responder = fn; } };
+  return { ...page, buttons, listeners, messages, clipboard, alerts, frames, busy, focus, respond: fn => { responder = fn; } };
 }
 
 test('switching through seven fields replaces the clipboard after earlier fields are pasted', async () => {
@@ -432,22 +425,16 @@ test('switching through seven fields replaces the clipboard after earlier fields
   }
 });
 
-test('approved action signatures survive filling but prevent repeat presses and reinspection replay', () => {
+test('inspected actions remain read-only context across reinspection', () => {
   const page = pastePage(), snapshot = page.invoke(inspectForm);
   assert.deepEqual(plain(snapshot.actions.map(({ label, kind }) => ({ label, kind }))), [{ label: 'Submit application', kind: 'submit' }, { label: 'Next step', kind: 'next' }]);
-  const action = snapshot.actions[0], press = { url: snapshot.url, actionId: action.id, actionSignature: action.signature };
-  assert.throws(() => page.invoke(pressAction, { ...press, actionSignature: 'not-approved' }), /control changed/);
-  page.invoke(fillForm, { url: snapshot.url, fields: [{ ...snapshot.fields[0], value: 'Synthetic Candidate' }] });
-  assert.deepEqual(plain(page.invoke(pressAction, press)), { clicked: true, label: 'Submit application', url: snapshot.url });
-  assert.equal(page.buttons[0].clicks, 1);
-  assert.throws(() => page.invoke(pressAction, press), /already been pressed/);
   const again = page.invoke(inspectForm);
-  assert.equal(again.actions[0].signature, action.signature);
-  assert.throws(() => page.invoke(pressAction, press), /already been pressed/);
-  assert.equal(page.buttons[0].clicks, 1);
+  assert.equal(again.actions[0].signature, snapshot.actions[0].signature);
+  assert.equal(page.invoke(checkFormBindings, snapshot).attached, true);
+  assert.deepEqual(page.buttons.map(button => button.clicks), [0, 0, 0]);
 });
 
-test('submit rejects changed labels, nodes, form destinations, submitter overrides and documents', () => {
+test('attachment rejects changed labels, nodes, form destinations, submitter overrides and documents', () => {
   for (const mutate of [
     page => { page.buttons[0].textContent = 'Delete account'; },
     page => { page.buttons[0].form.action = 'https://other.example.test/collect'; },
@@ -462,34 +449,22 @@ test('submit rejects changed labels, nodes, form destinations, submitter overrid
   ]) {
     const page = pastePage();
     page.buttons[0].form = { action: page.context.location.href, method: 'post', enctype: 'application/x-www-form-urlencoded', target: '', getAttribute(key) { return this[key] ?? null; } };
-    const snapshot = page.invoke(inspectForm), action = snapshot.actions[0], original = page.buttons[0];
+    const snapshot = page.invoke(inspectForm), original = page.buttons[0];
     mutate(page);
-    assert.throws(() => page.invoke(pressAction, { url: snapshot.url, actionId: action.id, actionSignature: action.signature }), /changed/);
+    assert.equal(page.invoke(checkFormBindings, snapshot).attached, false);
     assert.equal(original.clicks, 0);
     assert.equal(page.buttons[0].clicks, 0);
   }
 });
 
-test('rebound action IDs cannot reuse an earlier approval and uncertain clicks are consumed', () => {
-  const page = pastePage(), snapshot = page.invoke(inspectForm), action = snapshot.actions[0];
+test('rebound action IDs cannot reuse an earlier inspection signature', () => {
+  const page = pastePage(), snapshot = page.invoke(inspectForm);
   page.buttons[0].attrs.formaction = '/different';
   const changed = page.invoke(inspectForm);
-  assert.notEqual(changed.actions[0].signature, action.signature);
-  assert.throws(() => page.invoke(pressAction, { url: snapshot.url, actionId: action.id, actionSignature: action.signature }), /control changed/);
-  const press = { url: changed.url, actionId: action.id, actionSignature: changed.actions[0].signature };
-  page.buttons[0].click = () => { throw new Error('Result unknown'); };
-  assert.throws(() => page.invoke(pressAction, press), /Result unknown/);
-  assert.throws(() => page.invoke(pressAction, press), /already been pressed/);
-});
-
-test('observed thanks text is only a confirmation candidate, never a proven submission', () => {
-  const page = pastePage(); page.invoke(inspectForm);
-  page.context.document.body.innerText = 'Thank you! Your application has been received by Example Labs.';
-  const observed = page.invoke(observePage);
-  assert.equal(observed.outcome, 'unknown');
-  assert.equal(observed.confirmation, undefined);
-  assert.equal(observed.observedText, page.context.document.body.innerText);
-  assert.deepEqual(plain(observed.confirmationCandidates), ['Thank you', 'Your application has been received by Example Labs']);
+  assert.notEqual(changed.actions[0].signature, snapshot.actions[0].signature);
+  assert.equal(page.invoke(checkFormBindings, snapshot).attached, false);
+  assert.equal(page.invoke(checkFormBindings, changed).attached, true);
+  assert.equal(page.buttons[0].clicks, 0);
 });
 
 test('smart paste uses native clipboard only after a trusted click or Tab onto an empty inspected field', async () => {
@@ -618,16 +593,6 @@ test('clipboard permission failures and extension send failures never use a synt
   assert.deepEqual(page.clipboard, []);
 });
 
-test('fill retains inspected native length and validity constraints', () => {
-  for (const change of [el => { el.maxLength = 3; }, el => { el.minLength = 30; }, el => { el.invalid = true; }]) {
-    const page = pageContext(); change(page.controls[0]);
-    const snapshot = page.invoke(inspectForm);
-    const result = page.invoke(fillForm, { url: snapshot.url, fields: [{ ...snapshot.fields[0], value: 'Candidate' }] });
-    assert.deepEqual(plain(result), { filled: [], skipped: [snapshot.fields[0].id] });
-    assert.equal(page.controls[0].value, '');
-  }
-});
-
 const applicationMetadata = (overrides = {}) => ({
   bindingId: 'binding:synthetic', formId: 'form:synthetic', applicationId: 'application:synthetic', title: 'Engineer', company: 'Example',
   state: 'needs_documents', documents: [{ kind: 'cv', label: 'CV', ready: false }, { kind: 'cover_letter', label: 'Cover letter', ready: false }],
@@ -650,10 +615,13 @@ async function backgroundFixture(page = pastePage(), options = {}) {
   };
   const context = vm.createContext({
     chrome, crypto: { randomUUID }, PRODUCT_ORIGIN: origin, NATIVE_HOST: 'synthetic', BUILD_ID: 'test-build',
-    captureJobs, captureApplicationContext, inspectForm, fillForm, checkFormBindings, armSmartPaste, disarmSmartPaste, pressAction, observePage,
+    captureJobs, captureApplicationContext, inspectForm, checkFormBindings, armSmartPaste, disarmSmartPaste,
     safeDeviceRequest, externalSenderAllowed, deviceResult, applicationView,
-    setTimeout(fn, ms) { if (ms === 5000) { const id = ++nextTimer; timers.set(id, fn); return id; } return setTimeout(fn, 0); },
-    clearTimeout(id) { timers.delete(id); },
+    setTimeout(fn, ms) {
+      if (ms === 5000) { const id = ++nextTimer; timers.set(id, fn); return id; }
+      return setTimeout(fn, 0);
+    },
+    clearTimeout(id) { if (!timers.delete(id)) clearTimeout(id); },
     createPageAccess: accessOptions => {
       access = accessOptions.onAccess;
       return async (tabId, fn, args = [], expectedDocument = null) => {
@@ -712,40 +680,6 @@ async function backgroundFixture(page = pastePage(), options = {}) {
   };
 }
 
-const approvedFill = state => ({
-  requestId: randomUUID(), formId: state.prepared.formId,
-  fields: state.form.fields.map(({ id, signature }) => ({ id, signature })), answers: [],
-});
-
-test('agent fill includes signed staged answers absent from prepared fields and ignores unapproved panel edits', async () => {
-  const page = pastePage();
-  page.controls[1].name = 'Why this role'; page.controls[1].type = 'textarea'; page.controls[1].tagName = 'TEXTAREA'; page.controls[1].value = '';
-  const fixture = await backgroundFixture(page), state = fixture.state(), payload = approvedFill(state), unresolved = state.form.fields[1];
-  assert.equal(state.prepared.fields.length, 1);
-  payload.answers = [{ id: unresolved.id, signature: unresolved.signature, value: 'I have relevant experience.' }];
-  await fixture.act({ action: 'edit', payload: { edits: { [state.form.fields[0].id]: 'Not approved by the companion' } } });
-  const result = await fixture.command('forms_fill', payload);
-  assert.deepEqual(plain(result.filled), plain(state.form.fields.map(field => field.id)));
-  assert.equal(page.controls[0].value, 'Synthetic Candidate');
-  assert.equal(page.controls[1].value, 'I have relevant experience.');
-  assert.equal(page.buttons[0].clicks, 0);
-});
-
-test('agent fill rejects incomplete approval, wrong staged signatures, unknown and populated fields before writes', async () => {
-  for (const mutate of [
-    payload => { payload.fields.pop(); },
-    (payload, state) => { payload.answers = [{ id: state.form.fields[0].id, signature: 'wrong', value: 'No' }]; },
-    payload => { payload.answers = [{ id: 'control-999', signature: 'unknown', value: 'No' }]; },
-    (payload, state) => { const field = state.form.fields[1]; payload.answers = [{ id: field.id, signature: field.signature, value: 'No overwrite' }]; },
-  ]) {
-    const fixture = await backgroundFixture(), payload = approvedFill(fixture.state());
-    mutate(payload, fixture.state());
-    await assert.rejects(fixture.command('forms_fill', payload), /approved form|staged answer/);
-    assert.equal(fixture.page.controls[0].value, '');
-    assert.equal(fixture.page.controls[1].value, 'already-entered@example.test');
-  }
-});
-
 test('browser status checks live bindings, URL and Chrome document identity', async () => {
   for (const mutate of [
     fixture => { fixture.page.controls[0].type = 'password'; },
@@ -759,33 +693,6 @@ test('browser status checks live bindings, URL and Chrome document identity', as
     assert.deepEqual(plain(await fixture.command('forms_status', { formId })), { formId, attached: false });
     assert.equal(fixture.state().prepared, null);
   }
-});
-
-test('submit reports preexisting and new text as candidates without awarding success', async () => {
-  for (const changed of [false, true]) {
-    const fixture = await backgroundFixture(), state = fixture.state(), action = state.form.actions[0];
-    fixture.page.context.document.body.innerText = 'Thank you for visiting.';
-    if (changed) fixture.page.buttons[0].click = () => { fixture.page.buttons[0].clicks++; fixture.page.context.document.body.innerText = 'Application submitted.'; };
-    const payload = { requestId: randomUUID(), formId: state.prepared.formId, actionId: action.id, actionSignature: action.signature };
-    const result = await fixture.command('forms_submit', payload);
-    assert.equal(result.outcome, 'unknown');
-    assert.equal(result.confirmation, undefined);
-    assert.equal(result.sameDocument, true);
-    assert.deepEqual(plain(result.confirmationCandidates), [{ text: changed ? 'Application submitted' : 'Thank you for visiting', newSinceObservation: changed }]);
-    assert.equal(fixture.state().prepared.formId, payload.formId);
-    await assert.rejects(fixture.command('forms_submit', { ...payload, requestId: randomUUID() }), /already been pressed/);
-    assert.equal(fixture.page.buttons[0].clicks, 1);
-  }
-});
-
-test('same-URL document replacement after a press is navigation, never an inferred success', async () => {
-  const fixture = await backgroundFixture(), state = fixture.state(), action = state.form.actions[0];
-  fixture.page.buttons[0].click = () => { fixture.navigate('document-2'); };
-  const result = await fixture.command('forms_submit', { requestId: randomUUID(), formId: state.prepared.formId, actionId: action.id, actionSignature: action.signature });
-  assert.equal(result.navigated, true);
-  assert.equal(result.sameDocument, false);
-  assert.equal(result.outcome, 'unknown');
-  assert.equal(fixture.state().prepared, null);
 });
 
 test('clipboard release requires current companion validation and permission on every focus', async () => {
@@ -828,9 +735,9 @@ test('native disconnect invalidates prepared values and any pending clipboard re
 test('form destination attributes stay bound even when a named control shadows form.action', () => {
   const page = pastePage(), attrs = { action: '/approved', method: 'post' };
   page.buttons[0].form = { action: {}, getAttribute: key => attrs[key] ?? null };
-  const snapshot = page.invoke(inspectForm), action = snapshot.actions[0];
+  const snapshot = page.invoke(inspectForm);
   attrs.action = '/replaced';
-  assert.throws(() => page.invoke(pressAction, { url: snapshot.url, actionId: action.id, actionSignature: action.signature }), /control changed/);
+  assert.equal(page.invoke(checkFormBindings, snapshot).attached, false);
   assert.equal(page.buttons[0].clicks, 0);
 });
 
@@ -909,19 +816,17 @@ test('machine-name fallback labels use friendly final path segments', () => {
   assert.equal(page.invoke(inspectForm).fields[0].label, 'preferred name');
 });
 
-test('custom comboboxes remain manual and role changes invalidate native fill', () => {
+test('custom comboboxes remain manual and role changes invalidate inspected bindings', () => {
   for (const attrs of [{ role: 'combobox' }, { 'aria-autocomplete': 'list' }, { 'aria-autocomplete': 'both' }]) {
     const page = pageContext(), control = page.controls[0];
     Object.assign(control.attrs, attrs);
     const snapshot = page.invoke(inspectForm), field = snapshot.fields[0];
     assert.equal(field.manualOnly, true);
-    const result = page.invoke(fillForm, { url: snapshot.url, fields: [{ ...field, value: 'London' }] });
-    assert.equal(result.filled.length, 0);
     assert.equal(control.value, '');
   }
   const changed = pageContext(), snapshot = changed.invoke(inspectForm);
   changed.controls[0].attrs.role = 'combobox';
-  assert.throws(() => changed.invoke(fillForm, { url: snapshot.url, fields: [{ ...snapshot.fields[0], value: 'London' }] }), /changed/);
+  assert.equal(changed.invoke(checkFormBindings, snapshot).attached, false);
 });
 
 test('custom combobox focus never replaces the clipboard with a prepared value', async () => {
@@ -1060,8 +965,9 @@ test('saved answer updates preserve reviewed edits and require explicit replacem
   assert.equal(fixture.state().edits[field.id], 'My unsaved edit');
   assert.equal(fixture.state().applicationAnswersPending, true);
   assert.equal(fixture.state().answersStale, true);
-  await fixture.act({ action: 'fill' });
-  assert.match(fixture.state().error, /current saved answers/);
+  fixture.page.focus(fixture.page.controls[0]);
+  await tick();
+  assert.deepEqual(fixture.page.clipboard, []);
   assert.equal(fixture.page.controls[0].value, '');
   await fixture.act({ action: 'application-answers' });
   assert.equal(fixture.state().answersStale, false);

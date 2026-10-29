@@ -25,14 +25,7 @@ export function safeNativeCommand(message) {
   insist(new TextEncoder().encode(JSON.stringify(message)).length <= 1024 * 1024 - 1024, 'Browser command exceeds its size limit.');
   const p = message.payload;
   const text = (value, max) => typeof value === 'string' && value.length > 0 && value.length <= max;
-  const signedField = field => exact(field, ['id','signature']) && text(field.id, 200) && text(field.signature, 1000);
-  let valid = message.op === 'forms_status' && exact(p, ['formId']) && text(p.formId, 100);
-  if (message.op === 'forms_fill') valid = exact(p, ['requestId','formId','fields','answers']) && uuid(p.requestId) && text(p.formId, 100) &&
-    Array.isArray(p.fields) && p.fields.length <= 64 && p.fields.every(signedField) && new Set(p.fields.map(field => field.id)).size === p.fields.length &&
-    Array.isArray(p.answers) && p.answers.length <= 64 && p.answers.every(answer => exact(answer, ['id','value','signature']) && text(answer.id, 200) && text(answer.signature, 1000) && text(answer.value, 10000)) &&
-    new Set(p.answers.map(answer => answer.id)).size === p.answers.length;
-  if (message.op === 'forms_submit') valid = exact(p, ['requestId','formId','actionId','actionSignature']) && uuid(p.requestId) &&
-    text(p.formId, 100) && text(p.actionId, 200) && text(p.actionSignature, 1000);
+  const valid = message.op === 'forms_status' && exact(p, ['formId']) && text(p.formId, 100);
   insist(valid, 'This browser command is invalid or unavailable.');
   return { op: message.op, payload: p };
 }
@@ -56,7 +49,7 @@ export function applicationView(result) {
   };
 }
 
-// Companion-initiated commands (fill or submit on the user's own tab) arrive on the same port as
+// Companion-initiated read-only attachment checks arrive on the same port as
 // `{version, id, op, payload}` and are answered with `{version, id, ok, result|error}`.
 export function createNativeClient({ connect, host, onCommand = null, onDisconnect = null, randomUUID = () => crypto.randomUUID(), timeoutMs = 180000, maxPending = 4 }) {
   let port; const pending = new Map();
@@ -79,6 +72,9 @@ export function createNativeClient({ connect, host, onCommand = null, onDisconne
     active.onMessage.addListener(message => {
       if (port !== active) return;
       if (message && Object.hasOwn(message, 'op')) {
+        // Do not race an in-flight result with an error carrying the same ID.
+        // The original command alone replies, and must never be dispatched twice.
+        if (commands.has(message.id)) return;
         let command;
         try {
           command = safeNativeCommand(message);

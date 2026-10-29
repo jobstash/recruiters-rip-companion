@@ -8,6 +8,7 @@ import { policyIdFor } from './matching-contract.mjs';
 import { SKILL_DIGEST } from '../generated/skill-digest.mjs';
 import { localJobOriginal } from './job-tools.mjs';
 import { formEvidence } from './form-tools.mjs';
+import { assertJobNotBlocked, blockFilter } from './blocklist.mjs';
 
 export const CV_WRITING_GUIDE = [
   'Write to win the interview. The saved CV is the base career record: employers, roles, dates and achievements come from it. Facts are what the candidate has told you since; use them to tailor truthfully.',
@@ -54,6 +55,7 @@ const now = () => new Date().toISOString();
 function application(career, id) {
   const app = career.applications[id];
   if (!app) fail('NOT_FOUND', 'This application was not found. List local applications and choose its ID.');
+  assertJobNotBlocked(career, app.job.id, app.job);
   return app;
 }
 /** The saved CV text (non-archived purpose 'cv' sources) is the base career record. */
@@ -126,6 +128,7 @@ function catalogueJob(job, jobId) {
     fail('INVALID_JOB', 'The catalogue did not return a complete matching job. Read the job again, or paste the advert as job.');
   const url = job.applyUrl ?? job.url;
   return { id: job.id, title: job.title, company, description: job.description,
+    ...(typeof job.classification === 'string' && job.classification ? { classification: job.classification } : {}),
     ...(typeof url === 'string' && url ? { url } : {}), ...(typeof job.url === 'string' && job.url ? { originalUrl: job.url } : {}),
     ...(typeof job.location === 'string' && job.location ? { location: job.location } : {}) };
 }
@@ -166,30 +169,55 @@ function context(career, app) {
 
 export function createApplicationTools({ store, platform, documents, exportDocument }) {
   const tools = [];
+  const guard = (args, result) => {
+    const career = readCareer(store);
+    if (args.applicationId) application(career, args.applicationId);
+    if (args.jobId || args.job) assertJobNotBlocked(career, args.jobId, args.job);
+    if (result?.job) assertJobNotBlocked(career, result.job.id, result.job);
+    if (result?.applicationId && career.applications[result.applicationId]) application(career, result.applicationId);
+    return result;
+  };
   const add = (name, description, inputSchema, readOnly, invoke) => tools.push({ name, description, inputSchema, readOnly, invoke });
+  const save = async (name, args, change) => {
+    // Receipt replay must obey today's blocks, not the policy when the receipt was saved.
+    guard(args);
+    return guard(args, await mutateCareer(store, args, name, args, change));
+  };
   const mutate = (name, description, properties, required, change) => add(name, description,
     object({ ...mutationSchema, ...properties }, ['requestId', 'revision', ...required]), false,
-    args => mutateCareer(store, args, name, args, career => change(career, args)));
+    args => save(name, args, career => change(career, args)));
 
-  add('career_job_read', 'Read a complete catalogue job or a local capture (including listing text marked complete:false).', object({ id: text(100) }), true, args =>
-    typeof args.id === 'string' && args.id.startsWith('local:') ? localJobOriginal(readCareer(store), args.id) : platform('job_read', args));
+  add('career_job_read', 'Read an unblocked complete catalogue job or local capture (including listing text marked complete:false).', object({ id: text(100) }), true, async args => {
+    assertJobNotBlocked(readCareer(store), args.id);
+    const job = typeof args.id === 'string' && args.id.startsWith('local:') ? localJobOriginal(readCareer(store), args.id) : await platform('job_read', args);
+    assertJobNotBlocked(readCareer(store), args.id, job);
+    return job;
+  });
   add('career_application_create', 'Create or reuse the application for the exact catalogue or complete locally captured job (jobId), or full pasted advert (job, with exact url and optional applyUrl). Never match by title/company alone. A changed original invalidates old document fingerprints. Read career_application_context and reuse current documents; save and export new drafts only when missing or stale.',
     object({ ...mutationSchema, jobId: text(100), job: jobSchema }, ['requestId', 'revision']), false, async args => {
       if ((args.jobId === undefined) === (args.job === undefined)) fail('INVALID_INPUT', 'Provide either jobId for a catalogue job or job for a pasted advert.');
+      guard(args);
       const replay = replayCareer(store, args, 'career_application_create', args);
-      if (replay) return replay;
+      if (replay) return guard(args, replay);
       let job = args.job;
-      if (args.jobId !== undefined) job = typeof args.jobId === 'string' && args.jobId.startsWith('local:')
-        ? capturedApplicationJob(readCareer(store), args.jobId)
-        : catalogueJob(await platform('job_read', { id: args.jobId }), args.jobId);
-      return mutateCareer(store, args, 'career_application_create', args, career => {
+      if (args.jobId !== undefined) {
+        if (typeof args.jobId === 'string' && args.jobId.startsWith('local:')) job = capturedApplicationJob(readCareer(store), args.jobId);
+        else {
+          const original = await platform('job_read', { id: args.jobId });
+          assertJobNotBlocked(readCareer(store), args.jobId, original);
+          job = catalogueJob(original, args.jobId);
+        }
+      }
+      assertJobNotBlocked(readCareer(store), args.jobId ?? job.id, job);
+      return save('career_application_create', args, career => {
         const app = upsertApplication(career, job);
         return { applicationId: app.id, job: app.job };
       });
     });
   add('career_applications_list', 'List saved applications, most recently updated first.', object(pagination, []), true, args => {
     const career = readCareer(store), offset = args.offset ?? 0, limit = args.limit ?? 20;
-    const apps = Object.values(career.applications).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    const blocked = blockFilter(career);
+    const apps = Object.values(career.applications).filter(app => !blocked(app.job)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
     return { revision: career.revision, applications: apps.slice(offset, offset + limit).map(summary), total: apps.length,
       nextOffset: offset + limit < apps.length ? offset + limit : null };
   });
@@ -212,6 +240,7 @@ export function createApplicationTools({ store, platform, documents, exportDocum
 
   add('career_application_cv_save', 'Save the tailored CV as a structured document. Every highlight and experience bullet is {text, support}: support.cv quotes the saved CV verbatim, support.facts cites saved fact IDs, and the claim\'s numbers must appear in that cited evidence. Employers must appear in the saved CV or as a fact\'s employer; other numbers must come from the CV, facts or profile. Returns layout and non-blocking quality notes to fix silently.',
     object({ ...mutationSchema, applicationId: uuid, cv: cvSchema, presentation: presentationSchema }, ['requestId', 'revision', 'applicationId', 'cv']), false, async args => {
+      guard(args);
       const replay = replayCareer(store, args, 'career_application_cv_save', args);
       if (replay) return replay;
       const career = readCareer(store), app = application(career, args.applicationId);
@@ -225,7 +254,7 @@ export function createApplicationTools({ store, platform, documents, exportDocum
       const layout = await documents.measureCareerCvLayout({ document, heading, presentation });
       const issues = inspectCvQuality({ document, heading }).map(issue => `${issue.field}: ${issue.message}`);
       if (!layout.fits) issues.unshift(`layout: ${layout.error}`);
-      return mutateCareer(store, args, 'career_application_cv_save', args, current => {
+      return save('career_application_cv_save', args, current => {
         const target = application(current, app.id);
         const draft = { version: (target.cv?.version ?? 0) + 1, document: args.cv, presentation, policyId: CV_POLICY_ID,
           contextFingerprint: applicationContextFingerprint(current, target), createdAt: now() };
@@ -251,6 +280,7 @@ export function createApplicationTools({ store, platform, documents, exportDocum
 
   add('career_application_export', 'Export the current CV or cover letter as PDF (default) or TXT. PDF text is read back and checked before the file is written.',
     object({ ...mutationSchema, applicationId: uuid, kind: { enum: ['cv', 'cover_letter'] }, format: { enum: ['pdf', 'txt'] } }, ['requestId', 'revision', 'applicationId', 'kind']), false, async args => {
+      guard(args);
       const replay = replayCareer(store, args, 'career_application_export', args);
       if (replay) return replay;
       const career = readCareer(store), app = application(career, args.applicationId);
@@ -281,7 +311,7 @@ export function createApplicationTools({ store, platform, documents, exportDocum
         if (!textValidation.passed) fail('EXPORT_CORRUPT', `The generated PDF did not preserve its text and reading order. Missing text: ${textValidation.missingTokens.slice(0, 12).join(', ') || 'none; reading order or extra text differs'}.`);
       }
       // A concurrent change bumps the revision, so the rendered draft is still current here.
-      return mutateCareer(store, args, 'career_application_export', args, async current => {
+      return save('career_application_export', args, async current => {
         const target = application(current, app.id);
         const exported = await exportDocument({ applicationId: app.id, kind: args.kind, bytes,
           filename: `${args.kind}-${app.id}-v${draft.version}.${format}`, mediaType: format === 'pdf' ? 'application/pdf' : 'text/plain' });

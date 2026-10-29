@@ -1,6 +1,6 @@
 import { PRODUCT_ORIGIN, NATIVE_HOST, BUILD_ID } from './config.mjs';
 import { createNativeClient, safeDeviceRequest, externalSenderAllowed, deviceResult, applicationView } from './protocol.mjs';
-import { captureJobs, captureApplicationContext, inspectForm, fillForm, checkFormBindings, armSmartPaste, disarmSmartPaste, pressAction, observePage } from './page.mjs';
+import { captureJobs, captureApplicationContext, inspectForm, checkFormBindings, armSmartPaste, disarmSmartPaste } from './page.mjs';
 import { createPageAccess } from './page-access.mjs';
 
 const native = createNativeClient({ host: NATIVE_HOST, onCommand: command, onDisconnect: () => { void expirePrepared('Companion disconnected. Inspect and prepare this form again after reconnecting.'); }, connect: host => {
@@ -248,21 +248,6 @@ async function act(message) {
       if (generation !== token) return;
       await detect(state.tabId, token);
       if (generation === token) state.notice = 'Details saved on this computer.';
-    } else if (action === 'fill') {
-      if (!state.prepared || !state.form || state.answersStale) throw new Error('Use the current saved answers and review the form first.');
-      const fields = state.prepared.fields.filter(f => state.selected.includes(f.id)).map(f => ({ ...f, value: state.edits[f.id] ?? '' }));
-      if (!fields.length) throw new Error('Select at least one reviewed value.');
-      try {
-        const valid = await native.request('forms_validate', validationPayload());
-        if (generation !== token) return;
-        if (valid?.valid !== true) throw new Error('The prepared form context changed.');
-      } catch {
-        if (generation === token) await expirePrepared('Prepared values are no longer available. Unlock the companion, then inspect and prepare the form again.');
-        return;
-      }
-      const result = await fill(fields);
-      state.notice = `Filled ${result.filled.length}; skipped ${result.skipped.length}. Nothing was submitted.`;
-      if (result.skipped.length) { state.selected = result.skipped; state.notice += ' Skipped values remain here to review or copy.'; }
     } else if (action === 'settings') {
       await native.request('open_settings', {}); state.notice = 'Companion settings opened.';
     } else if (action === 'configure') {
@@ -274,16 +259,8 @@ async function act(message) {
     if (generation === token) { preparingRequest = null; state.busy = null; publish(); schedulePoll(); }
   }
 }
-async function fill(fields) {
-  const { page: result } = await inject(state.tabId, fillForm, [{ url: state.form.url, fields }], state.documentId);
-  // The form stays inspected: filled controls are no longer empty, so a repeat fill skips them, and the submit controls remain known.
-  if (!result.skipped.length) state.selected = [];
-  return result;
-}
-
-// Companion-initiated operations: the user's AI fills the tab this panel inspected, or presses submit after
-// the companion's own confirmation. The extension never chooses what to submit.
 async function command(op, payload = {}) {
+  if (op !== 'forms_status') throw new Error('This browser operation is unavailable.');
   if (!state.prepared || !state.form || state.busy || state.answersStale) throw new Error('Open the Recruiters.rip panel on the application tab and prepare current values first.');
   if (payload.formId !== state.prepared.formId) throw new Error('That form is not the one prepared in Chrome. Prepare it again in the panel.');
   if (op === 'forms_status') {
@@ -298,68 +275,6 @@ async function command(op, payload = {}) {
       return { formId: payload.formId, attached: false };
     }
   }
-  const token = ++generation;
-  state = { ...state, busy: op, error: '', notice: '' }; publish();
-  try {
-    if (op === 'forms_fill') {
-      const inspected = new Map(state.form.fields.map(field => [field.id, field]));
-      if (payload.fields.length !== inspected.size || payload.fields.some(field => inspected.get(field.id)?.signature !== field.signature))
-        throw new Error('The approved form no longer matches the inspected controls. Prepare it again.');
-      const answers = new Map();
-      for (const answer of payload.answers) {
-        const field = inspected.get(answer.id);
-        if (!field || field.signature !== answer.signature || !field.empty || field.manualOnly || (field.options && !field.options.some(option => option.value === answer.value)))
-          throw new Error('A staged answer no longer matches an available inspected control. Prepare it again.');
-        answers.set(answer.id, answer.value);
-      }
-      const prepared = new Map(state.prepared.fields.map(field => [field.id, field]));
-      const fields = state.form.fields.filter(field => field.empty && !field.manualOnly).map(field => {
-        const ready = prepared.get(field.id);
-        if (ready && ready.signature !== field.signature) throw new Error('Prepared values no longer match this form. Prepare it again.');
-        return { ...field, value: answers.get(field.id) ?? ready?.value ?? '' };
-      }).filter(field => typeof field.value === 'string' && field.value);
-      if (!fields.length) throw new Error('No prepared or staged values to fill.');
-      const result = await fill(fields);
-      state.notice = `Your AI filled ${result.filled.length} controls; ${result.skipped.length} skipped. Nothing was submitted.`;
-      return { filled: result.filled, skipped: result.skipped, url: state.form?.url ?? null };
-    }
-    if (op === 'forms_submit') {
-      const action = (state.form.actions ?? []).find(a => a.id === payload.actionId);
-      if (!action || action.signature !== payload.actionSignature) throw new Error('That approved submit control is not on the inspected form.');
-      await arm(false);
-      const tabId = state.tabId, documentId = state.documentId;
-      const { page: before } = await inject(tabId, observePage, [], documentId);
-      const { page: pressed } = await inject(tabId, pressAction, [{ url: state.form.url, actionId: action.id, actionSignature: payload.actionSignature }], documentId);
-      const observed = await settle(tabId, documentId, before);
-      state.notice = `Your AI pressed “${pressed.label}”. ${observed.confirmationCandidates.length ? 'The page contains possible confirmation text; check it yourself.' : 'Check the page for the result.'} Submission is not verified.`;
-      if (!observed.sameDocument) { clearApplication(); clearForm(); }
-      return { pressed: pressed.label, ...observed };
-    }
-    throw new Error('This browser operation is unavailable.');
-  } catch (error) {
-    if (generation === token) state.error = error.message || 'The request failed.';
-    throw error;
-  } finally {
-    if (generation === token) { state.busy = null; publish(); }
-  }
-}
-// After a press, give the page a moment, then read what it shows. A cross-origin navigation ends
-// Chrome's access to the tab; that is reported, never guessed.
-async function settle(tabId, documentBefore, before) {
-  const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
-  const unavailable = tab => ({ url: tab?.url ?? null, title: tab?.title ?? null, sameDocument: null, navigated: tab?.url && tab.url !== before.url ? true : null,
-    observedText: null, confirmationCandidates: [], outcome: 'unknown', alerts: [], accessible: false });
-  let tab = null;
-  for (let attempt = 0; attempt < 16; attempt++) {
-    await wait(500);
-    try { tab = await chrome.tabs.get(tabId); } catch { return unavailable(null); }
-    if (tab.status === 'complete' && attempt >= 3) break;
-  }
-  try {
-    const { page, documentId } = await inject(tabId, observePage);
-    return { ...page, sameDocument: documentId === documentBefore, navigated: documentId !== documentBefore || page.url !== before.url, accessible: true,
-      confirmationCandidates: page.confirmationCandidates.map(text => ({ text, newSinceObservation: !before.confirmationCandidates.includes(text) })) };
-  } catch { return unavailable(tab); }
 }
 
 chrome.runtime.onMessage.addListener((message, sender, respond) => {

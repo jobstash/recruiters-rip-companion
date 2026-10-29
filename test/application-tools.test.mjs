@@ -12,6 +12,7 @@ import { renderableCv } from '../src/mcp/cv-quality.mjs';
 import { ASSESSMENT_POLICY_ID } from '../src/mcp/matching-contract.mjs';
 import { matchingProfileVersion } from '../src/mcp/assessment-policy.mjs';
 import { createCareerState } from '../src/mcp/state.mjs';
+import { addBlock, removeBlock } from '../src/mcp/blocklist.mjs';
 
 // Built from this repository's document engine by build:runtime, so these
 // tests exercise the real layout, PDF rendering and PDF text read-back.
@@ -69,7 +70,7 @@ async function fixture(t, options = {}) {
     await writeFile(destination, input.bytes, { mode: 0o600 });
     return { path: destination, sha256, bytes: input.bytes.length, mediaType: input.mediaType, uri: `recruiters://exports/${sha256}${extension}` };
   };
-  const tools = new Map(createApplicationTools({ store, platform, documents, exportDocument }).map(tool => [tool.name, tool]));
+  const tools = new Map(createApplicationTools({ store, platform, documents: options.documents ?? documents, exportDocument }).map(tool => [tool.name, tool]));
   const call = (name, args = {}) => tools.get(`career_${name}`).invoke(args);
   const mutation = args => ({ requestId: randomUUID(), revision: state.career.revision, ...args });
   const create = (args = { job: pastedJob }) => call('application_create', mutation(args));
@@ -383,4 +384,84 @@ test('creating the same exact job reuses drafts; a changed original invalidates 
   await assert.rejects(f.exportDraft(created.applicationId, 'cv', 'txt'), { code: 'APPLICATION_CONTEXT_CHANGED' });
   await assert.rejects(f.exportDraft(created.applicationId, 'cover_letter', 'txt'), { code: 'APPLICATION_CONTEXT_CHANGED' });
   assert.equal(f.state().applications[created.applicationId].cv.version, 1, 'stale history is retained rather than silently rebound');
+});
+
+test('catalogue reads and application creation reject company slugs, display names and stale direct IDs', async t => {
+  const f = await fixture(t);
+  f.catalogue.company.name = 'Flow Traders';
+  await f.store.update(state => {
+    state.career.matching = { jobs: { 'node:9001': { id: 'node:9001', title: 'Engineer', company: 'flow-traders' } }, scores: {}, pairs: {} };
+    addBlock(state.career, { id: 'node:9001', kind: 'company' });
+  });
+  await assert.rejects(f.call('job_read', { id: 'node:9001' }), { code: 'JOB_BLOCKED' });
+  await assert.rejects(f.create({ jobId: 'node:9001' }), { code: 'JOB_BLOCKED' });
+  assert.equal(f.requests.length, 0);
+  await assert.rejects(f.create({ jobId: 'short-9001' }), { code: 'JOB_BLOCKED' });
+  await assert.rejects(f.create({ job: { ...pastedJob, company: 'FLOW_TRADERS' } }), { code: 'JOB_BLOCKED' });
+  assert.equal(Object.keys(f.state().applications).length, 0);
+  const allowed = await f.create();
+  assert.equal(allowed.job.company, pastedJob.company);
+  await f.store.update(state => {
+    state.career.blocklist = {};
+    addBlock(state.career, { id: 'node:9001', kind: 'job' });
+    delete state.career.matching.jobs['node:9001'];
+  });
+  await assert.rejects(f.call('job_read', { id: 'node:9001' }), { code: 'JOB_BLOCKED' });
+  await assert.rejects(f.create({ jobId: 'node:9001' }), { code: 'JOB_BLOCKED' });
+});
+
+test('blocking a saved application stops drafts, context and receipt replays without deleting saved work', async t => {
+  const f = await fixture(t);
+  const createArgs = f.mutation({ jobId: 'node:9001' });
+  const { applicationId } = await f.call('application_create', createArgs);
+  const cvArgs = f.mutation({ applicationId, cv: tailoredCv(f.facts) });
+  await f.call('application_cv_save', cvArgs);
+  const letterArgs = f.mutation({ applicationId, paragraphs: letter });
+  await f.call('application_letter_save', letterArgs);
+  const exportArgs = f.mutation({ applicationId, kind: 'cover_letter', format: 'txt' });
+  await f.call('application_export', exportArgs);
+  let entry;
+  await f.store.update(state => { entry = addBlock(state.career, { id: 'node:9001', kind: 'company' }); });
+  const before = f.state().applications[applicationId], exported = f.exported.length;
+  assert.equal((await f.call('applications_list')).total, 0);
+  for (const name of ['application_read', 'application_context'])
+    assert.throws(() => f.call(name, { applicationId }), { code: 'JOB_BLOCKED' });
+  for (const [name, args] of [['application_create', createArgs], ['application_cv_save', cvArgs],
+    ['application_letter_save', letterArgs], ['application_export', exportArgs],
+    ['application_letter_save', f.mutation({ applicationId, paragraphs: ['Dear team,', 'New draft'] })]])
+    await assert.rejects(f.call(name, args), { code: 'JOB_BLOCKED' });
+  assert.deepEqual(f.state().applications[applicationId], before);
+  assert.equal(f.exported.length, exported, 'no blocked export is published');
+  await f.store.update(state => { removeBlock(state.career, entry.id); });
+  assert.equal((await f.call('application_create', createArgs)).applicationId, applicationId);
+  assert.deepEqual((await f.call('application_read', { applicationId })).application, before);
+});
+
+test('blocks arriving during an advert fetch prevent reads and application creation', async t => {
+  for (const operation of ['job_read', 'application_create']) {
+    let release, started;
+    const waiting = new Promise(resolve => { started = resolve; });
+    const response = new Promise(resolve => { release = resolve; });
+    const f = await fixture(t, { platform: async () => { started(); return response; } });
+    const pending = operation === 'job_read' ? f.call(operation, { id: 'node:9001' }) : f.create({ jobId: 'node:9001' });
+    await waiting;
+    await f.store.update(state => { state.career.blocklist = { company: { kind: 'company', value: 'flow-traders' } }; });
+    release({ ...f.catalogue, company: { name: 'Flow Traders' } });
+    await assert.rejects(pending, { code: 'JOB_BLOCKED' });
+    assert.deepEqual(f.state().applications, {});
+  }
+});
+
+test('a block arriving during layout cannot save the already-rendered CV', async t => {
+  let release, started;
+  const waiting = new Promise(resolve => { started = resolve; });
+  const measured = new Promise(resolve => { release = resolve; });
+  const f = await fixture(t, { documents: { measureCareerCvLayout: async () => { started(); return measured; } } });
+  const { applicationId } = await f.create({ jobId: 'node:9001' });
+  const pending = f.saveCv(applicationId, tailoredCv(f.facts));
+  await waiting;
+  await f.store.update(state => { addBlock(state.career, { id: 'node:9001', kind: 'job' }); });
+  release({ fits: true, pages: 1 });
+  await assert.rejects(pending, { code: 'JOB_BLOCKED' });
+  assert.equal(f.state().applications[applicationId].cv, null);
 });

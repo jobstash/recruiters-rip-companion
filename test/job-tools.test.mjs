@@ -8,6 +8,7 @@ import { createCareerBrowser } from '../src/career-browser.mjs';
 import { createCareerState } from '../src/mcp/state.mjs';
 import { ASSESSMENT_POLICY_ID } from '../src/mcp/matching-contract.mjs';
 import { publicationInWindow } from '../src/mcp/publication-range.mjs';
+import { addBlock, removeBlock } from '../src/mcp/blocklist.mjs';
 
 const sourceUrl = 'https://jobs.example.test/search';
 const full = (suffix = 'a', overrides = {}) => ({ title: 'Reporting engineer', company: 'Example',
@@ -241,4 +242,40 @@ test('recapturing changed originals invalidates their assessments, while a snipp
     assessments: [{ ...row(id), reason: 'A new judgment of the recaptured original.' }],
   });
   assert.equal((await f.call('career_recommendations')).total, 1);
+});
+
+test('local listing, read, import receipts and draft creation all honor company and direct job blocks', async () => {
+  const f = fixture();
+  const args = { ...f.mutation(), sourceUrl, jobs: [full('slug', { company: 'flow-traders' }),
+    full('display', { company: 'Flow Traders' }), full('direct'), full('allowed')] };
+  const imported = await f.call('career_job_import', args);
+  const [slug, display, direct, allowed] = imported.jobs.map(job => job.id);
+  const created = await f.call('career_application_create', { ...f.mutation(), jobId: direct });
+  const saved = f.store.get().career.applications[created.applicationId];
+  let company;
+  await f.store.update(state => {
+    company = addBlock(state.career, { id: slug, kind: 'company' });
+    addBlock(state.career, { id: direct, kind: 'job' });
+  });
+  const listed = await f.call('career_jobs');
+  assert.deepEqual(listed.jobs.map(job => job.id), [allowed]);
+  assert.equal(listed.total, 1);
+  assert.equal(listed.nextOffset, null);
+  for (const id of [slug, display, direct]) {
+    await rejects(f.call('career_job_read', { id }), 'JOB_BLOCKED');
+    await rejects(f.call('career_application_create', { ...f.mutation(), jobId: id }), 'JOB_BLOCKED');
+  }
+  await rejects(f.call('career_job_import', args), 'JOB_BLOCKED');
+  await rejects(f.capture([full('new', { company: 'FLOW_TRADERS' })]), 'JOB_BLOCKED');
+  await rejects(f.capture([{ title: 'Recaptured listing', url: full('direct').url, complete: false }]), 'JOB_BLOCKED');
+  await rejects(f.call('career_application_create', { ...f.mutation(), job: {
+    title: 'Pasted role', company: 'Another display', description: 'Full advert', url: full('direct').url,
+  } }), 'JOB_BLOCKED');
+  assert.equal(Object.keys(f.store.get().career.jobs).length, 4);
+  assert.deepEqual(f.store.get().career.applications[created.applicationId], saved);
+  assert.equal((await f.call('career_job_read', { id: allowed })).id, allowed);
+  assert.equal((await f.call('career_application_create', { ...f.mutation(), jobId: allowed })).job.id, allowed);
+  await f.store.update(state => { removeBlock(state.career, company.id); });
+  assert.equal((await f.call('career_jobs')).total, 3);
+  assert.equal((await f.call('career_job_read', { id: display })).company, 'Flow Traders');
 });

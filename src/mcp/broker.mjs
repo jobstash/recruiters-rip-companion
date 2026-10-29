@@ -1,20 +1,22 @@
 import net from 'node:net';
 import path from 'node:path';
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { writeFile, chmod, unlink } from 'node:fs/promises';
 import { privateDirectory } from '../vault.mjs';
+import { endpoint, protectPrivatePath, createAuthenticationChallenge, verifyAuthenticationProof } from '../platform-runtime.cjs';
 
 const MAX_FRAME = 16 * 1024 * 1024;
 /** onConnections receives the client name each open session declared in its MCP initialize request ('' until it does). */
 export async function startMcpBroker({ directory, createServer, onConnections = () => {} }) {
   await privateDirectory(directory);
-  const socketPath = path.join(directory, 'mcp.sock');
-  try { await unlink(socketPath); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  const socketPath = endpoint(directory, 'mcp');
+  if (process.platform !== 'win32') await privateDirectory(path.dirname(socketPath));
+  if (process.platform !== 'win32') try { await unlink(socketPath); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   const token = randomBytes(32).toString('hex');
   const clients = new Map();
   const report = () => onConnections([...clients.values()]);
   const listener = net.createServer(socket => {
-    let input = Buffer.alloc(0), authenticated = false, transport, server;
+    let input = Buffer.alloc(0), authenticated = false, transport, server, challenge;
     const timer = setTimeout(() => socket.destroy(), 5000);
     const close = () => {
       clearTimeout(timer); if (clients.delete(socket)) report();
@@ -35,8 +37,11 @@ export async function startMcpBroker({ directory, createServer, onConnections = 
         messages = messages.then(async () => {
           if (socket.destroyed) return;
           if (!authenticated) {
-            const value = typeof message.auth === 'string' ? Buffer.from(message.auth) : Buffer.alloc(0);
-            if (Object.keys(message).length !== 1 || value.length !== token.length || !timingSafeEqual(value, Buffer.from(token))) { socket.destroy(); return; }
+            if (!challenge) {
+              challenge = createAuthenticationChallenge(token, 'mcp', message);
+              socket.write(JSON.stringify(challenge.message) + '\n'); return;
+            }
+            if (!message || Object.keys(message).length !== 1 || !verifyAuthenticationProof(token, 'client', 'mcp', challenge, message.authProof)) { socket.destroy(); return; }
             authenticated = true; clearTimeout(timer);
             transport = {
               async start() {},
@@ -60,10 +65,10 @@ export async function startMcpBroker({ directory, createServer, onConnections = 
     });
   });
   await new Promise((resolve, reject) => { listener.once('error', reject); listener.listen(socketPath, resolve); });
-  await chmod(socketPath, 0o600);
+  if (process.platform !== 'win32') await chmod(socketPath, 0o600);
   const config = path.join(directory, 'mcp-bridge.json');
   await writeFile(config, JSON.stringify({ socket: socketPath, token }), { mode: 0o600 });
-  await chmod(config, 0o600);
+  protectPrivatePath(config);
   return {
     disconnect() { for (const socket of clients.keys()) socket.destroy(); },
     close() { for (const socket of clients.keys()) socket.destroy(); listener.close(); },

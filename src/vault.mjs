@@ -1,13 +1,12 @@
 import { randomUUID, generateKeyPairSync } from 'node:crypto';
-import { mkdir, readFile, writeFile, rename, chmod, lstat, unlink } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, rename, lstat, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { CAREER_SCHEMA, createCareerState } from './mcp/state.mjs';
+import { protectPrivatePath, assertPrivatePath } from './platform-runtime.cjs';
 
 export async function privateDirectory(directory) {
   await mkdir(directory, { recursive: true, mode: 0o700 });
-  const info = await lstat(directory);
-  if (!info.isDirectory() || info.isSymbolicLink() || (process.getuid && info.uid !== process.getuid())) throw new Error('Local storage is unavailable.');
-  await chmod(directory, 0o700);
+  protectPrivatePath(directory, { directory: true });
 }
 function identity() {
   const pair = generateKeyPairSync('ed25519');
@@ -48,7 +47,7 @@ export function createVault(directory, { decryptLegacy } = {}) {
       let loaded;
       try {
         const info = await lstat(filename);
-        if (!info.isFile() || info.isSymbolicLink() || info.size > 130 * 1024 * 1024 || (process.getuid && info.uid !== process.getuid())) throw new Error('Invalid local storage.');
+        assertPrivatePath(filename, { info, maxSize: 130 * 1024 * 1024 });
         loaded = JSON.parse(await readFile(filename, 'utf8'));
         if (!validEnvelope(loaded)) throw new Error('Invalid local storage.');
       } catch (error) {

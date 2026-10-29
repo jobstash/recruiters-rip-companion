@@ -49,6 +49,24 @@ function renderConnections(clients = []) {
   $('other-connections').hidden = !other.size;
   $('other-connections').textContent = other.size ? `Also connected: ${[...other].join(', ')}` : '';
 }
+function renderIntegrations(current) {
+  const hosts = current.review?.hostInfo ?? {};
+  $('codex-host-label').textContent = hosts.codex?.label || 'Codex';
+  $('claude-host-label').textContent = hosts.claude?.label || 'Claude';
+  $('install-chatgpt').disabled = busy || hosts.codex?.available === false;
+  $('install-claude').textContent = hosts.claude?.mode === 'cli' ? 'Connect Claude Code' : 'Install Claude extension';
+  $('install-claude').disabled = busy || hosts.claude?.available === false;
+  $('claude-config-help').textContent = hosts.claude?.mode === 'cli'
+    ? 'Use this MCP entry in Claude Code. Continue in Claude also configures the application workspace.'
+    : 'Merge this entry into Claude Desktop’s MCP configuration.';
+  for (const browser of ['chrome', 'firefox']) {
+    const connected = current.browserIntegration?.connected?.includes(browser);
+    const registered = current.browserIntegration?.registered?.[browser];
+    $(`${browser}-native-status`).textContent = connected ? 'Connected now.'
+      : registered ? 'Native bridge registered. Load the extension to connect.'
+        : 'Native bridge registration unavailable. Reopen Companion and check local installation permissions.';
+  }
+}
 async function refresh() {
   const request = ++stateRequest;
   try {
@@ -87,6 +105,7 @@ async function refresh() {
     }
     $('mcp-command').textContent = state.setup.command; $('mcp-config').textContent = state.setup.claudeConfig;
     renderConnections(state.mcpClients);
+    renderIntegrations(state);
     window.decisionsUI?.refresh(state.decisions);
     window.careerBrowser?.setContext({ review: state.review, publicationRange: state.publicationRange, paired: state.paired });
     window.updatesUI?.refresh(state.updates);
@@ -124,12 +143,13 @@ for (const [id, op, message] of [
   ['install-chatgpt', 'install-chatgpt', result => `Recruiters.rip plugin configuration installed. ${result.conversationRequired}`],
   ['copy-command', 'copy-command', 'MCP command copied.'],
   ['copy-config', 'copy-config', 'Configuration copied.'],
-  ['install-claude', 'install-claude', 'Approve the extension installation in Claude Desktop.'],
+  ['install-claude', 'install-claude', result => result?.configured ? 'Claude Code workspace configured. Use Continue in Claude to start a conversation.' : 'Approve the extension installation in Claude Desktop.'],
   ['open-extension-folder', 'open-extension-folder', 'Extension folder opened. In Chrome’s Manage extensions, enable Developer mode and choose Load unpacked.'],
+  ['open-firefox-extension-folder', 'open-firefox-extension-folder', 'Extension folder opened. In Firefox, use about:debugging → This Firefox → Load Temporary Add-on and select manifest.json.'],
   ['import-cv', 'import-cv', result => result.cancelled ? 'Import canceled.' : 'CV imported.'],
   ['copy-review-prompt', 'copy-review-prompt', 'Copied. Paste into Codex or Claude.'],
-  ['review-codex', 'review-codex', 'Codex opened with the review prompt. Send it there to start the review.'],
-  ['review-claude', 'review-claude', 'Claude opened with the review prompt. Send it there to start the review.'],
+  ['review-codex', 'review-codex', result => result.mode === 'cli' ? 'Request ready in the Codex terminal. Press Enter there to send.' : 'Codex opened with the review prompt. Send it there to start the review.'],
+  ['review-claude', 'review-claude', result => result.mode === 'cli' ? 'Request ready in the Claude terminal. Press Enter there to send.' : 'Claude opened with the review prompt. Send it there to start the review.'],
   ['open-exports', 'open-exports', 'Export folder opened.'],
   ['backup', 'backup', result => result.exported ? 'Backup exported.' : 'Export canceled.'],
   ['delete-rankings', 'delete-rankings', 'Job assessments cleared.'],

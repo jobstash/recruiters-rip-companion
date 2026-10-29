@@ -1,5 +1,8 @@
 import { BUILD_ID } from './config.mjs';
 
+const chrome = globalThis.browser ?? globalThis.chrome;
+const pasteShortcut = /Mac/i.test(navigator.userAgentData?.platform ?? navigator.platform ?? '') ? '⌘V' : 'Ctrl+V';
+
 const $ = id => document.getElementById(id);
 let state, port, reconnect, pageKey, questionKey, fieldKey, jobKey, documentKey, receipt;
 const drafts = new Map();
@@ -81,6 +84,11 @@ function renderApplication(busy) {
   $('application-preparation').hidden = app?.state === 'ready';
   $('application-host').disabled = busy;
   $('application-host').value = state.applicationHost || app?.preferredHost || app?.handoff?.host || 'claude';
+  for (const option of $('application-host').options ?? []) {
+    const info = app?.hostInfo?.[option.value];
+    option.disabled = info?.available === false;
+    option.textContent = info?.label || (option.value === 'codex' ? 'Codex' : 'Claude');
+  }
   $('application-title').textContent = app ? [app.title, app.company].filter(Boolean).join(' · ') : '';
   const status = !app ? '' : {
     needs_job: app.jobUrl
@@ -93,13 +101,20 @@ function renderApplication(busy) {
   }[app.state];
   $('application-status').textContent = status;
   $('application-open-ad').hidden = !app?.jobUrl || !['needs_job', 'needs_refresh'].includes(app.state);
-  const hostName = $('application-host').value === 'codex' ? 'Codex' : 'Claude';
+  const host = $('application-host').value, info = app?.hostInfo?.[host];
+  const hostName = info?.label || (host === 'codex' ? 'Codex' : 'Claude');
   const awaiting = app?.handoff?.requiresSend === true;
-  $('application-prepare').textContent = awaiting ? `Open in ${hostName} and send the prepared prompt` : 'Prepare this application';
-  $('application-handoff').hidden = !app?.handoff;
-  $('application-handoff').textContent = !app?.handoff ? '' : awaiting
-    ? `Send the prepared prompt in ${app.handoff.host === 'codex' ? 'Codex' : 'Claude'} to start. Opening the app alone does not prepare documents.`
-    : 'Your agent has read this application request. Documents appear here when saved and exported.';
+  const cli = app?.handoff?.mode === 'cli';
+  const selectedCli = info?.mode === 'cli' || (!info?.mode && app?.handoff?.host === host && cli);
+  $('application-prepare').textContent = awaiting
+    ? selectedCli ? `Open ${hostName} in terminal` : `Open in ${hostName} and send the prepared prompt`
+    : 'Prepare this application';
+  $('application-handoff').hidden = !app?.handoff && info?.available !== false;
+  $('application-handoff').textContent = info?.available === false ? info.reason || `${hostName} is not available on this computer. Choose another installed agent.`
+    : !app?.handoff ? '' : awaiting
+      ? cli ? 'Review the prepared request in the terminal, then press Enter to start your agent. Opening the terminal alone does not prepare documents.'
+        : `Send the prepared prompt in ${app.handoff.host === 'codex' ? 'Codex' : 'Claude'} to start. Opening the app alone does not prepare documents.`
+      : 'Your agent has read this application request. Documents appear here when saved and exported.';
   const docs = app?.documents || [];
   const nextDocuments = JSON.stringify([app?.bindingId, docs]);
   if (documentKey !== nextDocuments) {
@@ -109,7 +124,7 @@ function renderApplication(busy) {
       row.append(el('p', `${label} · ${doc.ready ? 'Ready' : 'Not ready'}`));
       if (doc.ready) {
         const actions = el('div', '', 'document-actions');
-        for (const [action, text] of [['open', 'Open'], ['reveal', 'Show in Finder']]) {
+        for (const [action, text] of [['open', 'Open'], ['reveal', 'Show in folder']]) {
           const button = el('button', text, 'quiet');
           button.setAttribute('aria-label', `${text}: ${label}`);
           button.onclick = () => send('application-document', { kind: doc.kind, action });
@@ -152,6 +167,7 @@ function render() {
   renderApplication(busy);
   // Newly rendered document controls obey the same busy boundary as existing ones.
   for (const button of document.querySelectorAll('button')) if (button !== $('cancel')) button.disabled = busy;
+  $('application-prepare').disabled = busy || state.application?.hostInfo?.[$('application-host').value]?.available === false;
   if (state.saveReceipt && receipt !== state.saveReceipt.id) {
     receipt = state.saveReceipt.id;
     for (const key of state.saveReceipt.keys) { drafts.delete(key); if (questionInputs.has(key)) questionInputs.get(key).value = ''; }
@@ -180,9 +196,9 @@ function render() {
     : 'No paste answers ready.';
   const paste = $('paste');
   paste.hidden = !state.prepared?.fields.length || state.answersStale === true;
-  paste.textContent = !state.paste ? 'Click a field on the page, then press ⌘V.'
+  paste.textContent = !state.paste ? `Click a field on the page, then press ${pasteShortcut}.`
     : state.paste.ok === false ? `Clipboard access refused for ${state.paste.label}. Copy it in Review answers.`
-    : state.paste.ok === true ? `Clipboard ready for ${state.paste.label}. Press ⌘V in that field.`
+    : state.paste.ok === true ? `Clipboard ready for ${state.paste.label}. Press ${pasteShortcut} in that field.`
     : `Preparing the clipboard for ${state.paste.label}…`;
   const questions = (state.prepared?.questions || []).filter(question => question.key !== 'personalSummary');
   $('details-form').hidden = !questions.length;

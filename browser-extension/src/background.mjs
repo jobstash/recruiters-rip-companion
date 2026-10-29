@@ -1,14 +1,17 @@
 import { PRODUCT_ORIGIN, NATIVE_HOST, BUILD_ID } from './config.mjs';
 import { createNativeClient, safeDeviceRequest, externalSenderAllowed, deviceResult, applicationView } from './protocol.mjs';
 import { captureJobs, captureApplicationContext, inspectForm, checkFormBindings, armSmartPaste, disarmSmartPaste } from './page.mjs';
-import { createPageAccess } from './page-access.mjs';
+import { createPageAccess, preparedPageSender } from './page-access.mjs';
+
+const chrome = globalThis.browser ?? globalThis.chrome;
+const firefox = !!chrome.sidebarAction;
 
 const native = createNativeClient({ host: NATIVE_HOST, onCommand: command, onDisconnect: () => { void expirePrepared('Companion disconnected. Inspect and prepare this form again after reconnecting.'); }, connect: host => {
   const port = chrome.runtime.connectNative(host);
   port.onDisconnect.addListener(() => { void chrome.runtime.lastError; });
   return port;
 } });
-chrome.runtime.onConnectExternal.addListener(port => {
+chrome.runtime.onConnectExternal?.addListener(port => {
   if (!externalSenderAllowed(port, PRODUCT_ORIGIN)) { port.disconnect(); return; }
   let closed = false, busy = false;
   port.onDisconnect.addListener(() => { closed = true; });
@@ -26,7 +29,7 @@ chrome.runtime.onConnectExternal.addListener(port => {
 });
 
 // Memory only: a native port keeps the worker alive, and panel reconnection can
-// recover a completed request. No candidate values are persisted to Chrome disk.
+// recover a completed request. No candidate values are persisted to browser disk.
 let state = { buildId: BUILD_ID, busy: null, error: '', notice: '', tabId: null, documentId: null, page: null, jobs: [], form: null, prepared: null, edits: {}, selected: [], paste: null,
   application: null, applicationHost: 'claude', applicationNotice: '', applicationAnswersPending: false, answersStale: false };
 let generation = 0, preparingRequest = null, pasteSession = null, automaticPreparation = false;
@@ -88,9 +91,9 @@ async function pollApplication() {
   } finally { pollInFlight = false; schedulePoll(); }
 }
 const inject = createPageAccess({
-  sidePanel: chrome.sidePanel, tabs: chrome.tabs, scripting: chrome.scripting, action: chrome.action,
+  sidePanel: chrome.sidePanel, sidebarAction: chrome.sidebarAction, tabs: chrome.tabs, scripting: chrome.scripting, action: chrome.action,
   onAccess: tabId => act({ action: 'detect', payload: { tabId } }),
-  onError: () => { state.error = 'Chrome could not open this panel. Click the Recruiters.rip toolbar icon again.'; publish(); },
+  onError: () => { state.error = 'The browser could not open this panel. Click the Recruiters.rip toolbar icon again.'; publish(); },
 });
 const TEXT_TYPES = new Set(['text', 'email', 'tel', 'url', 'textarea', 'number', 'date']);
 const preparedValue = field => { const value = state.edits[field.id] ?? field.value ?? ''; return typeof value === 'string' && value && value.length <= 20000 ? value : null; };
@@ -204,13 +207,15 @@ async function act(message) {
       setApplication(result);
       state.applicationHost = payload.host;
       state.notice = result.opened === true && result.requiresSend === true
-        ? `Open in ${payload.host === 'codex' ? 'Codex' : 'Claude'} and send the prepared prompt.` : 'Review the application request in your agent.';
+        ? result.mode === 'cli' ? 'Review the prepared request in the terminal, then press Enter to start your agent.'
+          : `Open in ${payload.host === 'codex' ? 'Codex' : 'Claude'} and send the prepared prompt.`
+        : 'Review the application request in your agent.';
       pollsRemaining = 240;
     } else if (action === 'application-document') {
       if (!state.application || !['cv', 'cover_letter'].includes(payload.kind) || !['open', 'reveal'].includes(payload.action) ||
         !state.application.documents.some(doc => doc.kind === payload.kind && doc.ready)) throw new Error('That document is not ready. Prepare this application first.');
       await native.request('application_document', { bindingId: state.application.bindingId, kind: payload.kind, action: payload.action });
-      if (generation === token) state.notice = payload.action === 'reveal' ? 'Document shown in Finder. Upload it on the application page yourself.' : 'Document opened. Upload it on the application page yourself.';
+      if (generation === token) state.notice = payload.action === 'reveal' ? 'Document shown in your file manager. Upload it on the application page yourself.' : 'Document opened. Upload it on the application page yourself.';
     } else if (action === 'application-open-ad') {
       if (!state.application?.jobUrl) throw new Error('No job advert link was found. Open the original advert and click Read page.');
       await native.request('application_open_ad', { bindingId: state.application.bindingId });
@@ -262,7 +267,7 @@ async function act(message) {
 async function command(op, payload = {}) {
   if (op !== 'forms_status') throw new Error('This browser operation is unavailable.');
   if (!state.prepared || !state.form || state.busy || state.answersStale) throw new Error('Open the Recruiters.rip panel on the application tab and prepare current values first.');
-  if (payload.formId !== state.prepared.formId) throw new Error('That form is not the one prepared in Chrome. Prepare it again in the panel.');
+  if (payload.formId !== state.prepared.formId) throw new Error('That form is not the one prepared in this browser. Prepare it again in the panel.');
   if (op === 'forms_status') {
     const prepared = state.prepared, token = generation;
     try {
@@ -271,7 +276,7 @@ async function command(op, payload = {}) {
       if (!page.attached) { await expirePrepared('The inspected page changed. Inspect and prepare the form again.'); return { formId: payload.formId, attached: false }; }
       return { formId: payload.formId, attached: true, url: state.form.url, title: state.page?.title ?? '', prepared: state.prepared.fields.length, actions: (state.form.actions ?? []).map(({ id, label, kind, signature }) => ({ id, label, kind, signature })) };
     } catch {
-      if (prepared === state.prepared && token === generation) await expirePrepared('Chrome could not find the inspected page. Inspect and prepare the form again.');
+      if (prepared === state.prepared && token === generation) await expirePrepared('The browser could not find the inspected page. Inspect and prepare the form again.');
       return { formId: payload.formId, attached: false };
     }
   }
@@ -282,7 +287,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (message?.action === 'paste-value') {
     const field = state.prepared?.fields.find(f => f.id === message.fieldId);
     const inspected = state.form?.fields.find(f => f.id === message.fieldId), prepared = state.prepared, session = pasteSession;
-    const live = () => !state.busy && prepared === state.prepared && session && pasteSession === session && message.session === session && sender.tab.id === state.tabId && sender.documentId === state.documentId &&
+    const live = () => !state.busy && prepared === state.prepared && session && pasteSession === session && message.session === session && preparedPageSender(sender, message, state, firefox) &&
       field && inspected?.empty && !inspected.manualOnly && inspected.signature === field.signature && field.signature === message.signature && state.form?.url === message.url && TEXT_TYPES.has(field.type);
     if (!live()) { respond({ value: null }); return false; }
     const payload = validationPayload();
@@ -300,7 +305,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   }
   if (message?.action === 'paste-ready') {
     const field = state.prepared?.fields.find(f => f.id === message.fieldId);
-    if (!state.busy && pasteSession && message.session === pasteSession && field && field.signature === message.signature && sender.tab.id === state.tabId && sender.documentId === state.documentId && state.form?.url === message.url) { state.paste = { label: field.label, ok: message.ok === true }; publish(); }
+    if (!state.busy && pasteSession && message.session === pasteSession && field && field.signature === message.signature && preparedPageSender(sender, message, state, firefox) && state.form?.url === message.url) { state.paste = { label: field.label, ok: message.ok === true }; publish(); }
     return false;
   }
   return false;

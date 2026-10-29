@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, rm, readFile, writeFile, chmod, stat, symlink, mkdir, rename } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, writeFile, chmod, symlink, mkdir, rename } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -14,6 +14,15 @@ import { createMcpServer, createPlatformTools } from '../src/mcp/server.mjs';
 import { createDocumentFiles, readSelectedSource } from '../src/mcp/files.mjs';
 import { createMatchingTools } from '../src/mcp/matching-tools.mjs';
 import { ASSESSMENT_POLICY_ID, deriveDecision } from '../src/mcp/matching-contract.mjs';
+import { assertPrivatePath, protectPrivatePath } from '../src/platform-runtime.cjs';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+
+async function exposePath(filename, directory = false) {
+  if (process.platform !== 'win32') return chmod(filename, directory ? 0o755 : 0o644);
+  const root = process.env.SYSTEMROOT || process.env.SystemRoot;
+  await promisify(execFile)(path.win32.join(root, 'System32', 'icacls.exe'), [filename, '/grant', '*S-1-1-0:R'], { windowsHide: true });
+}
 
 const scoredAt = '2026-10-14T12:00:00.000Z';
 function storedAssessment(id, overall, changes = {}) {
@@ -194,8 +203,8 @@ test('complete CSV export uses native MCP resources alongside existing PDF expor
     previousRow = rowStart;
   }
   assert.equal(csv.text, await readFile(result.export.path, 'utf8'));
-  assert.equal((await stat(result.export.path)).mode & 0o777, 0o600);
-  assert.equal((await stat(path.dirname(result.export.path))).mode & 0o777, 0o700);
+  assertPrivatePath(result.export.path);
+  assertPrivatePath(path.dirname(result.export.path), { directory: true });
   const legacy = (await client.readResource({ uri: pdf.uri })).contents[0];
   assert.equal(legacy.mimeType, 'application/pdf');
   assert.deepEqual(Buffer.from(legacy.blob, 'base64'), pdfBytes);
@@ -223,26 +232,29 @@ test('document exports reject corrupt bytes, changed permissions, symlinks and a
     `recruiters://exports/${csv.sha256}.docx`, `recruiters://exports/${csv.sha256}.csv?path=secret`,
     `recruiters://exports/%2e%2e/${csv.sha256}.csv`])
     await assert.rejects(files.readResource(uri), { code: 'NOT_FOUND' });
-  await chmod(csv.path, 0o644);
+  await exposePath(csv.path);
   await assert.rejects(files.readResource(csv.uri), { code: 'EXPORT_CORRUPT' });
-  await chmod(csv.path, 0o600);
+  protectPrivatePath(csv.path);
   await writeFile(csv.path, Buffer.from('"tampered"\r\n'));
   await assert.rejects(files.readResource(csv.uri), { code: 'EXPORT_CORRUPT' });
   await assert.rejects(files.exportDocument({ mediaType: 'text/csv', bytes: csvBytes }), { code: 'EXPORT_CORRUPT' });
   await rm(csv.path);
-  const privateSource = path.join(directory, 'private-source.csv');
-  await writeFile(privateSource, csvBytes, { mode: 0o600 });
-  await symlink(privateSource, csv.path);
-  await assert.rejects(files.readResource(csv.uri), error => ['ELOOP', 'EMLINK'].includes(error.code));
-  await rm(csv.path);
+  await t.test('file symlinks cannot redirect a resource', async subtest => {
+    const privateSource = path.join(directory, 'private-source.csv');
+    await writeFile(privateSource, csvBytes, { mode: 0o600 });
+    try { await symlink(privateSource, csv.path); }
+    catch (error) { if (process.platform === 'win32' && error.code === 'EPERM') { subtest.skip('Windows file symlinks require Developer Mode or administrator privilege.'); return; } throw error; }
+    await assert.rejects(files.readResource(csv.uri), error => ['ELOOP', 'EMLINK', 'EXPORT_CORRUPT'].includes(error.code));
+    await rm(csv.path);
+  });
   await files.exportDocument({ mediaType: 'text/csv', bytes: csvBytes });
-  await chmod(files.exportDirectory(), 0o755);
+  await exposePath(files.exportDirectory(), true);
   await assert.rejects(files.readResource(csv.uri), { code: 'EXPORT_CORRUPT' });
   await assert.rejects(files.listResources(), { code: 'EXPORT_CORRUPT' });
-  await chmod(files.exportDirectory(), 0o700);
+  protectPrivatePath(files.exportDirectory(), { directory: true });
   const displaced = path.join(directory, 'displaced-exports');
   await rename(files.exportDirectory(), displaced);
-  await symlink(displaced, files.exportDirectory());
+  await symlink(displaced, files.exportDirectory(), process.platform === 'win32' ? 'junction' : 'dir');
   await assert.rejects(files.readResource(csv.uri), { code: 'EXPORT_CORRUPT' });
   await assert.rejects(files.listResources(), { code: 'EXPORT_CORRUPT' });
   await assert.rejects(files.exportDocument({ mediaType: 'text/csv', bytes: csvBytes }));
@@ -253,7 +265,7 @@ test('export ancestor symlinks and malformed device identities cannot redirect p
   t.after(() => rm(directory, { recursive: true, force: true }));
   const outside = path.join(directory, 'outside');
   await mkdir(outside, { mode: 0o700 });
-  await symlink(outside, path.join(directory, 'career-files'));
+  await symlink(outside, path.join(directory, 'career-files'), process.platform === 'win32' ? 'junction' : 'dir');
   const files = createDocumentFiles({ directory, store: f.scoped.store, assertAvailable: f.scoped.assertAvailable });
   await assert.rejects(files.exportDocument({ mediaType: 'text/csv', bytes: Buffer.from('"id"\r\n') }));
   await assert.rejects(files.listResources(), { code: 'EXPORT_CORRUPT' });
@@ -273,7 +285,7 @@ test('plain-text CV resources retain Unicode and enforce private-file integrity'
   const resource = await files.readResource(exported.uri);
   assert.equal(resource.text, text);
   assert.equal(resource.mimeType, 'text/plain');
-  assert.equal((await stat(exported.path)).mode & 0o777, 0o600);
+  assertPrivatePath(exported.path);
   assert.ok((await files.listResources()).some(resource => resource.uri === exported.uri && resource.mimeType === 'text/plain'));
   await writeFile(exported.path, 'Tampered CV');
   await assert.rejects(files.readResource(exported.uri), { code: 'EXPORT_CORRUPT' });

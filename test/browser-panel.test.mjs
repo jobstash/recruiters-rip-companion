@@ -5,7 +5,7 @@ import vm from 'node:vm';
 
 const BUILD_ID = 'synthetic-panel-build';
 
-async function panelFixture(initialState = {}) {
+async function panelFixture(initialState = {}, { platform = 'MacIntel', firefox = false } = {}) {
   const nodes = new Map(), sent = [];
   class Element {
     constructor(tag) { this.tagName = tag.toUpperCase(); this.children = []; this.dataset = {}; this.value = ''; this.hidden = false; this.disabled = false; }
@@ -22,8 +22,8 @@ async function panelFixture(initialState = {}) {
   const port = { onMessage: { addListener(fn) { receive = fn; } }, onDisconnect: { addListener(fn) { disconnected = fn; } }, postMessage(message) { sent.push(JSON.parse(JSON.stringify(message))); } };
   const context = vm.createContext({
     document: { getElementById: id => nodes.get(id), createElement: tag => new Element(tag), querySelectorAll: selector => all().filter(node => selector === 'button' ? node.tagName === 'BUTTON' : Object.hasOwn(node.dataset, 'job') && (!selector.endsWith(':checked') || node.checked)) },
-    chrome: { runtime: { connect: () => port, reload() { reloads++; } }, tabs: { query: async () => { tabQueries++; return [{ id: 7 }]; } } },
-    navigator: { clipboard: { writeText: async () => {} } }, setInterval() {}, setTimeout() {}, clearTimeout() {},
+    [firefox ? 'browser' : 'chrome']: { runtime: { connect: () => port, reload() { reloads++; } }, tabs: { query: async () => { tabQueries++; return [{ id: 7 }]; } } },
+    navigator: { platform, clipboard: { writeText: async () => {} } }, setInterval() {}, setTimeout() {}, clearTimeout() {},
   });
   const source = await readFile(new URL('../browser-extension/src/panel.mjs', import.meta.url), 'utf8');
   assert.match(source, /^import \{ BUILD_ID \} from '\.\/config\.mjs';/);
@@ -35,6 +35,40 @@ async function panelFixture(initialState = {}) {
   const inputs = id => descendants(nodes.get(id)).filter(node => ['INPUT','SELECT','TEXTAREA'].includes(node.tagName));
   return { nodes, sent, state, update, inputs, html, descendants, disconnect: () => disconnected(), get reloads() { return reloads; }, get tabQueries() { return tabQueries; } };
 }
+
+test('Firefox sidebar uses the browser namespace and native paste shortcut on each desktop OS', async () => {
+  for (const [platform, shortcut] of [['MacIntel', '⌘V'], ['Win32', 'Ctrl+V'], ['Linux x86_64', 'Ctrl+V']]) {
+    const panel = await panelFixture({}, { platform, firefox: true });
+    assert.equal(panel.nodes.get('paste').textContent, `Click a field on the page, then press ${shortcut}.`);
+    panel.update({ paste: { label: 'Full name', ok: true } });
+    assert.equal(panel.nodes.get('paste').textContent, `Clipboard ready for Full name. Press ${shortcut} in that field.`);
+    await panel.nodes.get('detect').onclick();
+    assert.deepEqual(panel.sent.at(-1), { action: 'detect', payload: { tabId: 7 } });
+  }
+});
+
+test('CLI handoffs require terminal confirmation and unavailable hosts cannot launch', async () => {
+  const waiting = {
+    bindingId: 'binding:cli', state: 'needs_documents', title: 'Engineer', documents: [], writing: [],
+    handoff: { host: 'codex', state: 'awaiting_agent', requiresSend: true, mode: 'cli' },
+    hostInfo: {
+      codex: { available: true, label: 'Codex CLI', mode: 'cli' },
+      claude: { available: false, label: 'Claude', reason: 'Install Claude Code to continue.' },
+    },
+  };
+  const panel = await panelFixture({ application: waiting, applicationHost: 'codex' });
+  assert.equal(panel.nodes.get('application-prepare').textContent, 'Open Codex CLI in terminal');
+  assert.match(panel.nodes.get('application-handoff').textContent, /terminal, then press Enter/);
+  assert.doesNotMatch(panel.nodes.get('application-handoff').textContent, /composer|Send the prepared prompt/);
+  panel.nodes.get('application-host').options = [{ value: 'claude' }, { value: 'codex' }];
+  panel.update({ applicationHost: 'claude' });
+  assert.equal(panel.nodes.get('application-prepare').disabled, true);
+  assert.equal(panel.nodes.get('application-host').options[0].disabled, true);
+  assert.equal(panel.nodes.get('application-host').options[1].disabled, false);
+  assert.equal(panel.nodes.get('application-handoff').textContent, 'Install Claude Code to continue.');
+  panel.update({ applicationHost: 'codex' });
+  assert.equal(panel.nodes.get('application-prepare').disabled, false);
+});
 
 test('paste and error updates preserve focused question and reviewed answer drafts', async () => {
   const panel = await panelFixture();
@@ -312,7 +346,7 @@ test('saved documents update in place, expose exact native actions, and never re
   assert.equal(question.value, '+44 1234567890');
   assert.equal(reviewed.value, 'My reviewed answer');
   const buttons = panel.descendants(panel.nodes.get('application-documents')).filter(node => node.tagName === 'BUTTON');
-  assert.deepEqual(buttons.map(button => button.textContent), ['Open', 'Show in Finder', 'Open', 'Show in Finder']);
+  assert.deepEqual(buttons.map(button => button.textContent), ['Open', 'Show in folder', 'Open', 'Show in folder']);
   buttons[0].onclick(); buttons[3].onclick();
   assert.deepEqual(panel.sent.slice(-2), [
     { action: 'application-document', payload: { kind: 'cv', action: 'open' } },

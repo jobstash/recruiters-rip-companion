@@ -1,17 +1,17 @@
 import { app, BrowserWindow, ipcMain, powerMonitor, Menu, shell, clipboard, dialog, safeStorage } from 'electron';
-import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { readFile, writeFile, chmod, unlink, mkdir } from 'node:fs/promises';
 import { watch, existsSync } from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { execFile } from 'node:child_process';
 import { createVault, privateDirectory, LEGACY_VAULT } from './vault.mjs';
 import { createDeviceClient } from './client.mjs';
 import { installNative } from './install-native.mjs';
-import { BROWSER_IDENTITIES } from './browser-identity.mjs';
+import { BROWSER_IDENTITIES, nativeBrowser } from './browser-identity.mjs';
 import { claimInstance } from './instance-lock.mjs';
+import { endpoint, launcherScript, mcpCommand, protectPrivatePath, createAuthenticationChallenge, verifyAuthenticationProof } from './platform-runtime.cjs';
 import { createIntroductionTools, introductionsStatus, setSharingConsent } from './mcp/introduction-tools.mjs';
 import { openEmploymentProfile } from './employment-browser.mjs';
 import { openJobPage, requirementContextPrompt } from './career-browser.mjs';
@@ -25,7 +25,7 @@ import { createScopedAccess } from './mcp/scope.mjs';
 import { createMatchingTools, deleteRankings } from './mcp/matching-tools.mjs';
 import { matchingProfileVersion } from './mcp/assessment-policy.mjs';
 import { addBlock, removeBlock } from './mcp/blocklist.mjs';
-import { installChatGptPlugin } from './host-setup.mjs';
+import { installChatGptPlugin, mcpInvocation } from './host-setup.mjs';
 import { createCareerBrowser } from './career-browser.mjs';
 import { createDecisionCredentials } from './decisions/credentials.mjs';
 import { savedPublicationRange, setPublicationRange } from './mcp/review-queue.mjs';
@@ -53,6 +53,7 @@ const vault = createVault(directory, legacyVault ? { decryptLegacy: encrypted =>
 let window, client, nativeBridge, mcpBridge, documents, files, locked = true, failure = '', mcpClients = [];
 let pendingApproval, confirmation = Promise.resolve(), initializing, exiting = false, screenLocked = false, sleeping = false;
 let heartbeatTimer, heartbeatBusy = false, browserConnection = 'pending', queuedPairing, pairingReturn;
+let browserRegistrations = { chrome: false, firefox: false };
 let sessionEpoch = 0, careerViewRevision = 0;
 let windowLoaded;
 const sockets = new Set();
@@ -117,8 +118,11 @@ async function updateAction(op) {
     assertAvailable(false);
     const result = await updates.install();
     if (result?.manualPath) {
-      const error = await shell.openPath(result.manualPath);
-      if (error) fail('UPDATE_MANUAL_OPEN_FAILED', 'The downloaded update could not be opened. Check the update status and try again.');
+      if (result.reveal) shell.showItemInFolder(result.manualPath);
+      else {
+        const error = await shell.openPath(result.manualPath);
+        if (error) fail('UPDATE_MANUAL_OPEN_FAILED', 'The downloaded update could not be opened. Check the update status and try again.');
+      }
     }
     return updates.state();
   } finally { updateApprovalAbort?.abort(); updateApprovalAbort = undefined; updateInstalling = false; emit(); }
@@ -138,23 +142,30 @@ function status() {
     paired: Boolean(state.pairing), decisionApiConfigured: decisionCredentials.publicState().configured, connections: [], execution: { state: state.pairing ? 'ready' : 'needs_connection' } };
 }
 function setup() {
-  const command = path.join(directory, 'recruiters-rip-mcp');
-  return { command, claudeConfig: JSON.stringify({ mcpServers: { 'recruiters-rip': { command, args: [] } } }, null, 2),
+  const command = mcpCommand(directory);
+  return { command, claudeConfig: JSON.stringify({ mcpServers: { 'recruiters-rip': mcpInvocation(command) } }, null, 2),
     claudePackage: path.join(app.isPackaged ? root.replace(/app\.asar$/, 'app.asar.unpacked') : root, 'src', 'generated', localOnly ? 'recruiters-rip-local.mcpb' : 'recruiters-rip.mcpb') };
 }
 // Installed review hosts are read once per session and whenever the review buttons are used; opening Jobs does not stat the disk every refresh.
-let reviewHosts = { claude: false, codex: false };
-async function refreshReviewHosts() { try { reviewHosts = await applicationAccess().launcher.available(); } catch { /* keeps the last known value */ } }
+let reviewHosts = { claude: false, codex: false }, reviewHostInfo = {};
+async function refreshReviewHosts() {
+  try {
+    const launcher = applicationAccess().launcher;
+    reviewHostInfo = await launcher.info();
+    reviewHosts = Object.fromEntries(Object.entries(reviewHostInfo).map(([key, value]) => [key, value.available]));
+  } catch { /* keeps the last known value */ }
+}
 function localState() {
   const publicState = status();
-  if (locked) return { ...publicState, failure, browserConnection, mcpClients };
+  const browserIntegration = { registered: browserRegistrations, connected: [...new Set([...sockets].map(socket => socket.browser))] };
+  if (locked) return { ...publicState, failure, browserConnection, browserIntegration, mcpClients };
   const state = vault.get();
-  return { ...publicState, account: state.pairing?.account ?? null, reconnectAccount: state.reconnectAccount ?? null, origin: state.pairing?.origin ?? null, browserConnection, mcpClients, failure,
+  return { ...publicState, account: state.pairing?.account ?? null, reconnectAccount: state.reconnectAccount ?? null, origin: state.pairing?.origin ?? null, browserConnection, browserIntegration, mcpClients, failure,
     setup: setup(), careerViewVersion: `${state.deviceId}:${sessionEpoch}:${careerViewRevision}`,
     decisions: { credentials: decisionCredentials.publicState() },
     publicationRange: savedPublicationRange(state.career ?? {}),
     updates: { ...updates.state(), blocked: paidWorkActive() || updateInstalling },
-    review: { hosts: reviewHosts, preferredHost: ['claude', 'codex'].includes(state.browserPreferences?.applicationHost) ? state.browserPreferences.applicationHost : reviewHosts.codex ? 'codex' : 'claude' },
+    review: { hosts: reviewHosts, hostInfo: reviewHostInfo, preferredHost: ['claude', 'codex'].includes(state.browserPreferences?.applicationHost) ? state.browserPreferences.applicationHost : reviewHosts.codex ? 'codex' : 'claude' },
     introductions: introductionsStatus(state.career ?? {}),
     approval: pendingApproval ? { id: pendingApproval.id, title: pendingApproval.title, detail: pendingApproval.detail } : null };
 }
@@ -288,15 +299,14 @@ async function selectSourceFile() {
   assertAvailable(true);
   return result.canceled || !result.filePaths[0] ? null : readSelectedSource(result.filePaths[0]);
 }
-async function openInChrome(value) {
+async function openInBrowser(value) {
   assertWorkAllowed();
   let url;
   try { url = new URL(value); } catch { fail('INVALID_INPUT', 'Open a saved HTTP(S) job page.'); }
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.href.length > 4096)
     fail('INVALID_INPUT', 'Open a saved HTTP(S) job page without embedded credentials.');
-  const env = Object.fromEntries(['PATH', 'HOME', 'TMPDIR'].filter(key => process.env[key]).map(key => [key, process.env[key]]));
-  await new Promise((resolve, reject) => execFile('/usr/bin/open', ['-a', 'Google Chrome', url.href], { env, timeout: 10000 }, error =>
-    error ? reject(new CareerError('BROWSER_UNAVAILABLE', 'Open Google Chrome and install the Recruiters.rip extension, then try again.')) : resolve()));
+  try { await shell.openExternal(url.href); }
+  catch { throw new CareerError('BROWSER_UNAVAILABLE', 'Set a default web browser in system settings, then open this application again.'); }
   return { opened: true };
 }
 function applicationAccess() {
@@ -309,11 +319,15 @@ function applicationAccess() {
     },
   });
   const launcher = createApplicationLauncher({ directory: path.join(directory, 'host-integration'), command: setup().command,
+    protocolAvailable: process.platform === 'linux' ? undefined : async scheme => {
+      try { return Boolean((await app.getApplicationInfoForProtocol(`${scheme}://`)).path); } catch { return false; }
+    },
     openExternal: async url => { scoped.assertAvailable(false); await shell.openExternal(url); scoped.assertAvailable(false); } });
   const view = async result => {
-    const hosts = await launcher.available(); scoped.assertAvailable(false);
+    const hostInfo = await launcher.info(); scoped.assertAvailable(false);
+    const hosts = Object.fromEntries(Object.entries(hostInfo).map(([key, value]) => [key, value.available]));
     const saved = scoped.store.get().browserPreferences?.applicationHost;
-    return { ...result, hosts, preferredHost: ['claude', 'codex'].includes(saved) ? saved : hosts.codex ? 'codex' : 'claude' };
+    return { ...result, hosts, hostInfo, preferredHost: ['claude', 'codex'].includes(saved) ? saved : hosts.codex ? 'codex' : 'claude' };
   };
   return { ...scoped, localFiles, workflow, launcher, view };
 }
@@ -341,8 +355,8 @@ function createSessionServer() {
       scoped.assertAvailable(true); const result = await selectSourceFile(); scoped.assertAvailable(true); return result;
     }, extractFile: documents.extractFile }),
     ...createApplicationTools({ store: scoped.store, platform: scopedPlatform, documents, exportDocument: localFiles.exportDocument }),
-    ...createApplicationPreparationTools({ workflow: applicationFlow, openInChrome: async url => {
-      scoped.assertAvailable(false); const result = await openInChrome(url); scoped.assertAvailable(false); return result;
+    ...createApplicationPreparationTools({ workflow: applicationFlow, openInBrowser: async url => {
+      scoped.assertAvailable(false); const result = await openInBrowser(url); scoped.assertAvailable(false); return result;
     } }),
     ...createMatchingTools({ store: scoped.store, platform: scopedPlatform, exportDocument: localFiles.exportDocument }),
     ...createJobTools({ store: scoped.store }),
@@ -372,15 +386,16 @@ async function installConnections() {
   await privateDirectory(directory);
   const launch = { executable: process.execPath, args: [...(app.isPackaged ? [] : [app.getAppPath()]), ...(localOnly ? ['--local-product'] : [])], localOnly };
   await writeFile(path.join(directory, 'mcp-launch.json'), JSON.stringify(launch), { mode: 0o600 });
-  await chmod(path.join(directory, 'mcp-launch.json'), 0o600);
-  const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
+  protectPrivatePath(path.join(directory, 'mcp-launch.json'));
   const script = path.join(app.isPackaged ? app.getAppPath().replace(/app\.asar$/, 'app.asar.unpacked') : app.getAppPath(), 'src', 'generated', 'mcp-host.cjs');
-  await writeFile(setup().command, `#!/bin/sh\nexec env ELECTRON_RUN_AS_NODE=1 ${quote(process.execPath)} ${quote(script)}${localOnly ? ' --local-product' : ''}\n`, { mode: 0o700 });
-  await chmod(setup().command, 0o700);
+  await writeFile(setup().command, launcherScript({ executable: process.execPath, script, args: localOnly ? ['--local-product'] : [] }), { mode: 0o700 });
+  protectPrivatePath(setup().command, { mode: 0o700 });
   try { await unlink(path.join(directory, 'recruiters-mcp')); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   if (app.isPackaged && !localOnly) app.setAsDefaultProtocolClient('recruiters-companion');
-  try { await installNative({ executable: process.execPath, appPath: app.getAppPath(), directory, packaged: app.isPackaged, localOnly }); browserConnection = 'installed'; }
-  catch { browserConnection = 'unavailable'; }
+  try {
+    const result = await installNative({ executable: process.execPath, appPath: app.getAppPath(), directory, packaged: app.isPackaged, localOnly });
+    browserRegistrations = result.browsers; browserConnection = result.installed ? 'installed' : 'unavailable';
+  } catch { browserConnection = 'unavailable'; }
 }
 async function nativeOperation(op, payload, socket = null) {
   const keys = { status: [], open_settings: [], open_decisions_settings: [], pair: ['productOrigin', 'pairing'],
@@ -413,17 +428,17 @@ async function nativeOperation(op, payload, socket = null) {
       access.assertAvailable(false);
       const opened = await access.launcher.open({ host: payload.host, preparationId });
       access.assertAvailable(false);
-      await access.workflow.launched({ preparationId, host: payload.host });
+      await access.workflow.launched({ preparationId, host: payload.host, mode: opened.mode });
       await access.store.update(next => { next.browserPreferences ??= {}; next.browserPreferences.applicationHost = payload.host; });
       careerViewRevision++; emit();
       return { ...await access.view(await access.workflow.status({ bindingId: payload.bindingId })), ...opened, preparationId };
     });
     if (op === 'application_open_ad') {
       const url = await access.workflow.jobUrl(payload);
-      access.assertAvailable(false); return openInChrome(url);
+      access.assertAvailable(false); return openInBrowser(url);
     }
     if (!['cv', 'cover_letter'].includes(payload.kind) || !['open', 'reveal'].includes(payload.action))
-      fail('INVALID_INPUT', 'Choose a current CV or cover-letter PDF to open or show in Finder.');
+      fail('INVALID_INPUT', 'Choose a current CV or cover-letter PDF to open or show in your file manager.');
     const record = await access.workflow.document({ bindingId: payload.bindingId, kind: payload.kind });
     const filename = await access.localFiles.resolveExport(record.uri);
     const current = await access.workflow.document({ bindingId: payload.bindingId, kind: payload.kind });
@@ -432,7 +447,7 @@ async function nativeOperation(op, payload, socket = null) {
     if (payload.action === 'reveal') shell.showItemInFolder(filename);
     else {
       const error = await shell.openPath(filename);
-      if (error) fail('EXPORT_UNAVAILABLE', 'The PDF could not be opened. Show it in Finder instead.');
+      if (error) fail('EXPORT_UNAVAILABLE', 'The PDF could not be opened. Show it in your file manager instead.');
     }
     return { opened: true, kind: payload.kind, action: payload.action };
   }
@@ -447,7 +462,7 @@ async function nativeOperation(op, payload, socket = null) {
     if (typeof payload.formId !== 'string' || payload.formId.length > 100 || !Array.isArray(payload.fields) || payload.fields.length > 64)
       fail('INVALID_INPUT', 'Provide the prepared form and its inspected field signatures.');
     const session = browserSession(payload.formId);
-    if (session.socket !== socket) fail('FORM_CONTEXT_CHANGED', 'This Chrome connection did not prepare the form.');
+    if (session.socket !== socket) fail('FORM_CONTEXT_CHANGED', 'This browser connection did not prepare the form.');
     const draft = currentForm(store.get().career ?? createCareerState(), payload.formId);
     if (session.answersHash !== hash(draft.answers ?? {}) || payload.fields.length !== draft.fields.length)
       fail('FORM_CONTEXT_CHANGED', 'Prepared answers changed. Choose Read page before pasting.');
@@ -495,10 +510,10 @@ function browserSession(formId, expected) {
   assertWorkAllowed();
   const session = browserSessions.get(formId);
   if (!session || session.socket.destroyed || !session.socket.writable)
-    fail('UNAVAILABLE', 'Chrome is not attached to this form. Open the Recruiters.rip panel on the application tab and prepare values before a new action.');
+    fail('UNAVAILABLE', 'The browser is not attached to this form. Open the Recruiters.rip panel on the application tab and prepare values before a new action.');
   const state = store.get();
   if (session.epoch !== sessionEpoch || session.identity !== identityKey(state) || (expected && session !== expected))
-    fail('FORM_CONTEXT_CHANGED', 'The Chrome preparation or local session changed. Prepare the form again before acting.');
+    fail('FORM_CONTEXT_CHANGED', 'The browser preparation or local session changed. Prepare the form again before acting.');
   const draft = currentForm(state.career ?? createCareerState(), formId);
   if (session.evidence !== draft.evidence || session.credentialVersion !== (state.prescanCredentialVersion ?? 0))
     fail('FORM_CONTEXT_CHANGED', 'Career evidence or the API credential changed. Choose Read page before acting.');
@@ -514,10 +529,10 @@ function browserStatus(session, formId) {
     };
     const waiting = { socket, resolve: value => finish(resolve, value), reject: error => finish(reject, error), timer: null,
       failure: detail => new CareerError('UNAVAILABLE', detail) };
-    waiting.timer = setTimeout(() => waiting.reject(waiting.failure('Chrome did not confirm the attachment in time.')), 5000);
+    waiting.timer = setTimeout(() => waiting.reject(waiting.failure('The browser did not confirm the attachment in time.')), 5000);
     browserReplies.set(id, waiting);
-    try { socket.write(bytes, error => { if (error) waiting.reject(waiting.failure('The Chrome connection failed before confirmation.')); }); }
-    catch { waiting.reject(waiting.failure('The command could not be confirmed by Chrome.')); }
+    try { socket.write(bytes, error => { if (error) waiting.reject(waiting.failure('The browser connection failed before confirmation.')); }); }
+    catch { waiting.reject(waiting.failure('The command could not be confirmed by the browser.')); }
   });
 }
 const browserBridge = {
@@ -530,10 +545,11 @@ const browserBridge = {
 };
 function encode(value) { const data = Buffer.from(JSON.stringify(value)); if (data.length > 1024 * 1024 - 1024) throw new Error('Native response too large.'); const header = Buffer.allocUnsafe(4); header.writeUInt32LE(data.length); return Buffer.concat([header, data]); }
 async function startNativeBridge() {
-  const token = randomBytes(32).toString('hex'), socketPath = path.join(directory, 'native.sock');
-  try { await unlink(socketPath); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  const token = randomBytes(32).toString('hex'), socketPath = endpoint(directory, 'native');
+  if (process.platform !== 'win32') await privateDirectory(path.dirname(socketPath));
+  if (process.platform !== 'win32') try { await unlink(socketPath); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   nativeBridge = net.createServer(socket => {
-    let authenticated = false, input = Buffer.alloc(0), pending = 0;
+    let authenticated = false, input = Buffer.alloc(0), pending = 0, challenge;
     const timer = setTimeout(() => { if (!authenticated) socket.destroy(); }, 5000);
     socket.on('error', () => socket.destroy());
     socket.on('close', () => {
@@ -541,7 +557,8 @@ async function startNativeBridge() {
       for (const [formId, session] of browserSessions) if (session.socket === socket) browserSessions.delete(formId);
       for (const [bindingId, session] of applicationSockets) if (session.socket === socket) applicationSockets.delete(bindingId);
       for (const waiting of browserReplies.values()) if (waiting.socket === socket)
-        waiting.reject(waiting.failure('Chrome disconnected before confirming the operation.'));
+        waiting.reject(waiting.failure('The browser disconnected before confirming the operation.'));
+      emit();
     });
     socket.on('data', chunk => {
       input = Buffer.concat([input, chunk]); if (input.length > 2 * 1024 * 1024) { socket.destroy(); return; }
@@ -550,16 +567,21 @@ async function startNativeBridge() {
         let message; try { message = JSON.parse(input.subarray(4, length + 4).toString('utf8')); } catch { socket.destroy(); return; } input = input.subarray(length + 4);
         if (!message || typeof message !== 'object' || Array.isArray(message)) { socket.destroy(); return; }
         if (!authenticated) {
-          const supplied = typeof message.auth === 'string' ? Buffer.from(message.auth) : Buffer.alloc(0);
-          if (message.origin !== `chrome-extension://${browserIdentity.extensionId}/` || supplied.length !== token.length || !timingSafeEqual(supplied, Buffer.from(token))) { socket.destroy(); return; }
-          authenticated = true; clearTimeout(timer); sockets.add(socket); continue;
+          if (!challenge) {
+            try { challenge = createAuthenticationChallenge(token, 'native', message); socket.write(encode(challenge.message)); }
+            catch { socket.destroy(); return; }
+            continue;
+          }
+          const browser = nativeBrowser(browserIdentity, message.origin);
+          if (!browser || Object.keys(message).some(key => !['authProof', 'origin'].includes(key)) || !verifyAuthenticationProof(token, 'client', 'native', challenge, message.authProof)) { socket.destroy(); return; }
+          authenticated = true; socket.browser = browser; clearTimeout(timer); sockets.add(socket); emit(); continue;
         }
         if (authenticated && message && typeof message === 'object' && Object.hasOwn(message, 'ok')) {
           const waiting = typeof message.id === 'string' ? browserReplies.get(message.id) : undefined;
           if (!waiting || waiting.socket !== socket || message.version !== 1 || typeof message.ok !== 'boolean') continue;
           if (message.ok === true && message.result && typeof message.result === 'object' && !Array.isArray(message.result)) waiting.resolve(message.result);
-          else if (message.ok === true) waiting.reject(waiting.failure('Chrome returned no usable result for this operation.'));
-          else waiting.reject(waiting.failure(typeof message.error?.message === 'string' ? message.error.message.slice(0, 400) : 'Chrome could not confirm this operation.'));
+          else if (message.ok === true) waiting.reject(waiting.failure('The browser returned no usable result for this operation.'));
+          else waiting.reject(waiting.failure(typeof message.error?.message === 'string' ? message.error.message.slice(0, 400) : 'The browser could not confirm this operation.'));
           continue;
         }
         if (Object.keys(message).some(key => !['version', 'id', 'op', 'payload'].includes(key)) || message.version !== 1 || typeof message.id !== 'string' || message.id.length > 100 || typeof message.op !== 'string' || ++pending > 8) { socket.destroy(); return; }
@@ -569,7 +591,9 @@ async function startNativeBridge() {
     });
   });
   await new Promise((resolve, reject) => { nativeBridge.once('error', reject); nativeBridge.listen(socketPath, resolve); });
-  await chmod(socketPath, 0o600); await writeFile(path.join(directory, 'bridge.json'), JSON.stringify({ socket: socketPath, token }), { mode: 0o600 }); await chmod(path.join(directory, 'bridge.json'), 0o600);
+  if (process.platform !== 'win32') await chmod(socketPath, 0o600);
+  await writeFile(path.join(directory, 'bridge.json'), JSON.stringify({ socket: socketPath, token }), { mode: 0o600 });
+  protectPrivatePath(path.join(directory, 'bridge.json'));
 }
 async function settingsOperation(op, input) {
   try {
@@ -689,21 +713,27 @@ async function settingsOperation(op, input) {
     else if (op === 'copy-command') clipboard.writeText(setup().command);
     else if (op === 'copy-config') clipboard.writeText(setup().claudeConfig);
     else if (op === 'install-chatgpt') result = await installChatGptPlugin({ directory, root: app.isPackaged ? root.replace(/app\.asar$/, 'app.asar.unpacked') : root, localOnly, command: setup().command });
-    else if (op === 'install-claude') { const error = await shell.openPath(setup().claudePackage); if (error) fail('INVALID_INPUT', 'The Claude extension could not be opened. Use the displayed local MCP configuration instead.'); }
-    else if (op === 'open-extension-folder') {
-      const folder = path.join(app.isPackaged ? root.replace(/app\.asar$/, 'app.asar.unpacked') : root, 'browser-extension', 'dist', localOnly ? 'local' : 'production');
+    else if (op === 'install-claude') {
+      const launcher = applicationAccess().launcher, hostInfo = await launcher.info();
+      if (!hostInfo.claude.available) fail('HOST_UNAVAILABLE', hostInfo.claude.reason);
+      if (hostInfo.claude.mode === 'cli') result = await launcher.connect('claude');
+      else { const error = await shell.openPath(setup().claudePackage); if (error) fail('INVALID_INPUT', 'The Claude extension could not be opened. Use the displayed local MCP configuration instead.'); }
+    }
+    else if (op === 'open-extension-folder' || op === 'open-firefox-extension-folder') {
+      const firefox = op === 'open-firefox-extension-folder', browser = firefox ? 'Firefox' : 'Chrome';
+      const folder = path.join(app.isPackaged ? root.replace(/app\.asar$/, 'app.asar.unpacked') : root, 'browser-extension', 'dist', `${firefox ? 'firefox-' : ''}${localOnly ? 'local' : 'production'}`);
       let manifest;
       try { manifest = JSON.parse(await readFile(path.join(folder, 'manifest.json'), 'utf8')); }
-      catch { fail('HOST_INSTALL_FAILED', app.isPackaged ? 'The bundled Chrome extension is missing. Reinstall the complete companion.' : 'Build the companion before opening its Chrome extension folder.'); }
-      if (manifest.version !== packageMetadata.version || manifest.key !== browserIdentity.key) fail('HOST_INSTALL_FAILED', 'The bundled Chrome extension does not match this companion. Rebuild or reinstall the complete companion.');
+      catch { fail('HOST_INSTALL_FAILED', app.isPackaged ? `The bundled ${browser} extension is missing. Reinstall the complete companion.` : `Build the companion before opening its ${browser} extension folder.`); }
+      if (manifest.version !== packageMetadata.version || (firefox ? manifest.browser_specific_settings?.gecko?.id !== browserIdentity.firefoxExtensionId : manifest.key !== browserIdentity.key)) fail('HOST_INSTALL_FAILED', `The bundled ${browser} extension does not match this companion. Rebuild or reinstall the complete companion.`);
       const error = await shell.openPath(folder);
-      if (error) fail('HOST_INSTALL_FAILED', 'The Chrome extension folder could not be opened. Reinstall the complete companion and try again.');
+      if (error) fail('HOST_INSTALL_FAILED', `The ${browser} extension folder could not be opened. Reinstall the complete companion and try again.`);
       result = { opened: true };
     }
     else if (op === 'open-exports') { const dir = files.exportDirectory(); await privateDirectory(dir); const error = await shell.openPath(dir); if (error) throw new Error(error); }
     else if (op === 'backup') {
       const target = await dialog.showSaveDialog(window, { title: 'Export local career backup', defaultPath: 'recruiters-career-backup.json', filters: [{ name: 'Career data', extensions: ['json'] }] });
-      if (!target.canceled && target.filePath) { assertAvailable(false); const state = store.get(); const backups = Object.entries(state.identityArchives ?? {}).map(([deviceId, archived]) => ({ deviceId, account: archived.pairing?.account, career: archived.career })); await writeFile(target.filePath, JSON.stringify({ version: 1, exportedAt: new Date().toISOString(), account: state.pairing?.account, career: state.career, archives: backups }, null, 2), { mode: 0o600 }); await chmod(target.filePath, 0o600); }
+      if (!target.canceled && target.filePath) { assertAvailable(false); const state = store.get(); const backups = Object.entries(state.identityArchives ?? {}).map(([deviceId, archived]) => ({ deviceId, account: archived.pairing?.account, career: archived.career })); await writeFile(target.filePath, JSON.stringify({ version: 1, exportedAt: new Date().toISOString(), account: state.pairing?.account, career: state.career, archives: backups }, null, 2), { mode: 0o600 }); protectPrivatePath(target.filePath); }
       result = { exported: !target.canceled };
     }
     else fail('INVALID_INPUT', 'This settings action is unavailable.');

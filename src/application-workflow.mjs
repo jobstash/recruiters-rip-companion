@@ -134,7 +134,7 @@ const getBinding = (career, id) => {
   return binding;
 };
 const getPreparation = (career, id) => {
-  const preparation = career.applicationPreparations?.[id] ?? fail('NOT_FOUND', 'This preparation request was not found. Prepare the application again in Chrome.');
+  const preparation = career.applicationPreparations?.[id] ?? fail('NOT_FOUND', 'This preparation request was not found. Prepare the application again in your browser.');
   getBinding(career, preparation.bindingId);
   return preparation;
 };
@@ -185,7 +185,7 @@ export function createApplicationWorkflow({ store, assertAvailable = () => {}, v
     return { bindingId, formId: binding.formId ?? null, applicationId: app?.id ?? null,
       title: job?.title ?? binding.page?.title ?? 'Application', company: job?.company ?? null,
       state: !app ? 'needs_job' : stale ? 'needs_refresh' : documents.every(item => item.ready) && writing.every(item => item.ready) ? 'ready' : drafts.length ? 'drafts' : 'needs_documents',
-      documents, writing, handoff: preparation?.host ? { host: preparation.host, state: preparation.readAt ? 'agent_read' : 'awaiting_agent', requiresSend: !preparation.readAt } : null,
+      documents, writing, handoff: preparation?.host ? { host: preparation.host, mode: preparation.mode ?? null, state: preparation.readAt ? 'agent_read' : 'awaiting_agent', requiresSend: !preparation.readAt } : null,
       answerVersion: app ? hash({ fingerprint, answers: (binding.page?.fields ?? []).map(field =>
         [applicationQuestionKey(field), reusableApplicationAnswer(career, app.id, field, fingerprint)?.value ?? null]) }) : null,
       jobUrl: safeUrl(binding.context?.original?.url ?? app?.job.originalUrl ?? app?.job.url ?? binding.context?.jobLinks?.[0]?.url) };
@@ -247,10 +247,10 @@ export function createApplicationWorkflow({ store, assertAvailable = () => {}, v
       return { preparationId: id };
     });
   }
-  async function launched({ preparationId, host }) {
-    if (!['claude', 'codex'].includes(host)) fail('INVALID_INPUT', 'Choose Claude or Codex.');
-    return mutation('application_launched', { preparationId, host }, career => {
-      getPreparation(career, preparationId).host = host;
+  async function launched({ preparationId, host, mode }) {
+    if (!['claude', 'codex'].includes(host) || !['desktop', 'cli'].includes(mode)) fail('INVALID_INPUT', 'Choose an available Claude or Codex desktop or CLI host.');
+    return mutation('application_launched', { preparationId, host, mode }, career => {
+      Object.assign(getPreparation(career, preparationId), { host, mode });
       return { preparationId };
     });
   }
@@ -306,34 +306,34 @@ export function createApplicationWorkflow({ store, assertAvailable = () => {}, v
   function jobUrl({ bindingId }) {
     const career = check(), binding = getBinding(career, bindingId), app = career.applications[binding.applicationId];
     return safeUrl(binding.context?.original?.url ?? app?.job.originalUrl ?? app?.job.url ?? binding.context?.jobLinks?.[0]?.url)
-      ?? fail('FULL_AD_REQUIRED', 'No exact original job link was captured. Open the original advert in Chrome.');
+      ?? fail('FULL_AD_REQUIRED', 'No exact original job link was captured. Open the original advert in your browser.');
   }
-  async function openApplication({ applicationId }, openInChrome) {
+  async function openApplication({ applicationId }, openInBrowser) {
     const career = check(), app = career.applications[applicationId] ?? fail('NOT_FOUND', 'Application not found.');
     assertJobNotBlocked(career, app.job.id, app.job);
     const fingerprint = applicationContextFingerprint(career, app);
     if (!(await exported(career, app, 'cv')) || !(await exported(career, app, 'cover_letter')))
       fail('DOCUMENT_NOT_CURRENT', 'Save and export both the current CV and cover letter PDFs before opening this application.');
     const url = safeUrl(app.job.applyUrl ?? app.job.url) ?? fail('FULL_AD_REQUIRED', 'This application has no saved exact application URL.');
-    if (typeof openInChrome !== 'function') fail('UNAVAILABLE', 'Opening an application in Chrome is unavailable.');
+    if (typeof openInBrowser !== 'function') fail('UNAVAILABLE', 'Opening an application in your browser is unavailable.');
     const current = check(), latest = current.applications[applicationId];
     if (latest) assertJobNotBlocked(current, latest.job.id, latest.job);
     if (!latest || applicationContextFingerprint(current, latest) !== fingerprint || hash(latest) !== hash(app)) fail('APPLICATION_CONTEXT_CHANGED', 'The application changed. Read it before opening.');
-    await openInChrome(url);
-    return { applicationId, opened: true, requiresPageRead: true, message: 'Read the application page in the Recruiters.rip Chrome panel to bind its questions. Upload documents manually.' };
+    await openInBrowser(url);
+    return { applicationId, opened: true, requiresPageRead: true, message: 'Read the application page in the Recruiters.rip browser panel to bind its questions. Upload documents using the native file picker.' };
   }
   return { resolve, status, prepare, launched, document, jobUrl, readPreparation, bindPreparation, openApplication };
 }
 
-export function createApplicationPreparationTools({ workflow, openInChrome }) {
+export function createApplicationPreparationTools({ workflow, openInBrowser }) {
   const object = properties => ({ type: 'object', properties, required: Object.keys(properties), additionalProperties: false });
   const uuid = { type: 'string', format: 'uuid' };
   return [
-    { name: 'career_application_preparation_read', readOnly: false, description: 'Read a durable Chrome preparation request, exact original job context and captured writing fields. Records that the agent read it; does not generate documents or release values to Chrome.',
+    { name: 'career_application_preparation_read', readOnly: false, description: 'Read a durable browser preparation request, exact original job context and captured writing fields. Records that the agent read it; does not generate documents or release values to the browser.',
       inputSchema: object({ preparationId: uuid }), invoke: args => workflow.readPreparation(args) },
-    { name: 'career_application_preparation_bind', readOnly: false, description: 'Bind a preparation request to the saved application created from its exact original job URL. Required when Chrome could not capture the complete advert.',
+    { name: 'career_application_preparation_bind', readOnly: false, description: 'Bind a preparation request to the saved application created from its exact original job URL. Required when the browser could not capture the complete advert.',
       inputSchema: object({ preparationId: uuid, applicationId: uuid }), invoke: args => workflow.bindPreparation(args) },
-    { name: 'career_application_open', readOnly: false, openWorld: true, description: 'Open this saved job’s application URL in Chrome only when both current CV and letter PDFs are exported. Read the page in the companion panel to capture questions; this does not fill, upload or submit.',
-      inputSchema: object({ applicationId: uuid }), invoke: args => workflow.openApplication(args, openInChrome) },
+    { name: 'career_application_open', readOnly: false, openWorld: true, description: 'Open this saved job’s application URL in your default browser only when both current CV and letter PDFs are exported. Read the page in the companion panel to capture questions; this does not fill, upload or submit.',
+      inputSchema: object({ applicationId: uuid }), invoke: args => workflow.openApplication(args, openInBrowser) },
   ];
 }

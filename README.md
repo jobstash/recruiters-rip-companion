@@ -1,12 +1,12 @@
 # Recruiters.rip Companion
 
-The companion keeps CVs, career facts, captured jobs and application drafts on your computer. Claude or Codex handles assessment and writing. The Chrome extension saves job adverts and prepares reviewed values for application forms.
+The companion keeps CVs, career facts, captured jobs and application drafts on your computer. Claude or Codex handles assessment and writing. Chrome and Firefox extensions save job adverts and prepare answers for native paste.
 
 See [AGENTS.md](AGENTS.md) for ownership and safety boundaries, and [design.md](design.md) for the shared interface rules.
 
 ## Install and connect
 
-The desktop preview supports macOS on Apple Silicon. Use Claude Desktop or ChatGPT desktop with local Work/Codex support.
+Companion targets macOS Apple Silicon, Windows x64 and Linux x64. Connect a supported Claude or Codex desktop app or CLI. The available host determines computer-use support; Companion does not provide those tools.
 
 ### Run from source
 
@@ -17,24 +17,33 @@ pnpm install --frozen-lockfile
 pnpm start
 ```
 
-Use Node 22.12 or newer and pnpm 10.28.0. `pnpm start` builds the local tools, document engine and Chrome extension before opening Electron. For the isolated development product, run `pnpm start:local`.
+Use Node 22.12 or newer and pnpm 10.28.0. `pnpm start` builds the local tools, document engine and Chrome/Firefox extensions before opening Electron. For isolated development, run `pnpm start:local`.
 
-Packaged builds are distributed through published releases in the [official repository](https://github.com/jobstash/recruiters-rip-companion/releases). Move **Recruiters.rip Companion.app** to Applications and open it. An ad-hoc preview is unnotarized; production release packaging requires the signing and notarization credentials described below.
+Install only artifacts actually published in the [official releases](https://github.com/jobstash/recruiters-rip-companion/releases):
+
+| Platform | Installer | Installation |
+| --- | --- | --- |
+| macOS Apple Silicon | ZIP or DMG | Move **Recruiters.rip Companion.app** to Applications. Ad-hoc builds are not notarized. |
+| Windows x64 | NSIS `.exe` | Run the per-user installer. Unsigned builds may trigger SmartScreen; no administrator-wide native-host registration is required. |
+| Linux x64 | `.AppImage` | Save the file, make it executable and run it in a graphical desktop session. Install the distribution's AppImage/FUSE dependencies when required; do not disable the Chromium sandbox globally. |
+
+The website shell installer is for macOS only. Firefox source ZIPs are development builds, not permanently installable signed add-ons.
 
 ### Connect your account and AI app
 
 1. Choose **Connect account**. Sign in in the browser window it opens, create the pairing request, and choose **Confirm account on this computer**.
 2. In the companion, approve the named account. Current membership enables the platform job feed; captured jobs and saved local records work without feed access.
-3. In **Settings → Chat apps**, choose **Install ChatGPT plugin** or **Install Claude extension**. Start a new local task or conversation with Recruiters.rip enabled.
+3. In **Settings → Chat apps**, install the Codex plugin or configure Claude. Detected CLI hosts use an application workspace and a visible terminal; press Enter there to send the prepared request. Desktop hosts open a prefilled conversation. Start a new task with Recruiters.rip enabled after updating the plugin.
 4. On **Me**, choose **Import CV**. The companion extracts PDF, DOCX or text locally; your connected agent reads the source and builds the profile.
 
 Model authentication stays in your AI app. Normal setup collects no OpenAI/Anthropic API key or chat login token. The optional Decisions key is entered only in companion settings. Scanned/image-only CVs need readable text; import does not perform model inference or OCR.
 
 ## Capture jobs and prepare form values
 
-1. In **Settings → Chat apps → Chrome extension**, choose **Open extension folder**.
-2. In Chrome 125+, open **Extensions → Manage extensions**, enable **Developer mode**, choose **Load unpacked**, and select that folder.
-3. Open an advert or application page and click the black **rr** extension icon beside Chrome's address bar. This grants temporary access to that tab and runs **Read page**. Chrome's generic side-panel button does not grant access. An application form is inspected and prepared in one flow; captured jobs remain available to select and save. No all-sites permission is requested.
+1. Keep Companion open. In **Settings → Chat apps**, choose the extension folder for your browser.
+2. **Chrome 125+:** open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**, and select the Chrome folder.
+3. **Firefox 128+:** for development, open `about:debugging` → **This Firefox** → **Load Temporary Add-on**, then select `manifest.json` in the Firefox folder. This installation lasts until Firefox closes. Permanent distribution requires a Mozilla-signed XPI; the build command does not obtain signing credentials or publish to AMO.
+4. On the job or application tab, click the **rr** toolbar icon. This grants temporary access and opens Chrome's side panel or Firefox's sidebar. Selecting a browser sidebar alone does not grant page access. **Read page** captures public job context and prepares known form answers without all-sites permissions.
 
 Captures appear in **Jobs** before assessment. They live outside the replaceable matching cache and survive ranking resets. Detail/apply URL aliases deduplicate repeat captures; page provenance alone never merges different jobs. A listing card without the full advert remains **Needs full advert**: open the original and capture it before asking for assessment or a CV. Publication dates remain unknown unless the page provides one.
 
@@ -64,15 +73,15 @@ Decisions selects known values; it does not write application prose. **Prepare t
 
 MCP job imports use `career_job_import`; `career_jobs` lists captures. `career_job_read` and `career_application_create({jobId})` resolve local originals without a platform request. Use `career_match_jobs({localOnly:true})` to assess complete captures offline; the selected publication range applies only to platform jobs.
 
-Build unpacked extensions with `pnpm build:browser`. Production and local builds have separate IDs/native hosts and use only `nativeMessaging`, `activeTab`, `scripting`, `sidePanel` and `clipboardWrite`. Source, fonts and brand assets close over this repository; no sibling checkout is needed.
+`pnpm build:browser` builds four folders: Chrome `browser-extension/dist/{production,local}` and Firefox `browser-extension/dist/{firefox-production,firefox-local}`. Each build includes fonts and brand assets. Chrome uses `sidePanel`; Firefox uses `sidebarAction` and `browser_specific_settings.gecko.id`. Both use `nativeMessaging`, `activeTab`, `scripting` and `clipboardWrite`, with separate production/local native hosts. Firefox has no website external-message bridge; account pairing uses Companion's loopback flow. To create archives, run `node browser-extension/build.mjs production --browser=chrome --zip` or `--browser=firefox --zip`.
 
 ## Public releases and updates
 
 In **Settings → Updates**, choose **Check for updates**, then **Download update** and **Install update**. Checks use the official repository's latest stable published release without a GitHub token. No release means unavailable, not up to date.
 
-The release must contain `recruiters-rip-companion-<version>-mac-arm64.zip` with a GitHub SHA-256 digest or a matching entry in `SHA256SUMS.txt`. After packaging, `pnpm release:metadata <output-directory>` generates the checksum file from the actual root-package-version ZIP and optional DMG. Publishing is a separate operator action; build commands never publish or change repository visibility.
+The updater selects the exact artifact for the current OS and architecture: `recruiters-rip-companion-<version>-mac-arm64.zip`, `-win-x64.exe`, or `-linux-x64.AppImage`. A GitHub SHA-256 digest or matching `SHA256SUMS.txt` entry is required. `pnpm release:metadata <output-directory>` hashes actual versioned artifacts; publishing remains a separate operator action.
 
-Downloads are bounded and verified before installation. A packaged production app requests native approval, rejects installation while paid work is active, drains accepted mutations and vault writes, stages the signed bundle and replaces only its own installed app. The helper retains the previous app until the new version confirms startup and rolls back failed swaps/launch commands. An unconfirmed launch is not reported as installed.
+Downloads are bounded and checksum-verified before installation. macOS packaged production installs retain the existing bundle identity/signature checks, native approval, write draining and rollback until the new app confirms startup. Windows hands off the verified NSIS installer; Linux reveals the verified executable AppImage for the user to quit Companion and replace/run it. Installer handoff is not reported as a completed installation. No Windows/Linux in-place self-replacement or signing/notarization claim is made.
 
 Source runs and local-product builds use verified manual installer handoff rather than replacing a checkout or changing product channels. Unwritable installation directories also use the manual path. Neither flow migrates or deletes career data, changes the app/storage identity, or accesses signing credentials. Update state is separate from career storage; local and production receipts are isolated.
 
@@ -84,7 +93,7 @@ This repository owns the Electron app, Chrome extension, local career/job/form s
 
 Local records use plain `vault.json` (0600) in a private directory (0700), without keychain storage or at-rest encryption. The connected agent reads career context through MCP. API requests send their stated context directly to OpenAI; form preparation releases selected values to the extension; neither shows an approval dialog. With the candidate's standing consent, `career_cv_share` sends one CV and its matched roles to JobStash through the signed device relay (see **JobStash profile sharing**); no other career content and no API keys reach the server. Membership gates the platform feed, not captured jobs or saved records. Backups and exported documents are ordinary files; API keys are excluded. Keep vaults, exports, credentials, certificates and user data out of source control.
 
-Current installed identity: app ID `rip.recruiters.companion`, displayed app **Recruiters.rip Companion**, Electron storage name **Recruiters Companion**, protocol `recruiters-companion://`, and macOS vault `~/Library/Application Support/Recruiters Companion/device/vault.json`. The app passes `--use-mock-keychain`, so Chromium creates no keychain item. This is not a legacy-compatibility guarantee: obsolete POC state can be discarded when a breaking change requires it. Keep tests isolated from the real vault.
+Installed identity stays `rip.recruiters.companion`, displayed app **Recruiters.rip Companion**, storage name **Recruiters Companion**, protocol `recruiters-companion://`. Vault paths are `~/Library/Application Support/Recruiters Companion/device/vault.json` on macOS, `%APPDATA%\\Recruiters Companion\\device\\vault.json` on Windows, and `${XDG_CONFIG_HOME:-~/.config}/Recruiters Companion/device/vault.json` on Linux. Local builds use `local-device`. Never test against real user data.
 
 Account connection returns through a short-lived HTTP listener bound only to `127.0.0.1` on a random port, so source runs and installed apps do not depend on macOS selecting the right custom-protocol handler. The return carries its one-time state and pairing payload in the URL fragment, which the local page removes from browser history before sending a same-origin POST. Foreign origins, rebound hosts, invalid state and replayed requests are rejected. Only native account approval and successful signed platform activation produce success; the browser receives no career data or API key. The listener closes after five minutes, when starting another connection, on OS lock or on quit. Existing `recruiters-companion://` entrypoints remain supported.
 
@@ -106,7 +115,7 @@ The optional OpenAI key in **Settings → Optional Decisions API** serves one th
 
 Basic preferences are required before any review: `roles`, `locations`, `workModes`, `willingToRelocate` and `travel` (`ESSENTIAL_PREFERENCES` in `src/mcp/assessment-policy.mjs`). Until all are answered, `career_match_jobs` and `career_match_batch` fail with `PREFERENCES_REQUIRED` before any catalogue call; the message lists the questions. `career_profile_read.missingPreferences` and `onboarding_status.questions` carry the same questions, and `locallyReady` stays false. The agent saves answers with `career_preferences_update`, so they live in the vault, not in chat or host memory. Use `roles` for the intended direction, `acceptedAlternatives` for acceptable adjacent/combined directions, `excludedRoles` for role families to avoid, and `notes` only for nuance. Me → **Preferences** shows that exact saved record in Direction, Location, Employment and Work groups; it never infers preferences from the CV. Every `career_match_batch` result re-supplies the saved `candidate` (CV, facts, complete preferences) and `profileVersion`, so reviewers in a new session or after compaction assess against the companion's copy.
 
-Only one companion process serves a storage directory. Electron's singleton lock let two simultaneous MCP launches both run, each with its own in-memory vault and able to overwrite the other's saves, so startup also takes a kernel-held lock (`src/instance-lock.mjs`: `O_EXLOCK` on macOS, an abstract socket on Linux) that a crash never leaves stale; a second process exits immediately.
+Only one companion process serves a storage directory. Startup claims a kernel-held lock: macOS `O_EXLOCK`, a Linux abstract socket, or a Windows named pipe. Local MCP and native-browser bridges use authenticated Unix sockets on POSIX and deterministic per-directory named pipes on Windows. A second process cannot open a competing in-memory vault; process exit releases the lock.
 
 ## JobStash profile sharing
 
@@ -222,15 +231,18 @@ Every runtime build and standalone MCP packaging command deletes the entire repo
 
 ## Distribution
 
-```sh
-pnpm package:release
-```
+| Build command | Native runner | Artifacts |
+| --- | --- | --- |
+| `pnpm package:adhoc` | macOS arm64 | `recruiters-rip-companion-<version>-mac-arm64.zip` and `.dmg`, ad-hoc signed, not notarized |
+| `pnpm package:win` | Windows x64 | `recruiters-rip-companion-<version>-win-x64.exe`, per-user NSIS installer |
+| `pnpm package:linux` | Linux x64 | `recruiters-rip-companion-<version>-linux-x64.AppImage` |
+| `pnpm package:local` | Any supported runner | Isolated unpacked developer app, no production protocol registration |
 
-This creates signed, notarized macOS ARM64 ZIP and DMG artifacts under `dist/release/`, never publishes, and fails rather than claiming signing succeeded without credentials. Supply a Developer ID Application certificate using `CSC_LINK` / `CSC_KEY_PASSWORD`, or its keychain identity using `CSC_NAME`; also supply Apple's API-key notarization credentials (`APPLE_API_KEY`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER`) or Apple-ID credentials (`APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`). Keep all credentials outside this repository.
+The CI matrix runs build/check/tests and packaging on each native OS and uploads artifacts without publishing. MCPB and extension ZIP generation use JavaScript archive creation, not an external `zip` command. Package the matching browser source ZIPs with every version; a Firefox ZIP must go through Mozilla signing before it can be offered as a permanent add-on.
 
-The repository is public and has no Apple Developer ID; releases are built with `pnpm package:adhoc`. It produces production-origin ZIP and DMG artifacts under `dist/adhoc/` with ad-hoc signing and **no notarization**. Do not describe these as notarized releases or silently disable OS protections.
+Publishing is explicit: commit the root version, tag `v<version>`, gather native runner artifacts, generate/merge their `SHA256SUMS.txt` entries and create a stable GitHub release. The website operator must mount the matching files before advertising downloads. Never reuse an older published version number for new binaries.
 
-Artifact basenames are `recruiters-rip-companion-<package.json version>-mac-arm64.zip` and `.dmg`. Publishing a version: bump `package.json`, commit, tag `v<version>`, run `pnpm package:adhoc`, zip `browser-extension/dist/production` as `recruiters-rip-chrome-<version>.zip`, append its digest to `SHA256SUMS.txt`, then create a non-draft, non-prerelease GitHub release on this repository with the ZIP, DMG, extension ZIP and `SHA256SUMS.txt`. The in-app updater (`src/updates.mjs`) only discovers that shape: `releases/latest`, the exact ZIP name and either a GitHub asset digest or `SHA256SUMS.txt`. The website's `curl -fsSL https://recruiters.rip/install | sh` installer reads the same release; because curl sets no quarantine attribute, Gatekeeper does not prompt. The website operator also mirrors the two ZIPs onto its private host volume for the browser Downloads page.
+`pnpm package:release` uses native release targets. On macOS it still requires a genuine Developer ID Application identity and Apple notarization credentials; `pnpm package:adhoc` is the no-Apple-key route. Windows builds without signing credentials remain unsigned. No command disables operating-system security controls or silently publishes.
 
 ## Document source and asset notices
 

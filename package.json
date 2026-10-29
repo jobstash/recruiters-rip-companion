@@ -1,6 +1,6 @@
 {
   "name": "recruiters-companion",
-  "version": "3.9.2",
+  "version": "3.10.0",
   "private": true,
   "description": "Local career tools for Codex and Claude",
   "main": "src/main.mjs",
@@ -9,19 +9,21 @@
   "engines": { "node": ">=22.12.0" },
   "scripts": {
     "build:runtime": "node scripts/runtime.mjs",
-    "build:browser": "node browser-extension/build.mjs production && node browser-extension/build.mjs local",
+    "build:browser": "node browser-extension/build.mjs production && node browser-extension/build.mjs local && node browser-extension/build.mjs production --browser=firefox && node browser-extension/build.mjs local --browser=firefox",
     "build": "pnpm build:runtime && pnpm build:browser",
     "start": "pnpm build && electron .",
     "dev": "node scripts/dev.mjs",
     "start:local": "pnpm build && electron . --local-product",
     "package:local": "pnpm build && node scripts/package-local.mjs",
-    "package:adhoc": "pnpm build && electron-builder --mac zip dmg --arm64 --publish never -c.mac.identity=- -c.mac.notarize=false -c.directories.output=dist/adhoc -c.extraMetadata.localProduct=false && pnpm release:metadata dist/adhoc",
+    "package:adhoc": "pnpm build && node src/package-release.mjs --unsigned --platform=darwin && pnpm release:metadata dist/adhoc",
+    "package:win": "pnpm build && node src/package-release.mjs --unsigned --platform=win32 && pnpm release:metadata dist/windows",
+    "package:linux": "pnpm build && node src/package-release.mjs --unsigned --platform=linux && pnpm release:metadata dist/linux",
     "package:release": "pnpm build && node src/package-release.mjs && pnpm release:metadata dist/release",
     "release:metadata": "node scripts/release-metadata.mjs",
     "package:mcp": "node scripts/package-mcp.mjs",
     "check": "node --check src/main.mjs && node --check src/instance-lock.mjs && node --check src/pairing-return.mjs && node --check src/vault.mjs && node --check src/client.mjs && node --check src/native-host.cjs && node --check src/mcp/server.mjs && node --check src/mcp/broker.mjs && node --check src/mcp/state.mjs && node --check src/mcp/facts.mjs && node --check src/mcp/interview.mjs && node --check src/mcp/profile-tools.mjs && node --check src/mcp/introduction-tools.mjs && node --check src/employment-browser.mjs && node --check src/mcp/application-tools.mjs && node --check src/mcp/files.mjs && node --check src/career-browser.mjs && node --check ui/settings.js && node --check ui/career-browser.js && node --check src/preload.cjs && node --check src/package-release.mjs && node --check scripts/after-pack.cjs && node --check scripts/clean-dist.cjs && node --check src/mcp/matching-contract.mjs && node --check eval/lib.mjs && node --check eval/prepare.mjs && node --check eval/score.mjs && node --check src/browser-identity.mjs && node --check src/install-native.mjs && node --check src/browser-forms.mjs && node --check src/mcp/form-tools.mjs && node --check src/mcp/job-tools.mjs && node --check src/mcp/blocklist.mjs && node --check src/decisions/form-mapping.mjs && node --check src/updates.mjs && node --check src/update-install.cjs && node --check ui/updates.js && node --check scripts/release-metadata.mjs && node --check scripts/package-local.mjs && pnpm check:browser && node --check src/decisions/credentials.mjs && node --check src/decisions/provider.mjs && node --check src/mcp/review-queue.mjs && node --check src/mcp/publication-range.mjs",
     "check:browser": "node --check browser-extension/build.mjs && node --check browser-extension/manifest.mjs && node --check browser-extension/src/background.mjs && node --check browser-extension/src/page.mjs && node --check browser-extension/src/page-access.mjs && node --check browser-extension/src/panel.mjs && node --check browser-extension/src/protocol.mjs",
-    "test": "pnpm build:runtime && node --test test/*.test.mjs",
+    "test": "pnpm build:runtime && node scripts/test.mjs",
     "eval:prepare": "node eval/prepare.mjs",
     "eval:score": "node eval/score.mjs"
   },
@@ -40,8 +42,8 @@
     "rxjs": "^7.8.1",
     "yauzl": "^3.4.0"
   },
-  "devDependencies": { "electron": "^40.0.0", "electron-builder": "^26.0.12", "esbuild": "^0.25.0", "typescript": "5.9.3" },
-  "pnpm": { "onlyBuiltDependencies": ["electron", "esbuild"] },
+  "devDependencies": { "adm-zip": "0.5.16", "electron": "^40.0.0", "electron-builder": "^26.0.12", "esbuild": "^0.25.0", "typescript": "5.9.3" },
+  "pnpm": { "onlyBuiltDependencies": ["electron", "esbuild"], "supportedArchitectures": { "os": ["current"], "cpu": ["current"] } },
   "build": {
     "appId": "rip.recruiters.companion",
     "productName": "Recruiters.rip Companion",
@@ -51,7 +53,7 @@
     "protocols": [{ "name": "Recruiters.rip account connection", "schemes": ["recruiters-companion"] }],
     "files": ["src/**/*", "!src/package-release.mjs", "!src/documents/**/*", "ui/**/*", "browser-extension/dist/**/*", "package.json"],
     "asar": true,
-    "asarUnpack": ["src/native-host.cjs", "src/browser-identity.mjs", "src/update-install.cjs", "src/generated/mcp-host.cjs", "src/generated/*.mcpb", "src/generated/recruiters-rip-plugin/**/*", "browser-extension/dist/**/*", "node_modules/@napi-rs/**/*", "node_modules/pdf-parse/**/*"],
+    "asarUnpack": ["src/native-host.cjs", "src/platform-runtime.cjs", "src/browser-identity.mjs", "src/update-install.cjs", "src/generated/mcp-host.cjs", "src/generated/*.mcpb", "src/generated/recruiters-rip-plugin/**/*", "browser-extension/dist/**/*", "node_modules/@napi-rs/**/*", "node_modules/pdf-parse/**/*"],
     "beforePack": "scripts/clean-dist.cjs",
     "afterPack": "scripts/after-pack.cjs",
     "electronFuses": { "runAsNode": true },
@@ -63,6 +65,8 @@
       "entitlementsInherit": "scripts/entitlements.mac.plist"
     },
     "dmg": { "sign": false },
-    "linux": { "target": ["AppImage"], "category": "Office" }
+    "win": { "target": [{ "target": "nsis", "arch": ["x64"] }], "signAndEditExecutable": false },
+    "nsis": { "oneClick": false, "perMachine": false, "allowToChangeInstallationDirectory": true, "deleteAppDataOnUninstall": false },
+    "linux": { "target": [{ "target": "AppImage", "arch": ["x64"] }], "artifactName": "recruiters-rip-companion-${version}-linux-x64.${ext}", "category": "Office" }
   }
 }

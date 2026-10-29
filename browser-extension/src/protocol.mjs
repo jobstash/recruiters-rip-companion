@@ -44,8 +44,16 @@ export function applicationView(result) {
     documents: ['cv', 'cover_letter'].map(kind => ({ kind, ready: result.documents?.some(doc => doc.kind === kind && doc.ready === true) === true, label: kind === 'cv' ? 'CV' : 'Cover letter' })),
     writing: (Array.isArray(result.writing) ? result.writing : []).slice(0, 64).map(field => ({ fieldId: text(field.fieldId, 200), label: text(field.label) || 'Written answer', ready: field.ready === true })),
     handoff: host(result.handoff?.host) && ['awaiting_agent', 'agent_read'].includes(result.handoff?.state)
-      ? { host: result.handoff.host, state: result.handoff.state, requiresSend: result.handoff.requiresSend === true } : null,
+      ? { host: result.handoff.host, state: result.handoff.state, requiresSend: result.handoff.requiresSend === true,
+        ...(['desktop', 'cli'].includes(result.handoff.mode) ? { mode: result.handoff.mode } : {}) } : null,
     answerVersion: text(result.answerVersion, 200), jobUrl, preferredHost: host(result.preferredHost),
+    ...(result.hostInfo && typeof result.hostInfo === 'object' ? {
+      hostInfo: Object.fromEntries(['claude', 'codex'].filter(key => typeof result.hostInfo[key]?.available === 'boolean').map(key => [key, {
+        available: result.hostInfo[key].available, label: text(result.hostInfo[key].label),
+        mode: ['desktop', 'cli'].includes(result.hostInfo[key].mode) ? result.hostInfo[key].mode : null,
+        reason: text(result.hostInfo[key].reason),
+      }])),
+    } : {}),
   };
 }
 

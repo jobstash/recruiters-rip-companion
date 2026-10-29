@@ -1,45 +1,34 @@
 'use strict';
-const fs = require('node:fs');
 const path = require('node:path');
-const net = require('node:net');
 const { spawn } = require('node:child_process');
+const { endpoint, restrictedEnvironment, assertPrivatePath, privateJSON, connectAuthenticated } = require('./platform-runtime.cjs');
 const MAX_INPUT = 1024 * 1024 + 65536;
 const MAX_OUTPUT = 1024 * 1024 - 1024;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-function privateFile(file) {
-  const info = fs.lstatSync(file);
-  if (!info.isFile() || info.isSymbolicLink() || (process.getuid && info.uid !== process.getuid()) || (info.mode & 0o077)) throw new Error('Invalid bridge storage');
-  return JSON.parse(fs.readFileSync(file, 'utf8'));
-}
-function frame(value) {
-  const body = Buffer.from(JSON.stringify(value));
-  if (body.length > MAX_OUTPUT) throw new Error('Response exceeds native transport limit');
-  const size = Buffer.allocUnsafe(4); size.writeUInt32LE(body.length); return Buffer.concat([size, body]);
-}
 (async () => {
   const configPath = process.argv[2];
-  const config = privateFile(configPath);
-  const { BROWSER_IDENTITIES } = await import('./browser-identity.mjs');
-  const identity = config.localOnly === true ? BROWSER_IDENTITIES.local : BROWSER_IDENTITIES.production;
-  const expectedOrigin = `chrome-extension://${identity.extensionId}/`;
-  if (process.argv[3] !== expectedOrigin) process.exit(1);
-  const dir = fs.lstatSync(config.directory);
-  if (!dir.isDirectory() || dir.isSymbolicLink() || (dir.mode & 0o077) || (process.getuid && dir.uid !== process.getuid())) process.exit(1);
+  if (typeof configPath !== 'string' || !path.isAbsolute(configPath)) throw new Error('Invalid native configuration path.');
+  const config = privateJSON(configPath);
+  if (!config || typeof config.localOnly !== 'boolean' || typeof config.packaged !== 'boolean' ||
+      !['executable', 'appPath', 'directory'].every(key => typeof config[key] === 'string' && path.isAbsolute(config[key])) ||
+      configPath !== path.join(config.directory, 'native-config.json')) throw new Error('Invalid native configuration.');
+  if (config.firefoxManifest !== undefined && (typeof config.firefoxManifest !== 'string' || !path.isAbsolute(config.firefoxManifest))) throw new Error('Invalid Firefox manifest path.');
+  const { BROWSER_IDENTITIES, nativeInvocationIdentity } = await import('./browser-identity.mjs');
+  const identity = config.localOnly ? BROWSER_IDENTITIES.local : BROWSER_IDENTITIES.production;
+  const origin = nativeInvocationIdentity(identity, process.argv.slice(3), { firefoxManifest: config.firefoxManifest });
+  assertPrivatePath(config.directory, { directory: true });
   let socket;
   for (let attempt = 0; attempt < 60; attempt++) {
     try {
-      const bridge = privateFile(path.join(config.directory, 'bridge.json'));
-      socket = await new Promise((resolve, reject) => {
-        const candidate = net.connect(bridge.socket);
-        candidate.once('error', reject);
-        candidate.once('connect', () => { candidate.removeListener('error', reject); candidate.write(frame({ auth: bridge.token, origin: expectedOrigin })); resolve(candidate); });
-      });
+      const bridge = privateJSON(path.join(config.directory, 'bridge.json'));
+      if (bridge.socket !== endpoint(config.directory, 'native') || !/^[a-f0-9]{64}$/.test(bridge.token)) throw new Error('Invalid native connection.');
+      if (process.platform !== 'win32') assertPrivatePath(path.dirname(bridge.socket), { directory: true });
+      socket = await connectAuthenticated(bridge.socket, bridge.token, 'native', { origin });
       break;
     } catch {
       if (attempt === 0) {
         // The harness owns model authentication; do not inherit its API/session keys.
-        const env = Object.fromEntries(['PATH', 'HOME', 'TMPDIR', 'CODEX_HOME', 'XDG_CONFIG_HOME', 'DISPLAY', 'WAYLAND_DISPLAY', 'DBUS_SESSION_BUS_ADDRESS', 'XDG_RUNTIME_DIR']
-          .filter(key => process.env[key]).map(key => [key, process.env[key]]));
+        const env = restrictedEnvironment();
         if (config.localOnly && typeof config.localOrigin === 'string') env.BROWSER_APPLICATION_LOCAL_ORIGIN = config.localOrigin;
         const args = [...(config.packaged ? [] : [config.appPath]), '--bridge', ...(config.localOnly ? ['--local-product'] : [])];
         const child = spawn(config.executable, args, { detached: true, stdio: 'ignore', env }); child.on('error', () => {}); child.unref();
@@ -60,6 +49,7 @@ function frame(value) {
       process.stdout.write(incoming.subarray(0, length + 4)); incoming = incoming.subarray(length + 4);
     }
   });
+  socket.resume();
   let input = Buffer.alloc(0);
   process.stdin.on('data', chunk => {
     input = Buffer.concat([input, chunk]);

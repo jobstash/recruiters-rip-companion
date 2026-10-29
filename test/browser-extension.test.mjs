@@ -7,7 +7,7 @@ import { BROWSER_IDENTITIES } from '../src/browser-identity.mjs';
 import { createManifest } from '../browser-extension/manifest.mjs';
 import { safeDeviceRequest, externalSenderAllowed, deviceResult, createNativeClient, safeNativeCommand, applicationView } from '../browser-extension/src/protocol.mjs';
 import { captureJobs, captureApplicationContext, inspectForm, checkFormBindings, armSmartPaste, disarmSmartPaste } from '../browser-extension/src/page.mjs';
-import { createPageAccess } from '../browser-extension/src/page-access.mjs';
+import { createPageAccess, preparedPageSender } from '../browser-extension/src/page-access.mjs';
 
 const origin = BROWSER_IDENTITIES.production.productOrigin;
 const request = (op, payload = {}) => ({ version: 1, id: randomUUID(), op, payload });
@@ -76,6 +76,117 @@ test('production and local identities derive distinct IDs and minimal user-trigg
   assert.notEqual(BROWSER_IDENTITIES.local.nativeHost, BROWSER_IDENTITIES.production.nativeHost);
 });
 
+test('Firefox builds have isolated Gecko identities and only supported sidebar/background permissions', () => {
+  const ids = [];
+  for (const [mode, identity] of Object.entries(BROWSER_IDENTITIES)) {
+    const manifest = createManifest(identity, '3.8.1', mode === 'local', 'firefox');
+    ids.push(manifest.browser_specific_settings.gecko.id);
+    assert.equal(manifest.browser_specific_settings.gecko.id, identity.firefoxExtensionId);
+    assert.equal(manifest.browser_specific_settings.gecko.strict_min_version, '128.0');
+    assert.deepEqual(manifest.background, { scripts: ['background.mjs'], type: 'module' });
+    assert.equal(manifest.sidebar_action.default_panel, 'panel.html');
+    assert.deepEqual(manifest.permissions, ['nativeMessaging', 'activeTab', 'scripting', 'clipboardWrite']);
+    for (const key of ['key', 'side_panel', 'externally_connectable', 'minimum_chrome_version', 'host_permissions', 'content_scripts'])
+      assert.equal(manifest[key], undefined, key);
+    assert.equal(manifest.action.default_popup, undefined);
+    assert.deepEqual(manifest.browser_specific_settings.gecko.data_collection_permissions.required, ['websiteContent', 'personallyIdentifyingInfo']);
+  }
+  assert.deepEqual(ids, ['recruiters-rip@recruiters.rip', 'recruiters-rip-local@recruiters.rip']);
+  assert.throws(() => createManifest(BROWSER_IDENTITIES.production, '3.8.1', false, 'unknown'));
+});
+
+test('Firefox sidebar opens inside the toolbar gesture before any inspection awaits', async () => {
+  const onClicked = event(), calls = [];
+  let gesture = false;
+  createPageAccess({
+    sidebarAction: { open() { assert.equal(gesture, true); calls.push('open'); return Promise.resolve(); } },
+    action: { onClicked }, tabs: {}, scripting: {},
+    onAccess: tabId => { assert.equal(gesture, false); calls.push(tabId); },
+    onError: assert.fail,
+  });
+  gesture = true;
+  onClicked.emit({ id: 42 });
+  assert.deepEqual(calls, ['open']);
+  gesture = false;
+  await tick();
+  assert.deepEqual(calls, ['open', 42]);
+});
+
+test('Firefox document tokens guard the same injection without falling back to a navigated frame', async () => {
+  let page = pastePage();
+  const calls = [];
+  const inject = createPageAccess({
+    sidebarAction: {}, tabs: { get: async id => ({ id, url: page.context.location.href }) },
+    scripting: { executeScript: async options => {
+      calls.push(options);
+      try { return [{ frameId: 0, result: await page.invoke(options.func, ...options.args) }]; }
+      catch (error) { return [{ frameId: 0, error }]; }
+    } },
+  });
+  const first = await inject(7, inspectForm);
+  assert.ok(first.documentId);
+  assert.equal(first.page.documentToken, undefined, 'opaque token is not sent to native form schemas');
+  const request = { url: first.page.url, fields: first.page.fields, actions: first.page.actions };
+  assert.equal((await inject(7, checkFormBindings, [request], first.documentId)).page.attached, true);
+  assert.deepEqual(calls.at(-1).target, { tabId: 7, frameIds: [0] });
+  page = pastePage(); // Same URL and control labels; entirely new document.
+  for (const [func, args] of [[checkFormBindings, [request]], [captureJobs, []], [captureApplicationContext, []], [armSmartPaste, [{ session: randomUUID() }]], [disarmSmartPaste, []]])
+    await assert.rejects(inject(7, func, args, first.documentId), /page changed/);
+  assert.deepEqual(page.messages, []);
+  assert.deepEqual(page.clipboard, []);
+  const next = await inject(7, inspectForm);
+  assert.notEqual(next.documentId, first.documentId);
+});
+
+test('clipboard senders require the actual browser document binding, top frame and inspected tab', () => {
+  const state = { tabId: 7, documentId: 'document-token' };
+  const sender = { tab: { id: 7 }, frameId: 0 }, message = { documentToken: 'document-token' };
+  assert.equal(preparedPageSender(sender, message, state, true), true);
+  assert.equal(preparedPageSender(sender, message, state), false, 'Chrome must never fall back to an extension token');
+  for (const invalid of [{ ...sender, frameId: 1 }, { ...sender, tab: { id: 8 } }])
+    assert.equal(preparedPageSender(invalid, message, state, true), false);
+  assert.equal(preparedPageSender(sender, { documentToken: 'previous-document' }, state, true), false);
+  assert.equal(preparedPageSender(sender, {}, state, true), false);
+  assert.equal(preparedPageSender({ ...sender, documentId: state.documentId }, {}, state), true);
+});
+
+test('Firefox native ports retain channel host identity and fail pending requests on disconnect', async () => {
+  for (const identity of Object.values(BROWSER_IDENTITIES)) {
+    const port = fakePort(), hosts = [];
+    const browser = { runtime: { connectNative(host) { hosts.push(host); return port; } } };
+    const client = createNativeClient({ host: identity.nativeHost, connect: host => browser.runtime.connectNative(host) });
+    const response = client.request('application_resolve', { requestId: randomUUID() });
+    const sent = port.sent[0];
+    assert.equal(sent.op, 'application_resolve');
+    port.onMessage.emit({ version: 1, id: sent.id, ok: true, result: { bindingId: 'binding:firefox' } });
+    assert.deepEqual(await response, { bindingId: 'binding:firefox' });
+    assert.deepEqual(hosts, [identity.nativeHost]);
+    const pending = client.request('forms_validate', { formId: 'form:firefox', fields: [] });
+    port.error = { message: 'Native host closed' }; // Firefox reports port.error, not callback lastError.
+    port.onDisconnect.emit();
+    await assert.rejects(pending, /Open Recruiters/);
+    assert.equal(client.connected(), false);
+  }
+});
+
+test('application projection retains only supported host availability and launch modes', () => {
+  const view = applicationView({
+    bindingId: 'binding:cli', state: 'needs_documents',
+    handoff: { host: 'codex', state: 'awaiting_agent', requiresSend: true, mode: 'cli', prompt: 'private prompt' },
+    hostInfo: {
+      codex: { available: true, label: 'Codex CLI', mode: 'cli', command: '/private/agent' },
+      claude: { available: false, label: 'Claude', mode: 'unknown', reason: 'Install Claude Code.' },
+      untrusted: { available: true, label: 'Unsupported agent' },
+    },
+  });
+  assert.equal(view.handoff.mode, 'cli');
+  assert.deepEqual(Object.keys(view.hostInfo), ['claude', 'codex']);
+  assert.equal(view.hostInfo.claude.available, false);
+  assert.equal(view.hostInfo.claude.mode, null);
+  assert.equal(view.hostInfo.codex.label, 'Codex CLI');
+  assert.doesNotMatch(JSON.stringify(view), /private|Unsupported/);
+});
+
 test('external websites can only pair, read account connection status or open settings', () => {
   for (const op of ['status','open_settings']) assert.equal(safeDeviceRequest(request(op), origin).op, op);
   const pairing = { productOrigin: origin, pairing: { deviceId: randomUUID(), challenge: 'one-time', expiresAt: new Date(Date.now() + 60000).toISOString(), account: { id: 'synthetic', label: 'Synthetic' } } };
@@ -130,7 +241,7 @@ function pageContext() {
   }
   const controls = [new Input('Full name'), new Input('Email', 'email', 'already-entered@example.test'), new Input('Password', 'password'), new Input('Social security number'), new Input('Gender'), new Input('I agree to terms'), new Input('Resume', 'file')];
   const context = vm.createContext({ URL, crypto: { randomUUID }, location: { href: 'https://jobs.example.test/application' }, document: { title: 'Application', baseURI: 'https://jobs.example.test/application', forms: [], getElementById() { return null; }, querySelectorAll() { return controls; } }, getComputedStyle: () => ({ display: 'block', visibility: 'visible' }), HTMLInputElement: Input, HTMLSelectElement: Input, HTMLTextAreaElement: Input, Event: class { constructor(type) { this.type = type; } } });
-  const invoke = (fn, request = null) => { context.request = request; return vm.runInContext(`(${fn.toString()})(request)`, context); };
+  const invoke = (fn, request = null, expectedDocument = null) => { context.request = request; context.expectedDocument = expectedDocument; return vm.runInContext(`(${fn.toString()})(request, expectedDocument)`, context); };
   return { controls, context, invoke };
 }
 
@@ -404,6 +515,34 @@ function pastePage() {
   return { ...page, buttons, listeners, messages, clipboard, alerts, frames, busy, focus, respond: fn => { responder = fn; } };
 }
 
+test('Firefox Promise messaging prepares the native clipboard only while the inspected field retains focus', async () => {
+  for (const outcome of ['success', 'blur', 'permission', 'disconnected']) {
+    const page = pastePage(), snapshot = page.invoke(inspectForm), messages = [];
+    let resolve;
+    page.context.browser = { runtime: { sendMessage(message) {
+      assert.equal(arguments.length, 1, 'Firefox messaging must not receive a Chrome callback');
+      messages.push(message);
+      if (outcome === 'disconnected') return Promise.reject(new Error('Native extension disconnected'));
+      return message.action === 'paste-value' ? new Promise(done => { resolve = done; }) : Promise.resolve();
+    } } };
+    delete page.context.chrome;
+    page.invoke(armSmartPaste, { session: randomUUID() });
+    page.focus(page.controls[0]);
+    assert.equal(messages[0].documentToken, snapshot.documentToken);
+    if (outcome === 'blur') { page.listeners['window:blur'](); page.context.document.hasFocus = () => false; }
+    if (outcome === 'permission') page.context.navigator.clipboard.writeText = () => Promise.reject(new Error('Clipboard permission denied'));
+    resolve?.({ value: 'Synthetic Firefox Candidate' });
+    await tick();
+    assert.deepEqual(page.clipboard, outcome === 'success' ? ['Synthetic Firefox Candidate'] : []);
+    if (outcome === 'success' || outcome === 'permission') {
+      assert.equal(messages.at(-1).action, 'paste-ready');
+      assert.equal(messages.at(-1).ok, outcome === 'success');
+    } else assert.equal(messages.length, 1);
+    assert.equal(page.controls[0].value, '');
+    assert.deepEqual(page.controls[0].events, []);
+  }
+});
+
 test('switching through seven fields replaces the clipboard after earlier fields are pasted', async () => {
   for (const tab of [false, true]) {
     const page = pastePage(), Input = page.context.HTMLInputElement;
@@ -478,7 +617,7 @@ test('smart paste uses native clipboard only after a trusted click or Tab onto a
   assert.equal(page.messages.length, 0);
   page.focus(page.controls[0]);
   await tick();
-  const identity = { fieldId: snapshot.fields[0].id, signature: snapshot.fields[0].signature, url: snapshot.url, session };
+  const identity = { fieldId: snapshot.fields[0].id, signature: snapshot.fields[0].signature, url: snapshot.url, session, documentToken: snapshot.documentToken };
   assert.deepEqual(plain(page.messages[0]), { action: 'paste-value', ...identity });
   assert.deepEqual(plain(page.messages[1]), { action: 'paste-ready', ...identity, ok: true });
   assert.deepEqual(page.clipboard, ['Synthetic Candidate']);
@@ -607,16 +746,20 @@ async function backgroundFixture(page = pastePage(), options = {}) {
   let nativeOptions, messageHandler, access, documentId = 'document-1', permission = true, validate = async () => ({ valid: true });
   let saveDetails = async payload => ({ saved: Object.keys(payload.values) });
   let prepareResult = options.prepare || (payload => ({ formId: 'form:synthetic', snapshot: 'snapshot:synthetic', questions: [{ key: 'phone', label: 'Phone', type: 'tel' }], fields: payload.fields.filter(field => field.empty && !field.manualOnly).slice(0, 1).map(field => ({ ...field, value: 'Synthetic Candidate' })) }));
+  const extensionId = options.firefox ? BROWSER_IDENTITIES.local.firefoxExtensionId : 'extension';
+  const extensionOrigin = options.firefox ? `moz-extension://${randomUUID()}` : 'chrome-extension://extension';
+  const nativePort = fakePort(), nativeHosts = [];
   const chrome = {
-    runtime: { id: 'extension', onConnectExternal: event(), onConnect: event(), onMessage: { addListener(fn) { messageHandler = fn; } }, getURL: path => `chrome-extension://extension/${path}` },
+    runtime: { id: extensionId, ...(!options.firefox ? { onConnectExternal: event() } : {}), onConnect: event(), onMessage: { addListener(fn) { messageHandler = fn; } }, getURL: path => `${extensionOrigin}/${path}`,
+      connectNative(host) { nativeHosts.push(host); return nativePort; } },
     permissions: { contains: async () => permission },
     tabs: { get: async () => ({ id: 7, url: page.context.location.href, title: 'Application', status: 'complete' }), onActivated: event(), onUpdated: event(), onRemoved: event() },
-    sidePanel: {}, scripting: {},
+    ...(options.firefox ? { sidebarAction: {} } : { sidePanel: {} }), scripting: {},
   };
   const context = vm.createContext({
-    chrome, crypto: { randomUUID }, PRODUCT_ORIGIN: origin, NATIVE_HOST: 'synthetic', BUILD_ID: 'test-build',
+    [options.firefox ? 'browser' : 'chrome']: chrome, crypto: { randomUUID }, PRODUCT_ORIGIN: origin, NATIVE_HOST: 'synthetic', BUILD_ID: 'test-build',
     captureJobs, captureApplicationContext, inspectForm, checkFormBindings, armSmartPaste, disarmSmartPaste,
-    safeDeviceRequest, externalSenderAllowed, deviceResult, applicationView,
+    safeDeviceRequest, externalSenderAllowed, deviceResult, applicationView, preparedPageSender,
     setTimeout(fn, ms) {
       if (ms === 5000) { const id = ++nextTimer; timers.set(id, fn); return id; }
       return setTimeout(fn, 0);
@@ -627,7 +770,10 @@ async function backgroundFixture(page = pastePage(), options = {}) {
       return async (tabId, fn, args = [], expectedDocument = null) => {
         injections.push(fn.name);
         if (expectedDocument && expectedDocument !== documentId) throw new Error('The page changed.');
-        return { page: fn === captureJobs ? { jobs: options.jobs || [] } : fn === captureApplicationContext ? options.context || {} : page.invoke(fn, args[0] ?? null), documentId };
+        const result = fn === captureJobs ? { jobs: options.jobs || [] } : fn === captureApplicationContext ? options.context || {} : page.invoke(fn, args[0] ?? null, options.firefox ? expectedDocument : null);
+        if (options.firefox && fn === inspectForm) documentId = result.documentToken;
+        const { documentToken, ...snapshot } = result;
+        return { page: snapshot, documentId };
       };
     },
     createNativeClient: options => {
@@ -654,11 +800,13 @@ async function backgroundFixture(page = pastePage(), options = {}) {
   if (!options.prepare) assert.equal(state().error, '');
   page.context.chrome.runtime.sendMessage = (message, callback) => {
     page.messages.push(message);
-    const asynchronous = messageHandler(message, { id: 'extension', tab: { id: 7 }, frameId: 0, documentId }, callback ?? (() => {}));
+    const asynchronous = messageHandler(message, { id: extensionId, tab: { id: 7 }, frameId: 0, ...(!options.firefox ? { documentId } : {}) }, callback ?? (() => {}));
     if (!asynchronous && message.action !== 'paste-value') callback?.();
   };
+  if (options.firefox) page.context.browser = { runtime: { sendMessage: message => new Promise(resolve => page.context.chrome.runtime.sendMessage(message, resolve)) } };
   return {
     page, calls, injections, state, act,
+    nativeHosts, nativePort, connectNative: () => nativeOptions.connect(nativeOptions.host),
     command(op, payload) { const command = safeNativeCommand(request(op, payload)); return nativeOptions.onCommand(command.op, command.payload); },
     disconnect: () => nativeOptions.onDisconnect(),
     validate: fn => { validate = fn; },
@@ -671,7 +819,7 @@ async function backgroundFixture(page = pastePage(), options = {}) {
     resolveApplication: fn => { resolveApplication = fn; },
     applicationStatus: fn => { applicationStatus = fn; },
     launchApplication: fn => { launchApplication = fn; },
-    connectPanel() { const panel = fakePort(); panel.name = 'recruiters-panel'; panel.sender = { id: 'extension', url: 'chrome-extension://extension/panel.html' }; chrome.runtime.onConnect.emit(panel); return panel; },
+    connectPanel(sender = { id: extensionId, url: chrome.runtime.getURL('panel.html') }) { const panel = fakePort(); panel.name = 'recruiters-panel'; panel.sender = sender; chrome.runtime.onConnect.emit(panel); return panel; },
     poll: () => vm.runInContext('pollApplication()', context),
     get scheduledPolls() { return timers.size; },
     activate: tabId => chrome.tabs.onActivated.emit({ tabId }),
@@ -679,6 +827,25 @@ async function backgroundFixture(page = pastePage(), options = {}) {
     removeTab: tabId => chrome.tabs.onRemoved.emit(tabId),
   };
 }
+
+test('Firefox background authenticates dynamic sidebar URLs, native host and token-bound clipboard messages', async () => {
+  const fixture = await backgroundFixture(pastePage(), { firefox: true });
+  assert.ok(fixture.state().prepared);
+  assert.equal(fixture.connectNative(), fixture.nativePort);
+  assert.deepEqual(fixture.nativeHosts, ['synthetic']);
+  const panel = fixture.connectPanel();
+  assert.equal(panel.sent.length, 1, 'runtime.getURL accepts Firefox dynamic moz-extension origin');
+  for (const url of [`moz-extension://${BROWSER_IDENTITIES.local.firefoxExtensionId}/panel.html`, 'https://recruiters.rip/panel.html', 'chrome-extension://extension/panel.html'])
+    assert.equal(fixture.connectPanel({ id: BROWSER_IDENTITIES.local.firefoxExtensionId, url }).sent.length, 0);
+  fixture.page.focus(fixture.page.controls[0]); await tick();
+  assert.deepEqual(fixture.page.clipboard, ['Synthetic Candidate']);
+  assert.equal(fixture.state().paste.ok, true);
+  fixture.updateTab(7, { status: 'loading' });
+  assert.equal(fixture.state().prepared, null);
+  fixture.page.focus(fixture.page.controls[0]); await tick();
+  assert.equal(fixture.page.clipboard.length, 1, 'navigation cannot deliver a stale prepared answer');
+  panel.disconnect();
+});
 
 test('browser status checks live bindings, URL and Chrome document identity', async () => {
   for (const mutate of [

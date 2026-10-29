@@ -1,41 +1,28 @@
 #!/usr/bin/env node
 'use strict';
-const fs = require('node:fs');
 const path = require('node:path');
-const os = require('node:os');
-const net = require('node:net');
 const { spawn } = require('node:child_process');
+const { deviceDirectory, endpoint, restrictedEnvironment, assertPrivatePath, privateJSON, connectAuthenticated } = require('../platform-runtime.cjs');
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
-function privateJSON(file) {
-  const info = fs.lstatSync(file);
-  if (!info.isFile() || info.isSymbolicLink() || info.size > 16384 || (process.getuid && info.uid !== process.getuid()) || (info.mode & 0o077)) throw new Error('Invalid local connection configuration.');
-  return JSON.parse(fs.readFileSync(file, 'utf8'));
-}
 async function main() {
   if (process.argv.slice(2).some(arg => arg !== '--local-product')) throw new Error('Unsupported connection option.');
-  if (!['darwin', 'linux'].includes(process.platform)) throw new Error('This local companion package supports macOS and Linux.');
   const local = process.argv.includes('--local-product');
-  const support = process.platform === 'darwin' ? path.join(os.homedir(), 'Library', 'Application Support') : process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config');
-  const directory = path.join(support, 'Recruiters Companion', local ? 'local-device' : 'device');
-  const stat = fs.lstatSync(directory);
-  if (!stat.isDirectory() || stat.isSymbolicLink() || (stat.mode & 0o077) || (process.getuid && stat.uid !== process.getuid())) throw new Error('Local companion storage is unavailable.');
+  const directory = deviceDirectory({ localOnly: local });
+  assertPrivatePath(directory, { directory: true });
   const launch = privateJSON(path.join(directory, 'mcp-launch.json'));
   if (!path.isAbsolute(launch.executable) || !Array.isArray(launch.args) || launch.args.some(arg => typeof arg !== 'string') || launch.localOnly !== local) throw new Error('Invalid companion installation.');
   let socket;
   for (let attempt = 0; attempt < 60; attempt++) {
     try {
       const config = privateJSON(path.join(directory, 'mcp-bridge.json'));
-      if (config.socket !== path.join(directory, 'mcp.sock') || !/^[a-f0-9]{64}$/.test(config.token)) throw new Error('Invalid local connection.');
-      socket = await new Promise((resolve, reject) => {
-        const connection = net.connect(config.socket);
-        connection.once('error', error => { connection.destroy(); reject(error); });
-        connection.once('connect', () => { connection.removeAllListeners('error'); connection.write(JSON.stringify({ auth: config.token }) + '\n'); resolve(connection); });
-      });
+      if (config.socket !== endpoint(directory, 'mcp') || !/^[a-f0-9]{64}$/.test(config.token)) throw new Error('Invalid local connection.');
+      if (process.platform !== 'win32') assertPrivatePath(path.dirname(config.socket), { directory: true });
+      socket = await connectAuthenticated(config.socket, config.token, 'mcp');
       break;
     } catch {
       if (attempt === 0) {
         // Do not pass model tokens, API keys, proxies, or shell startup options to the companion.
-        const env = Object.fromEntries(['PATH', 'HOME', 'TMPDIR', 'XDG_CONFIG_HOME', 'DISPLAY', 'WAYLAND_DISPLAY', 'DBUS_SESSION_BUS_ADDRESS', 'XDG_RUNTIME_DIR'].filter(key => process.env[key]).map(key => [key, process.env[key]]));
+        const env = restrictedEnvironment();
         const child = spawn(launch.executable, [...launch.args, '--mcp-background'], { env, detached: true, stdio: 'ignore' });
         child.on('error', () => {}); child.unref();
       }

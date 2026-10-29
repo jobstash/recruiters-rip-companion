@@ -137,21 +137,28 @@
 <section id="chat-app-settings" class="setup-section" aria-labelledby="chat-app-title">
 <h2 id="chat-app-title">Chat apps</h2>
 <div class="settings-content"><div class="app-row">
-<h3 class="app-name">ChatGPT desktop · Codex</h3>
+<h3 id="codex-host-label" class="app-name">Codex</h3>
 <p id="chatgpt-connection" class="app-status caption" aria-live="polite"></p>
-<button id="install-chatgpt" class="app-action ghost" type="button">Install ChatGPT plugin</button>
+<button id="install-chatgpt" class="app-action ghost" type="button">Install Codex plugin</button>
 <details class="app-details"><summary>Manual MCP setup</summary><p>Register this command as <strong>recruiters-rip</strong> in your local MCP host.</p><code id="mcp-command" class="command"></code><button id="copy-command" class="text" type="button">Copy command</button></details>
 </div>
 <div class="app-row">
-<h3 class="app-name">Claude Desktop</h3>
+<h3 id="claude-host-label" class="app-name">Claude</h3>
 <p id="claude-connection" class="app-status caption" aria-live="polite"></p>
 <button id="install-claude" class="app-action ghost" type="button">Install Claude extension</button>
-<details class="app-details"><summary>Manual configuration</summary><p>Merge this entry into Claude Desktop’s MCP configuration.</p><pre id="mcp-config" class="command"></pre><button id="copy-config" class="text" type="button">Copy configuration</button></details>
+<details class="app-details"><summary>Manual configuration</summary><p id="claude-config-help">Merge this entry into your Claude MCP configuration.</p><pre id="mcp-config" class="command"></pre><button id="copy-config" class="text" type="button">Copy configuration</button></details>
 </div>
 <div class="app-row">
 <h3 class="app-name">Chrome extension</h3>
 <button id="open-extension-folder" class="app-action ghost" type="button">Open extension folder</button>
 <p class="app-details">In Chrome, open Extensions → Manage extensions, turn on Developer mode, choose Load unpacked and select the opened folder.</p>
+<p id="chrome-native-status" class="app-status caption" aria-live="polite"></p>
+</div>
+<div class="app-row">
+<h3 class="app-name">Firefox extension</h3>
+<button id="open-firefox-extension-folder" class="app-action ghost" type="button">Open extension folder</button>
+<p class="app-details">For development, open about:debugging → This Firefox → Load Temporary Add-on and select manifest.json in the opened folder. Temporary add-ons are removed when Firefox closes. Permanent installation requires a Mozilla-signed add-on.</p>
+<p id="firefox-native-status" class="app-status caption" aria-live="polite"></p>
 </div>
 <p id="other-connections" class="caption" aria-live="polite" hidden></p>
 </div>

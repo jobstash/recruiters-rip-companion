@@ -1,5 +1,6 @@
-// These functions are serialized by chrome.scripting; keep every dependency inside.
-export function captureJobs() {
+// These functions are serialized by scripting.executeScript; keep dependencies inside.
+export function captureJobs(_request, expectedDocument) {
+  if (expectedDocument && globalThis[Symbol.for('recruiters.form-controls.v1')]?.document !== expectedDocument) throw new Error('The inspected document changed.');
   const clean = (value, max = 60000) => String(value ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
   const url = value => { try { const u = new URL(value, location.href); return /^https?:$/.test(u.protocol) && !u.username && !u.password && u.href.length <= 2000 ? u.href : null; } catch { return null; } };
   if (!url(location.href)) throw new Error('Open an HTTP or HTTPS job page with a URL under 2,000 characters.');
@@ -90,7 +91,8 @@ export function captureJobs() {
 }
 
 // Inspect controls without writing values or activating page actions.
-export function inspectForm() {
+export function inspectForm(_request, expectedDocument) {
+  if (expectedDocument && globalThis[Symbol.for('recruiters.form-controls.v1')]?.document !== expectedDocument) throw new Error('The inspected document changed.');
   const clean = value => String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, 500);
   let pageUrl;
   try { pageUrl = new URL(location.href); } catch { throw new Error('Open an HTTP or HTTPS application page.'); }
@@ -192,10 +194,11 @@ export function inspectForm() {
     return [field.id, { el, signature: field.signature, check: () => identities.url === location.href && el.isConnected && visible(el) && !field.manualOnly && field.empty && !disabled(el) && el.value === '' && controlSignature(el) === signatures[0] }];
   }));
   identities.actions = actionNodes;
-  return { url: location.href, title: clean(document.title) || pageUrl.hostname, fields: schema, actions };
+  return { url: location.href, title: clean(document.title) || pageUrl.hostname, fields: schema, actions, documentToken: identities.document };
 }
 
-export function checkFormBindings(request) {
+export function checkFormBindings(request, expectedDocument) {
+  if (expectedDocument && globalThis[Symbol.for('recruiters.form-controls.v1')]?.document !== expectedDocument) throw new Error('The inspected document changed.');
   const identities = globalThis[Symbol.for('recruiters.form-controls.v1')];
   if (!identities || request?.url !== location.href || identities.url !== location.href || request.fields?.length !== identities.controls?.size || request.actions?.length !== identities.actions?.size) return { attached: false };
   const fieldsMatch = request.fields.every(field => {
@@ -211,7 +214,8 @@ export function checkFormBindings(request) {
 
 // Smart paste uses only the native clipboard API after a trusted click or Tab focus.
 // It never intercepts paste or writes a synthetic paste/input event into the page.
-export function armSmartPaste({ session } = {}) {
+export function armSmartPaste({ session } = {}, expectedDocument) {
+  if (expectedDocument && globalThis[Symbol.for('recruiters.form-controls.v1')]?.document !== expectedDocument) throw new Error('The inspected document changed.');
   const identities = globalThis[Symbol.for('recruiters.form-controls.v1')];
   if (!identities?.fields || typeof session !== 'string' || !session) throw new Error('Inspect and prepare the form before arming paste.');
   const armedKey = Symbol.for('recruiters.smart-paste.v1');
@@ -248,18 +252,26 @@ export function armSmartPaste({ session } = {}) {
         const current = () => arm.active && arm.session === session && arm.epoch === epoch && bound === globalThis[Symbol.for('recruiters.form-controls.v1')] && bound.fields.get(fieldId) === field &&
           document.activeElement === el && document.hasFocus() && field.check();
         if (!current() || !navigator.clipboard?.writeText) return;
+        // Firefox's browser namespace is Promise-only; Chrome's callback keeps
+        // runtime.lastError scoped to the callback that owns it.
+        const send = message => globalThis.browser?.runtime
+          ? globalThis.browser.runtime.sendMessage(message)
+          : new Promise((resolve, reject) => {
+            globalThis.chrome.runtime.sendMessage(message, response => {
+              const error = globalThis.chrome.runtime.lastError;
+              if (error) reject(new Error(error.message)); else resolve(response);
+            });
+          });
+        const message = { fieldId, signature: field.signature, url: location.href, session, documentToken: bound.document };
         try {
-          chrome.runtime.sendMessage({ action: 'paste-value', fieldId, signature: field.signature, url: location.href, session }, response => {
-            if (chrome.runtime.lastError) return;
+          void send({ ...message, action: 'paste-value' }).then(async response => {
             const value = response?.value;
             if (typeof value !== 'string' || !value || value.length > 20000 || !current()) return;
-            const report = ok => {
-              if (!current()) return;
-              try { chrome.runtime.sendMessage({ action: 'paste-ready', fieldId, signature: field.signature, url: location.href, session, ok }, () => void chrome.runtime.lastError); } catch { /* The extension disconnected. */ }
-            };
-            try { navigator.clipboard.writeText(value).then(() => report(true), () => report(false)); } catch { report(false); }
-          });
-        } catch { /* The extension disconnected; nothing reaches the clipboard. */ }
+            let ok = false;
+            try { await navigator.clipboard.writeText(value); ok = true; } catch { /* Report the actual clipboard outcome. */ }
+            if (current()) await send({ ...message, action: 'paste-ready', ok });
+          }).catch(() => { /* The extension disconnected; never synthesize a paste. */ });
+        } catch { /* The extension disconnected before sending. */ }
         return;
       }
     };
@@ -281,7 +293,8 @@ export function armSmartPaste({ session } = {}) {
   }
   return { armed: true, fields: [...identities.fields.values()].filter(field => field.check()).length };
 }
-export function disarmSmartPaste() {
+export function disarmSmartPaste(_request, expectedDocument) {
+  if (expectedDocument && globalThis[Symbol.for('recruiters.form-controls.v1')]?.document !== expectedDocument) throw new Error('The inspected document changed.');
   const arm = globalThis[Symbol.for('recruiters.smart-paste.v1')];
   if (arm) { arm.active = false; arm.session = null; arm.epoch++; arm.selection = null; }
   return { armed: false };
@@ -290,7 +303,8 @@ export function disarmSmartPaste() {
 // Capture only public job context. Entered form values are deliberately excluded.
 // Linked descriptions are fetched only from this page's origin; the agent must
 // retrieve the supplied job link itself when no complete original is available.
-export async function captureApplicationContext() {
+export async function captureApplicationContext(_request, expectedDocument) {
+  if (expectedDocument && globalThis[Symbol.for('recruiters.form-controls.v1')]?.document !== expectedDocument) throw new Error('The inspected document changed.');
   const here = new URL(location.href);
   if (!['http:', 'https:'].includes(here.protocol) || here.username || here.password) return { jobLinks: [] };
   const clean = value => String(value ?? '').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '').trim();

@@ -4,6 +4,7 @@ on:
     paths:
       - scripts/windows-acl-diagnostic.cjs
       - .github/workflows/windows-diagnostic.yml
+      - src/platform-runtime.cjs
 permissions:
   contents: read
 jobs:

@@ -10,7 +10,9 @@ const environmentKeys = ['PATH', 'HOME', 'TMPDIR', 'CODEX_HOME', 'XDG_CONFIG_HOM
 const windowsKeys = ['SYSTEMROOT', 'WINDIR', 'APPDATA', 'LOCALAPPDATA', 'TEMP', 'TMP', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'COMSPEC', 'PATHEXT', 'PROGRAMFILES', 'PROGRAMFILES(X86)', 'PROGRAMW6432'];
 function restrictedEnvironment(env = process.env, platform = process.platform) {
   const allowed = new Set([...environmentKeys, ...(platform === 'win32' ? windowsKeys : [])]);
-  return Object.fromEntries(Object.entries(env).filter(([key, value]) => allowed.has(platform === 'win32' ? key.toUpperCase() : key) && typeof value === 'string'));
+  return Object.fromEntries(Object.entries(env).filter(([key, value]) =>
+    (allowed.has(platform === 'win32' ? key.toUpperCase() : key) && typeof value === 'string' && value.length > 0) ||
+    (platform === 'linux' && key === 'APPIMAGE_EXTRACT_AND_RUN' && value === '1')));
 }
 function supportDirectory({ platform = process.platform, env = process.env, home = os.homedir() } = {}) {
   const paths = platform === 'win32' ? path.win32 : path.posix;
@@ -52,8 +54,9 @@ function launcherScript({ executable, script, args = [], forwardArgs = false, pl
     return `@echo off\r\nsetlocal DisableDelayedExpansion\r\nfor /f "tokens=1 delims==" %%V in ('set') do ${keep} set "%%V="\r\nset "ELECTRON_RUN_AS_NODE=1"\r\n${values.map(quote).join(' ')}${forwardArgs ? ' %*' : ''}\r\nexit /b %errorlevel%\r\n`;
   }
   const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
-  const env = environmentKeys.map(key => `${key}="\${${key}-}"`).join(' ');
-  return `#!/bin/sh\nexec /usr/bin/env -i ${env} ELECTRON_RUN_AS_NODE=1 ${values.map(quote).join(' ')}${forwardArgs ? ' "$@"' : ''}\n`;
+  const env = environmentKeys.map(key => `\${${key}:+"${key}=$${key}"}`).join(' ');
+  const extraction = platform === 'linux' ? 'appimage_mode=\nif [ "${APPIMAGE_EXTRACT_AND_RUN-}" = 1 ]; then appimage_mode=APPIMAGE_EXTRACT_AND_RUN=1; fi\n' : '';
+  return `#!/bin/sh\n${extraction}exec /usr/bin/env -i ${env}${platform === 'linux' ? ' $appimage_mode' : ''} ELECTRON_RUN_AS_NODE=1 ${values.map(quote).join(' ')}${forwardArgs ? ' "$@"' : ''}\n`;
 }
 
 // Windows mode bits do not represent privacy. Inspect/enforce the actual NTFS DACL,
@@ -63,10 +66,13 @@ function windowsAcl(filename, protect, directory, { env = process.env, run = exe
   const root = env.SYSTEMROOT || env.SystemRoot;
   if (!root || !path.win32.isAbsolute(root)) throw new Error('Windows system directory is unavailable.');
   const target = Buffer.from(filename, 'utf8').toString('base64');
-  const script = `$ErrorActionPreference='Stop';$p=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${target}'));$sid=[Security.Principal.WindowsIdentity]::GetCurrent().User;$a=Get-Acl -LiteralPath $p;if($a.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $sid.Value){throw 'Foreign owner'};` +
-    (protect ? `$a.SetAccessRuleProtection($true,$false);foreach($r in @($a.Access)){$a.RemoveAccessRuleSpecific($r)};$inherit=[Security.AccessControl.InheritanceFlags]::${directory ? 'ContainerInherit -bor [Security.AccessControl.InheritanceFlags]::ObjectInherit' : 'None'};foreach($s in @($sid.Value,'S-1-5-18','S-1-5-32-544')){$r=[Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.SecurityIdentifier]::new($s),[Security.AccessControl.FileSystemRights]::FullControl,$inherit,[Security.AccessControl.PropagationFlags]::None,[Security.AccessControl.AccessControlType]::Allow);$a.AddAccessRule($r)};Set-Acl -LiteralPath $p -AclObject $a;$a=Get-Acl -LiteralPath $p;` : '') +
+  // Use .NET ACL APIs directly: Get-Acl/Set-Acl trigger PowerShell module
+  // discovery, which can hang or load incompatible modules from a host shell.
+  const kind = directory ? 'Directory' : 'File';
+  const script = `$ErrorActionPreference='Stop';$p=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${target}'));$sid=[Security.Principal.WindowsIdentity]::GetCurrent().User;$a=[IO.${kind}]::GetAccessControl($p);if($a.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $sid.Value){throw 'Foreign owner'};` +
+    (protect ? `$a.SetAccessRuleProtection($true,$false);foreach($r in @($a.Access)){$a.RemoveAccessRuleSpecific($r)};$inherit=[Security.AccessControl.InheritanceFlags]::${directory ? 'ContainerInherit -bor [Security.AccessControl.InheritanceFlags]::ObjectInherit' : 'None'};foreach($s in @($sid.Value,'S-1-5-18','S-1-5-32-544')){$r=[Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.SecurityIdentifier]::new($s),[Security.AccessControl.FileSystemRights]::FullControl,$inherit,[Security.AccessControl.PropagationFlags]::None,[Security.AccessControl.AccessControlType]::Allow);$a.AddAccessRule($r)};[IO.${kind}]::SetAccessControl($p,$a);$a=[IO.${kind}]::GetAccessControl($p);` : '') +
     `$allowed=@($sid.Value,'S-1-5-18','S-1-5-32-544');$own=$false;foreach($r in $a.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])){if($r.AccessControlType -eq 'Allow'){if($r.IdentityReference.Value -notin $allowed){throw 'Public access'};if($r.IdentityReference.Value -eq $sid.Value){$own=$true}}};if(-not $own){throw 'Missing owner access'}`;
-  run(path.win32.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { env: restrictedEnvironment(env, 'win32'), windowsHide: true, stdio: 'pipe', timeout: 15000 });
+  run(path.win32.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { env: restrictedEnvironment(env, 'win32'), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], timeout: 15000 });
 }
 function assertPrivatePath(filename, { directory = false, maxSize = Infinity, platform = process.platform, info = fs.lstatSync(filename), ...options } = {}) {
   if (info.isSymbolicLink() || !(directory ? info.isDirectory() : info.isFile()) || (!directory && info.size > maxSize)) throw new Error('Invalid private storage.');
@@ -134,5 +140,29 @@ function connectAuthenticated(socketPath, token, channel, { origin, timeout = 50
     socket.once('connect', () => socket.write(authenticationFrame(channel, { hello: clientNonce })));
   });
 }
+async function prepareBridgeRuntime({ executable, appPath, directory, packaged, version, platform = process.platform, env = process.env }) {
+  const runtimeRoot = packaged ? appPath.replace(/app\.asar$/, 'app.asar.unpacked') : appPath;
+  if (platform !== 'linux' || !packaged || !env.APPIMAGE) return { executable, appPath, runtimeRoot };
+  if (!path.posix.isAbsolute(env.APPIMAGE) || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version)) throw new Error('Invalid AppImage installation.');
+  const image = await fs.promises.realpath(env.APPIMAGE);
+  if (!(await fs.promises.stat(image)).isFile()) throw new Error('The installed AppImage is unavailable.');
+  await fs.promises.access(image, fs.constants.X_OK);
+  // The AppImage mount disappears on exit. Only standalone bridge scripts need
+  // persistence; the stable AppImage remounts its own Electron in Node mode.
+  const base = path.join(directory, 'bridge-runtime'), cached = path.join(base, version);
+  for (const entry of [directory, base, cached, path.join(cached, 'src'), path.join(cached, 'src', 'generated')]) {
+    await fs.promises.mkdir(entry, { recursive: true, mode: 0o700 });
+    protectPrivatePath(entry, { directory: true });
+  }
+  for (const relative of ['src/native-host.cjs', 'src/browser-identity.mjs', 'src/platform-runtime.cjs', 'src/generated/mcp-host.cjs']) {
+    const destination = path.join(cached, relative), temporary = `${destination}.${randomBytes(12).toString('hex')}.tmp`;
+    const bytes = await fs.promises.readFile(path.join(runtimeRoot, relative));
+    try {
+      await fs.promises.writeFile(temporary, bytes, { mode: 0o600, flag: 'wx' });
+      await fs.promises.rename(temporary, destination);
+    } finally { await fs.promises.unlink(temporary).catch(error => { if (error.code !== 'ENOENT') throw error; }); }
+  }
+  return { executable: image, appPath: cached, runtimeRoot: cached };
+}
 module.exports = { restrictedEnvironment, supportDirectory, deviceDirectory, endpoint, mcpCommand, launcherScript, assertPrivatePath, protectPrivatePath, privateJSON,
-  createAuthenticationChallenge, verifyAuthenticationProof, connectAuthenticated };
+  createAuthenticationChallenge, verifyAuthenticationProof, connectAuthenticated, prepareBridgeRuntime };

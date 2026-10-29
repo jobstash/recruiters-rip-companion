@@ -76,7 +76,8 @@ test('Windows desktop detection requires a registered URL protocol and installed
 test('Linux desktop support requires a real MIME handler and executable', async t => {
   const root = await temporary(t);
   await mkdir(path.join(root, 'applications'));
-  const binary = path.join(root, 'Claude résumé');
+  // The MIME entry models Linux even when its fixture file lives on Windows.
+  const binary = '/opt/Claude résumé/claude';
   await writeFile(path.join(root, 'applications', 'claude.desktop'), `[Desktop Entry]\nType=Application\nName=Claude\nNoDisplay=true\nExec="${binary}" %u\n`);
   const options = { platform: 'linux', home: root, env: { XDG_DATA_HOME: root, XDG_DATA_DIRS: root, DISPLAY: ':0' },
     run: async () => ({ stdout: 'claude.desktop\n' }), canExecute: async file => file === binary };

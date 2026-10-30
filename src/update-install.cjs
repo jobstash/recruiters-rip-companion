@@ -1,7 +1,7 @@
 'use strict';
 // Copied outside the installed bundle before launch. Built-ins only: the old app
 // can be renamed without this helper resolving any code from it afterwards.
-const fs = require('node:fs/promises');
+const fs = require(process.versions.electron ? 'original-fs' : 'node:fs').promises;
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { claimInstallation, installationLock } = require('./update-install-lock.cjs');

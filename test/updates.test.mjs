@@ -437,4 +437,6 @@ test('ZIP extraction writes app.asar as physical bytes alongside unpacked resour
   assert.equal((await disk.lstat(extracted)).isFile(), true);
   assert.equal(await disk.readFile(extracted, 'utf8'), bytes);
   assert.equal(await disk.readFile(path.join(bundle, 'Contents/Resources/app.asar.unpacked/src/update-install.cjs'), 'utf8'), 'synthetic unpacked helper');
+  await disk.rm(path.join(root, 'extract'), { recursive: true, force: true });
+  assert.deepEqual(await disk.readdir(root), ['update.zip']);
 });

@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { constants, createReadStream, writeFileSync } from 'node:fs';
-import { access, chmod, copyFile, lstat, mkdir, open, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { copyFile as copyBundledFile } from 'node:fs/promises';
 import { spawn, execFile } from 'node:child_process';
 import { createRequire } from 'node:module';
 import path from 'node:path';
@@ -9,6 +9,12 @@ import yauzl from 'yauzl';
 import { createSourceUpdateController } from './source-updates.mjs';
 
 const require = createRequire(import.meta.url);
+// Update artifacts and receipts are physical disk objects, never ASAR mounts.
+// Only bundled helper sources below retain Electron's virtual-file resolution.
+const physicalFs = require(process.versions.electron ? 'original-fs' : 'node:fs');
+const { createReadStream, writeFileSync } = physicalFs;
+const disk = physicalFs.promises;
+const { access, chmod, copyFile, lstat, mkdir, open, readFile, realpath, rename, rm, writeFile } = disk;
 const installer = require('./update-install.cjs');
 const { protectPrivatePath } = require('./platform-runtime.cjs');
 const { validateMacExecutable } = require('./update-macho.cjs');
@@ -199,7 +205,6 @@ function archivePath(name) {
 export async function extractUpdateZip(file, destination, signal) {
   // These are physical ZIP entries, including app.asar itself. Electron's
   // normal fs treats .asar paths as virtual archives, even while creating them.
-  const disk = require(process.versions.electron ? 'original-fs' : 'node:fs').promises;
   await disk.mkdir(destination, { mode: 0o700 });
   const zip = await new Promise((resolve, reject) => yauzl.open(file, { lazyEntries: true, autoClose: false, decodeStrings: true, strictFileNames: true, validateEntrySizes: true }, (error, result) => error ? reject(error) : resolve(result)));
   const seen = new Set(), links = [];
@@ -553,8 +558,9 @@ export function createUpdateController({ version, platform = process.platform, a
         return update({ status: 'downloaded', progress: null });
       } catch (error) {
         if (handle) await handle.close().catch(() => {});
-        await rm(partial, { force: true });
-        await rm(file, { force: true });
+        const cleanup = await Promise.allSettled([rm(partial, { force: true }), rm(file, { force: true })]);
+        const failed = cleanup.find(result => result.status === 'rejected');
+        if (failed) error.cleanupError = failed.reason;
         throw error;
       }
     });
@@ -633,9 +639,9 @@ export function createUpdateController({ version, platform = process.platform, a
         }
         const helperName = platform === 'win32' ? 'update-install.ps1' : platform === 'linux' ? 'update-install.sh' : 'update-install.cjs';
         const helper = path.join(work, helperName);
-        await copyFile(fileURLToPath(new URL(`./${helperName}`, import.meta.url)), helper, constants.COPYFILE_EXCL);
+        await copyBundledFile(fileURLToPath(new URL(`./${helperName}`, import.meta.url)), helper, constants.COPYFILE_EXCL);
         await chmod(helper, 0o600);
-        if (platform === 'darwin') await copyFile(fileURLToPath(new URL('./update-install-lock.cjs', import.meta.url)), path.join(work, 'update-install-lock.cjs'), constants.COPYFILE_EXCL);
+        if (platform === 'darwin') await copyBundledFile(fileURLToPath(new URL('./update-install-lock.cjs', import.meta.url)), path.join(work, 'update-install-lock.cjs'), constants.COPYFILE_EXCL);
         await writeFile(`${activeFile}.tmp`, JSON.stringify({ id }), { mode: 0o600 });
         await rename(`${activeFile}.tmp`, activeFile);
         throwIfAborted(signal);
@@ -651,9 +657,12 @@ export function createUpdateController({ version, platform = process.platform, a
       } catch (error) {
         if (!committed) {
           admission?.release?.();
-          if (stagedOwned) await rm(staged, { recursive: true, force: true });
-          await rm(work, { recursive: true, force: true });
-          await rm(activeFile, { force: true });
+          const cleanup = await Promise.allSettled([
+            ...(stagedOwned ? [rm(staged, { recursive: true, force: true })] : []),
+            rm(work, { recursive: true, force: true }), rm(activeFile, { force: true }),
+          ]);
+          const failed = cleanup.find(result => result.status === 'rejected');
+          if (failed) { error.cleanupError = failed.reason; throw error; }
           if (error.code === 'INSTALL_DEFERRED') return update({ status: 'downloaded', progress: null, error: null });
           if (['EACCES', 'EPERM', 'EROFS'].includes(error.code)) return manual('The installation directory could not be updated. Install the verified release manually with the required permissions.');
         }

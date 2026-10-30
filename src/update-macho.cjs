@@ -1,6 +1,6 @@
 'use strict';
 const { constants } = require('node:fs');
-const { open } = require('node:fs/promises');
+const { open } = require(process.versions.electron ? 'original-fs' : 'node:fs').promises;
 
 const ARM64 = 0x0100000c;
 const INVALID = () => Object.assign(new Error('The executable is not a valid ARM64 Mach-O image.'), { code: 'INVALID_MACHO' });

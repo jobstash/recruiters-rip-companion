@@ -1,5 +1,5 @@
 'use strict';
-const fs = require('node:fs');
+const fs = require(process.versions.electron ? 'original-fs' : 'node:fs');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
 const { spawn } = require('node:child_process');

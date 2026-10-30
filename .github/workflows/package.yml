@@ -74,7 +74,6 @@ jobs:
         run: node node_modules/electron/install.js
       - run: pnpm build
       - run: pnpm check
-      - run: pnpm test
       - name: Build platform installers
         env:
           # Ad-hoc Mac signing uses identity "-", never a certificate or secret.
@@ -93,6 +92,8 @@ jobs:
       - name: Launch AppImage with Chromium sandbox and a disposable profile
         if: runner.os == 'Linux'
         run: xvfb-run --auto-servernum node scripts/smoke-package.mjs
+      - name: Run full test suite
+        run: node scripts/test.mjs
       - name: Package unsigned browser upload archives
         if: runner.os == 'macOS'
         run: |

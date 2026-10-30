@@ -337,13 +337,14 @@ async function launchNativeHelper(helper, journal, signal, acquireAdmission) {
     ? encodedCommand(`& {\n${await readFile(helper, 'utf8')}\n} -Journal '${journal.journal.replaceAll("'", "''")}'`)
     : [helper, work, journal.target, journal.staged, journal.backup, String(journal.pid), journal.digest, journal.id, journal.userData, journal.lock.file];
   const lockHandle = journal.platform === 'linux' ? await open(journal.lock.file, constants.O_CREAT | constants.O_RDWR | constants.O_NOFOLLOW, 0o600) : null;
-  let child, spawnError;
+  let child, spawnError, helperStderr = '';
   try {
     if (lockHandle) {
       const info = await lockHandle.stat();
       if (!info.isFile() || info.nlink !== 1 || await realpath(journal.lock.file) !== journal.lock.file) throw fail('INVALID_TARGET', 'The installation exclusion file is unsafe.');
     }
-    child = spawn(command, args, { detached: true, env: installer.launchEnvironment(), stdio: lockHandle ? ['ignore', 'ignore', 'ignore', lockHandle.fd] : 'ignore' });
+    child = spawn(command, args, { detached: true, env: installer.launchEnvironment(), stdio: lockHandle ? ['ignore', 'ignore', 'pipe', lockHandle.fd] : ['ignore', 'ignore', 'pipe'] });
+    child.stderr.on('data', bytes => { if (helperStderr.length < 8192) helperStderr += bytes.toString('utf8').slice(0, 8192 - helperStderr.length); });
     child.once('error', error => { spawnError = error; });
   } finally { await lockHandle?.close(); }
   try {
@@ -351,7 +352,11 @@ async function launchNativeHelper(helper, journal, signal, acquireAdmission) {
     for (;;) {
       throwIfAborted(signal);
       if (spawnError) throw spawnError;
-      if (child.exitCode !== null || child.signalCode || Date.now() >= deadline) throw fail('HELPER_FAILED', 'The native updater could not prepare this installation. Use the release installer.');
+      if (child.exitCode !== null || child.signalCode || Date.now() >= deadline) {
+        const error = fail('HELPER_FAILED', 'The native updater could not prepare this installation. Use the release installer.');
+        error.cause = new Error(helperStderr.trim() || `Native helper did not become ready (exit ${child.exitCode}, signal ${child.signalCode}).`);
+        throw error;
+      }
       try {
         const ready = path.join(work, 'ready');
         const info = await lstat(ready);
@@ -364,6 +369,7 @@ async function launchNativeHelper(helper, journal, signal, acquireAdmission) {
     throwIfAborted(signal);
     if (admission && !admission.valid()) throw fail('INSTALL_DEFERRED', 'The update is waiting until the app is idle.');
     writeFileSync(path.join(work, 'commit'), journal.id, { flag: 'wx', mode: 0o600 });
+    child.stderr.unref();
     child.unref();
   } catch (error) { child.kill(); throw error; }
 }

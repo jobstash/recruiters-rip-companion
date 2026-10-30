@@ -125,6 +125,10 @@ try {
   }
   Receipt 'confirmed'
 } catch {
+  $failure = $_
+  # The parent retains bounded stderr only as a private diagnostic cause. A
+  # closed parent pipe must never prevent rollback or honest receipt handling.
+  try { [Console]::Error.WriteLine($failure.Exception.ToString() + [Environment]::NewLine + $failure.InvocationInfo.PositionMessage) } catch {}
   try {
     if (Confirmed) { Receipt 'confirmed' }
     elseif ($changed -and (Test-Path -LiteralPath $j.backup)) { Restore }

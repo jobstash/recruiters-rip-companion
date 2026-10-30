@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { createRequire } from 'node:module';
 import { mkdtemp, mkdir, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -418,4 +419,22 @@ test('ZIP extraction accepts bounded internal framework links and rejects traver
     await assert.rejects(extractUpdateZip(file, path.join(root, `attack-${index}`), signal));
   }
   assert.equal((await readdir(root)).includes('outside'), false);
+});
+
+test('ZIP extraction writes app.asar as physical bytes alongside unpacked resources', async t => {
+  const disk = createRequire(import.meta.url)(process.versions.electron ? 'original-fs' : 'node:fs').promises;
+  const root = await disk.realpath(await disk.mkdtemp(path.join(tmpdir(), 'recruiters-physical-asar-')));
+  t.after(() => disk.rm(root, { recursive: true, force: true }));
+  const app = 'Recruiters.rip Companion.app';
+  const bytes = 'Opaque synthetic archive bytes, not a mounted ASAR filesystem.';
+  const archive = path.join(root, 'update.zip');
+  await disk.writeFile(archive, zip([
+    { name: `${app}/Contents/Resources/app.asar`, content: bytes },
+    { name: `${app}/Contents/Resources/app.asar.unpacked/src/update-install.cjs`, content: 'synthetic unpacked helper' },
+  ]));
+  const bundle = await extractUpdateZip(archive, path.join(root, 'extract'), new AbortController().signal);
+  const extracted = path.join(bundle, 'Contents/Resources/app.asar');
+  assert.equal((await disk.lstat(extracted)).isFile(), true);
+  assert.equal(await disk.readFile(extracted, 'utf8'), bytes);
+  assert.equal(await disk.readFile(path.join(bundle, 'Contents/Resources/app.asar.unpacked/src/update-install.cjs'), 'utf8'), 'synthetic unpacked helper');
 });

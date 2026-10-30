@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { constants, createReadStream, writeFileSync } from 'node:fs';
-import { access, chmod, copyFile, lstat, mkdir, open, readFile, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { access, chmod, copyFile, lstat, mkdir, open, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { spawn, execFile } from 'node:child_process';
 import { createRequire } from 'node:module';
 import path from 'node:path';
@@ -197,7 +197,10 @@ function archivePath(name) {
 // Extract regular files before creating any symlinks. Electron framework links
 // are allowed only when their eventual real target stays inside this bundle.
 export async function extractUpdateZip(file, destination, signal) {
-  await mkdir(destination, { mode: 0o700 });
+  // These are physical ZIP entries, including app.asar itself. Electron's
+  // normal fs treats .asar paths as virtual archives, even while creating them.
+  const disk = require(process.versions.electron ? 'original-fs' : 'node:fs').promises;
+  await disk.mkdir(destination, { mode: 0o700 });
   const zip = await new Promise((resolve, reject) => yauzl.open(file, { lazyEntries: true, autoClose: false, decodeStrings: true, strictFileNames: true, validateEntrySizes: true }, (error, result) => error ? reject(error) : resolve(result)));
   const seen = new Set(), links = [];
   let entries = 0, expanded = 0, inputStream = null, entryWork = Promise.resolve();
@@ -222,9 +225,9 @@ export async function extractUpdateZip(file, destination, signal) {
           const isDirectory = entry.fileName.endsWith('/');
           if (![0, 0x8000, 0x4000, 0xa000].includes(kind) || (kind === 0x4000 && !isDirectory) || (isDirectory && ![0, 0x4000].includes(kind))) throw fail('UNSAFE_ARCHIVE', 'The ZIP contains an unsupported file type.');
           const output = path.join(destination, ...parts);
-          if (isDirectory) await mkdir(output, { recursive: true, mode: 0o755 });
+          if (isDirectory) await disk.mkdir(output, { recursive: true, mode: 0o755 });
           else {
-            await mkdir(path.dirname(output), { recursive: true, mode: 0o755 });
+            await disk.mkdir(path.dirname(output), { recursive: true, mode: 0o755 });
             const input = await new Promise((res, rej) => zip.openReadStream(entry, (error, stream) => error ? rej(error) : res(stream)));
             inputStream = input;
             if (kind === 0xa000) {
@@ -237,7 +240,7 @@ export async function extractUpdateZip(file, destination, signal) {
               if (!resolved.startsWith(`/${PRODUCT}/`)) throw fail('UNSAFE_ARCHIVE', 'A ZIP symbolic link escapes the app.');
               links.push({ output, target });
             } else {
-              const handle = await open(output, 'wx', ((entry.externalFileAttributes >>> 16) & 0o111) ? 0o755 : 0o644);
+              const handle = await disk.open(output, 'wx', ((entry.externalFileAttributes >>> 16) & 0o111) ? 0o755 : 0o644);
               try {
                 let written = 0;
                 for await (const chunk of input) {
@@ -258,13 +261,13 @@ export async function extractUpdateZip(file, destination, signal) {
       zip.readEntry();
     });
     throwIfAborted(signal);
-    for (const link of links) { throwIfAborted(signal); await symlink(link.target, link.output); }
+    for (const link of links) { throwIfAborted(signal); await disk.symlink(link.target, link.output); }
     const bundle = path.join(destination, PRODUCT);
     for (const link of links) {
       throwIfAborted(signal);
-      if (!(await realpath(link.output)).startsWith(`${bundle}${path.sep}`)) throw fail('UNSAFE_ARCHIVE', 'An extracted symbolic link escapes the app.');
+      if (!(await disk.realpath(link.output)).startsWith(`${bundle}${path.sep}`)) throw fail('UNSAFE_ARCHIVE', 'An extracted symbolic link escapes the app.');
     }
-    if (!(await lstat(bundle)).isDirectory()) throw fail('INVALID_BUNDLE', 'The update ZIP contains no companion app.');
+    if (!(await disk.lstat(bundle)).isDirectory()) throw fail('INVALID_BUNDLE', 'The update ZIP contains no companion app.');
     return bundle;
   } finally {
     signal.removeEventListener('abort', abort);

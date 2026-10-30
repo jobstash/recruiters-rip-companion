@@ -47,6 +47,10 @@
 <div><h2 id="setup-next-title">Start a job review</h2><p id="setup-next-description"></p><p id="setup-next-status" class="caption" role="status"></p></div>
 <button id="setup-next" class="primary" type="button">Connect account</button>
 </section>
+<section id="me-sharing" class="setup-next" aria-labelledby="me-sharing-title" hidden>
+<div><h2 id="me-sharing-title">Share your CV with <button class="link" type="button" data-open-jobstash>JobStash</button>?</h2><p>If you choose Share, your AI app sends them your CV and work history for direct introductions to companies. Otherwise it stays off.</p></div>
+<div class="actions"><button id="sharing-keep-off" class="ghost" type="button">Keep off</button><button id="sharing-share" class="text" type="button">Share</button></div>
+</section>
 <div class="actions"><button id="import-cv" class="ghost" type="button">Import CV</button><button id="me-jobs" class="ghost" type="button">Jobs</button><button id="me-account" class="text" type="button" hidden>Connect account</button></div>
 </div>
 <div id="me-browser" class="career-browser">
@@ -142,46 +146,57 @@
 <section id="chat-app-settings" class="setup-section" aria-labelledby="chat-app-title">
 <h2 id="chat-app-title">AI apps</h2>
 <div class="settings-content">
-<p>Choose Codex or Claude. Sign in there, then connect it to Companion.</p>
-<div class="app-row">
-<h3 id="codex-host-label" class="app-name">Codex</h3>
-<p id="chatgpt-connection" class="app-status caption" aria-live="polite"></p>
-<button id="install-chatgpt" class="app-action ghost" type="button">Set up</button>
-<button id="get-codex" class="app-action ghost" type="button" hidden>Get Codex</button>
-<div class="app-details"><p id="codex-setup-help"></p><div class="actions"><button id="setup-codex" class="ghost" type="button">Continue in Codex</button></div>
-<details><summary>Advanced</summary><p id="codex-setup-detail" hidden></p><p>Register this command as <strong>recruiters-rip</strong> in your local MCP host.</p><code id="mcp-command" class="command"></code><button id="copy-command" class="text" type="button">Copy command</button></details></div>
+<div class="app-block">
+<div class="app-head"><h3 id="codex-host-label" class="app-name">Codex</h3><p id="codex-status" class="caption" aria-live="polite"></p></div>
+<ol class="app-steps">
+<li id="codex-get-step" hidden><span>Install Codex</span><button id="get-codex" class="ghost" type="button">Get Codex</button></li>
+<li><span>Add recruiters.rip</span><button id="install-chatgpt" class="ghost" type="button">Set up</button></li>
+<li><span>Start a job search</span><button id="setup-codex" class="ghost" type="button">Continue in Codex</button></li>
+</ol>
 </div>
-<div class="app-row">
-<h3 id="claude-host-label" class="app-name">Claude</h3>
-<p id="claude-connection" class="app-status caption" aria-live="polite"></p>
-<button id="install-claude" class="app-action ghost" type="button">Set up</button>
-<button id="get-claude" class="app-action ghost" type="button" hidden>Get Claude</button>
-<div class="app-details"><p id="claude-setup-help"></p><div class="actions"><button id="setup-claude" class="ghost" type="button">Continue in Claude</button></div>
-<details><summary>Advanced</summary><p id="claude-setup-detail" hidden></p><p id="claude-config-help">Merge this entry into your Claude MCP configuration.</p><pre id="mcp-config" class="command"></pre><button id="copy-config" class="text" type="button">Copy configuration</button></details></div>
+<div class="app-block">
+<div class="app-head"><h3 id="claude-host-label" class="app-name">Claude</h3><p id="claude-status" class="caption" aria-live="polite"></p></div>
+<ol class="app-steps">
+<li id="claude-get-step" hidden><span>Install Claude</span><button id="get-claude" class="ghost" type="button">Get Claude</button></li>
+<li><span>Add recruiters.rip</span><button id="install-claude" class="ghost" type="button">Set up</button></li>
+<li><span>Start a job search</span><button id="setup-claude" class="ghost" type="button">Continue in Claude</button></li>
+</ol>
 </div>
 <p id="other-connections" class="caption" aria-live="polite" hidden></p>
+<div class="app-block">
+<div class="app-head"><h3 class="app-name">Setup prompt for your agent</h3></div>
+<p class="caption">Paste into Codex CLI, Claude Code, Cursor or any agent to add recruiters.rip on this computer.</p>
+<pre id="agent-prompt" class="command agent-prompt" tabindex="0" aria-label="Setup prompt"></pre>
+<div class="actions"><button id="copy-agent-prompt" class="ghost" type="button">Copy prompt</button></div>
+</div>
 </div>
 </section>
 <section id="browser-settings" class="setup-section" aria-labelledby="browser-title">
 <h2 id="browser-title">Browser extensions</h2>
-<div class="settings-content"><p>Optional. Add a browser extension to save jobs and help fill application forms. Keep Companion open when using it.</p>
-<div class="app-row">
-<h3 class="app-name">Chrome extension</h3>
-<button id="save-extension" class="app-action ghost" type="button">Save to Downloads</button>
-<div class="app-details"><ol class="help-steps"><li>Choose Save to Downloads.</li><li>In Chrome, open <code>chrome://extensions</code> and turn on Developer mode.</li><li>Choose Load unpacked and select the “Recruiters.rip Chrome extension” folder in Downloads.</li><li>Open a job and choose the recruiters.rip toolbar icon.</li></ol><p class="caption">It updates itself while Companion is open. Keep the folder in Downloads.</p><p id="chrome-saved" class="caption" role="status" hidden></p></div>
-<p id="chrome-native-status" class="app-status caption" aria-live="polite"></p>
+<div class="settings-content"><p>Optional. Save jobs and fill application forms from your browser.</p>
+<div class="browser-setup">
+<h3>Chrome <span id="chrome-native-status" class="caption" role="status"></span></h3>
+<ol class="setup-steps">
+<li><span>Download</span><button id="save-extension" class="ghost" type="button">Save to Downloads</button></li>
+<li><span>Open extensions</span><span><button id="open-chrome-extensions" class="link" type="button" aria-label="Open chrome://extensions in Chrome">chrome://extensions</button><span id="chrome-extensions-manual" class="step-fallback" hidden>Couldn’t open Chrome. Paste this in its address bar: <code>chrome://extensions</code> <button id="copy-chrome-extensions" class="text" type="button">Copy</button></span></span></li>
+<li><span>Set up</span><span>Turn on Developer mode, choose Load unpacked, select Recruiters.rip Chrome extension in Downloads.</span></li>
+<li><span>Use it</span><span>On a job page, click the recruiters.rip icon.</span></li>
+</ol>
 </div>
-<div class="app-row">
-<h3 class="app-name">Firefox extension</h3>
-<button id="save-firefox-extension" class="app-action ghost" type="button">Save to Downloads</button>
-<div class="app-details"><ol class="help-steps"><li>Choose Save to Downloads.</li><li>In Firefox, open <code>about:debugging</code> → This Firefox → Load Temporary Add-on.</li><li>Select <code>manifest.json</code> in the “Recruiters.rip Firefox extension” folder in Downloads.</li><li>Open a job and choose the recruiters.rip toolbar icon.</li></ol><p class="caption">Load it again after closing Firefox.</p><p id="firefox-saved" class="caption" role="status" hidden></p></div>
-<p id="firefox-native-status" class="app-status caption" aria-live="polite"></p>
+<div class="browser-setup">
+<h3>Firefox <span id="firefox-native-status" class="caption" role="status"></span></h3>
+<ol class="setup-steps">
+<li><span>Download</span><button id="save-firefox-extension" class="ghost" type="button">Save to Downloads</button></li>
+<li><span>Open extensions</span><span><button id="open-firefox-extensions" class="link" type="button" aria-label="Open about:debugging in Firefox">about:debugging</button><span id="firefox-extensions-manual" class="step-fallback" hidden>Couldn’t open Firefox. Paste this in its address bar: <code>about:debugging#/runtime/this-firefox</code> <button id="copy-firefox-extensions" class="text" type="button">Copy</button></span></span></li>
+<li><span>Set up</span><span>Choose Load Temporary Add-on and select manifest.json in Recruiters.rip Firefox extension in Downloads.</span></li>
+<li><span>Use it</span><span>On a job page, click the recruiters.rip icon.</span></li>
+</ol>
 </div>
 </div>
 </section>
 <section id="sharing-settings" class="setup-section" aria-labelledby="sharing-title">
 <h2 id="sharing-title">CV sharing</h2>
-<div class="settings-content"><details><summary>Optional · share with JobStash</summary><p>Allow your AI app to send your CV and work history to JobStash. You can stop future sharing here at any time.</p><p id="sharing-status">CV sharing is off.</p><p id="sharing-shared" class="caption" hidden></p><button id="sharing-toggle" class="ghost" type="button">Allow CV sharing</button></details></div>
+<div class="settings-content"><p>When on, your AI app sends your CV and work history to <button class="link" type="button" data-open-jobstash>JobStash</button> for direct introductions to companies.</p><p id="sharing-status">CV sharing is off.</p><p id="sharing-shared" class="caption" hidden></p><button id="sharing-toggle" class="ghost" type="button">Share CV</button></div>
 </section>
 <section id="decisions" class="setup-section" aria-labelledby="decisions-title">
 <h2 id="decisions-title">Form filling</h2>

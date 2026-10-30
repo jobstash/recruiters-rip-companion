@@ -35,7 +35,7 @@ chrome.runtime.onConnectExternal?.addListener(port => {
 // Memory only: a native port keeps the worker alive, and panel reconnection can
 // recover a completed request. No candidate values are persisted to browser disk.
 let state = { buildId: BUILD_ID, busy: null, error: '', notice: '', tabId: null, documentId: null, page: null, pageKind: 'unknown', jobs: [], form: null, prepared: null, edits: {}, selected: [], paste: null,
-  application: null, applicationHost: 'claude', applicationNotice: '', applicationAnswersPending: false, answersStale: false, companion: null, errorCode: null };
+  saved: {}, application: null, applicationHost: 'claude', applicationNotice: '', applicationAnswersPending: false, answersStale: false, companion: null, errorCode: null };
 let generation = 0, preparingRequest = null, pasteSession = null, automaticPreparation = false;
 let inspectedPage = null;
 let pollTimer = null, pollEpoch = 0, pollInFlight = false, pollsRemaining = 0;
@@ -106,16 +106,50 @@ const inject = createPageAccess({
 });
 const TEXT_TYPES = new Set(['text', 'email', 'tel', 'url', 'textarea', 'number', 'date']);
 const preparedValue = field => { const value = state.edits[field.id] ?? field.value ?? ''; return typeof value === 'string' && value && value.length <= 20000 ? value : null; };
-const clearForm = () => { pasteSession = null; state.prepared = null; state.selected = []; state.edits = {}; state.form = null; state.paste = null; state.answersStale = false; };
+const clearForm = () => { pasteSession = null; state.prepared = null; state.selected = []; state.edits = {}; state.saved = {}; state.form = null; state.paste = null; state.answersStale = false; };
 async function arm(active) {
   pasteSession = null;
   if (!Number.isInteger(state.tabId) || !state.documentId) return;
   if (active && !await chrome.permissions.contains({ permissions: ['clipboardWrite'] })) throw new Error('In your browser’s extension settings, allow recruiters.rip to copy text so you can paste answers.');
   const session = active ? crypto.randomUUID() : null;
+  // Only fields still missing in this prepared snapshot may report what the user enters on the page.
+  const capture = active ? (state.prepared?.unresolved ?? []).flatMap(item => {
+    const field = item.add && state.form?.fields.find(field => field.id === item.id);
+    return field ? [{ id: field.id, signature: field.signature }] : [];
+  }) : [];
   try {
-    await inject(state.tabId, active ? armSmartPaste : disarmSmartPaste, active ? [{ session }] : [], state.documentId);
+    await inject(state.tabId, active ? armSmartPaste : disarmSmartPaste, active ? [{ session, capture }] : [], state.documentId);
     pasteSession = session;
   } catch (error) { if (active) throw error; }
+}
+// Answer saves run one at a time; clipboard validation waits for them so it never sees a half-applied save.
+let saving = Promise.resolve();
+function queued(task) { const run = saving.then(task); saving = run.catch(() => {}); return run; }
+const addable = id => state.prepared?.unresolved?.some(item => item.id === id && item.add) ? state.form?.fields.find(field => field.id === id) : null;
+async function saveAnswer(fieldId, value, source) {
+  const prepared = state.prepared, field = addable(fieldId);
+  if (!field) throw new Error('Read page before adding this answer.');
+  if (value !== null && (typeof value !== 'string' || !value.trim() || value.length > 10000 || (field.options && !field.options.some(option => option.value === value))))
+    throw new Error('Enter an answer before saving.');
+  stopPolling();
+  try {
+    const result = await native.request('forms_answer_save', { requestId: crypto.randomUUID(), formId: prepared.formId, snapshot: prepared.snapshot, fieldId, value, source });
+    if (prepared !== state.prepared) return;
+    if (result?.fieldId !== fieldId || !['future', 'application', 'none'].includes(result.scope)) throw new Error('Companion did not confirm saving this answer. Try again.');
+    state.saved = { ...state.saved, [fieldId]: { scope: value === null ? 'none' : result.scope, source } };
+    if (source === 'panel') {
+      // A panel answer becomes ready to paste in the page's own field order.
+      const order = id => state.form.fields.findIndex(item => item.id === id);
+      prepared.fields = [...prepared.fields, { ...field, value, source: 'user' }].sort((a, b) => order(a.id) - order(b.id));
+      prepared.unresolved = prepared.unresolved.filter(item => item.id !== fieldId);
+      state.edits = { ...state.edits, [fieldId]: value };
+    }
+    if (result.scope === 'future' && state.application) {
+      // Companion re-bound current answers and documents to the saved answer; adopt that context without discarding review.
+      const bindingId = state.application.bindingId, view = applicationView(await native.request('application_status', { bindingId }));
+      if (prepared === state.prepared && state.application?.bindingId === bindingId && view.bindingId === bindingId) state.application = view;
+    }
+  } finally { schedulePoll(); }
 }
 
 async function expirePrepared(notice) {
@@ -326,26 +360,13 @@ async function act(message) {
       if (!indexes.length) throw new Error('Select the jobs you applied to.');
       const result = await native.request('capture_jobs', { requestId: crypto.randomUUID(), sourceUrl: state.page.url, jobs: indexes.map(i => state.jobs[i]) });
       state.notice = `Saved ${result.jobs.length} ${result.jobs.length === 1 ? 'job' : 'jobs'} as applied. See Jobs → Applications in Companion.`;
-    } else if (action === 'profile-save') {
-      if (!state.prepared?.snapshot || !state.form) throw new Error('Read page before saving details.');
-      const allowed = new Map((state.prepared.questions || []).filter(question => question.key !== 'personalSummary').map(question => [question.key, question]));
-      const values = payload.values;
-      if (!values || typeof values !== 'object' || Array.isArray(values) || !Object.keys(values).length ||
-        Object.entries(values).some(([key, value]) => !allowed.has(key) ||
-          (allowed.get(key).type === 'boolean' ? typeof value !== 'boolean' : typeof value !== 'string' || !value.trim() || value.length > 10000) ||
-          (allowed.get(key).options && !allowed.get(key).options.some(option => option.value === value))))
-        throw new Error('Enter the requested details before saving.');
-      const result = await native.request('forms_profile_save', { requestId: crypto.randomUUID(), formId: state.prepared.formId, snapshot: state.prepared.snapshot, values });
-      if (generation !== token) return;
-      const keys = Object.keys(values);
-      if (!Array.isArray(result?.saved) || keys.some(key => !result.saved.includes(key)))
-        throw new Error('Companion did not confirm saving these details. Your edits are still here; try again.');
-      state.saveReceipt = { id: crypto.randomUUID(), keys };
-      state.notice = 'Details saved on this computer.'; publish();
-      await arm(false);
-      if (generation !== token) return;
-      await detect(state.tabId, token);
-      if (generation === token) state.notice = 'Details saved on this computer.';
+    } else if (action === 'answer-save') {
+      if (state.answersStale) throw new Error('Refresh answers before adding one.');
+      await queued(() => saveAnswer(payload.fieldId, payload.value, 'panel'));
+    } else if (action === 'answer-undo') {
+      const saved = state.saved?.[payload.fieldId];
+      if (saved?.scope !== 'future' || saved.source !== 'page') throw new Error('There is no saved answer to undo.');
+      await queued(() => saveAnswer(payload.fieldId, null, 'page'));
     } else if (action === 'settings') {
       await native.request('open_settings', {}); state.notice = 'Companion settings opened.';
     } else if (action === 'configure') {
@@ -388,7 +409,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     if (!live()) { respond({ value: null }); return false; }
     const payload = validationPayload();
     state.paste = { label: field.label, ok: null }; publish();
-    void Promise.resolve().then(async () => {
+    void saving.then(async () => {
       if (!await chrome.permissions.contains({ permissions: ['clipboardWrite'] })) throw new Error('Clipboard permission is unavailable.');
       const validated = await native.request('forms_validate', payload);
       if (validated?.valid !== true) throw new Error('The prepared form context changed.');
@@ -402,6 +423,17 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (message?.action === 'paste-ready') {
     const field = state.prepared?.fields.find(f => f.id === message.fieldId);
     if (!state.busy && pasteSession && message.session === pasteSession && field && field.signature === message.signature && preparedPageSender(sender, message, state, firefox) && state.form?.url === message.url) { state.paste = { label: field.label, ok: message.ok === true }; publish(); }
+    return false;
+  }
+  if (message?.action === 'answer-captured') {
+    // The user typed into a field that was missing in this snapshot. Companion decides whether it is a reusable answer.
+    const field = addable(message.fieldId), prepared = state.prepared, fieldId = message.fieldId;
+    if (field && pasteSession && message.session === pasteSession && field.signature === message.signature && preparedPageSender(sender, message, state, firefox) &&
+        state.form?.url === message.url && typeof message.value === 'string' && message.value.trim() && message.value.length <= 10000 && !state.answersStale) {
+      void queued(() => saveAnswer(fieldId, field.options ? message.value : message.value.trim(), 'page')).catch(() => {
+        if (prepared === state.prepared) state.saved = { ...state.saved, [fieldId]: { scope: 'none', source: 'page' } };
+      }).finally(publish);
+    }
     return false;
   }
   return false;

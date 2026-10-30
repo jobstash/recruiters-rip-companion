@@ -223,9 +223,11 @@ main { flex: 1; min-height: 0; overflow: auto; padding: var(--spacing-32) var(--
 .setup-section { display: grid; grid-template-columns: 160px minmax(0, 1fr); gap: var(--spacing-32); min-width: 0; padding-block: var(--spacing-32); border-top: 1px solid var(--color-facet); }
 .setup-section.account { border-top-color: var(--color-ink); }
 .settings-content { display: grid; gap: var(--spacing-24); min-width: 0; }
-.settings-tabs { position: sticky; top: 0; z-index: 2; margin-bottom: var(--spacing-16); background: var(--color-canvas); }
+/* The subtab bar sticks at the very top of the scrolling main, covering main's top padding so nothing shows above it. */
+#view-setup { --tabs-lift: var(--spacing-32); }
+.settings-tabs { position: sticky; top: calc(-1 * var(--tabs-lift)); z-index: 2; margin: calc(-1 * var(--tabs-lift)) 0 var(--spacing-16); padding-top: var(--tabs-lift); background: var(--color-canvas); }
 #settings-general, #settings-backups { min-width: 0; }
-#view-setup .setup-section { scroll-margin-top: var(--spacing-64); }
+#view-setup .setup-section { scroll-margin-top: calc(var(--tabs-lift) + 45px + var(--spacing-24)); }
 #settings-backups .settings-content > p { max-width: var(--reading); overflow-wrap: anywhere; }
 #backup-availability:empty, #backup-status:empty { display: none; }
 .backup-field { display: grid; gap: var(--spacing-8); min-width: 0; font: 500 12px/1.5 var(--font-geist-mono); }
@@ -240,6 +242,13 @@ main { flex: 1; min-height: 0; overflow: auto; padding: var(--spacing-32) var(--
 .app-status { grid-area: status; min-width: 0; }
 .app-action { grid-area: action; align-self: center; }
 .app-details { grid-area: details; }
+/* AI apps: each app is its name, an evidence-backed status, then numbered steps with the action inline. */
+.app-block { display: grid; gap: var(--spacing-8); min-width: 0; max-width: var(--reading); }
+.app-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--spacing-16); }
+.app-steps { margin: 0; padding: 0; list-style: none; counter-reset: step; }
+.app-steps li { counter-increment: step; display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; align-items: center; gap: var(--spacing-16); padding-block: var(--spacing-8); border-top: 1px solid var(--color-facet); color: var(--color-ink-2); }
+.app-steps li::before { content: counter(step); font: 400 13px/1.6 var(--font-geist-mono); color: var(--color-smoke); }
+.agent-prompt { max-height: 176px; overflow: auto; }
 details { min-width: 0; }
 summary { cursor: pointer; width: fit-content; max-width: 100%; min-height: 44px; display: flex; align-items: center; gap: var(--spacing-8); list-style: none; font: 500 12px/1.33 var(--font-geist-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--color-smoke); }
 summary::-webkit-details-marker { display: none; }
@@ -261,6 +270,7 @@ summary:hover { color: var(--color-ink); }
 .setup-next { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--spacing-24); padding-bottom: var(--spacing-16); border-bottom: 1px solid var(--color-facet); }
 .setup-next > div { display: grid; gap: var(--spacing-8); min-width: 0; }
 .setup-next h2 { font-size: 28px; }
+.setup-next > .actions { display: flex; }
 .publication-window { display: grid; gap: var(--spacing-8); min-width: 0; }
 #decisions-key-message:empty { display: none; }
 
@@ -273,6 +283,19 @@ summary:hover { color: var(--color-ink); }
 /* Help follows the actual setup sequence, then the conversation handoff and reference links. */
 .help-steps { margin: 0; padding-left: 1.25em; display: grid; gap: var(--spacing-8); color: var(--color-ink-2); line-height: 1.6; max-width: var(--reading); }
 .help-links code { font: 400 14px/1.6 var(--font-geist-mono); color: var(--color-ink); user-select: all; }
+/* Extension setup: four numbered steps per browser, each with its action inline. */
+.browser-setup { display: grid; gap: var(--spacing-8); }
+.browser-setup h3 { font: 500 14px/1.5 var(--font-geist-mono); }
+.browser-setup h3 .caption { margin-left: var(--spacing-8); }
+.setup-steps { display: grid; gap: var(--spacing-8); margin: 0; padding: 0; list-style: none; counter-reset: step; max-width: var(--reading); }
+.setup-steps li { display: grid; grid-template-columns: 1.5em 9rem minmax(0, 1fr); align-items: center; gap: var(--spacing-16); min-height: 44px; counter-increment: step; color: var(--color-ink-2); line-height: 1.6; }
+.setup-steps li::before { content: counter(step); font: 500 12px/1.33 var(--font-geist-mono); color: var(--color-smoke); }
+.setup-steps li > span:first-child { color: var(--color-ink); }
+.setup-steps code { font: 400 14px/1.6 var(--font-geist-mono); color: var(--color-ink); white-space: nowrap; user-select: all; }
+.step-fallback { display: block; }
+/* A link-styled control for destinations Companion opens natively (the renderer never navigates). */
+button.link, .me-actions button.link { display: inline; min-height: 0; padding: 0; font: inherit; letter-spacing: inherit; text-transform: none; text-decoration: underline; text-underline-offset: .2em; }
+button.link:hover:not(:disabled) { color: var(--color-smoke); }
 
 /* Native modal semantics and focus management are retained. */
 dialog { width: min(600px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); padding: 0; border: 1px solid var(--color-facet); border-radius: 0; background: var(--color-canvas); color: var(--color-ink); overflow: auto; }
@@ -284,6 +307,7 @@ dialog::backdrop { background: color-mix(in oklab, var(--color-void) 80%, transp
 @media (max-width: 759px) {
   :root { --page-pad: var(--spacing-16); }
   main { padding-top: var(--spacing-24); }
+  #view-setup { --tabs-lift: var(--spacing-24); }
   .topbar { gap: var(--spacing-8); }
   .brand { gap: var(--spacing-16); }
   .career-panes { grid-template-columns: minmax(0, 1fr); }
@@ -291,6 +315,8 @@ dialog::backdrop { background: color-mix(in oklab, var(--color-void) 80%, transp
   .career-reader { border-left: 1px solid var(--color-facet); padding: var(--spacing-16); }
   .career-reader .back { display: inline-flex; }
   .app-row { grid-template-columns: minmax(0, 1fr); grid-template-areas: "name" "status" "action" "details"; }
+  .setup-steps li { grid-template-columns: 1.5em minmax(0, 1fr); }
+  .setup-steps li > :last-child { grid-column: 2; }
   .setup-section { grid-template-columns: minmax(0, 1fr); gap: var(--spacing-24); }
   .setup-next { grid-template-columns: minmax(0, 1fr); gap: var(--spacing-16); }
   .me-actions button { padding-inline: var(--spacing-8); }

@@ -125,7 +125,7 @@ export function createNativeClient({ connect, host, onCommand = null, onDisconne
     return active;
   }
   function request(op, payload) {
-    insist(['status','pair','open_settings','open_decisions_settings','capture_jobs','forms_prepare','forms_profile_save','forms_cancel','forms_validate',
+    insist(['status','pair','open_settings','open_decisions_settings','capture_jobs','forms_prepare','forms_answer_save','forms_cancel','forms_validate',
       'application_resolve','application_status','application_host','application_prepare','application_document','application_open_ad','application_copy_intro'].includes(op), 'This native operation is unavailable.');
     insist(pending.size < maxPending, 'The companion is busy. Cancel or finish the current request.');
     const id = randomUUID(), message = { version: 1, id, op, payload };

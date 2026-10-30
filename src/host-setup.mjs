@@ -1,4 +1,4 @@
-import { access, cp, lstat, mkdir, writeFile, rm, readFile, realpath, rename, stat } from 'node:fs/promises';
+import { access, cp, lstat, mkdir, writeFile, rm, readFile, readdir, realpath, rename, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -31,6 +31,76 @@ export function mcpInvocation(command, { platform = process.platform, env = proc
   if (/["\r\n\0]/.test(command)) fail('INVALID_INPUT', 'The Windows tool launcher path cannot contain quotes or control characters.');
   return { command: path.win32.join(env.SystemRoot || env.SYSTEMROOT || env.WINDIR || 'C:\\Windows', 'System32', 'cmd.exe'),
     args: ['/d', '/v:off', '/s', '/c', '%RECRUITERS_RIP_MCP_COMMAND%'], env: { RECRUITERS_RIP_MCP_COMMAND: `"${command}"` } };
+}
+
+export function mcpServerToml(name, command, options) {
+  const invocation = mcpInvocation(command, options);
+  return `[mcp_servers.${name}]\ncommand = ${JSON.stringify(invocation.command)}\nargs = ${JSON.stringify(invocation.args)}\n`
+    + (invocation.env ? `\n[mcp_servers.${name}.env]\n${Object.entries(invocation.env).map(([key, value]) => `${key} = ${JSON.stringify(value)}\n`).join('')}` : '');
+}
+
+const serverName = localOnly => localOnly ? 'recruiters-rip-local' : 'recruiters-rip';
+const quoteSh = value => `'${String(value).replaceAll("'", "'\\''")}'`;
+
+// Pasted into any coding agent. Commands follow https://developers.openai.com/codex/mcp,
+// https://code.claude.com/docs/en/mcp and https://modelcontextprotocol.io/docs/develop/connect-local-servers.
+// Windows gets config-file entries only: its launcher runs through cmd.exe, which shell one-liners would re-quote.
+export function agentSetupPrompt(command, { localOnly = false, platform = process.platform, env = process.env } = {}) {
+  const name = serverName(localOnly), invocation = mcpInvocation(command, { platform, env }), windows = platform === 'win32';
+  const entry = `"${name}": ${JSON.stringify(invocation)}`;
+  const desktopConfig = platform === 'darwin' ? '~/Library/Application Support/Claude/claude_desktop_config.json'
+    : windows ? '%APPDATA%\\Claude\\claude_desktop_config.json' : '~/.config/Claude/claude_desktop_config.json';
+  return [
+    'Set up the recruiters.rip MCP server on this computer.',
+    '',
+    windows ? `It is a local stdio server named ${name}, started by this entry:` : `It is a local stdio server named ${name}. Its command is this file, with no arguments:`,
+    windows ? JSON.stringify(invocation) : command,
+    '',
+    'Add it to each of these apps that is installed here. Do not remove or change any other MCP server.',
+    '',
+    'Codex (the CLI, IDE extension and ChatGPT desktop share this setup):',
+    ...(windows ? ['Add this to %USERPROFILE%\\.codex\\config.toml:']
+      : [`codex mcp add ${name} -- ${quoteSh(command)}`, 'If the codex command is not available, add this to ~/.codex/config.toml instead:']),
+    mcpServerToml(name, command, { platform, env }).trimEnd(),
+    '',
+    'Claude Code:',
+    ...(windows ? ['Add this entry inside the top-level "mcpServers" object in %USERPROFILE%\\.claude.json:', entry]
+      : [`claude mcp add --scope user ${name} -- ${quoteSh(command)}`]),
+    '',
+    `Claude Desktop: add this entry inside "mcpServers" in ${desktopConfig}. Create the file if it does not exist.`,
+    entry,
+    '',
+    `Any other agent, such as Cursor: add the same command as a stdio MCP server named ${name}.`,
+    '',
+    `Then fully quit and reopen each app you changed, and check it works there by calling the ${name} tool career_profile_read.`,
+  ].join('\n');
+}
+
+const tableEnabled = (toml, table) => {
+  const lines = toml.split(/\r?\n/), start = lines.findIndex(line => line.trim() === `[${table}]`);
+  if (start < 0) return false;
+  const body = lines.slice(start + 1), end = body.findIndex(line => line.trim().startsWith('['));
+  return !(end < 0 ? body : body.slice(0, end)).some(line => /^\s*enabled\s*=\s*false\b/.test(line));
+};
+
+/** Whether Codex / Claude have a recruiters.rip MCP entry they load, read from their own config files. Unreadable means not found. */
+export async function addedHosts({ workspace, localOnly = false, platform = process.platform, env = process.env, home = homedir(),
+  read = filename => readFile(filename, 'utf8'), list = readdir } = {}) {
+  const p = paths(platform), name = serverName(localOnly), workspaceName = 'recruiters-rip-applications';
+  const text = async filename => { try { return await read(filename); } catch { return ''; } };
+  const servers = async filename => { try { const value = JSON.parse(await read(filename))?.mcpServers; return value && typeof value === 'object' ? value : {}; } catch { return {}; } };
+  const codexConfig = await text(p.join(env.CODEX_HOME || p.join(home, '.codex'), 'config.toml'));
+  const codex = [`plugins."recruiters-rip@${name}"`, `mcp_servers.${name}`, `mcp_servers."${name}"`].some(table => tableEnabled(codexConfig, table))
+    || tableEnabled(await text(p.join(workspace, '.codex', 'config.toml')), `mcp_servers.${workspaceName}`);
+  const desktop = platform === 'darwin' ? p.join(home, 'Library', 'Application Support', 'Claude')
+    : platform === 'win32' ? p.join(env.APPDATA || p.join(home, 'AppData', 'Roaming'), 'Claude') : p.join(env.XDG_CONFIG_HOME || p.join(home, '.config'), 'Claude');
+  let extensions = [];
+  try { extensions = await list(p.join(desktop, 'Claude Extensions')); } catch {}
+  const claudeFiles = [p.join(desktop, 'claude_desktop_config.json'), p.join(home, '.claude.json'), ...(env.CLAUDE_CONFIG_DIR ? [p.join(env.CLAUDE_CONFIG_DIR, '.claude.json')] : [])];
+  const claude = extensions.some(entry => entry === name || entry.endsWith(`.${name}`))
+    || (await Promise.all(claudeFiles.map(servers))).some(value => Object.hasOwn(value, name))
+    || Object.hasOwn(await servers(p.join(workspace, '.mcp.json')), workspaceName);
+  return { codex, claude };
 }
 
 export async function findHostCli(host, { platform = process.platform, env = process.env, home = homedir(), canExecute = executable,

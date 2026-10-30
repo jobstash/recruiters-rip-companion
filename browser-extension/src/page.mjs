@@ -105,13 +105,28 @@ export function inspectForm(_request, expectedDocument) {
   const identity = node => { if (!identities.nodes.has(node)) identities.nodes.set(node, crypto.randomUUID()); return identities.nodes.get(node); };
   const sensitive = /password|passcode|payment|credit.?card|debit.?card|card.?number|cardholder|\bcvv\b|\bcvc\b|\bcc-|transaction|bank|routing|iban|social.?security|\bssn\b|tax.?id|national.?(?:id|insurance)|passport|government|driver.?licen[cs]e|birth|\bbday\b|\bdob\b|\bage\b|\b(?:18|21)\s*(?:or older|years old|and over)|\bsex\b|gender|pronouns?|race|ethnic|nationality|citizenship|religio|disabil|medical|health|veteran|military|marital|sexual|demograph|self.?identif|signature|sign.?here|consent|agree|certif|attest|acknowledge|terms|privacy|background.?check|opt.?in|subscribe|marketing|permission|\bi confirm\b|\bi authorize\b|may we|can we contact|contact (?:my|your|me)\b|information.*(?:accurate|true)|(?:accurate|true).*information|i have read|expiry|expiration/i;
   const visible = el => !el.closest('[hidden],[aria-hidden="true"],inert') && el.getClientRects().length > 0 && getComputedStyle(el).display !== 'none' && getComputedStyle(el).visibility !== 'hidden';
+  // Placeholder prompts ("Start typing…", "Select…") are not questions; prefer the visible question text before the control.
+  const placeholderLike = text => /^(?:start typing|type here|type to search|type your answer|search|select|choose|pick one|please select|please choose|enter (?:a |an |your )?(?:answer|value|text))\b[^?]{0,30}$/i.test(text);
+  const textOf = node => { const copy = node.cloneNode(true); copy.querySelectorAll?.('input,select,textarea,button,script,style').forEach(n => n.remove()); return clean(copy.textContent); };
+  const precedingQuestion = el => {
+    for (let node = el, depth = 0; node && depth < 4; node = node.parentElement, depth++) {
+      for (let sibling = node.previousElementSibling, count = 0; sibling && count < 3; sibling = sibling.previousElementSibling, count++) {
+        // Another control before this one belongs to a different question.
+        if (/^(?:INPUT|SELECT|TEXTAREA)$/.test(sibling.tagName) || sibling.querySelector?.('input,select,textarea')) return '';
+        const text = textOf(sibling);
+        if (text && !placeholderLike(text)) return text;
+      }
+    }
+    return '';
+  };
   const labelFor = el => {
-    const label = [...(el.labels || [])].map(l => { const copy = l.cloneNode(true); copy.querySelectorAll('input,select,textarea,button,script,style').forEach(n => n.remove()); return copy.textContent; }).join(' ');
+    const label = [...(el.labels || [])].map(textOf).join(' ');
     const labelled = (el.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean).map(id => document.getElementById(id)?.textContent || '').join(' ');
     const identifier = el.name || el.id || '';
     const parts = [...identifier.matchAll(/\[([^\]]+)\]/g)];
     const fallback = (parts.at(-1)?.[1] || identifier).replace(/[_-]+/g, ' ');
-    return clean(el.getAttribute('aria-label') || labelled || label || el.getAttribute('placeholder') || fallback);
+    const named = [el.getAttribute('aria-label'), labelled, label, el.getAttribute('placeholder')].map(clean).filter(Boolean);
+    return named.find(text => !placeholderLike(text)) || precedingQuestion(el) || named[0] || clean(fallback);
   };
   const protectedControl = el => sensitive.test([el.name, el.id, el.autocomplete, el.getAttribute('aria-label'), el.getAttribute('placeholder'), el.getAttribute('title'),
     ...(el.labels || [])].map(value => typeof value === 'string' ? value : value?.textContent || '').join(' ') + ' ' +
@@ -214,13 +229,14 @@ export function checkFormBindings(request, expectedDocument) {
 
 // Smart paste uses only the native clipboard API after a trusted click or Tab focus.
 // It never intercepts paste or writes a synthetic paste/input event into the page.
-export function armSmartPaste({ session } = {}, expectedDocument) {
+export function armSmartPaste({ session, capture = [] } = {}, expectedDocument) {
   if (expectedDocument && globalThis[Symbol.for('recruiters.form-controls.v1')]?.document !== expectedDocument) throw new Error('The inspected document changed.');
   const identities = globalThis[Symbol.for('recruiters.form-controls.v1')];
   if (!identities?.fields || typeof session !== 'string' || !session) throw new Error('Inspect and prepare the form before arming paste.');
   const armedKey = Symbol.for('recruiters.smart-paste.v1');
   const arm = globalThis[armedKey] ||= { active: false, listening: false, epoch: 0, selection: null };
   arm.active = true; arm.session = session; arm.epoch++; arm.selection = null;
+  arm.capture = new Map((Array.isArray(capture) ? capture : []).map(item => [item.id, item.signature]));
   if (!arm.listening) {
     arm.listening = true;
     const invalidate = () => { arm.epoch++; arm.selection = null; };
@@ -240,6 +256,33 @@ export function armSmartPaste({ session } = {}, expectedDocument) {
     // window blur: that would erase the trusted click/Tab selection mid-switch.
     globalThis.addEventListener('blur', invalidate);
     document.addEventListener('visibilitychange', () => { if (document.visibilityState !== 'visible') invalidate(); }, true);
+    // Firefox's browser namespace is Promise-only; Chrome's callback keeps
+    // runtime.lastError scoped to the callback that owns it.
+    const send = message => globalThis.browser?.runtime
+      ? globalThis.browser.runtime.sendMessage(message)
+      : new Promise((resolve, reject) => {
+        globalThis.chrome.runtime.sendMessage(message, response => {
+          const error = globalThis.chrome.runtime.lastError;
+          if (error) reject(new Error(error.message)); else resolve(response);
+        });
+      });
+    // A committed value (change fires on blur or selection, never per keystroke) in a field
+    // that was missing when prepared. Companion decides whether it is worth keeping.
+    document.addEventListener('change', event => {
+      if (!arm.active || !event.isTrusted) return;
+      const bound = globalThis[Symbol.for('recruiters.form-controls.v1')];
+      for (const [fieldId, signature] of arm.capture ?? []) {
+        const control = bound?.controls?.get(fieldId);
+        if (!control?.group.includes(event.target)) continue;
+        if (control.fieldSignature !== signature || !control.check()) return;
+        const value = control.el.type === 'radio' ? control.group.find(node => node.checked)?.value ?? '' : control.el.tagName === 'SELECT' ? control.el.value : String(control.el.value ?? '').trim();
+        if (!value || value.length > 10000) return;
+        try {
+          void send({ action: 'answer-captured', fieldId, signature, value, url: location.href, session: arm.session, documentToken: bound.document }).catch(() => {});
+        } catch { /* The extension disconnected. */ }
+        return;
+      }
+    }, true);
     const select = (event, el = event.target) => {
       const selection = arm.selection;
       arm.selection = null;
@@ -252,16 +295,6 @@ export function armSmartPaste({ session } = {}, expectedDocument) {
         const current = () => arm.active && arm.session === session && arm.epoch === epoch && bound === globalThis[Symbol.for('recruiters.form-controls.v1')] && bound.fields.get(fieldId) === field &&
           document.activeElement === el && document.hasFocus() && field.check();
         if (!current() || !navigator.clipboard?.writeText) return;
-        // Firefox's browser namespace is Promise-only; Chrome's callback keeps
-        // runtime.lastError scoped to the callback that owns it.
-        const send = message => globalThis.browser?.runtime
-          ? globalThis.browser.runtime.sendMessage(message)
-          : new Promise((resolve, reject) => {
-            globalThis.chrome.runtime.sendMessage(message, response => {
-              const error = globalThis.chrome.runtime.lastError;
-              if (error) reject(new Error(error.message)); else resolve(response);
-            });
-          });
         const message = { fieldId, signature: field.signature, url: location.href, session, documentToken: bound.document };
         try {
           void send({ ...message, action: 'paste-value' }).then(async response => {

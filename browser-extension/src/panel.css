@@ -39,7 +39,11 @@ select option { background: var(--color-surface); color: var(--color-ink); }
 .row { padding: var(--spacing-16) 0; overflow-wrap: anywhere; }
 .check { display: flex; align-items: center; gap: var(--spacing-8); min-height: 44px; }
 .row label:not(.check) { display: block; }
-#details-form { margin-top: var(--spacing-32); }
+.caption { display: flex; flex-wrap: wrap; align-items: center; gap: 0 var(--spacing-8); margin: -12px 0 0 30px; color: var(--color-smoke); }
+.caption button.text { min-height: 32px; }
+.editor { padding: 0 0 var(--spacing-16) 30px; }
+.editor label { display: block; color: var(--color-ink-2); overflow-wrap: anywhere; }
+.editor .actions { margin-top: var(--spacing-16); }
 summary { min-height: 44px; padding-block: 12px; cursor: pointer; color: var(--color-smoke); font: var(--text-label); letter-spacing: var(--tracking-label); text-transform: uppercase; }
 #review { margin-top: var(--spacing-8); }
 #options { margin-top: var(--spacing-40); }

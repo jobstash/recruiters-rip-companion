@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { discoverHost, findHostCli, findChatGptCli, hostEnvironment, installChatGptPlugin, mcpInvocation } from '../src/host-setup.mjs';
+import { addedHosts, agentSetupPrompt, discoverHost, findHostCli, findChatGptCli, hostEnvironment, installChatGptPlugin, mcpInvocation } from '../src/host-setup.mjs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
@@ -93,6 +93,54 @@ test('MCP batch invocation keeps Unicode, shell metacharacters and percent signs
   assert.deepEqual(invocation.env, { RECRUITERS_RIP_MCP_COMMAND: `"${command}"` });
   assert.throws(() => mcpInvocation('C:\\bad" & other.cmd', { platform: 'win32' }), { code: 'INVALID_INPUT' });
   assert.deepEqual(mcpInvocation('/home/Zoë & Team/mcp', { platform: 'linux' }), { command: '/home/Zoë & Team/mcp', args: [] });
+});
+
+test('an app counts as added only when its own config names an enabled recruiters.rip entry', async () => {
+  const home = '/home/synthetic', workspace = '/profile/host-integration/application-workspace';
+  const check = (files, options = {}) => addedHosts({ workspace, home, platform: 'darwin', env: {}, ...options,
+    read: async file => { if (!Object.hasOwn(files, file)) throw Object.assign(new Error('missing'), { code: 'ENOENT' }); return files[file]; },
+    list: async directory => { const prefix = `${directory}/`; const entries = Object.keys(files).filter(file => file.startsWith(prefix)).map(file => file.slice(prefix.length).split('/')[0]); if (!entries.length) throw new Error('missing'); return entries; } });
+  const codexConfig = `${home}/.codex/config.toml`, desktopConfig = `${home}/Library/Application Support/Claude/claude_desktop_config.json`;
+  assert.deepEqual(await check({}), { codex: false, claude: false });
+  assert.deepEqual(await check({ [codexConfig]: '[plugins."recruiters-rip@recruiters-rip"]\nenabled = true\n\n[plugins."other@x"]\nenabled = false\n' }), { codex: true, claude: false });
+  assert.deepEqual(await check({ [codexConfig]: '[plugins."recruiters-rip@recruiters-rip"]\nenabled = false\n' }), { codex: false, claude: false });
+  assert.deepEqual(await check({ [codexConfig]: '[mcp_servers.recruiters-rip]\ncommand = "/x"\n' }), { codex: true, claude: false });
+  assert.deepEqual(await check({ '/codex-home/config.toml': '[mcp_servers.recruiters-rip]\ncommand = "/x"\n' }, { env: { CODEX_HOME: '/codex-home' } }), { codex: true, claude: false });
+  assert.deepEqual(await check({ [`${workspace}/.codex/config.toml`]: '[mcp_servers.recruiters-rip-applications]\ncommand = "/x"\n' }), { codex: true, claude: false });
+  assert.deepEqual(await check({ [desktopConfig]: JSON.stringify({ mcpServers: { 'recruiters-rip': { command: '/x' } } }) }), { codex: false, claude: true });
+  assert.deepEqual(await check({ [`${home}/.claude.json`]: JSON.stringify({ mcpServers: { 'recruiters-rip': { command: '/x' } } }) }), { codex: false, claude: true });
+  assert.deepEqual(await check({ [`${workspace}/.mcp.json`]: JSON.stringify({ mcpServers: { 'recruiters-rip-applications': { command: '/x' } } }) }), { codex: false, claude: true });
+  assert.deepEqual(await check({ [`${home}/Library/Application Support/Claude/Claude Extensions/local.mcpb.recruiters.recruiters-rip/manifest.json`]: '{}' }), { codex: false, claude: true });
+  assert.deepEqual(await check({ [desktopConfig]: '{not json', [`${home}/.claude.json`]: JSON.stringify({ mcpServers: { other: {} }, projects: {} }) }), { codex: false, claude: false });
+  // Windows and Linux read each app's documented config location.
+  assert.deepEqual(await check({ 'C:\\Users\\Zoë\\AppData\\Roaming\\Claude\\claude_desktop_config.json': JSON.stringify({ mcpServers: { 'recruiters-rip': {} } }) },
+    { platform: 'win32', home: 'C:\\Users\\Zoë', workspace: 'C:\\profile\\workspace', env: { APPDATA: 'C:\\Users\\Zoë\\AppData\\Roaming' } }), { codex: false, claude: true });
+  assert.deepEqual(await check({ [`${home}/.config/Claude/claude_desktop_config.json`]: JSON.stringify({ mcpServers: { 'recruiters-rip': {} } }) }, { platform: 'linux' }), { codex: false, claude: true });
+  // The local product only counts its own entries.
+  const production = { [codexConfig]: '[plugins."recruiters-rip@recruiters-rip"]\n', [desktopConfig]: JSON.stringify({ mcpServers: { 'recruiters-rip': {} } }) };
+  assert.deepEqual(await check(production, { localOnly: true }), { codex: false, claude: false });
+  assert.deepEqual(await check({ [codexConfig]: '[plugins."recruiters-rip@recruiters-rip-local"]\n', [desktopConfig]: JSON.stringify({ mcpServers: { 'recruiters-rip-local': {} } }) }, { localOnly: true }), { codex: true, claude: true });
+});
+
+test('the agent setup prompt names exact commands and files with this computer’s launcher', () => {
+  const command = "/Users/Zoë/Library/Application Support/Recruiters Companion/device/it's-mcp";
+  const prompt = agentSetupPrompt(command, { platform: 'darwin' });
+  assert.ok(prompt.includes(`codex mcp add recruiters-rip -- '/Users/Zoë/Library/Application Support/Recruiters Companion/device/it'\\''s-mcp'`));
+  assert.ok(prompt.includes(`claude mcp add --scope user recruiters-rip -- '/Users/Zoë/Library/Application Support/Recruiters Companion/device/it'\\''s-mcp'`));
+  assert.ok(prompt.includes(`[mcp_servers.recruiters-rip]\ncommand = ${JSON.stringify(command)}\nargs = []`));
+  assert.ok(prompt.includes('~/Library/Application Support/Claude/claude_desktop_config.json'));
+  assert.deepEqual(JSON.parse(`{${prompt.split('\n').find(line => line.startsWith('"recruiters-rip": '))}}`), { 'recruiters-rip': { command, args: [] } });
+  assert.ok(prompt.includes('career_profile_read'));
+  assert.ok(agentSetupPrompt('/home/z/mcp', { platform: 'linux' }).includes('~/.config/Claude/claude_desktop_config.json'));
+  assert.ok(agentSetupPrompt('/home/z/mcp', { platform: 'linux', localOnly: true }).includes("codex mcp add recruiters-rip-local -- '/home/z/mcp'"));
+  // Windows runs the .cmd launcher through cmd.exe, so the prompt gives config entries rather than shell one-liners.
+  const windowsCommand = 'C:\\Users\\Zoë\\AppData\\Roaming\\Recruiters Companion\\device\\recruiters-rip-mcp.cmd', env = { SystemRoot: 'C:\\Windows' };
+  const windows = agentSetupPrompt(windowsCommand, { platform: 'win32', env });
+  assert.equal(/codex mcp add|claude mcp add/.test(windows), false);
+  assert.ok(windows.includes('%APPDATA%\\Claude\\claude_desktop_config.json'));
+  assert.ok(windows.includes('%USERPROFILE%\\.codex\\config.toml'));
+  assert.ok(windows.includes('%USERPROFILE%\\.claude.json'));
+  assert.deepEqual(JSON.parse(`{${windows.split('\n').find(line => line.startsWith('"recruiters-rip": '))}}`)['recruiters-rip'], mcpInvocation(windowsCommand, { platform: 'win32', env }));
 });
 
 test('host subprocesses receive OS/session paths but never inherited provider keys or Node injection', () => {

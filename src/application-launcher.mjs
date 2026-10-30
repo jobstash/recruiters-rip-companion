@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { privateDirectory } from './vault.mjs';
 import { fail } from './mcp/state.mjs';
-import { discoverHost, hostEnvironment, mcpInvocation } from './host-setup.mjs';
+import { discoverHost, hostEnvironment, mcpInvocation, mcpServerToml } from './host-setup.mjs';
 import platformRuntime from './platform-runtime.cjs';
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -165,7 +165,5 @@ export function createApplicationLauncher({ directory, command, openExternal, ho
 }
 
 export function applicationMcpToml(command, options) {
-  const invocation = mcpInvocation(command, options);
-  return `[mcp_servers.${applicationConnection}]\ncommand = ${JSON.stringify(invocation.command)}\nargs = ${JSON.stringify(invocation.args)}\n`
-    + (invocation.env ? `\n[mcp_servers.${applicationConnection}.env]\n${Object.entries(invocation.env).map(([key, value]) => `${key} = ${JSON.stringify(value)}\n`).join('')}` : '');
+  return mcpServerToml(applicationConnection, command, options);
 }

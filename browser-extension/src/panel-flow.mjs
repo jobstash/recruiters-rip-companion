@@ -14,7 +14,7 @@ export function derivePanelFlow(state = {}) {
   if (state.busy) {
     const message = {
       detect: 'Reading this page…', prepare: 'Preparing saved answers…', 'prepare-saved': 'Preparing saved answers…',
-      'application-prepare': `Preparing this application in ${hostName}…`, 'profile-save': 'Saving details…',
+      'application-prepare': `Preparing this application in ${hostName}…`, 'answer-save': 'Saving answer…', 'answer-undo': 'Removing saved answer…',
       'application-host': 'Saving AI app choice…', 'application-document': 'Showing your CV…',
       'copy-intro': 'Copying introduction…', save: 'Saving as applied…', settings: 'Opening Companion…',
       configure: 'Opening settings…', install: 'Opening downloads…', 'open-job': 'Opening job…', 'application-open-ad': 'Opening job ad…',

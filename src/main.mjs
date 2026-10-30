@@ -17,6 +17,7 @@ import { createIntroductionTools, introductionsStatus, setSharingConsent } from 
 import { deleteCv } from './mcp/cv-deletion.mjs';
 import { openEmploymentProfile } from './employment-browser.mjs';
 import { openJobPage, requirementContextPrompt } from './career-browser.mjs';
+import { EXTENSIONS_PAGES, openExtensionsPage } from './browser-page.mjs';
 import { CareerError, createCareerState, fail, hash, upgradeCareer } from './mcp/state.mjs';
 import { createMcpServer, createPlatformTools } from './mcp/server.mjs';
 import { createProfileTools } from './mcp/profile-tools.mjs';
@@ -27,7 +28,7 @@ import { createScopedAccess } from './mcp/scope.mjs';
 import { createMatchingTools, deleteRankings } from './mcp/matching-tools.mjs';
 import { matchingProfileVersion } from './mcp/assessment-policy.mjs';
 import { addBlock, removeBlock } from './mcp/blocklist.mjs';
-import { installChatGptPlugin, mcpInvocation, prepareClaudePackage } from './host-setup.mjs';
+import { addedHosts, agentSetupPrompt, installChatGptPlugin, prepareClaudePackage } from './host-setup.mjs';
 import { createCareerBrowser } from './career-browser.mjs';
 import { createDecisionCredentials, decisionCredentialStatus } from './decisions/credentials.mjs';
 import { savedPublicationRange, setPublicationRange } from './mcp/review-queue.mjs';
@@ -269,16 +270,28 @@ function status() {
 }
 function setup() {
   const command = mcpCommand(directory);
-  return { command, claudeConfig: JSON.stringify({ mcpServers: { 'recruiters-rip': mcpInvocation(command) } }, null, 2),
+  return { command, agentPrompt: agentSetupPrompt(command, { localOnly }),
     claudePackage: path.join(app.isPackaged ? root.replace(/app\.asar$/, 'app.asar.unpacked') : root, 'src', 'generated', localOnly ? 'recruiters-rip-local.mcpb' : 'recruiters-rip.mcpb') };
 }
-// Installed review hosts are read once per session and whenever the review buttons are used; opening Jobs does not stat the disk every refresh.
+// Installed review hosts and their recruiters.rip entries are read at startup, when the window regains focus and after setup/review actions; opening Jobs does not stat the disk every refresh.
 let reviewHosts = { claude: false, codex: false }, reviewHostInfo = {};
 async function refreshReviewHosts() {
   try {
-    const launcher = applicationAccess().launcher;
-    reviewHostInfo = await launcher.info();
-    reviewHosts = Object.fromEntries(Object.entries(reviewHostInfo).map(([key, value]) => [key, value.available]));
+    const info = await applicationAccess().launcher.info();
+    if (JSON.stringify(info) !== JSON.stringify(reviewHostInfo)) {
+      reviewHostInfo = info;
+      reviewHosts = Object.fromEntries(Object.entries(info).map(([key, value]) => [key, value.available]));
+      emit();
+    }
+  } catch { /* keeps the last known value */ }
+  await refreshAddedHosts();
+}
+// "Added" means the app's own config names recruiters.rip; also re-read whenever an app connects.
+let hostsAdded = { codex: false, claude: false };
+async function refreshAddedHosts() {
+  try {
+    const next = await addedHosts({ workspace: path.join(directory, 'host-integration', 'application-workspace'), localOnly });
+    if (next.codex !== hostsAdded.codex || next.claude !== hostsAdded.claude) { hostsAdded = next; emit(); }
   } catch { /* keeps the last known value */ }
 }
 function localState() {
@@ -291,7 +304,7 @@ function localState() {
     decisions: { credentials: decisionCredentialStatus(state) },
     publicationRange: savedPublicationRange(state.career ?? {}),
     updates: updateState(),
-    review: { hosts: reviewHosts, hostInfo: reviewHostInfo, preferredHost: ['claude', 'codex'].includes(state.browserPreferences?.applicationHost) ? state.browserPreferences.applicationHost : reviewHosts.codex ? 'codex' : 'claude' },
+    review: { hosts: reviewHosts, hostInfo: reviewHostInfo, added: hostsAdded, preferredHost: ['claude', 'codex'].includes(state.browserPreferences?.applicationHost) ? state.browserPreferences.applicationHost : reviewHosts.codex ? 'codex' : 'claude' },
     introductions: introductionsStatus(state.career ?? {}),
     approval: pendingApproval ? { id: pendingApproval.id, title: pendingApproval.title, detail: pendingApproval.detail } : null };
 }
@@ -309,7 +322,7 @@ function showSettings() {
   window.webContents.on('will-navigate', event => event.preventDefault());
   window.webContents.on('will-attach-webview', event => event.preventDefault());
   window.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
-  window.on('focus', () => workGate.activity());
+  window.on('focus', () => { workGate.activity(); void refreshReviewHosts(); });
   window.on('blur', () => workGate.activity());
   window.webContents.on('before-input-event', () => workGate.activity());
   window.webContents.session.setPermissionCheckHandler(() => false);
@@ -569,7 +582,7 @@ async function refreshBrowserExtension(browser, save = false) {
 async function nativeOperation(op, payload, socket = null) {
   const keys = { status: [], open_settings: [], open_decisions_settings: [], pair: ['productOrigin', 'pairing'],
     capture_jobs: ['requestId', 'sourceUrl', 'jobs'], forms_prepare: ['requestId', 'formId', 'url', 'title', 'fields', 'actions', 'useApi'], forms_cancel: ['requestId'],
-    forms_validate: ['formId', 'fields'], forms_profile_save: ['requestId', 'formId', 'snapshot', 'values'],
+    forms_validate: ['formId', 'fields'], forms_answer_save: ['requestId', 'formId', 'snapshot', 'fieldId', 'value', 'source'],
     application_resolve: ['requestId', 'page', 'jobs', 'context'], application_status: ['bindingId'], application_host: ['host'],
     application_prepare: ['bindingId', 'host'], application_document: ['bindingId', 'kind', 'action'], application_open_ad: ['bindingId'], application_copy_intro: ['bindingId'] };
   if (!Object.hasOwn(keys, op)) fail('INVALID_INPUT', 'This browser operation is unavailable.');
@@ -628,11 +641,15 @@ async function nativeOperation(op, payload, socket = null) {
     }
     return { opened: true, kind: payload.kind, action: payload.action };
   }
-  if (op === 'forms_profile_save') {
+  if (op === 'forms_answer_save') {
     const session = browserSessions.get(payload.formId);
     if (!session || session.socket !== socket || session.epoch !== sessionEpoch || session.identity !== identityKey(store.get()))
-      fail('FORM_CONTEXT_CHANGED', 'Read this application page before saving details.');
-    const result = await browserForms.saveDetails(payload);
+      fail('FORM_CONTEXT_CHANGED', 'Read this application page before saving answers.');
+    const before = session.evidence, result = await browserForms.saveAnswer(payload);
+    // The save re-binds current drafts to the new evidence; keep prepared clipboard sessions bound to them too.
+    const drafts = store.get().career?.formDrafts ?? {};
+    for (const [formId, other] of browserSessions) if (other.evidence === before && drafts[formId]) other.evidence = drafts[formId].evidence;
+    if (drafts[payload.formId]) session.answersHash = hash(drafts[payload.formId].answers ?? {});
     careerViewRevision++; emit(); return result;
   }
   if (op === 'forms_validate') {
@@ -929,7 +946,7 @@ async function settingsOperation(op, input, ownMutation) {
       await access.workflow.setHost({ host });
       await refreshReviewHosts();
     }
-    else if (op === 'copy-command') clipboard.writeText(setup().command);
+    else if (op === 'copy-agent-prompt') clipboard.writeText(setup().agentPrompt);
     else if (op === 'get-codex' || op === 'get-claude') {
       const codex = op === 'get-codex', cli = process.platform === 'linux';
       const url = codex
@@ -940,8 +957,10 @@ async function settingsOperation(op, input, ownMutation) {
         ? cli ? 'OpenAI’s Codex setup page' : 'OpenAI’s desktop download page'
         : cli ? 'Anthropic’s Claude Code setup page' : 'Anthropic’s Claude download page' };
     }
-    else if (op === 'copy-config') clipboard.writeText(setup().claudeConfig);
-    else if (op === 'install-chatgpt') result = await installChatGptPlugin({ directory, root: app.isPackaged ? root.replace(/app\.asar$/, 'app.asar.unpacked') : root, localOnly, command: setup().command });
+    else if (op === 'install-chatgpt') {
+      result = await installChatGptPlugin({ directory, root: app.isPackaged ? root.replace(/app\.asar$/, 'app.asar.unpacked') : root, localOnly, command: setup().command });
+      await refreshAddedHosts();
+    }
     else if (op === 'install-claude') {
       const launcher = applicationAccess().launcher, hostInfo = await launcher.info();
       if (!hostInfo.claude.available) fail('HOST_UNAVAILABLE', hostInfo.claude.reason);
@@ -949,14 +968,18 @@ async function settingsOperation(op, input, ownMutation) {
       else {
         const filename = await prepareClaudePackage({ template: setup().claudePackage, directory, localOnly, version: packageMetadata.version });
         const error = await shell.openPath(filename);
-        if (error) fail('INVALID_INPUT', 'The Claude extension could not be opened. Use the displayed local MCP configuration instead.');
+        if (error) fail('INVALID_INPUT', 'The Claude extension could not be opened. Use Copy setup prompt instead.');
       }
+      await refreshAddedHosts();
     }
     else if (op === 'save-extension' || op === 'save-firefox-extension') {
       const folder = await refreshBrowserExtension(op === 'save-firefox-extension' ? 'firefox' : 'chrome', true);
       shell.showItemInFolder(folder);
       result = { saved: true, folder: path.basename(folder) };
     }
+    else if (op === 'open-chrome-extensions' || op === 'open-firefox-extensions') result = await openExtensionsPage(op === 'open-chrome-extensions' ? 'chrome' : 'firefox');
+    else if (op === 'copy-chrome-extensions' || op === 'copy-firefox-extensions') clipboard.writeText(EXTENSIONS_PAGES[op === 'copy-chrome-extensions' ? 'chrome' : 'firefox']);
+    else if (op === 'open-jobstash') await shell.openExternal('https://jobstash.xyz');
     else fail('INVALID_INPUT', 'This settings action is unavailable.');
     emit(); return { ok: true, result };
   } catch (error) { return { ok: false, error: safeFailure(error) }; }
@@ -1014,7 +1037,7 @@ else {
     // persistent cookie key. API credentials are entered only through the local settings IPC.
     await showSettings();
     await installConnections(); await startNativeBridge();
-    mcpBridge = await startMcpBroker({ directory, createServer: createSessionServer, onConnections: clients => { mcpClients = clients; emit(); } });
+    mcpBridge = await startMcpBroker({ directory, createServer: createSessionServer, onConnections: clients => { mcpClients = clients; emit(); void refreshAddedHosts(); } });
     try { await initialize(); } catch (error) { failure = error?.code === 'LEGACY_VAULT_LOCKED' ? error.message : 'Local storage is unavailable. Check the companion data folder, then open local storage.'; }
     await refreshReviewHosts();
     heartbeatTimer = setInterval(() => {

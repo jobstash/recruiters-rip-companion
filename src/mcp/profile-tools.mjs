@@ -63,7 +63,7 @@ function saveSource(career, input) {
   return source;
 }
 /** Upserts normalized facts: an id replaces that fact, otherwise a saved fact with the same subject is replaced. */
-function upsertFacts(career, entries) {
+export function upsertFacts(career, entries) {
   const keys = entries.map(({ fields }) => factKey(fields));
   if (new Set(keys).size !== keys.length) fail('INVALID_INPUT', 'Each subject and employer combination may appear only once per save; combine the answers into one fact.');
   const byKey = new Map(Object.values(career.facts).map(fact => [factKey(fact), fact.id]));

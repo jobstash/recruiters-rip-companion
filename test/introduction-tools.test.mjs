@@ -22,6 +22,16 @@ function fixture({ share = async ({ documentId }) => ({ documentId, attached: tr
 const role = (overrides = {}) => ({ ref: 'profile:12', name: 'Example Labs', title: 'Senior Engineer', startDate: '2021-03', endDate: '2024-01', current: false, ...overrides });
 const statusOf = async f => (await f.call('career_employment_status')).sources[0].status;
 
+test('a fresh profile has CV sharing off and unanswered, and sends nothing', async () => {
+  const f = fixture();
+  assert.equal(createCareerState().introductions, undefined);
+  assert.equal((await f.call('career_employment_status')).consent, null);
+  const { contentHash } = (await f.call('career_employment_status')).sources[0];
+  await f.call('career_employment_save', { sourceId: 'cv', contentHash, employment: [role()] });
+  await assert.rejects(f.call('career_cv_share', { sourceId: 'cv' }), { code: 'CONSENT_REQUIRED' });
+  assert.equal(f.calls.share.length, 0);
+});
+
 test('a CV moves from needs_extraction to shared under standing consent alone, and a CV or role change needs a new share', async () => {
   const f = fixture();
   const { contentHash } = (await f.call('career_employment_status')).sources[0];

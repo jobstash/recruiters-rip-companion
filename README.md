@@ -39,12 +39,15 @@ Wait for Companion to show that the account is connected. If it stays pending, s
 
 In **Companion → Me**, choose **Import CV** and select a PDF, Word document or text file. Use a document with selectable text, not a scanned image.
 
-### 4. Connect Codex or Claude
+### 4. Add recruiters.rip to Codex or Claude
 
-1. In **Settings → AI apps**, choose Codex or Claude. You only need one.
-2. If it is missing, choose **Get Codex** or **Get Claude**, install it and sign in. On Linux, these links lead to apps that run in Terminal; follow their official installation guides.
-3. Back in Companion, choose **Set up** and follow the instructions for your installed app.
-4. Enable recruiters.rip in your AI app when asked, then start a new task or conversation. Keep Companion open.
+In **Settings → AI apps**, follow the steps for one app:
+
+1. If it is missing, choose **Get Codex** or **Get Claude**, install it and sign in. On Linux, these links lead to apps that run in Terminal; follow their official installation guides.
+2. **Add recruiters.rip:** choose **Set up**. The app shows **Added** once its settings include recruiters.rip, and **In use now** while a conversation is using it.
+3. **Start a job search:** choose **Continue in Codex** or **Continue in Claude**.
+
+Using another agent (Codex CLI, Claude Code, Cursor)? Choose **Copy prompt** under **Setup prompt for your agent**, paste it into that agent and send. It adds recruiters.rip with this computer's exact paths.
 
 ### 5. Review jobs
 
@@ -55,9 +58,7 @@ Answer any questions about your experience, roles and locations. Your AI saves t
 <details>
 <summary>If your AI app cannot find Companion</summary>
 
-Keep Companion open. In **Settings → AI apps**, follow the instructions for your app, then start a new conversation with recruiters.rip enabled. Ask: **Use recruiters.rip to find me a job.**
-
-Choose **Continue in Codex** or **Continue in Claude**, then send the message there. Companion will show **Connected now** when the connection is working.
+In **Settings → AI apps**, check your app shows **Added**, then start a new conversation. Ask: **Use recruiters.rip to find me a job.** If it still has no recruiters.rip tools, choose **Copy prompt** and send it to any coding agent on this computer.
 </details>
 
 ### 6. Apply for a job
@@ -81,35 +82,20 @@ Portable backups verify document bytes and rebind them to fresh local document i
 
 Use it to save job adverts and help fill application forms. You can find and review jobs without it.
 
-Use Chrome 125 or newer, or Firefox 128 or newer. Keep Companion open. Open **Settings → Browser extensions** and choose **Save to Downloads** for your browser. Companion saves a `Recruiters.rip Chrome extension` or `Recruiters.rip Firefox extension` folder in your Downloads folder and shows it.
+Use Chrome 125 or newer, or Firefox 128 or newer, and keep Companion open. Open **Settings → Browser extensions** and follow the four steps for your browser:
 
-Keep that folder in Downloads: Companion refreshes it when it starts after an update, and the extension reloads itself when the browser is idle and no application work is active. Companion never replaces a folder with the same name that it did not create; rename or remove that folder first. Firefox’s temporary-loading requirement still applies.
+1. **Download:** choose **Save to Downloads**. Companion saves a `Recruiters.rip Chrome extension` or `Recruiters.rip Firefox extension` folder in Downloads and shows it.
+2. **Open extensions:** choose the `chrome://extensions` or `about:debugging` link. Companion opens that page in the browser; if it can't, copy the shown address into the browser's address bar.
+3. **Set up:** in Chrome, turn on **Developer mode**, choose **Load unpacked** and select the **Recruiters.rip Chrome extension** folder in Downloads. In Firefox, choose **Load Temporary Add-on** and select `manifest.json` in the **Recruiters.rip Firefox extension** folder in Downloads.
+4. **Use it:** on a job page, click the **recruiters.rip** icon.
 
-<details>
-<summary>Chrome</summary>
-
-1. Open `chrome://extensions`.
-2. Turn on **Developer mode**.
-3. Choose **Load unpacked** and select the **Recruiters.rip Chrome extension** folder in Downloads.
-4. Open a job page and choose **recruiters.rip** from Chrome’s **Extensions** menu, or click its **rr** icon.
-</details>
-
-<details>
-<summary>Firefox</summary>
-
-1. Open `about:debugging` and choose **This Firefox**.
-2. Choose **Load Temporary Add-on**.
-3. Select `manifest.json` in the **Recruiters.rip Firefox extension** folder in Downloads.
-4. Open a job page and choose **recruiters.rip** from Firefox’s **Extensions** menu, or click its **rr** icon.
-
-You will need to load this version again after closing Firefox.
-</details>
+Keep that folder in Downloads: Companion refreshes it when it starts after an update, and the extension reloads itself when the browser is idle and no application work is active. Companion never replaces a folder with the same name that it did not create; rename or remove that folder first. Firefox removes temporary add-ons when it closes, so load it again after restarting Firefox.
 
 ### Fill an application
 
 1. Open a job ad or application and click the **rr** toolbar icon. It reads the page and gets saved answers ready.
 2. Choose **Prepare application**. Codex or Claude opens with the request; click **Send**, or press **Enter** if a text window opens. Change the app under **Options**.
-3. Click an empty answer box and paste with **⌘V** on Mac or **Ctrl+V** on Windows/Linux. If details are missing, enter them and choose **Save details**.
+3. Click an empty answer box and paste with **⌘V** on Mac or **Ctrl+V** on Windows/Linux. For a **Missing** answer, choose **Add**, enter it and **Save**. General answers such as your notice period or expected salary are kept for future applications; anything specific to this job is kept for this application only. Typing a missing general answer into the form itself keeps it too, with **Undo** in the panel.
 4. Use **Show CV** to find the file to upload and **Copy intro** for a cover-letter or message box. Check the form and submit it yourself.
 
 Saved answers work without an API key. Extra help choosing saved answers is optional in **Settings → Form filling**, using a separately billed OpenAI API key.
@@ -244,7 +230,7 @@ Purpose: JobStash keeps the candidate's CV and CV-derived work history on their 
 
 1. `career_employment_status` lists each current CV as `needs_extraction`, `ready_to_share` or `shared` (keyed by the CV's content hash). The connected agent reads the CV, extracts employers, titles and `YYYY`/`YYYY-MM` dates, and calls `career_employer_search`. That is the `employer_search` platform operation, which returns up to five JobStash candidates per employer, profiles first.
 2. The agent keeps only confident matches and saves them locally with `career_employment_save`. Unmatched employers are dropped and never sent.
-3. Consent is controlled in **Settings → CV sharing**. Withdrawing stops future uploads only; anything already on JobStash stays, and consent can be granted again. The agent does not add a separate consent question to onboarding.
+3. Sharing is off for a new profile: no consent is recorded until the candidate chooses. On first run Companion's Me screen asks **Share your CV with JobStash?** with **Keep off** and **Share**; the choice can be changed later in **Settings → CV sharing**. An answer the candidate gives the AI app is recorded the same way (`career_introductions_update`). Withdrawing stops future uploads only; anything already on JobStash stays, and consent can be granted again.
 4. `career_cv_share` checks consent, CV bytes and matched roles, then sends `POST /device/cv` without a further dialog. The paired device signs the request; the recruiters.rip proxy forwards those bytes unchanged (up to 7.5 MiB). Middleware resolves the existing Privy-linked User from the device, stores the PDF/DOCX or text in the existing JobStash R2 resume bucket, replaces the profile's CV showcase link, and replaces its `CV_EMPLOYMENT` edges in one database transaction. Any unknown entity reference rejects the whole upload; a failed database transaction removes the newly uploaded object. No `candidate_documents` table or new migration is needed on production `main`.
 5. GitHub is optional: `account_github_connect` opens `recruiters.rip/account#github`, where developers link GitHub through Privy. `account_status` reports `platform.github.login` once middleware has synchronized it. The link is what makes warm intros possible.
 6. **Me → Career** shows the saved matches: employer, title and dates per role, newest first, with **Go to {company}’s profile**. That action sends the saved entity ref to the `employer_profile` platform operation (pairing required, membership not), which returns `{kind, slug, name}`: the Organization or Project `normalizedName` that keys its ecosystem.vision page (a profile resolves through its single linked child; several children or none is a 404). The companion opens `https://ecosystem.vision/organizations/names/<slug>` or `/projects/names/<slug>` and never builds a URL from a display name. Entries whose CV changed since extraction say so until the agent refreshes them.
@@ -271,7 +257,7 @@ Say **“Reassess roles.”** The host performs one ranking reset, then reviews 
 
 The companion's **Clear reviews** action and `career_rankings_delete` clear rankings, pairwise comparisons and cached jobs. They preserve profile, preferences, CVs, facts, job applications, account data and API credentials. A reset invalidates in-flight writers so deleted results cannot reappear. `career_match_jobs.profileVersion` binds profile changes and ranking resets; bounded saved-job reassessments can read it as `career_profile_read.matchingProfileVersion`.
 
-Navigation is **Me / Jobs / Settings / Help**; Me opens by default. Me keeps **Import CV** and **Jobs**, with account/setup guidance when needed, above **CVs / Facts / Preferences / Career**. The CV detail starts with **Delete CV**; a red border distinguishes this destructive action. Generated files belong to their jobs and applications through **Open CV / Open letter**, not to a global file button in Me. Settings has **General / Backups** subtabs: General holds account, app, browser, sharing, form and update controls; Backups holds save, preview, restore and folder actions. Manual connection details stay under **Advanced**. Import and restore use native file pickers, never renderer-supplied paths. Locked storage, account connection and explicit CV deletion confirmation retain their boundaries. Automatic updates use the saved update preference and safe restart admission, not a per-release approval dialog.
+Navigation is **Me / Jobs / Settings / Help**; Me opens by default. Me keeps **Import CV** and **Jobs**, with account/setup guidance when needed, above **CVs / Facts / Preferences / Career**. The CV detail starts with **Delete CV**; a red border distinguishes this destructive action. Generated files belong to their jobs and applications through **Open CV / Open letter**, not to a global file button in Me. Settings has **General / Backups** subtabs: General holds account, app, browser, sharing, form and update controls; Backups holds save, preview, restore and folder actions. Manual setup for any agent is one copyable prompt in **AI apps**. Import and restore use native file pickers, never renderer-supplied paths. Locked storage, account connection and explicit CV deletion confirmation retain their boundaries. Automatic updates use the saved update preference and safe restart admission, not a per-release approval dialog.
 
 Backup JSON version 2 contains profile records and SHA-256-verified document bytes, limited to 128 MiB per file, 100 profiles and 2,000 saved documents. Original CV files are limited to 5 MiB and saved documents to 12 MiB each. Current career-schema-2 records in version-1 exports remain importable; unsupported career schemas fail rather than passing through the destructive schema upgrade. Missing historical files are disclosed. Restore materializes only each application's current document version, independent of historical-record ordering. Restores retain sign-in, device identity, credentials, other identity archives and current sharing consent, while clearing runtime receipts and invalidating stale operations. Failed restores roll back replacements and newly created files without removing preexisting exports. Shared-CV references remain untrusted provenance for server-authorized deletion, not permission or proof of current sharing.
 
@@ -298,6 +284,8 @@ New facts retain their original `applicationId`; follow-up exchanges can retain 
 The host compares the full CV and facts semantically, including questions, context and exchanges, and passes an existing `factId` for justified reuse across differently worded requirements. This is host reasoning, not automatic keyword equivalence. When existing detail lacks material specificity, use `factId` with a targeted `followUp` instead of repeating the level question. Compatible hosts get forms; others get numbered choices such as `1a 2c`. A single pending detail accepts a plain sentence; mixed or multiple questions use the exact numbered format returned by the tool. Present pending follow-ups from either interview tool rather than stopping at “saved.” Skipping or cancellation invents no detail and does not erase a saved partial answer. No mandatory essays or fabricated metrics.
 
 Subsequent evaluation uses these explanations where relevant: they can change requirements, gates and dimensions or resolve eligibility, without automatic bonuses or forced changes to unrelated assessments. Fact changes update `profileVersion`, making previous assessments stale; discovery returns jobs needing reassessment. Collecting an answer does not automatically launch background reassessment. Reassess affected saved roles when needed and perform full reevaluation when requested, using current context and fresh reasoning rather than retagging old judgments.
+
+Browser form answers use one native operation, `forms_answer_save` `{requestId, formId, snapshot, fieldId, value, source: 'panel' | 'page'}` (`value: null` undoes), bound to the current prepared snapshot's missing fields and validated against the inspected field. Companion classifies the field from its label (`src/browser-forms.mjs`), never trusting the extension: contact fields (including labels that contain an unambiguous concept such as LinkedIn) go to the profile, general sponsorship and relocation to preferences, and the fixed topics Notice period, Expected compensation, GitHub profile, Portfolio or website and Spoken languages to one generic fact each (`note`, or `yes_no`/`choice` for choice fields; no employer or application; re-saving updates it). Read page then fills those fields without an API key. Everything else is saved only as this form's user answer, and text typed on the page that is not generic is never stored. Protected/demographic fields, salary history, references, criminal history and other people's contacts are never stored. A saved answer re-binds current form drafts, application answers and documents to the new career context so other ready answers stay ready, and it does not change `profileVersion` or trigger reassessment.
 
 ## CV and cover letters
 

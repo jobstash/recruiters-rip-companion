@@ -6,11 +6,11 @@ const chrome = globalThis.browser ?? globalThis.chrome;
 const pasteShortcut = /Mac/i.test(navigator.userAgentData?.platform || navigator.platform || navigator.userAgent) ? '⌘V' : 'Ctrl+V';
 const $ = id => document.getElementById(id);
 const el = (tag, text, className) => { const node = document.createElement(tag); if (text) node.textContent = text; if (className) node.className = className; return node; };
-let state, port, reconnect, pageKey, questionKey, fieldKey, jobKey, receipt, flow, lastAction, suspendedFocus;
+let state, port, reconnect, pageKey, fieldKey, listKey, jobKey, flow, lastAction, suspendedFocus;
 // Memory only: explicit panel edits, never values typed into the employer's page.
-const drafts = new Map(), answerDrafts = new Map(), selections = new Map();
-let answerContext;
-const questionInputs = new Map(), reviewInputs = new Map();
+const answerDrafts = new Map(), selections = new Map();
+let answerContext, editing = null, editorNode = null, focusAfter = null;
+const reviewInputs = new Map();
 function send(action, payload = {}) {
   if (state?.buildId !== BUILD_ID) return;
   if (!port) { $('error').hidden = false; $('error').textContent = 'The panel disconnected. Reopen it to continue.'; return; }
@@ -57,14 +57,6 @@ $('application-answers').onclick = () => send('application-answers');
 $('prepare-saved').onclick = () => send('prepare-saved');
 $('show-cv').onclick = () => { if (!state.busy && flow.cvReady) send('application-document', { kind: 'cv', action: 'reveal' }); };
 $('copy-intro').onclick = () => { if (!state.busy && flow.introReady) send('copy-intro'); };
-$('details-form').onsubmit = event => {
-  event.preventDefault();
-  if (state.busy || !$('details-form').reportValidity()) return;
-  const types = new Map((state.prepared?.questions || []).filter(question => question.key !== 'personalSummary').map(question => [question.key, question.type]));
-  const values = Object.fromEntries([...questionInputs].filter(([key, input]) => types.has(key) && input.value.trim()).map(([key, input]) => [key, types.get(key) === 'boolean' ? input.value === 'true' : input.value.trim()]));
-  if (!Object.keys(values).length) { $('error').hidden = false; $('error').textContent = 'Enter a missing detail before saving.'; return; }
-  send('profile-save', { values });
-};
 function edited() { send('edit', { identity: reviewIdentity(state), snapshot: state.prepared?.snapshot, edits: state.edits, selected: state.selected }); }
 function selection(id, selected) { selections.set(id, selected); state.selected = state.selected.filter(value => value !== id); if (selected) state.selected.push(id); edited(); }
 $('copy').onclick = async () => {
@@ -93,10 +85,10 @@ function preserveFocus(renderControls) {
   }
 }
 // One plain row per item: check (done) or empty circle, ellipsised label, right-aligned mono status.
-function listRow(label, status, done) {
+function listRow(label, status, done, action = null) {
   const row = el('li', '', 'item'), mark = el('span', '', done ? 'dot done' : 'dot'), name = el('span', label, 'name');
   mark.setAttribute('aria-hidden', 'true'); name.title = label;
-  row.append(mark, name, el('span', status, 'state'));
+  row.append(mark, name, ...(action ? [action] : []), el('span', status, 'state'));
   return row;
 }
 function answerStatus(field) {
@@ -106,6 +98,76 @@ function answerStatus(field) {
   if (!String(state.edits[field.id] ?? field.value ?? '').trim()) return ['Missing', false];
   return [state.paste?.ok === true && state.paste.label === field.label ? 'Copied' : 'Ready', true];
 }
+// Every prepared field in page order: ready answers, then what is still missing and whether it can be added here.
+const SAVED = { future: 'Saved for future applications', application: 'Saved for this application' };
+function answerRows(prepared) {
+  const order = new Map((state.form?.fields || []).map((field, index) => [field.id, index]));
+  return [...(prepared?.fields || []).map(item => ({ item, ready: true })), ...(prepared?.unresolved || []).map(item => ({ item, ready: false }))]
+    .sort((a, b) => (order.get(a.item.id) ?? order.size) - (order.get(b.item.id) ?? order.size)).map(({ item, ready }) => {
+      const saved = state.saved?.[item.id], typed = saved?.source === 'page';
+      const [status, done] = typed ? ['Filled', true] : ready ? answerStatus(item) : ['Missing', false];
+      return { id: item.id, label: item.label, status, done, add: !ready && item.add === true && !typed && !state.answersStale,
+        caption: SAVED[saved?.scope] ?? '', undo: typed && saved.scope === 'future' };
+    });
+}
+function openEditor(id) { editing = { id, value: '' }; editorNode = null; focusAfter = `new-${id}`; render(); }
+function closeEditor(id) { editing = null; focusAfter = `add-${id}`; render(); }
+function editorRow(row, busy) {
+  const field = state.form?.fields?.find(item => item.id === row.id) || { type: 'text' };
+  const item = el('li', '', 'editor'), form = el('form'), label = el('label', row.label), input = answerInput(field);
+  const actions = el('div', '', 'actions'), save = el('button', 'Save', 'quiet'), cancel = el('button', 'Cancel', 'text');
+  input.id = `new-${row.id}`; label.htmlFor = input.id; input.required = true; input.disabled = busy;
+  if (!field.options) input.maxLength = field.maxLength || 10000;
+  input.value = editing.value; input.oninput = input.onchange = () => { editing.value = input.value; };
+  input.onkeydown = event => { if (event.key === 'Escape') { event.preventDefault(); closeEditor(row.id); } };
+  save.type = 'submit'; cancel.type = 'button'; cancel.onclick = () => closeEditor(row.id);
+  form.onsubmit = event => {
+    event.preventDefault();
+    if (state.busy || !form.reportValidity()) return;
+    const value = field.options ? input.value : input.value.trim();
+    if (!value) { $('error').hidden = false; $('error').textContent = 'Enter an answer, or choose Cancel.'; return; }
+    send('answer-save', { fieldId: row.id, value });
+  };
+  actions.append(save, cancel); form.append(label, input, actions); item.append(form);
+  item.dataset.id = row.id;
+  return item;
+}
+function renderAnswerList(rows, busy, prepared) {
+  if (editing && prepared && !rows.some(row => row.id === editing.id && row.add)) {
+    // Saved (or no longer addable): close the editor and continue with the next missing answer.
+    const index = rows.findIndex(row => row.id === editing.id), next = rows.slice(index + 1).find(row => row.add) || rows.find(row => row.add);
+    editing = null; focusAfter = next ? `add-${next.id}` : null;
+  }
+  // Status refreshes rebuild the rows but keep the open editor's node, value and focus.
+  if (!editing) editorNode = null;
+  const key = JSON.stringify([rows, editing?.id ?? null]);
+  if (listKey !== key) preserveFocus(() => {
+    listKey = key;
+    $('answer-list').replaceChildren(...rows.flatMap(row => {
+      let action = null;
+      if (row.add && editing?.id !== row.id) {
+        action = el('button', 'Add', 'text'); action.id = `add-${row.id}`; action.setAttribute('aria-label', `Add ${row.label}`);
+        action.onclick = () => openEditor(row.id);
+      }
+      const nodes = [listRow(row.label, row.status, row.done, action)];
+      if (row.caption) {
+        const caption = el('li', '', 'caption');
+        caption.append(el('span', row.undo ? `${row.caption} ·` : row.caption));
+        if (row.undo) {
+          const undo = el('button', 'Undo', 'text'); undo.setAttribute('aria-label', `Undo saved answer for ${row.label}`);
+          undo.onclick = () => send('answer-undo', { fieldId: row.id });
+          caption.append(undo);
+        }
+        nodes.push(caption);
+      }
+      if (row.add && editing?.id === row.id) nodes.push(editorNode?.dataset.id === row.id ? editorNode : (editorNode = editorRow(row, busy)));
+      return nodes;
+    }));
+  });
+  const input = editing && $(`new-${editing.id}`);
+  if (input) input.disabled = busy;
+  if (focusAfter && !busy) { $(focusAfter)?.focus(); focusAfter = null; }
+}
 function renderAnswers(busy, hidden) {
   const prepared = hidden ? null : state.prepared;
   $('paste').hidden = !prepared || !flow.answerCount || !!state.answersStale;
@@ -113,19 +175,6 @@ function renderAnswers(busy, hidden) {
     : state.paste.ok === false ? `Could not copy ${state.paste.label}. Copy it from Edit answers instead.`
     : state.paste.ok === true ? `Ready to paste: ${state.paste.label}. Press ${pasteShortcut} in that field.`
     : `Getting ${state.paste.label} ready to paste…`;
-  const questions = (prepared?.questions || []).filter(question => question.key !== 'personalSummary');
-  $('details-form').hidden = !questions.length;
-  const nextQuestions = JSON.stringify(questions);
-  if (questionKey !== nextQuestions) preserveFocus(() => {
-    questionKey = nextQuestions; questionInputs.clear(); $('question-list').replaceChildren();
-    for (const question of questions) {
-      const row = el('div', '', 'row'), label = el('label', question.label), input = answerInput(question);
-      input.id = `detail-${question.key}`; label.htmlFor = input.id; input.maxLength = 10000;
-      input.value = drafts.get(question.key) ?? ''; input.oninput = () => drafts.set(question.key, input.value);
-      questionInputs.set(question.key, input); row.append(label, input); $('question-list').append(row);
-    }
-  });
-  for (const input of questionInputs.values()) input.disabled = busy;
   const fields = prepared?.fields || [];
   $('review').hidden = !fields.length;
   $('review-actions').hidden = !fields.length;
@@ -149,12 +198,10 @@ function renderAnswers(busy, hidden) {
     input.disabled = check.disabled = busy || !!field.manualOnly || !field.empty || !!state.answersStale;
     check.checked = state.selected.includes(field.id);
   }
-  const reusableLabels = new Set(questions.map(question => question.label));
-  const unknown = (prepared?.unresolved || []).filter(item => !reusableLabels.has(item.label));
-  $('answer-list').replaceChildren(...fields.map(field => listRow(field.label, ...answerStatus(field))),
-    ...unknown.map(item => listRow(item.label, 'Missing', false)));
-  $('answers-label').hidden = $('answer-list').hidden = !fields.length && !unknown.length;
-  $('form').hidden = !prepared || (!fields.length && !unknown.length && !questions.length);
+  const rows = answerRows(prepared);
+  renderAnswerList(rows, busy, prepared);
+  $('answers-label').hidden = $('answer-list').hidden = !rows.length;
+  $('form').hidden = !prepared || !rows.length;
   $('copy').disabled = busy || !!state.answersStale;
 }
 function renderJobs(busy) {
@@ -179,17 +226,17 @@ function renderJobs(busy) {
 function render() {
   const busy = !!state.busy;
   const active = document.activeElement;
-  if (busy && !suspendedFocus && /^(detail|answer|select)-/.test(active?.id || '')) {
+  if (busy && !suspendedFocus && /^(answer|select|new)-/.test(active?.id || '')) {
     suspendedFocus = { id: active.id, page: pageKey, start: active.selectionStart, end: active.selectionEnd };
   }
   for (const button of document.querySelectorAll('button')) button.disabled = busy;
   if (state.buildId !== BUILD_ID) {
-    for (const id of ['error', 'cancel', 'page', 'application', 'form', 'jobs', 'options', 'install', 'recover', 'application-prepare', 'application-answers', 'prepare-saved', 'application-open-ad', 'paste', 'review', 'details-form']) $(id).hidden = true;
+    for (const id of ['error', 'cancel', 'page', 'application', 'form', 'jobs', 'options', 'install', 'recover', 'application-prepare', 'application-answers', 'prepare-saved', 'application-open-ad', 'paste', 'review']) $(id).hidden = true;
     $('status').textContent = 'Extension updated. Reload to continue.'; $('status').hidden = false;
     $('detect').hidden = false; $('detect').className = ''; $('detect').textContent = 'Reload extension'; return;
   }
   const currentPage = JSON.stringify([state.tabId, state.documentId, state.page?.url]);
-  if (pageKey !== currentPage) { pageKey = currentPage; drafts.clear(); answerDrafts.clear(); selections.clear(); suspendedFocus = null; questionKey = fieldKey = jobKey = null; }
+  if (pageKey !== currentPage) { pageKey = currentPage; answerDrafts.clear(); selections.clear(); suspendedFocus = null; editing = focusAfter = null; fieldKey = listKey = jobKey = null; }
   state.edits ||= {}; state.selected ||= [];
   if (state.prepared) {
     const identity = reviewIdentity(state);
@@ -206,7 +253,7 @@ function render() {
   $('company').textContent = state.application?.company || (state.jobs?.length === 1 ? state.jobs[0].company : '') || '';
   $('company').hidden = !$('company').textContent;
   $('status').textContent = flow.kind === 'error' ? '' : flow.message;
-  if (!busy && state.notice && (lastAction === 'save' || (!noJob && ['profile-save', 'copy-intro', 'application-document', 'application-open-ad', 'cancel'].includes(lastAction)))) $('status').textContent += ` ${state.notice}`;
+  if (!busy && state.notice && (lastAction === 'save' || (!noJob && ['copy-intro', 'application-document', 'application-open-ad', 'cancel'].includes(lastAction)))) $('status').textContent += ` ${state.notice}`;
   $('error').hidden = flow.kind !== 'error'; $('error').textContent = flow.kind === 'error' ? flow.message : '';
   for (const id of ['detect', 'application-prepare', 'recover', 'cancel', 'application-open-ad', 'application-answers', 'prepare-saved']) $(id).hidden = true;
   if (flow.primary) {
@@ -234,14 +281,11 @@ function render() {
   $('show-cv').hidden = !allowDocuments || !flow.cvReady;
   $('copy-intro').hidden = !allowDocuments || !flow.introReady;
   $('application-notice').hidden = !state.applicationNotice; $('application-notice').textContent = state.applicationNotice || '';
-  if (state.saveReceipt && receipt !== state.saveReceipt.id) {
-    receipt = state.saveReceipt.id;
-    for (const key of state.saveReceipt.keys) { drafts.delete(key); if (questionInputs.has(key)) questionInputs.get(key).value = ''; }
-  }
   const answersHidden = noJob || ['locked', 'unavailable', 'update'].includes(flow.kind);
   renderAnswers(busy, answersHidden);
-  // The footer carries one sentence: the paste instruction replaces a bare answer count.
+  // The footer carries one sentence: an error, else a state the user must act on, else the paste instruction.
   $('status').hidden = !$('status').textContent || (!$('paste').hidden && ['ready', 'answers'].includes(flow.kind));
+  if (!$('status').hidden || !$('error').hidden) $('paste').hidden = true;
   renderJobs(busy);
   for (const button of document.querySelectorAll('button')) if (button !== $('cancel')) button.disabled = busy;
   if (state.answersStale) $('copy').disabled = true;

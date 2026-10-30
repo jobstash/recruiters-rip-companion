@@ -1,7 +1,9 @@
 import { CareerError, fail, hash, mutateCareer, readCareer } from './mcp/state.mjs';
-import { formEvidence, formFingerprint, unavailableField, validFormValue, validateFormSnapshot } from './mcp/form-tools.mjs';
+import { currentForm, formEvidence, formFingerprint, unavailableField, validFormValue, validateFormSnapshot } from './mcp/form-tools.mjs';
 import { FORM_DECISIONS, mapFormValues } from './decisions/form-mapping.mjs';
-import { CONTACT_FIELDS, patchProfile, validateProfilePatch } from './mcp/profile-fields.mjs';
+import { CONTACT_FIELDS, patchProfile } from './mcp/profile-fields.mjs';
+import { factKey, normalizeFact } from './mcp/facts.mjs';
+import { upsertFacts } from './mcp/profile-tools.mjs';
 import { contactCandidates } from './form-contact-candidates.mjs';
 import { applicationContextFingerprint, isApplicationWritingField, reusableApplicationAnswer } from './application-workflow.mjs';
 import { assertJobNotBlocked } from './mcp/blocklist.mjs';
@@ -43,10 +45,72 @@ function otherPersonContact(field) {
     (['email', 'tel'].includes(field.type) || /\b(?:email|e mail|name|phone|telephone|mobile|contact)\b/.test(label) ||
       Boolean(AUTOCOMPLETE[field.autocomplete?.trim().toLowerCase()]));
 }
+// Distinctive concepts may appear inside a longer question ("Share a link to your LinkedIn profile").
+const CONTAINS = { linkedinUrl: [/\blinkedin\b/], email: [/\b(?:email|e mail)\b/, 'email'], phone: [/\b(?:phone|telephone|mobile)\b/, 'tel'] };
 function contactKey(field) {
-  const key = Object.keys(CONTACTS).find(key => CONTACTS[key].includes(normalized(field.label)));
+  const label = normalized(field.label);
+  const exact = Object.keys(CONTACTS).find(key => CONTACTS[key].includes(label));
+  const contains = Object.keys(CONTAINS).filter(key => CONTAINS[key][0].test(label) && (!CONTAINS[key][1] || CONTAINS[key][1] === field.type));
+  const key = exact ?? (contains.length === 1 ? contains[0] : null);
   const auto = AUTOCOMPLETE[field.autocomplete?.trim().toLowerCase()];
-  return otherPersonContact(field) || (auto && auto !== key) ? null : key ?? null;
+  return otherPersonContact(field) || (auto && auto !== key) ? null : key;
+}
+const ELIGIBILITY = /\b(?:sponsor|sponsorship|visa|work authori[sz]ation|eligible to work)\b/i;
+// Never stored from a form, even for this application: salary history, criminal history and references.
+const NEVER_STORED = /\b(?:current|previous|past|last|present) (?:annual |yearly |base |total |gross )*(?:salary|compensation|pay|remuneration|rate)\b|\bsalary history\b|\bcriminal\b|\bconvict|\bfelon|\breferences?\b|\breferees?\b/;
+// Generic answers reused on later applications, matched deterministically on the normalized label.
+export const ANSWER_TOPICS = Object.freeze([
+  { subject: 'Notice period', pattern: /\bnotice period\b|\b(?:earliest|soonest) (?:possible |available )?start(?:ing)? date\b|\bwhen (?:can|could|would) you (?:be able to )?start\b|\b(?:available|availability) to start\b/ },
+  { subject: 'Expected compensation', pattern: /\b(?:expected|desired|target|requested) (?:annual |yearly |base |total |gross )*(?:salary|compensation|pay|remuneration|rate)\b|\b(?:salary|compensation|pay) (?:expectations?|requirements?)\b/ },
+  { subject: 'GitHub profile', pattern: /\bgithub\b/ },
+  { subject: 'Portfolio or website', pattern: /\bportfolio\b|\bpersonal (?:website|site|web site|homepage)\b|^(?:your )?(?:website|web site|homepage)(?: url)?$/ },
+  { subject: 'Spoken languages', pattern: /\blanguages? (?:do )?you speak\b|\bspoken languages?\b|\blanguages? spoken\b/ },
+  { subject: 'Willing to relocate', preference: 'willingToRelocate', pattern: /^(?:are you )?(?:willing|open|able|prepared) to relocate(?: for (?:this|the) (?:role|position|job))?$|^(?:willing(?:ness)? to relocate|relocation)$/ },
+]);
+const yesNo = text => { const value = normalized(text); return /^(?:yes|y)\b/.test(value) ? true : /^(?:no|n)\b/.test(value) ? false : null; };
+/** Server-side classification. null: never stored; key: profile/preference; topic: generic fact; otherwise this application only. */
+function answerTarget(field) {
+  const label = normalized(field.label), key = contactKey(field);
+  // A custom country picker cannot be filled, but its explicitly named country is still reusable.
+  const collectible = key === 'country' ? { ...field, manualOnly: false } : field;
+  if (unavailableField(collectible) || otherPersonContact(field) || NEVER_STORED.test(label) || (key !== 'requiresSponsorship' && ELIGIBILITY.test(label))) return null;
+  if (key) return { field: collectible, key };
+  const topic = ANSWER_TOPICS.find(topic => topic.pattern.test(label));
+  return { field, ...(topic ? { topic } : {}) };
+}
+/** Resolves what a value would store; unstorable generic text stays an answer for this application. */
+function answerPlan(target, value) {
+  const option = target.field.options?.find(option => option.value === value);
+  const text = option ? option.label.trim() : value?.trim();
+  const preference = target.key === 'requiresSponsorship' ? 'requiresSponsorship' : target.topic?.preference;
+  if (value === null) return { ...target, preference };
+  if (preference) {
+    const answer = yesNo(text);
+    if (answer === null && target.key) fail('INVALID_INPUT', 'Answer the general sponsorship question with Yes or No.');
+    return answer === null ? { field: target.field } : { ...target, preference, answer };
+  }
+  if (target.key) return { ...target, text };
+  if (!target.topic) return target;
+  try {
+    if (text.length > 160) throw new Error('Too long for a reusable answer.');
+    const answer = option ? yesNo(text) : null, kind = !option ? 'note' : answer === null ? 'choice' : 'yes_no';
+    return { ...target, fact: normalizeFact({ kind, subject: target.topic.subject, answer: kind === 'yes_no' ? (answer ? 'Yes' : 'No') : text, question: target.field.label.slice(0, 300) }) };
+  } catch { return { field: target.field }; }
+}
+// A user's own answer is not new evidence for answers and documents already bound to the career context.
+function keepBindings(career, change) {
+  const evidence = formEvidence(career), apps = Object.values(career.applications ?? {});
+  const contexts = apps.map(app => applicationContextFingerprint(career, app));
+  change();
+  const next = formEvidence(career), drafts = Object.values(career.formDrafts ?? {});
+  for (const draft of drafts) if (draft.evidence === evidence) draft.evidence = next;
+  apps.forEach((app, index) => {
+    const before = contexts[index], after = applicationContextFingerprint(career, app);
+    if (before === after) return;
+    for (const item of [app.cv, app.coverLetter, ...(app.exports ?? []), ...Object.values(app.formAnswers ?? {})])
+      if (item?.contextFingerprint === before) item.contextFingerprint = after;
+    for (const draft of drafts) if (draft.applicationId === app.id && draft.applicationContext === before) draft.applicationContext = after;
+  });
 }
 function profileValue(profile, key) {
   if (key === 'requiresSponsorship') return typeof profile.preferences?.requiresSponsorship === 'boolean' ? (profile.preferences.requiresSponsorship ? 'Yes' : 'No') : null;
@@ -57,43 +121,26 @@ function profileValue(profile, key) {
   }
   return null;
 }
-function directValue(field, profile) {
-  const key = contactKey(field);
-  let value = key ? profileValue(profile, key) : null;
-  if (!value) return null;
+function chosen(field, value, source) {
   if (['select', 'radio'].includes(field.type)) {
     const options = field.options.filter(option => normalized(option.label) === normalized(value) || normalized(option.value) === normalized(value));
     value = options.length === 1 ? options[0].value : null;
   }
-  return typeof value === 'string' && validFormValue(field, value) ? { value, source: key === 'requiresSponsorship' ? 'profile.preferences.requiresSponsorship' : `profile.${key}` } : null;
+  return typeof value === 'string' && validFormValue(field, value) ? { value, source } : null;
 }
-function missingQuestions(fields, profile, values) {
-  const questions = new Map();
-  for (const field of fields) {
-    const key = contactKey(field);
-    // A custom country picker cannot be filled, but its explicitly named country is still reusable.
-    const collectible = key === 'country' ? { ...field, manualOnly: false } : field;
-    if (!key || unavailableField(collectible) || values.has(field.id) || profileValue(profile, key)) continue;
-    if (key === 'requiresSponsorship') {
-      const previous = questions.get(key);
-      questions.set(key, { key, label: 'Do you now or in the future require visa sponsorship?', type: 'boolean',
-        required: previous?.required || field.required === true, options: [{ value: true, label: 'Yes' }, { value: false, label: 'No' }] });
-      continue;
-    }
-    const info = CONTACT_FIELDS[key], choice = ['select', 'radio'].includes(field.type);
-    const options = choice ? field.options.filter(option => option.value && option.label.trim()).map(option => ({ value: option.label, label: option.label })) : null;
-    if (choice && (!options.length || new Set(options.map(option => option.value)).size !== options.length)) continue;
-    const previous = questions.get(key);
-    if (previous) {
-      previous.required ||= field.required === true;
-      if (choice) {
-        previous.type = 'select';
-        previous.options = previous.options ? previous.options.filter(option => options.some(other => other.value === option.value)) : options;
-      }
-    } else questions.set(key, { key, label: info.label, type: choice ? 'select' : info.type ?? 'text',
-      required: field.required === true, ...(choice ? { options } : {}) });
+function directValue(field, profile) {
+  const key = contactKey(field), value = key ? profileValue(profile, key) : null;
+  return value ? chosen(field, value, key === 'requiresSponsorship' ? 'profile.preferences.requiresSponsorship' : `profile.${key}`) : null;
+}
+function topicValue(field, career) {
+  const topic = answerTarget(field)?.topic;
+  if (!topic) return null;
+  if (topic.preference) {
+    const saved = career.profile?.preferences?.[topic.preference];
+    return typeof saved === 'boolean' ? chosen(field, saved ? 'Yes' : 'No', `profile.preferences.${topic.preference}`) : null;
   }
-  return [...questions.values()].filter(question => !question.options || question.options.length);
+  const fact = Object.values(career.facts ?? {}).find(fact => !fact.employer && !fact.applicationId && factKey(fact) === factKey({ subject: topic.subject }));
+  return fact ? chosen(field, fact.answer, `fact:${fact.id}`) : null;
 }
 function knownBank(career) {
   const bank = [];
@@ -183,11 +230,14 @@ export function createBrowserForms({ store, credentials, assertAvailable, fetchI
       for (const field of snapshot.fields) {
         const reason = unavailableField(field);
         if (reason) { reasons.set(field.id, reason); continue; }
-        const answer = reusableApplicationAnswer(career, app?.id, field, applicationContext) ?? (app || !isApplicationWritingField(field) ? staged?.[field.id] : null);
-        if (answer && validFormValue(field, answer.value)) { values.set(field.id, { value: answer.value, source: 'agent' }); continue; }
+        const saved = staged?.[field.id], user = saved?.source === 'user';
+        const answer = reusableApplicationAnswer(career, app?.id, field, applicationContext) ?? (app || user || !isApplicationWritingField(field) ? saved : null);
+        if (answer && validFormValue(field, answer.value)) { values.set(field.id, { value: answer.value, source: answer.source === 'user' ? 'user' : 'agent' }); continue; }
+        const topic = topicValue(field, career);
+        if (topic) { values.set(field.id, topic); continue; }
         if (isApplicationWritingField(field)) { reasons.set(field.id, 'Ask your connected agent to write this answer for this application.'); continue; }
         if (otherPersonContact(field)) { reasons.set(field.id, 'This asks about another person. Stage an explicit supported answer with your connected agent or complete manually.'); continue; }
-        if (contactKey(field) !== 'requiresSponsorship' && /\b(?:sponsor|sponsorship|visa|work authori[sz]ation|eligible to work)\b/i.test(field.label)) {
+        if (contactKey(field) !== 'requiresSponsorship' && ELIGIBILITY.test(field.label)) {
           reasons.set(field.id, 'Confirm eligibility for this application with your connected agent or complete manually.'); continue;
         }
         const direct = directValue(field, career.profile ?? {});
@@ -248,62 +298,62 @@ export function createBrowserForms({ store, credentials, assertAvailable, fetchI
       for (const field of nameFields) if (reasons.get(field.id) === 'The name parts are ambiguous. Enter them explicitly.') values.delete(field.id);
       for (const answer of values.values()) delete answer.candidateKind;
       current(run);
-      const questions = missingQuestions(snapshot.fields, career.profile ?? {}, values);
+      const missing = snapshot.fields.filter(field => !values.has(field.id) && answerTarget(field)).map(field => field.id);
       const collectionSnapshot = hash({ fingerprint, evidence, identity: run.identity, requestId: args.requestId, answers: run.answersHash });
       await store.update(saved => {
         check(run, saved);
-        saved.career.formDrafts[formId].profileCollection = { snapshot: collectionSnapshot, identity: run.identity,
-          evidence, answersHash: run.answersHash, questions };
+        saved.career.formDrafts[formId].collection = { snapshot: collectionSnapshot, identity: run.identity, missing };
       });
       current(run);
-      return { formId, snapshot: collectionSnapshot, questions, ...(args.useApi ? { api: { configured: Boolean(run.key), used: requests > 0 } } : {}),
+      return { formId, snapshot: collectionSnapshot, ...(args.useApi ? { api: { configured: Boolean(run.key), used: requests > 0 } } : {}),
         url: snapshot.url, fields: snapshot.fields.filter(field => values.has(field.id)).map(field => ({ ...field, ...values.get(field.id) })),
-        unresolved: snapshot.fields.filter(field => !values.has(field.id)).map(({ id, label }) => ({ id, label, reason: reasons.get(id) ?? 'No known answer. Ask your connected agent to stage an answer, or complete manually.' })),
+        unresolved: snapshot.fields.filter(field => !values.has(field.id)).map(({ id, label }) => ({ id, label,
+          reason: reasons.get(id) ?? 'No known answer. Ask your connected agent to stage an answer, or complete manually.', ...(missing.includes(id) ? { add: true } : {}) })),
         ...(args.useApi ? { usage: { provider: FORM_DECISIONS.provider, model: FORM_DECISIONS.model, requests, inputTokens,
           estimatedCostUsd: inputTokens * FORM_DECISIONS.inputUsdPerMillion / 1000000, inputUsdPerMillion: FORM_DECISIONS.inputUsdPerMillion, priceNote: PRICE_NOTE } } : {}) };
     } finally { if (active.get(args.requestId) === run) active.delete(args.requestId); }
   }
-  async function saveDetails(args) {
-    if (!args || typeof args !== 'object' || Array.isArray(args) || Object.keys(args).some(key => !['requestId', 'formId', 'snapshot', 'values'].includes(key)) ||
-        !UUID.test(args.requestId) || typeof args.formId !== 'string' || typeof args.snapshot !== 'string' || !/^[a-f0-9]{64}$/.test(args.snapshot))
-      fail('INVALID_INPUT', 'Provide a request UUID, prepared form and snapshot with explicit profile values.');
-    if (!args.values || typeof args.values !== 'object' || Array.isArray(args.values) || !Object.keys(args.values).length)
-      fail('INVALID_INPUT', 'Provide explicit missing details to save.');
-    const { requiresSponsorship, ...profilePatch } = args.values;
-    if (Object.hasOwn(args.values, 'requiresSponsorship') && typeof requiresSponsorship !== 'boolean')
-      fail('INVALID_INPUT', 'Answer the general sponsorship question with Yes or No.');
-    if (Object.keys(profilePatch).length) validateProfilePatch(profilePatch);
-    if (Object.entries(profilePatch).some(([key, value]) => !Object.hasOwn(CONTACT_FIELDS, key) || typeof value !== 'string'))
-      fail('INVALID_INPUT', 'Only explicit reusable profile details can be saved from this form.');
-    assertAvailable();
-    const career = readCareer(store);
-    assertFormJobAllowed(career, args.formId);
-    const result = await mutateCareer(store, { requestId: args.requestId, revision: readCareer(store).revision },
-      'forms_profile_save', args, (career, state) => {
-        assertAvailable();
-        const draft = career.formDrafts?.[args.formId], binding = draft?.profileCollection;
-        assertFormJobAllowed(career, args.formId);
-        if (!binding || binding.snapshot !== args.snapshot || identity(state) !== binding.identity ||
-            formEvidence(career) !== binding.evidence || draft.evidence !== binding.evidence ||
-            answersHash(career, args.formId) !== binding.answersHash)
-          fail('FORM_CONTEXT_CHANGED', 'The form or your saved evidence changed. Read the page again before saving.');
-        const allowed = new Map(binding.questions.map(question => [question.key, question]));
-        for (const [key, value] of Object.entries(args.values)) {
-          const question = allowed.get(key);
-          if (!question || (question.options && !question.options.some(option => option.value === value)))
-            fail('INVALID_INPUT', 'Save only the missing details requested by this form.');
-        }
-        const saved = Object.keys(profilePatch).length ? patchProfile(career, profilePatch) : [];
-        if (requiresSponsorship !== undefined) {
+  /** One user answer for a prepared missing field. `value: null` undoes it. The server alone decides what is generic. */
+  async function saveAnswer(args) {
+    if (!args || typeof args !== 'object' || Array.isArray(args) || Object.keys(args).some(key => !['requestId', 'formId', 'snapshot', 'fieldId', 'value', 'source'].includes(key)) ||
+        !UUID.test(args.requestId) || typeof args.formId !== 'string' || args.formId.length > 100 || typeof args.snapshot !== 'string' || !/^[a-f0-9]{64}$/.test(args.snapshot) ||
+        typeof args.fieldId !== 'string' || !args.fieldId || args.fieldId.length > 200 || !['panel', 'page'].includes(args.source) ||
+        !(args.value === null || (typeof args.value === 'string' && args.value.trim() && args.value.length <= 10000)))
+      fail('INVALID_INPUT', 'Provide a request UUID, prepared form, snapshot, field, answer and source.');
+    const bound = (career, state) => {
+      assertAvailable();
+      assertFormJobAllowed(career, args.formId);
+      const draft = currentForm(career, args.formId), binding = draft.collection;
+      if (!binding || binding.snapshot !== args.snapshot || binding.identity !== identity(state))
+        fail('FORM_CONTEXT_CHANGED', 'The form or your saved answers changed. Read the page again before saving.');
+      const target = binding.missing.includes(args.fieldId) && answerTarget(draft.fields.find(field => field.id === args.fieldId));
+      if (!target) fail('INVALID_INPUT', 'This answer cannot be saved here. Complete it on the page.');
+      if (args.value !== null && !validFormValue(target.field, args.value)) fail('INVALID_INPUT', 'Enter a valid answer for this field.');
+      return { draft, plan: answerPlan(target, args.value) };
+    };
+    const { plan } = bound(readCareer(store), store.get());
+    // Job-specific text typed on the employer's page stays there.
+    if (args.source === 'page' && !plan.key && !plan.preference && !plan.fact && !(args.value === null && plan.topic)) return { fieldId: args.fieldId, scope: 'none' };
+    return mutateCareer(store, { requestId: args.requestId, revision: readCareer(store).revision }, 'forms_answer_save', args, (career, state) => {
+      const { draft, plan } = bound(career, state), value = args.value;
+      if (!plan.key && !plan.preference && !plan.topic) {
+        if (value === null) delete draft.answers[args.fieldId];
+        else Object.defineProperty(draft.answers, args.fieldId, { value: { value, source: 'user' }, writable: true, enumerable: true, configurable: true });
+        draft.updatedAt = new Date().toISOString();
+        return { fieldId: args.fieldId, scope: 'application' };
+      }
+      keepBindings(career, () => {
+        if (plan.preference) {
           career.profile.preferences ??= {};
-          career.profile.preferences.requiresSponsorship = requiresSponsorship;
-          saved.push('requiresSponsorship');
-        }
-        career.evidenceRevision++;
-        delete draft.profileCollection;
-        return { saved };
+          if (value === null) delete career.profile.preferences[plan.preference];
+          else career.profile.preferences[plan.preference] = plan.answer;
+        } else if (plan.key) patchProfile(career, { [plan.key]: value === null ? null : plan.text });
+        else if (value === null) {
+          for (const fact of Object.values(career.facts)) if (factKey(fact) === factKey({ subject: plan.topic.subject })) delete career.facts[fact.id];
+        } else upsertFacts(career, [{ fields: plan.fact }]);
       });
-    return { saved: result.saved };
+      return { fieldId: args.fieldId, scope: 'future' };
+    });
   }
-  return { prepare, saveDetails, cancel, cancelAll };
+  return { prepare, saveAnswer, cancel, cancelAll };
 }

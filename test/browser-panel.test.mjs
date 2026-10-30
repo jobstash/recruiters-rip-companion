@@ -32,12 +32,16 @@ async function panelFixture(initialState = {}, { platform = 'MacIntel', firefox 
   });
   const source = await readFile(new URL('../browser-extension/src/panel.mjs', import.meta.url), 'utf8');
   vm.runInContext(source.replace(/^import \{ BUILD_ID \} from '\.\/config\.mjs';/, `const BUILD_ID = ${JSON.stringify(BUILD_ID)};`).replace(/^import .*;\r?\n/gm, ''), context);
-  const state = { buildId: BUILD_ID, busy: null, notice: '', error: '', pageKind: 'application', companion: { workflowVersion: 2, hasCv: true }, tabId: 7, documentId: 'doc', page: { title: 'Application · Example', url: 'https://example.test/apply' }, jobs: [], form: { fields: [] }, selected: ['name'], edits: { name: 'Saved Name' }, paste: null,
-    prepared: { formId: 'form:synthetic', snapshot: 'snapshot:synthetic', api: { configured: false, used: false }, fields: [{ id: 'name', label: 'Full name', type: 'text', value: 'Saved Name', empty: true }], questions: [{ key: 'phone', label: 'Phone', type: 'tel', required: true }], unresolved: [{ label: 'Why this role?', reason: 'private internal reason' }] } };
+  const state = { buildId: BUILD_ID, busy: null, notice: '', error: '', pageKind: 'application', companion: { workflowVersion: 2, hasCv: true }, tabId: 7, documentId: 'doc', page: { title: 'Application · Example', url: 'https://example.test/apply' }, jobs: [], selected: ['name'], edits: { name: 'Saved Name' }, paste: null, saved: {},
+    form: { fields: [{ id: 'name', label: 'Full name', type: 'text' }, { id: 'phone', label: 'Phone', type: 'tel' }, { id: 'why', label: 'Why this role?', type: 'textarea' }] },
+    prepared: { formId: 'form:synthetic', snapshot: 'snapshot:synthetic', api: { configured: false, used: false }, fields: [{ id: 'name', label: 'Full name', type: 'text', value: 'Saved Name', empty: true }],
+      unresolved: [{ id: 'phone', label: 'Phone', reason: 'private internal reason', add: true }, { id: 'why', label: 'Why this role?', reason: 'private internal reason', add: true }] } };
   const update = patch => { Object.assign(state, patch); receive(JSON.parse(JSON.stringify(state))); };
   update(initialState);
   const inputs = id => descendants(nodes.get(id)).filter(node => ['INPUT', 'SELECT', 'TEXTAREA'].includes(node.tagName));
-  return { nodes, sent, copied, state, update, inputs, html, descendants, document, disconnect: () => disconnected(), get reloads() { return reloads; }, get tabQueries() { return tabQueries; } };
+  const button = (label, id = 'answer-list') => descendants(nodes.get(id)).find(node => node.tagName === 'BUTTON' && (node['aria-label'] === label || node.textContent === label));
+  const rows = () => nodes.get('answer-list').children.map(row => row.className === 'item' ? `${row.children[1].textContent}: ${row.children.at(-1).textContent}${row.children.length > 3 ? ' +' : ''}` : `${row.className}: ${descendants(row).map(node => node.tagName === 'SPAN' || node.tagName === 'BUTTON' || node.tagName === 'LABEL' ? node.textContent : '').filter(Boolean).join(' ')}`);
+  return { nodes, sent, copied, state, update, inputs, button, rows, html, descendants, document, disconnect: () => disconnected(), get reloads() { return reloads; }, get tabQueries() { return tabQueries; } };
 }
 const application = (overrides = {}) => ({
   bindingId: 'binding:private-internal', title: 'Engineer', company: 'Example', state: 'needs_documents',
@@ -69,7 +73,7 @@ test('one Prepare action launches the selected app, while Options persists the c
   assert.deepEqual(panel.sent.at(-1), { action: 'application-host', payload: { host: 'claude' } });
   assert.equal(panel.nodes.get('cv-state').textContent, 'Not ready'); assert.equal(panel.nodes.get('show-cv').hidden, true);
   const answers = (await panelFixture()).nodes.get('answer-list').children;
-  assert.deepEqual(answers.map(row => row.children.map(node => node.textContent ?? node.className)), [['dot done', 'Full name', 'Ready'], ['dot', 'Why this role?', 'Missing']]);
+  assert.deepEqual(answers.map(row => row.children.map(node => node.textContent ?? node.className)), [['dot done', 'Full name', 'Ready'], ['dot', 'Phone', 'Add', 'Missing'], ['dot', 'Why this role?', 'Add', 'Missing']]);
 });
 
 test('handoffs give actual Send or Enter instructions and never expose Stop or another Start', async () => {
@@ -96,12 +100,13 @@ test('only owned preparation exposes Stop and removes its inactive primary actio
 
 test('paste, errors and saved answer refreshes preserve explicit edits, selections and focused controls', async () => {
   const panel = await panelFixture();
-  const question = panel.inputs('question-list')[0], reviewed = panel.inputs('field-list').find(node => node.type !== 'checkbox');
+  panel.button('Add Phone').onclick();
+  const question = panel.inputs('answer-list')[0], reviewed = panel.inputs('field-list').find(node => node.type !== 'checkbox');
   question.value = '+44 1234567890'; question.oninput();
   reviewed.value = 'Reviewed Candidate'; reviewed.oninput(); reviewed.focus(); reviewed.setSelectionRange(4, 8);
   for (const patch of [{ paste: { label: 'Full name', ok: true } }, { error: 'Storage is locked. Unlock Companion and try again.' }, { error: '', prepared: { ...panel.state.prepared, snapshot: 'new', fields: [{ ...panel.state.prepared.fields[0], value: 'New saved name' }] }, edits: { name: 'New saved name' } }]) {
     panel.update(patch);
-    assert.equal(panel.inputs('question-list')[0], question);
+    assert.equal(panel.inputs('answer-list')[0], question);
     assert.equal(panel.inputs('field-list').find(node => node.type !== 'checkbox'), reviewed);
     assert.equal(question.value, '+44 1234567890'); assert.equal(reviewed.value, 'Reviewed Candidate');
     assert.equal(panel.document.activeElement, reviewed); assert.equal(reviewed.selectionStart, 4);
@@ -117,30 +122,48 @@ test('schema changes restore focus and draft only for the same surviving answer'
   assert.equal(replacement.value, 'Explicit edit'); assert.equal(panel.document.activeElement, replacement); assert.equal(replacement.selectionStart, 2);
 });
 
-test('save details uses native validation, allows a subset and clears only confirmed saved values', async () => {
+test('a missing row adds its answer inline with native validation and closes once saved', async () => {
   const panel = await panelFixture();
-  panel.update({ prepared: { ...panel.state.prepared, questions: [{ key: 'phone', label: 'Phone', type: 'tel', required: true }, { key: 'email', label: 'Email', type: 'email', required: true }] } });
-  const form = panel.nodes.get('details-form'), [phone, email] = panel.inputs('question-list');
-  phone.value = '+44 1234567890'; phone.oninput();
-  assert.notEqual(phone.required, true); assert.notEqual(email.required, true);
+  assert.deepEqual(panel.rows(), ['Full name: Ready', 'Phone: Missing +', 'Why this role?: Missing +']);
+  panel.button('Add Phone').onclick();
+  const [phone] = panel.inputs('answer-list'), form = panel.descendants(panel.nodes.get('answer-list')).find(node => node.tagName === 'FORM');
+  assert.equal(panel.document.activeElement, phone); assert.equal(phone.type, 'tel'); assert.equal(phone.required, true);
+  assert.equal(panel.button('Add Phone'), undefined, 'the open row has no second Add');
   form.valid = false; form.onsubmit({ preventDefault() {} }); assert.equal(panel.sent.length, 0);
-  form.valid = true; form.onsubmit({ preventDefault() {} });
-  assert.deepEqual(panel.sent.at(-1), { action: 'profile-save', payload: { values: { phone: '+44 1234567890' } } });
-  assert.equal(phone.value, '+44 1234567890');
-  panel.update({ busy: 'profile-save' }); assert.equal(phone.disabled, true);
-  panel.update({ busy: null, error: 'Could not save.' }); assert.equal(phone.value, '+44 1234567890');
-  panel.update({ error: '', saveReceipt: { id: 'receipt', keys: ['phone'] }, notice: 'Details saved.' }); assert.equal(phone.value, '');
+  form.valid = true; phone.value = '   '; form.onsubmit({ preventDefault() {} }); assert.equal(panel.sent.length, 0);
+  phone.value = ' +44 1234567890 '; phone.oninput(); form.onsubmit({ preventDefault() {} });
+  assert.deepEqual(panel.sent.at(-1), { action: 'answer-save', payload: { fieldId: 'phone', value: '+44 1234567890' } });
+  panel.update({ busy: 'answer-save' }); assert.equal(phone.disabled, true);
+  panel.update({ busy: null, error: 'Could not save.' }); assert.equal(panel.inputs('answer-list')[0], phone); assert.equal(phone.value, ' +44 1234567890 ');
+  panel.update({ error: '', saved: { phone: { scope: 'future', source: 'panel' } }, edits: { name: 'Saved Name', phone: '+44 1234567890' },
+    prepared: { ...panel.state.prepared, fields: [...panel.state.prepared.fields, { id: 'phone', label: 'Phone', type: 'tel', value: '+44 1234567890', empty: true }],
+      unresolved: panel.state.prepared.unresolved.filter(item => item.id !== 'phone') } });
+  assert.deepEqual(panel.rows(), ['Full name: Ready', 'Phone: Ready', 'caption: Saved for future applications', 'Why this role?: Missing +']);
+  assert.equal(panel.inputs('answer-list').length, 0);
+  assert.equal(panel.document.activeElement, panel.button('Add Why this role?'), 'focus continues to the next missing answer');
+  panel.button('Add Why this role?').onclick();
+  assert.equal(panel.inputs('answer-list')[0].tagName, 'TEXTAREA');
+  panel.button('Cancel').onclick();
+  assert.equal(panel.inputs('answer-list').length, 0); assert.equal(panel.document.activeElement, panel.button('Add Why this role?'));
+  panel.update({ saved: { ...panel.state.saved, why: { scope: 'application', source: 'panel' } }, prepared: { ...panel.state.prepared,
+    fields: [...panel.state.prepared.fields, { id: 'why', label: 'Why this role?', type: 'textarea', value: 'Because.', empty: true }], unresolved: [] } });
+  assert.deepEqual(panel.rows().slice(-2), ['Why this role?: Ready', 'caption: Saved for this application']);
 });
 
-test('job-specific summaries are never reusable details; boolean answers require an explicit choice', async () => {
+test('page-typed answers read Filled; only reusable ones offer Undo; choices use the page options', async () => {
   const panel = await panelFixture();
-  panel.update({ prepared: { ...panel.state.prepared, questions: [{ key: 'personalSummary', label: 'Summary', type: 'textarea' }] } });
-  assert.equal(panel.inputs('question-list').length, 0); assert.equal(panel.nodes.get('details-form').hidden, true);
-  panel.update({ prepared: { ...panel.state.prepared, questions: [{ key: 'requiresSponsorship', label: 'Sponsorship?', type: 'boolean', options: [{ value: true, label: 'Yes' }, { value: false, label: 'No' }] }] } });
-  const input = panel.inputs('question-list')[0]; assert.equal(input.value, '');
-  panel.nodes.get('details-form').onsubmit({ preventDefault() {} }); assert.equal(panel.sent.length, 0);
-  input.value = 'false'; input.oninput(); panel.nodes.get('details-form').onsubmit({ preventDefault() {} });
-  assert.deepEqual(panel.sent.at(-1).payload.values, { requiresSponsorship: false });
+  panel.update({ saved: { why: { scope: 'none', source: 'page' }, phone: { scope: 'future', source: 'page' } } });
+  assert.deepEqual(panel.rows(), ['Full name: Ready', 'Phone: Filled', 'caption: Saved for future applications · Undo', 'Why this role?: Filled']);
+  panel.button('Undo saved answer for Phone').onclick();
+  assert.deepEqual(panel.sent.at(-1), { action: 'answer-undo', payload: { fieldId: 'phone' } });
+  panel.update({ saved: {}, form: { fields: [...panel.state.form.fields, { id: 'notice', label: 'Notice period', type: 'select', options: [{ value: 'm1', label: 'One month' }, { value: 'm3', label: 'Three months' }] }] },
+    prepared: { ...panel.state.prepared, unresolved: [{ id: 'notice', label: 'Notice period', reason: 'private', add: true }] } });
+  panel.button('Add Notice period').onclick();
+  const select = panel.inputs('answer-list')[0];
+  assert.deepEqual(select.children.map(option => [option.value, option.textContent]), [['', 'Choose a value'], ['m1', 'One month'], ['m3', 'Three months']]);
+  select.value = 'm3'; select.onchange();
+  panel.descendants(panel.nodes.get('answer-list')).find(node => node.tagName === 'FORM').onsubmit({ preventDefault() {} });
+  assert.deepEqual(panel.sent.at(-1), { action: 'answer-save', payload: { fieldId: 'notice', value: 'm3' } });
 });
 
 test('inspected webpage values never become answer controls before successful preparation', async () => {
@@ -159,26 +182,27 @@ test('clipboard progress, failure, confirmation and browser denial remain distin
   assert.equal(denied.nodes.get('error').hidden, false); assert.match(denied.nodes.get('error').textContent, /manually/);
 });
 
-test('missing answers show reusable details separately and do not leak internal reasons', async () => {
+test('missing answers list every unresolved field and do not leak internal reasons', async () => {
   const panel = await panelFixture();
-  panel.update({ prepared: { ...panel.state.prepared, fields: [], unresolved: [{ label: 'Phone', reason: 'private reason' }, { label: 'Why this role?', reason: 'private reason' }] } });
+  panel.update({ prepared: { ...panel.state.prepared, fields: [], unresolved: [{ id: 'phone', label: 'Phone', reason: 'private reason', add: true }, { id: 'gender', label: 'Gender', reason: 'private reason' }] } });
   assert.equal(panel.nodes.get('paste').hidden, true); assert.equal(panel.nodes.get('review').hidden, true);
-  assert.equal(panel.nodes.get('details-form').hidden, false);
-  assert.deepEqual(panel.nodes.get('answer-list').children.map(row => row.children[1].textContent), ['Why this role?']);
-  assert.doesNotMatch(JSON.stringify(panel.nodes.get('answer-list')), /private reason|Phone/);
-  panel.update({ prepared: { ...panel.state.prepared, unresolved: [] } }); assert.equal(panel.nodes.get('answer-list').children.length, 0);
+  assert.deepEqual(panel.rows(), ['Phone: Missing +', 'Gender: Missing']);
+  assert.doesNotMatch(JSON.stringify(panel.nodes.get('answer-list')), /private reason/);
+  panel.update({ answersStale: true }); assert.deepEqual(panel.rows(), ['Phone: Missing', 'Gender: Missing'], 'stale answers cannot add');
+  panel.update({ answersStale: false, prepared: { ...panel.state.prepared, unresolved: [] } }); assert.equal(panel.nodes.get('answer-list').children.length, 0);
 });
 
 test('drafts survive preparation resets but do not cross document boundaries', async () => {
   const panel = await panelFixture(), prepared = panel.state.prepared;
-  const input = panel.inputs('question-list')[0]; input.value = 'Unsaved phone'; input.oninput();
+  panel.button('Add Phone').onclick();
+  const input = panel.inputs('answer-list')[0]; input.value = 'Unsaved phone'; input.oninput();
   panel.update({ prepared: null, busy: 'prepare' }); panel.update({ prepared, busy: null });
-  assert.equal(panel.inputs('question-list')[0].value, 'Unsaved phone');
-  panel.update({ documentId: 'another-page' }); assert.equal(panel.inputs('question-list')[0].value, '');
+  assert.equal(panel.inputs('answer-list')[0].value, 'Unsaved phone');
+  panel.update({ documentId: 'another-page' }); assert.equal(panel.inputs('answer-list').length, 0);
 });
 
 test('build mismatch offers only explicit reload and preserves drafts until the compatible worker returns', async () => {
-  const panel = await panelFixture(), question = panel.inputs('question-list')[0]; question.value = 'Draft'; question.oninput();
+  const panel = await panelFixture(); panel.button('Add Phone').onclick(); const question = panel.inputs('answer-list')[0]; question.value = 'Draft'; question.oninput();
   const tabQueries = panel.tabQueries;
   for (const buildId of [undefined, 'older-build']) {
     panel.update({ buildId });
@@ -188,7 +212,7 @@ test('build mismatch offers only explicit reload and preserves drafts until the 
     panel.update({ busy: null });
   }
   panel.nodes.get('detect').onclick(); assert.equal(panel.reloads, 1); assert.equal(panel.tabQueries, tabQueries);
-  panel.update({ buildId: BUILD_ID }); assert.equal(panel.inputs('question-list')[0], question); assert.equal(question.value, 'Draft');
+  panel.update({ buildId: BUILD_ID }); assert.equal(panel.inputs('answer-list')[0], question); assert.equal(question.value, 'Draft');
 });
 
 test('ready documents expose one Show CV and Copy intro, never paths or duplicate document actions', async () => {
@@ -236,17 +260,18 @@ test('Companion recovery distinguishes unavailable, locked, old, missing CV and 
   await panel.nodes.get('detect').onclick(); assert.equal(panel.sent.at(-1).action, 'detect');
   for (const [companion, expected] of [[{ locked: true }, /Unlock/], [{ workflowVersion: 1 }, /Update/], [{ workflowVersion: 2, hasCv: false }, /Import CV/], [{ workflowVersion: 2, hostInfo: { claude: { available: false } } }, /unavailable/]]) {
     panel.update({ errorCode: null, companion }); assert.match(panel.nodes.get('status').textContent, expected); assert.equal(panel.nodes.get('recover').hidden, false);
+    assert.equal(panel.nodes.get('paste').hidden, true, 'the footer shows one sentence: the blocking state, not Answers ready');
     assert.equal(panel.nodes.get('application-prepare').hidden, true); panel.nodes.get('recover').onclick(); assert.equal(panel.sent.at(-1).action, 'settings');
   }
 });
 
 test('extra-help errors recover with saved answers and other errors preserve drafts', async () => {
-  const panel = await panelFixture(), input = panel.inputs('question-list')[0]; input.value = 'Draft'; input.oninput();
+  const panel = await panelFixture(); panel.button('Add Phone').onclick(); const input = panel.inputs('answer-list')[0]; input.value = 'Draft'; input.oninput();
   panel.update({ errorCode: 'DECISIONS_KEY_REQUIRED', error: 'Internal API diagnostic' });
   assert.equal(panel.nodes.get('prepare-saved').hidden, false); panel.nodes.get('prepare-saved').onclick(); assert.equal(panel.sent.at(-1).action, 'prepare-saved');
   for (const errorCode of ['PAGE_PERMISSION_REQUIRED', 'PAGE_UNSUPPORTED', 'PAGE_READ_FAILED', 'FORM_CONTEXT_CHANGED']) {
     panel.update({ errorCode, error: 'Read the page again.' }); assert.equal(panel.nodes.get('error').hidden, false); assert.equal(panel.nodes.get('detect').hidden, false);
-    assert.equal(panel.inputs('question-list')[0], input); assert.equal(input.value, 'Draft');
+    assert.equal(panel.inputs('answer-list')[0], input); assert.equal(input.value, 'Draft');
   }
 });
 

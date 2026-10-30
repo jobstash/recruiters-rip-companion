@@ -71,12 +71,14 @@ async function connect(url) {
   });
   socket.addEventListener('close', () => { for (const request of pending.values()) { clearTimeout(request.timer); request.reject(new Error('Source inspector closed.')); } pending.clear(); });
   await new Promise((resolve, reject) => { const timer = setTimeout(() => reject(new Error('Source inspector timed out.')), 10000); socket.addEventListener('open', () => { clearTimeout(timer); resolve(); }, { once: true }); socket.addEventListener('error', () => { clearTimeout(timer); reject(new Error('Source inspector failed.')); }, { once: true }); });
-  const connection = { close: () => new Promise((resolve, reject) => {
-    if (socket.readyState === WebSocket.CLOSED) { resolve(); return; }
-    const timer = setTimeout(() => reject(new Error('Source inspector did not detach.')), 5000);
-    socket.addEventListener('close', () => { clearTimeout(timer); resolve(); }, { once: true });
+  const connection = { close: () => socket.close(), detachMain() {
+    // This is terminal: inspector.close() may disconnect before replying.
+    // Actual process exit and app-written update confirmation prove handoff;
+    // a WebSocket close-frame acknowledgement is not a runtime requirement.
+    if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ id: ++sequence, method: 'Runtime.evaluate',
+      params: { expression: "setImmediate(() => process.getBuiltinModule('inspector').close())" } }));
     socket.close();
-  }), send(expression) { return new Promise((resolve, reject) => {
+  }, send(expression) { return new Promise((resolve, reject) => {
     const id = ++sequence, timer = setTimeout(() => { pending.delete(id); reject(new Error('Source operation timed out.')); }, 25 * 60 * 1000);
     pending.set(id, { resolve, reject, timer }); socket.send(JSON.stringify({ id, method: 'Runtime.evaluate', params: { expression, awaitPromise: true, returnByValue: true } }));
   }); } }; connections.push(connection); return connection;
@@ -137,15 +139,49 @@ async function sourceProcesses() {
   // profile. Waiting for their unrelated parent to reap them is not app exit.
   return (await macSourceProcessDetails()).filter(info => !info.state.startsWith('Z')).map(info => info.pid);
 }
+async function requestMacQuit(pid) {
+  const owned = (await macSourceProcessDetails()).find(info => info.pid === pid && !info.state.startsWith('Z'));
+  if (!owned) return 'already-exited';
+  const quote = value => `"${value.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`;
+  const script = [
+    'use framework "AppKit"',
+    `set targetApp to current application's NSRunningApplication's runningApplicationWithProcessIdentifier:${pid}`,
+    'if targetApp is missing value then return "not-application"',
+    "set executableURL to targetApp's executableURL()",
+    "set executablePath to executableURL's |path|() as text",
+    `set expectedPaths to {${[...sourceExecutables].map(quote).join(',')}}`,
+    'if expectedPaths does not contain executablePath then error "Owned executable changed before Quit"',
+    "set requested to (targetApp's terminate()) as boolean",
+    'if requested then return "quit-requested"',
+    'return "quit-refused"',
+  ].join('\n');
+  const { stdout, stderr } = await execute('/usr/bin/osascript', ['-e', script], { env, cwd: scratch, timeout: 10000, maxBuffer: 8192 });
+  append(stderr);
+  const result = stdout.trim();
+  if (result === 'not-application') {
+    // Run-as-Node bridge helpers are not AppKit applications. Only those
+    // exact owned helper PIDs may use SIGTERM; never substitute it for Quit.
+    if (pid === restartedPid && (await sourceProcesses()).includes(pid)) throw new Error('The owned main process was not recognized as an AppKit application.');
+    if ((await sourceProcesses()).includes(pid)) await stop(pid);
+    return 'owned-node-helper-signalled';
+  }
+  assert.equal(result, 'quit-requested', 'The owned Mac application refused its ordinary Quit request.');
+  return result;
+}
 async function closeSelectedApp() {
-  await Promise.all(connections.map(connection => connection.close()));
+  for (const connection of connections) connection.close();
   let sample;
   if (process.platform === 'darwin') {
-    sample = { before: await macSourceProcessDetails() };
+    sample = { method: 'NSRunningApplication.terminate', before: await macSourceProcessDetails(), requests: [] };
     (report.macSourceShutdowns ??= []).push(sample);
   }
-  for (const pid of await sourceProcesses()) await stop(pid);
-  try { await until(async () => (await sourceProcesses()).length === 0, 15000, 'owned source processes to exit before background relaunch'); }
+  try {
+    for (const pid of await sourceProcesses()) {
+      if (sample) sample.requests.push({ pid, outcome: await requestMacQuit(pid) });
+      else await stop(pid);
+    }
+    await until(async () => (await sourceProcesses()).length === 0, 15000, 'owned source processes to exit before background relaunch');
+  }
   finally { if (sample) sample.after = await macSourceProcessDetails(); }
 }
 async function bridgeSession(executable, args, native, action) {
@@ -428,7 +464,7 @@ try {
   assert.equal(admitted.update.status, 'installing', 'Manual/source instructions cannot pass a managed transition.');
   assert.equal(admitted.admissions, 1); assert.equal(admitted.attempts, 2); assert.equal(admitted.closed, true);
   report.scenarios.push('real-source-scheduler-build-idle-wait-and-final-work-gate-admission-with-synthetic-idle-input');
-  await Promise.all([main.close(), renderer.close()]);
+  main.detachMain(); renderer.close();
   journal = await until(async () => {
     const value = await transition();
     if (['failed', 'rolled-back', 'unconfirmed'].includes(value?.status)) throw new Error(`Managed source update failed: ${JSON.stringify(value)}`);
@@ -439,6 +475,7 @@ try {
   const proof = JSON.parse(await readFile(path.join(path.dirname(journal.journal), 'confirmed.json'), 'utf8'));
   assert.equal(proof.id, journal.id); assert.equal(proof.version, pkg.version);
   assert.ok(Number.isSafeInteger(restartedPid) && restartedPid > 1 && restartedPid !== initialPid); process.kill(restartedPid, 0);
+  assert.equal((await sourceProcesses()).includes(initialPid), false, 'The original source process must exit, regardless of WebSocket close-frame behavior.');
   const next = JSON.parse(await readFile(path.join(managedRoot, 'current.json'), 'utf8'));
   assert.equal(next.version, pkg.version); assert.notEqual(next.sourceRoot, first.sourceRoot);
   assert.equal(next.sourceRoot, stagedSource);
@@ -475,10 +512,15 @@ try {
 } catch (error) { report.error = error.message; console.error(logs); throw error; }
 finally {
   await mkdir(path.dirname(reportFile), { recursive: true }); await writeFile(reportFile, JSON.stringify(report, null, 2) + '\n');
-  await Promise.allSettled(connections.map(connection => connection.close()));
+  for (const connection of connections) connection.close();
   journal ||= await transition().catch(() => null);
-  await stop(restartedPid || journal?.launchedPid); await stop(initialPid); await stop(launcher?.pid);
-  for (const pid of await sourceProcesses()) await stop(pid);
+  if (process.platform === 'darwin') {
+    for (const pid of await sourceProcesses()) await requestMacQuit(pid).catch(error => append(`Owned Mac cleanup: ${error.message}\n`));
+  } else {
+    await stop(restartedPid || journal?.launchedPid); await stop(initialPid);
+    for (const pid of await sourceProcesses()) await stop(pid);
+  }
+  await stop(launcher?.pid);
   if (process.platform === 'linux') for (const name of await readdir('/proc')) {
     if (!/^\d+$/.test(name) || Number(name) === process.pid) continue;
     try { if ((await readFile(`/proc/${name}/environ`, 'utf8')).split('\0').includes(`HOME=${home}`)) await stop(Number(name)); }

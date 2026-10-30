@@ -2,6 +2,7 @@
 ; including an unrelated installation. The updater drains its own work and exits
 ; before starting NSIS; any remaining instance must be closed by its user.
 !macro customCheckAppRunning
+  !insertmacro IS_POWERSHELL_AVAILABLE
   !insertmacro FIND_PROCESS "${APP_EXECUTABLE_FILENAME}" $R0
   ${if} $R0 == 0
     IfSilent companion_running_quit

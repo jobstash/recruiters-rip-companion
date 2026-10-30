@@ -192,6 +192,8 @@ Job capture uses `career_job_import` and `career_jobs`. Complete local originals
 
 **Settings → Updates → Keep the app up to date** is on by default. Companion checks after startup, on resume when due, and every six hours. It verifies the download, then waits for active work to finish and a quiet, unfocused computer before restarting. **Check now** checks immediately; you can turn automatic updates off.
 
+Quitting saves your career data without waiting for background update checks or builds.
+
 The installed version and latest published version are shown separately. A newer local build says it is ahead of the published release; it is never downgraded or incorrectly described as the published version. No release means unavailable, not up to date.
 
 Ready-made installs use the exact Mac arm64 ZIP, Windows x64 NSIS installer or Linux x64 AppImage. Downloads are bounded and SHA-256 verified, with official repository and target checks. Mac replacement covers apps originally installed from ZIP or DMG; Windows installs silently without killing another running app; Linux replaces the actual AppImage, not its temporary mounted folder. The previous installation is retained until the new app confirms startup. Unsafe or unwritable locations explain what needs changing rather than pretending installation succeeded.

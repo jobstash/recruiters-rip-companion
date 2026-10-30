@@ -307,8 +307,10 @@ test('updater quit handoff never waits on its own scheduler/install promise', as
   assert.equal(quit.settled(), 0);
 });
 
-test('ordinary quit closes admission and drains work before exiting', async () => {
-  const fixture = mainFixture(), quit = attachQuit(fixture), waiting = deferred();
+test('ordinary quit saves career work without waiting for a background update', async () => {
+  const fixture = mainFixture(), quit = attachQuit(fixture), waiting = deferred(), update = deferred();
+  fixture.context.updates.cancel = () => { fixture.view.status = 'cancelled'; return update.promise; };
+  fixture.context.updateInstallTask = update.promise;
   fixture.view.status = 'downloading';
   const work = fixture.gate.run(() => waiting.promise);
   fixture.context.app.quit();
@@ -319,6 +321,8 @@ test('ordinary quit closes admission and drains work before exiting', async () =
   waiting.resolve(); await work; await turn();
   assert.equal(fixture.context.quitReady, true);
   assert.equal(quit.quits(), 2);
+  assert.equal(quit.settled(), 0);
+  update.resolve();
 });
 
 test('only local settings exposes strictly boolean update preferences', async () => {

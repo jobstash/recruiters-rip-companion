@@ -60,6 +60,7 @@ export function createSourceUpdateController({ version, sourceRoot, directory, p
   }
   async function support(signal) {
     receipt = await inspectManagedSource(sourceRoot, { version });
+    assertNotAborted(signal);
     if (!receipt) { update({ automaticSupported: false, automaticReason: 'Ordinary source checkouts are never replaced. Use the source installer for managed automatic builds.' }); return; }
     update({ sourceProvenance: receipt.provenance, sourceCommit: receipt.commit });
     try { await cleanRunningSource(signal); }
@@ -100,9 +101,12 @@ export function createSourceUpdateController({ version, sourceRoot, directory, p
     if (!initialized) await initialize();
     if (pending && view.status === 'downloaded') return state();
     return operate('check', async signal => {
-      await support(signal);
       update({ status: 'checking', error: null });
+      assertNotAborted(signal);
+      await support(signal);
+      assertNotAborted(signal);
       release = await resolveRelease({ signal });
+      assertNotAborted(signal);
       const order = compareSourceVersions(version, release.version);
       return update({ status: order > 0 ? 'ahead' : order === 0 ? 'current' : 'available', latestVersion: release.version, releaseUrl: release.releaseUrl || `${REPOSITORY}/releases`, progress: null });
     }, 120000);
@@ -110,9 +114,12 @@ export function createSourceUpdateController({ version, sourceRoot, directory, p
   function download() {
     return operate('build', async signal => {
       if (!initialized || !release || compareSourceVersions(version, release.version) >= 0) throw sourceError('INVALID_STATE', 'Check for a newer source release before building.');
-      await cleanRunningSource(signal);
       update({ status: 'downloading', progress: null, error: null });
+      assertNotAborted(signal);
+      await cleanRunningSource(signal);
+      assertNotAborted(signal);
       pending = await buildSourceVersion({ root: receipt.root, release, tools, signal, onProgress: message => update({ buildMessage: message }) });
+      assertNotAborted(signal);
       return update({ status: 'downloaded', progress: 1, buildMessage: 'Built from source; waiting for a safe restart.' });
     });
   }
@@ -121,7 +128,9 @@ export function createSourceUpdateController({ version, sourceRoot, directory, p
       if (!pending || !receipt || compareSourceVersions(version, pending.version) >= 0) throw sourceError('INVALID_STATE', 'Build and verify a newer source release before installing.');
       update({ status: 'staging', progress: null, error: null });
       await cleanRunningSource(signal);
+      assertNotAborted(signal);
       await validateSourceBuild(pending.sourceRoot, pending.version);
+      assertNotAborted(signal);
       await assertInstalledSource(pending.sourceRoot, tools, signal);
       const root = receipt.root;
       let oldPointer;

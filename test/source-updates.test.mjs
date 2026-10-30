@@ -70,6 +70,41 @@ test('ordinary clones cannot opt in through environment or borrowed receipt', as
   assert.deepEqual(await fs.readdir(sourceRoot), ['receipt.json']);
 });
 
+test('source checks publish a cancellable phase before local preflight and do not start release transport after cancellation', async t => {
+  const sourceRoot = await temporary(t);
+  let requests = 0;
+  const controller = createSourceUpdateController({
+    version: '3.12.0', sourceRoot, directory: path.join(sourceRoot, 'synthetic-profile', 'updates'),
+    resolveRelease: async () => { requests++; return { version: '3.13.0' }; },
+  });
+  await controller.initialize();
+  const checking = controller.check();
+  const rejected = assert.rejects(checking, { code: 'CANCELLED' });
+  assert.equal(controller.state().status, 'checking');
+  await controller.cancel();
+  await rejected;
+  assert.equal(requests, 0);
+  assert.equal(controller.state().status, 'cancelled');
+});
+
+test('source downloads publish their cancellable phase before tool preflight without creating a build on cancellation', { skip: !process.versions.node.startsWith('24.') }, async t => {
+  const receipt = await fixture(t);
+  const controller = createSourceUpdateController({
+    version: receipt.version, sourceRoot: receipt.sourceRoot, directory: path.join(receipt.root, 'synthetic-profile', 'updates'),
+    resolveRelease: async () => ({ version: '3.13.0', tag: 'v3.13.0', commit: 'b'.repeat(40), provenance: 'local-candidate', checkout: receipt.sourceRoot }),
+  });
+  await controller.initialize();
+  await controller.check();
+  const before = await fs.readdir(path.join(receipt.root, 'versions'));
+  const downloading = controller.download();
+  const rejected = assert.rejects(downloading, { code: 'CANCELLED' });
+  assert.equal(controller.state().status, 'downloading');
+  await controller.cancel();
+  await rejected;
+  assert.equal(controller.state().status, 'cancelled');
+  assert.deepEqual(await fs.readdir(path.join(receipt.root, 'versions')), before);
+});
+
 test('ahead source checkout is never downgraded and build requires a newer release', async t => {
   const sourceRoot = await temporary(t);
   const controller = createSourceUpdateController({ version: '3.12.0', sourceRoot, directory: path.join(sourceRoot, 'updates'), resolveRelease: async () => ({ version: '3.11.0' }) });

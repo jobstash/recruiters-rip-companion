@@ -96,14 +96,9 @@ async function evaluate(connection, expression) {
 async function digest(file) { const hash = createHash('sha256'); for await (const chunk of createReadStream(file)) hash.update(chunk); return hash.digest('hex'); }
 async function downloadBaseline(file) {
   const name = `recruiters-rip-companion-3.10.0-${target.suffix}`;
-  const metadata = await fetch('https://api.github.com/repos/jobstash/recruiters-rip-companion/releases/tags/v3.10.0', { signal: AbortSignal.timeout(30000) });
-  if (!metadata.ok) throw new Error(`Baseline release metadata unavailable: ${metadata.status}`);
-  const release = await metadata.json();
-  assert.equal(release.draft, false); assert.equal(release.prerelease, false); assert.equal(release.tag_name, 'v3.10.0');
-  const assets = release.assets.filter(asset => asset.name === name);
-  assert.equal(assets.length, 1); assert.equal(assets[0].size, target.size); assert.equal(assets[0].digest, `sha256:${target.digest}`);
+  // This immutable test fixture already pins its official tag, size and digest.
+  // Do not spend unauthenticated API quota rediscovering the same asset.
   let url = `https://github.com/jobstash/recruiters-rip-companion/releases/download/v3.10.0/${name}`;
-  assert.equal(assets[0].browser_download_url, url);
   try {
     const cached = await lstat(file);
     assert.equal(cached.isFile() && !cached.isSymbolicLink(), true); assert.equal(cached.size, target.size);

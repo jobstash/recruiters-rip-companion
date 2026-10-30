@@ -975,11 +975,8 @@ else {
       browserForms.cancelAll(); pendingApproval?.finish(false);
       void (async () => {
         const handedOff = ['installing', 'launched'].includes(updates.state().status);
-        if (!handedOff) {
-          await cancelUpdate();
-          await updateInstallTask?.catch(() => {});
-          await updateScheduler.settled();
-        }
+        // Abort background updates without holding Quit open for network or builds.
+        if (!handedOff) void updates.cancel().catch(() => {});
         await workGate.drain();
         await Promise.allSettled([...mutations]);
         // Queue behind every accepted career write before allowing Electron to exit.

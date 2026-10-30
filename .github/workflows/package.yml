@@ -81,15 +81,12 @@ jobs:
           # PR artifacts must exercise the same signature validation as main.
           CSC_FOR_PULL_REQUEST: ${{ matrix.command == 'package:adhoc' && 'true' || 'false' }}
         run: pnpm ${{ matrix.command }}
-      - name: Upgrade verified public 3.10 installation to the candidate package
+      - name: Exercise current native updater with a pinned physical fixture
         if: runner.os != 'Linux'
         run: node scripts/smoke-update.mjs
-      - name: Upgrade verified public 3.10 AppImage with the Chromium sandbox
+      - name: Exercise current AppImage updater with Chromium sandbox
         if: runner.os == 'Linux'
         run: xvfb-run --auto-servernum node scripts/smoke-update.mjs
-      - name: Upgrade using published 3.10 Mac updater and legacy receipt
-        if: runner.os == 'macOS'
-        run: node scripts/smoke-update.mjs --legacy-mac
       - name: Launch installed Windows or macOS application with a disposable profile
         if: runner.os != 'Linux'
         run: node scripts/smoke-package.mjs
@@ -131,7 +128,7 @@ jobs:
         with:
           name: native-update-evidence-${{ matrix.os }}-${{ matrix.arch }}
           if-no-files-found: error
-          path: dist/update-smoke*.json
+          path: dist/update-smoke.json
 
   source:
     needs: version

@@ -25,11 +25,11 @@ function validateJournal(journal, journalFile) {
   if (journal.staged !== path.join(parent, `.recruiters-update-${journal.id}${suffix}`) ||
       journal.backup !== path.join(parent, `.recruiters-backup-${journal.id}${suffix}`) ||
       path.basename(path.dirname(journalFile)) !== `install-${journal.id}`) throw new Error('Invalid update paths.');
-  if (journal.platform && !['darwin', 'linux', 'win32'].includes(journal.platform)) throw new Error('Invalid update platform.');
-  if (journal.platform === 'win32' && (journal.installer !== path.join(path.dirname(journalFile), 'installer.exe') || !/^[a-f0-9]{64}$/.test(journal.digest))) throw new Error('Invalid installer receipt.');
-  if (journal.platform === 'linux' && !/^[a-f0-9]{64}$/.test(journal.digest)) throw new Error('Invalid AppImage receipt.');
-  if (journal.executable && (path.basename(journal.executable) !== journal.executable || /[\\/:]/.test(journal.executable))) throw new Error('Invalid app executable.');
-  if (journal.userData && journal.userData !== path.dirname(path.dirname(path.dirname(journalFile)))) throw new Error('Invalid update profile.');
+  if (!['darwin', 'linux', 'win32'].includes(journal.platform)) throw new Error('Invalid update platform.');
+  if (!/^[a-f0-9]{64}$/.test(journal.digest)) throw new Error('Invalid update digest.');
+  if (journal.platform === 'win32' && journal.installer !== path.join(path.dirname(journalFile), 'installer.exe')) throw new Error('Invalid installer receipt.');
+  if (typeof journal.executable !== 'string' || !journal.executable || path.basename(journal.executable) !== journal.executable || /[\\/:]/.test(journal.executable)) throw new Error('Invalid app executable.');
+  if (journal.userData !== path.dirname(path.dirname(path.dirname(journalFile)))) throw new Error('Invalid update profile.');
   return journal;
 }
 
@@ -103,8 +103,8 @@ function launch(target, journal) {
   return new Promise((resolve, reject) => {
     // Launch the real executable: unlike LaunchServices this preserves the
     // storage environment and gives us a process whose premature exit is real.
-    const executable = path.join(target, 'Contents', 'MacOS', journal?.executable || 'Recruiters.rip Companion');
-    const child = spawn(executable, journal?.userData ? [`--user-data-dir=${journal.userData}`] : [], { detached: true, env: launchEnvironment(), stdio: 'ignore' });
+    const executable = path.join(target, 'Contents', 'MacOS', journal.executable);
+    const child = spawn(executable, [`--user-data-dir=${journal.userData}`], { detached: true, env: launchEnvironment(), stdio: 'ignore' });
     child.once('error', reject);
     child.once('spawn', () => { child.unref(); resolve(child); });
   });

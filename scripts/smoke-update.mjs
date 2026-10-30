@@ -1,12 +1,8 @@
-// CI-only native integration: the public 3.10.0 binaries are immutable fixtures.
-// Because 3.10.0 predates cross-platform automatic installation, its loopback
-// inspector loads the candidate's *packaged* updater. Only release transport is
-// supplied locally: real package bytes pass production download/hash/staging,
-// native handoff/replacement/restart and the new application's ready confirmation.
-// This is not evidence that an unmodified 3.10.0 Windows/Linux updater self-updates.
-// --legacy-mac instead uses the published controller and byte-identical helper.
-// A CI-only preload adds isolated HOME/profile arguments to its exact native
-// /usr/bin/open invocation; no validation, swap or confirmation is substituted.
+// CI-only native integration. Pinned binaries are disposable physical replacement
+// fixtures, not a supported old-version installation or compatibility contract.
+// Their loopback inspector loads the candidate's packaged updater; only release
+// transport is supplied locally. Real package bytes pass production verification,
+// handoff/replacement/restart and the candidate application's ready confirmation.
 import assert from 'node:assert/strict';
 import { spawn, execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -19,9 +15,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createVault } from '../src/vault.mjs';
 
 if (process.env.GITHUB_ACTIONS !== 'true' || process.env.CI !== 'true') throw new Error('Native update smoke requires a disposable GitHub Actions runner.');
-const legacyMac = process.argv.slice(2).includes('--legacy-mac');
-if (process.argv.slice(2).some(arg => arg !== '--legacy-mac')) throw new Error('Usage: node scripts/smoke-update.mjs [--legacy-mac]');
-if (legacyMac && (process.platform !== 'darwin' || process.env.RUNNER_ENVIRONMENT !== 'github-hosted')) throw new Error('Legacy Mac smoke requires a disposable GitHub-hosted Mac runner.');
+if (process.argv.length !== 2) throw new Error('Usage: node scripts/smoke-update.mjs');
 const targets = {
   darwin: { arch: 'arm64', output: 'adhoc', suffix: 'mac-arm64.zip', size: 151567922, digest: '7df2569d570216dcfe669770e2533f09f72a39e7c40d918f11cae7aa915b0aae' },
   win32: { arch: 'x64', output: 'windows', suffix: 'win-x64.exe', size: 123803745, digest: 'bc07962c1be10633588aef75965951168f91b09d139df29f10a69096c716cb18' },
@@ -32,7 +26,7 @@ if (!target || target.arch !== process.arch) throw new Error('Unsupported native
 if (process.platform === 'linux' && process.getuid() === 0) throw new Error('AppImage upgrade smoke requires a non-root Chromium sandbox.');
 const root = fileURLToPath(new URL('..', import.meta.url));
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
-const reportFile = path.join(root, 'dist', legacyMac ? 'update-smoke-legacy-mac.json' : 'update-smoke.json');
+const reportFile = path.join(root, 'dist', 'update-smoke.json');
 const scratchBase = process.platform === 'win32' ? tmpdir() : process.env.RUNNER_TEMP || tmpdir();
 const scratch = await realpath(await mkdtemp(path.join(scratchBase, 'recruiters-update-smoke-')));
 const home = path.join(scratch, 'home');
@@ -45,9 +39,9 @@ const env = { ...process.env, HOME: home, USERPROFILE: home, APPDATA: path.join(
 for (const key of Object.keys(env)) if (/^(?:ELECTRON_RUN_AS_NODE|NODE_OPTIONS|NODE_PATH|OPENAI_API_KEY|ANTHROPIC_API_KEY|RECRUITERS_COMPANION_DEV|APPIMAGE|APPDIR|APPIMAGE_EXTRACT_AND_RUN)$/i.test(key)) delete env[key];
 if (process.platform === 'win32') { env.HOMEDRIVE = path.parse(home).root.replace(/[\\/]$/, ''); env.HOMEPATH = home.slice(env.HOMEDRIVE.length); }
 const execute = promisify(execFile), delay = ms => new Promise(resolve => setTimeout(resolve, ms));
-const report = { result: 'failed', platform: process.platform, arch: process.arch, from: '3.10.0', to: pkg.version,
-  baseline: { officialRelease: 'v3.10.0', sha256: target.digest }, candidateTransport: 'local fixture of real built artifact through production fetchImpl',
-  bootstrap: legacyMac ? 'published 3.10 controller and byte-identical helper; exact LaunchServices arguments instrumented only for synthetic profile/environment isolation' : 'candidate packaged updater loaded into verified old installed app through CI-only loopback inspector', scenarios: [] };
+const report = { result: 'failed', platform: process.platform, arch: process.arch, fixtureVersion: '3.10.0', candidateVersion: pkg.version,
+  baseline: { kind: 'pinned-physical-fixture', officialRelease: 'v3.10.0', sha256: target.digest }, candidateTransport: 'local fixture of real built artifact through production fetchImpl',
+  bootstrap: 'current packaged updater loaded into disposable physical fixture through CI-only loopback inspector; no old-version compatibility claim', scenarios: [] };
 let child, main, renderer, executable, appPath, log = '', inspectorUrl, browserUrl, exit, launchError, receipt, restartedPid;
 const connections = [];
 const append = chunk => {
@@ -149,11 +143,6 @@ async function stop(pid) {
   if (process.platform === 'win32') await execute(path.join(env.SYSTEMROOT || env.SystemRoot, 'System32', 'taskkill.exe'), ['/PID', String(pid), '/T', '/F']).catch(() => {});
   else { try { process.kill(pid, 'SIGTERM'); } catch (error) { if (error.code !== 'ESRCH') throw error; } }
 }
-async function exactMacProcesses() {
-  if (!executable) return [];
-  const { stdout } = await execute('/bin/ps', ['-axo', 'pid=,comm=', '-ww'], { timeout: 10000, maxBuffer: 4 * 1024 * 1024 });
-  return stdout.split('\n').map(line => /^\s*(\d+)\s+(.+?)\s*$/.exec(line)).filter(match => match?.[2] === executable).map(match => Number(match[1]));
-}
 
 try {
   for (const directory of [home, userData, updates, env.APPDATA, env.LOCALAPPDATA, env.XDG_CONFIG_HOME, env.XDG_DATA_HOME, env.XDG_CACHE_HOME, env.XDG_RUNTIME_DIR, env.TMP]) await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -224,18 +213,12 @@ try {
   }
   const releaseUrl = `https://github.com/jobstash/recruiters-rip-companion/releases/download/v${pkg.version}/${candidateName}`;
   const metadata = { tag_name: `v${pkg.version}`, html_url: `https://github.com/jobstash/recruiters-rip-companion/releases/tag/v${pkg.version}`, draft: false, prerelease: false, published_at: new Date().toISOString(), assets: [{ name: candidateName, size: candidateSize, state: 'uploaded', digest: `sha256:${candidateDigest}`, browser_download_url: releaseUrl }] };
-  const engineAsar = legacyMac ? path.join(appPath, 'Contents', 'Resources', 'app.asar') : candidate.asar;
-  const legacyConfig = path.join(scratch, 'legacy-launch.json'), legacyAudit = path.join(scratch, 'legacy-launch-audit.jsonl');
-  if (legacyMac) {
-    const keys = ['HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_RUNTIME_DIR', 'TMPDIR', 'TMP', 'TEMP'];
-    await writeFile(legacyConfig, JSON.stringify({ target: appPath, userData, audit: legacyAudit, environment: Object.fromEntries(keys.map(key => [key, env[key]])) }), { mode: 0o600, flag: 'wx' });
-  }
   const setup = `async () => {
     const vm = process.getBuiltinModule('vm');
     // Inspector evaluation needs an explicit loader, including for the
     // candidate engine's source-backend dependency with top-level await.
     const loadModule = vm.compileFunction('return import(specifier)', ['specifier'], { importModuleDynamically: vm.constants.USE_MAIN_CONTEXT_DEFAULT_LOADER });
-    const { createUpdateController } = await loadModule(${JSON.stringify(pathToFileURL(path.join(engineAsar, 'src', 'updates.mjs')).href)});
+    const { createUpdateController } = await loadModule(${JSON.stringify(pathToFileURL(path.join(candidate.asar, 'src', 'updates.mjs')).href)});
     const fs = process.getBuiltinModule('fs');
     const { Readable, Transform } = process.getBuiltinModule('stream');
     const electron = process.getBuiltinModule('module').createRequire(process.execPath)('electron');
@@ -249,74 +232,54 @@ try {
       } }));
       return new Response(Readable.toWeb(body), { headers: { 'content-length': ${JSON.stringify(String(candidateSize))} } });
     };
-    const options = { version: '3.10.0', directory: ${JSON.stringify(updates)}, appPath: ${JSON.stringify(appPath)}, packaged: true, fetchImpl, authorize: async () => true, quit: () => setTimeout(() => electron.app.quit(), 500) };
-    let source, unsupported, unsupportedError = null, legacyHelperDigest = null;
-    if (${legacyMac}) {
-      const module = process.getBuiltinModule('module'), childProcess = process.getBuiltinModule('child_process'), path = process.getBuiltinModule('path');
-      legacyHelperDigest = process.getBuiltinModule('crypto').createHash('sha256').update(fs.readFileSync(${JSON.stringify(path.join(engineAsar, 'src', 'update-install.cjs'))})).digest('hex');
-      const spawn = childProcess.spawn;
-      childProcess.spawn = function(command, args, settings) {
-        const journal = Array.isArray(args) && args.length === 2 && args[1];
-        const work = typeof journal === 'string' && path.dirname(journal);
-        if (command === process.execPath && settings?.env?.ELECTRON_RUN_AS_NODE === '1' && work &&
-            path.dirname(work) === ${JSON.stringify(updates)} && /^install-[a-f0-9]{32}$/.test(path.basename(work)) &&
-            journal === path.join(work, 'journal.json') && args[0] === path.join(work, 'update-install.cjs')) {
-          return spawn.call(this, command, ['--require', ${JSON.stringify(path.join(root, 'scripts', 'smoke-update-legacy-preload.cjs'))}, ...args],
-            { ...settings, env: { ...settings.env, GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted', RECRUITERS_UPDATE_SMOKE_CONFIG: ${JSON.stringify(legacyConfig)} } });
-        }
-        return spawn.call(this, command, args, settings);
-      };
-      module.syncBuiltinESMExports();
-    } else {
-      const scheduling = await loadModule(${JSON.stringify(pathToFileURL(path.join(candidate.asar, 'src', 'update-scheduler.mjs')).href)});
-      globalThis.__updateSmokeIdle = false; globalThis.__updateSmokeClock = 0; globalThis.__updateSmokeAdmissions = 0;
-      globalThis.__updateSmokeDenyOnce = true; globalThis.__updateSmokeAttempts = 0; globalThis.__updateSmokeReady = [];
-      globalThis.__updateSmokeGate = scheduling.createUpdateWorkGate({ now: () => __updateSmokeClock });
-      globalThis.__updateSmokeClock = scheduling.UPDATE_QUIET_WINDOW + 1;
-      options.acquireInstallAdmission = async ({ automatic }) => {
-        if (!automatic || !__updateSmokeIdle || !__updateSmokeGate.quiet()) return null;
-        const path = process.getBuiltinModule('path');
-        const active = JSON.parse(fs.readFileSync(${JSON.stringify(path.join(updates, 'active.json'))}, 'utf8'));
-        const work = path.join(${JSON.stringify(updates)}, 'install-' + active.id);
-        const staged = JSON.parse(fs.readFileSync(path.join(work, 'journal.json'), 'utf8'));
-        if (staged.id !== active.id || staged.status !== 'staged') throw new Error('Final admission ran before a staged native receipt.');
-        if (process.platform !== 'darwin' && fs.readFileSync(path.join(work, 'ready'), 'utf8') !== active.id) throw new Error('Final admission ran before the native helper was ready.');
-        __updateSmokeReady.push(staged.id); __updateSmokeAttempts++;
-        if (__updateSmokeDenyOnce) { __updateSmokeDenyOnce = false; return null; }
-        if (!__updateSmokeGate.close()) return null;
-        await __updateSmokeGate.drain(); __updateSmokeAdmissions++;
-        return { valid: () => __updateSmokeIdle && __updateSmokeGate.quiet() && __updateSmokeGate.state().closed, release: () => __updateSmokeGate.reopen() };
-      };
-      globalThis.__updateSmokeScheduling = scheduling;
-      source = createUpdateController({ ...options, packaged: false, appPath: null, directory: ${JSON.stringify(path.join(userData, 'source-updates'))} });
-      await source.initialize();
-      unsupported = createUpdateController({ ...options, arch: 'unsupported', directory: ${JSON.stringify(path.join(userData, 'unsupported-updates'))} });
-      await unsupported.initialize();
-      try { await unsupported.check(); } catch (error) { unsupportedError = error.code; }
-    }
+    const options = { version: '3.10.0', directory: ${JSON.stringify(updates)}, appPath: ${JSON.stringify(appPath)}, packaged: true, fetchImpl, quit: () => setTimeout(() => electron.app.quit(), 500) };
+    let unsupportedError = null;
+    const scheduling = await loadModule(${JSON.stringify(pathToFileURL(path.join(candidate.asar, 'src', 'update-scheduler.mjs')).href)});
+    globalThis.__updateSmokeIdle = false; globalThis.__updateSmokeClock = 0; globalThis.__updateSmokeAdmissions = 0;
+    globalThis.__updateSmokeDenyOnce = true; globalThis.__updateSmokeAttempts = 0; globalThis.__updateSmokeReady = [];
+    globalThis.__updateSmokeGate = scheduling.createUpdateWorkGate({ now: () => __updateSmokeClock });
+    globalThis.__updateSmokeClock = scheduling.UPDATE_QUIET_WINDOW + 1;
+    options.acquireInstallAdmission = async ({ automatic }) => {
+      if (!automatic || !__updateSmokeIdle || !__updateSmokeGate.quiet()) return null;
+      const path = process.getBuiltinModule('path');
+      const active = JSON.parse(fs.readFileSync(${JSON.stringify(path.join(updates, 'active.json'))}, 'utf8'));
+      const work = path.join(${JSON.stringify(updates)}, 'install-' + active.id);
+      const staged = JSON.parse(fs.readFileSync(path.join(work, 'journal.json'), 'utf8'));
+      if (staged.id !== active.id || staged.status !== 'staged') throw new Error('Final admission ran before a staged native receipt.');
+      if (process.platform !== 'darwin' && fs.readFileSync(path.join(work, 'ready'), 'utf8') !== active.id) throw new Error('Final admission ran before the native helper was ready.');
+      __updateSmokeReady.push(staged.id); __updateSmokeAttempts++;
+      if (__updateSmokeDenyOnce) { __updateSmokeDenyOnce = false; return null; }
+      if (!__updateSmokeGate.close()) return null;
+      await __updateSmokeGate.drain(); __updateSmokeAdmissions++;
+      return { valid: () => __updateSmokeIdle && __updateSmokeGate.quiet() && __updateSmokeGate.state().closed, release: () => __updateSmokeGate.reopen() };
+    };
+    globalThis.__updateSmokeScheduling = scheduling;
+    const source = createUpdateController({ ...options, packaged: false, appPath: null, directory: ${JSON.stringify(path.join(userData, 'source-updates'))} });
+    await source.initialize();
+    const unsupported = createUpdateController({ ...options, arch: 'unsupported', directory: ${JSON.stringify(path.join(userData, 'unsupported-updates'))} });
+    await unsupported.initialize();
+    try { await unsupported.check(); } catch (error) { unsupportedError = error.code; }
     globalThis.__updateSmoke = createUpdateController(options);
     await globalThis.__updateSmoke.initialize();
-    if (!${legacyMac}) {
-      globalThis.__updateSmokeScheduler = __updateSmokeScheduling.createUpdateScheduler({
-        updates: __updateSmoke, preferences: __updateSmokeScheduling.createUpdatePreferences(${JSON.stringify(updates)}),
-        install: async options => {
-          globalThis.__updateSmokeInstallFailure = null;
-          try { return await __updateSmoke.install(options); }
-          catch (error) {
-            globalThis.__updateSmokeInstallFailure = { name: error?.name, code: error?.code,
-              message: String(error?.message || error).slice(0, 2048), stack: String(error?.stack || '').slice(0, 8192),
-              cause: error?.cause?.message ? String(error.cause.message).slice(0, 2048) : undefined };
-            throw error;
-          }
-        },
-        canInstall: () => __updateSmokeIdle && __updateSmokeGate.quiet() && __updateSmokeGate.state().active === 0,
-        now: () => __updateSmokeClock,
-      });
-    }
-    return { native: globalThis.__updateSmoke.state(), source: source?.state(), unsupported: unsupported?.state(), unsupportedError, legacyHelperDigest };
+    globalThis.__updateSmokeScheduler = __updateSmokeScheduling.createUpdateScheduler({
+      updates: __updateSmoke, preferences: __updateSmokeScheduling.createUpdatePreferences(${JSON.stringify(updates)}),
+      install: async options => {
+        globalThis.__updateSmokeInstallFailure = null;
+        try { return await __updateSmoke.install(options); }
+        catch (error) {
+          globalThis.__updateSmokeInstallFailure = { name: error?.name, code: error?.code,
+            message: String(error?.message || error).slice(0, 2048), stack: String(error?.stack || '').slice(0, 8192),
+            cause: error?.cause?.message ? String(error.cause.message).slice(0, 2048) : undefined };
+          throw error;
+        }
+      },
+      canInstall: () => __updateSmokeIdle && __updateSmokeGate.quiet() && __updateSmokeGate.state().active === 0,
+      now: () => __updateSmokeClock,
+    });
+    return { native: globalThis.__updateSmoke.state(), source: source.state(), unsupported: unsupported.state(), unsupportedError };
   }`;
   const initial = await evaluate(main, `(${setup})()`);
-  if (!legacyMac) {
+  {
     if (process.platform === 'darwin' && !initial.native.automaticSupported) {
       // Failure-only CI evidence. Keep native validation intact; do not expose
       // these fixture paths or bounded native stderr through product update UI.
@@ -362,11 +325,7 @@ try {
   assert.equal((await readdir(updates)).some(name => name.endsWith('.partial') || /^download-/.test(name)), false);
   report.scenarios.push('corrupted-download-rejected-old-app-still-running-no-handoff');
   let installing;
-  if (legacyMac) {
-    const downloaded = await evaluate(main, '(async () => { await __updateSmoke.check(); await __updateSmoke.download(); return __updateSmoke.state(); })()');
-    assert.equal(downloaded.status, 'downloaded');
-    installing = await evaluate(main, '__updateSmoke.install()');
-  } else {
+  {
     const pending = await evaluate(main, '(async () => { await __updateSmokeScheduler.start(); return { update: __updateSmoke.state(), automation: __updateSmokeScheduler.state(), admissions: __updateSmokeAdmissions }; })()');
     assert.equal(pending.update.status, 'downloaded'); assert.equal(pending.automation.waitingForIdle, true); assert.equal(pending.admissions, 0);
     assert.equal(await readReceipt(), null, 'Scheduler must retain its download without handing off before idle.');
@@ -399,18 +358,7 @@ try {
   assert.equal(receipt.version, pkg.version); assert.equal(receipt.previousVersion, '3.10.0'); assert.equal(receipt.target, appPath);
   const confirmation = JSON.parse(await readFile(path.join(path.dirname(receipt.journal), 'confirmed.json'), 'utf8'));
   assert.equal(confirmation.id, receipt.id); assert.equal(confirmation.version, pkg.version);
-  if (legacyMac) {
-    assert.equal(receipt.schema, 1); assert.equal(receipt.platform, undefined); assert.equal(receipt.userData, undefined);
-    assert.equal(await digest(path.join(path.dirname(receipt.journal), 'update-install.cjs')), initial.legacyHelperDigest, 'Published helper bytes must remain unchanged.');
-    const processes = await exactMacProcesses();
-    assert.equal(processes.length, 1, 'Legacy LaunchServices must start exactly one real app at the unique installed path.');
-    [restartedPid] = processes;
-    const launches = (await readFile(legacyAudit, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
-    assert.equal(launches.length, 1); assert.equal(launches[0].command, '/usr/bin/open');
-    assert.deepEqual(launches[0].originalArgs, ['-n', appPath]);
-    assert.equal(launches[0].isolatedArgs.at(-1), `--user-data-dir=${userData}`);
-    report.scenarios.push('published-mac-controller-byte-identical-helper-schema1-confirmation-with-launch-isolation-adapter');
-  } else restartedPid = receipt.launchedPid;
+  restartedPid = receipt.launchedPid;
   assert.ok(Number.isSafeInteger(restartedPid) && restartedPid > 1 && restartedPid !== child.pid, 'A distinct native restarted process must be observed.');
   process.kill(restartedPid, 0);
   if (process.platform === 'linux') assert.equal(await digest(appPath), candidateDigest, 'Actual installed AppImage must be replaced with the verified candidate bytes.');
@@ -425,8 +373,7 @@ try {
   assert.equal(await readFile(exportFile, 'utf8'), exportBytes);
   report.scenarios.push('saved-synthetic-profile-identity-and-document-preserved');
   report.result = 'passed'; report.receipt = { status: receipt.status, version: receipt.version, previousVersion: receipt.previousVersion };
-  report.notExercised = ['real candidate GitHub publication/download before publication', 'OS permission prompts or signing/notarization', 'native startup-failure rollback (covered separately by helper regressions)', 'legacy 3.10 automatic Windows/Linux update capability'];
-  if (legacyMac) report.notExercised.push('unmodified legacy LaunchServices profile/environment arguments');
+  report.notExercised = ['real candidate GitHub publication/download before publication', 'OS permission prompts or signing/notarization', 'native startup-failure rollback (covered separately by helper regressions)', 'old-version updater compatibility (not supported or required)'];
   console.log(JSON.stringify(report));
 } catch (error) { report.error = error.message; console.error(log); throw error; }
 finally {
@@ -434,10 +381,6 @@ finally {
   for (const connection of connections) connection.close();
   receipt ||= await readReceipt().catch(() => null);
   await stop(restartedPid || receipt?.launchedPid); await stop(child?.pid);
-  if (legacyMac) {
-    for (const pid of await exactMacProcesses()) await stop(pid);
-    await until(async () => (await exactMacProcesses()).length === 0, 10000, 'isolated legacy Mac application exit');
-  }
   if (process.platform === 'linux') {
     for (const name of await readdir('/proc')) {
       if (!/^\d+$/.test(name) || Number(name) === process.pid) continue;

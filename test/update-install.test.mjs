@@ -16,7 +16,8 @@ async function fixture(t) {
   const parent = path.join(root, 'Applications');
   await mkdir(work, { recursive: true, mode: 0o700 });
   await mkdir(parent);
-  const journal = { schema: 1, id, version: '1.3.0', previousVersion: '1.2.3', pid: process.pid,
+  const journal = { schema: 1, platform: 'darwin', executable: 'Recruiters.rip Companion', userData: root, digest: '0'.repeat(64),
+    id, version: '1.3.0', previousVersion: '1.2.3', pid: process.pid,
     target: path.join(parent, 'Recruiters.rip Companion.app'), staged: path.join(parent, `.recruiters-update-${id}.app`),
     backup: path.join(parent, `.recruiters-backup-${id}.app`), journal: path.join(work, 'journal.json') };
   for (const [app, version] of [[journal.target, '1.2.3'], [journal.staged, '1.3.0']]) {
@@ -148,24 +149,6 @@ test('a launched process exiting before readiness rolls back instead of claiming
   assert.equal((await readJournal(journal.journal)).status, 'rolled-back');
   assert.equal(await versionAt(journal.target), '1.2.3');
   assert.equal(launches, 2);
-});
-
-test('published 3.10 Mac schema-one receipts receive the exact legacy startup proof', async t => {
-  // The published helper omits platform/executable/digest/userData. Its final
-  // in-memory receipt write can also omit the new launchedPid field.
-  const { journal } = await fixture(t);
-  for (const field of ['platform', 'executable', 'digest', 'userData', 'launchedPid']) assert.equal(journal[field], undefined);
-  const legacyReceipt = { ...journal, status: 'launched' };
-  await writeFile(journal.journal, JSON.stringify(legacyReceipt));
-  const pending = await readJournal(journal.journal);
-  await confirmUpdate(pending);
-  assert.deepEqual(JSON.parse(await readFile(path.join(path.dirname(journal.journal), 'confirmed.json'), 'utf8')), {
-    id: legacyReceipt.id, version: legacyReceipt.version,
-  });
-  // Model the real old helper's concurrent final write. The unchanged monotonic
-  // confirmation proof remains authoritative; no migration or new keys needed.
-  await writeFile(journal.journal, JSON.stringify({ ...legacyReceipt, status: 'unconfirmed' }));
-  assert.equal((await readJournal(journal.journal)).status, 'confirmed');
 });
 
 test('a competing ordinary owner after old exit prevents every installation rename', async t => {

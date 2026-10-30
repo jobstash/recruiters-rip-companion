@@ -139,13 +139,17 @@ try {
   $failure = $_
   # The parent retains bounded stderr only as a private diagnostic cause. A
   # closed parent pipe must never prevent rollback or honest receipt handling.
-  try { [Console]::Error.WriteLine($failure.Exception.ToString() + [Environment]::NewLine + $failure.InvocationInfo.PositionMessage) } catch {}
+  $failureText = $failure.Exception.ToString() + [Environment]::NewLine + $failure.InvocationInfo.PositionMessage
+  try { [Console]::Error.WriteLine($failureText) } catch {}
   if ($null -eq $j -or !$work) { exit 1 }
+  # Start-Process detaches stderr, so keep the exact failure in the private update folder.
+  try { [IO.File]::WriteAllText((Join-Path $work 'helper-error.txt'), $failureText) } catch {}
   try {
     if (Confirmed) { Receipt 'confirmed' }
     elseif ($changed -and (Test-Path -LiteralPath $j.backup)) { Restore }
     else { Receipt 'failed' }
   } catch { # Preserve both app and backup if recovery itself cannot complete.
+    try { [IO.File]::AppendAllText((Join-Path $work 'helper-error.txt'), [Environment]::NewLine + 'Recovery: ' + $_.Exception.ToString()) } catch {}
     try { Receipt 'unconfirmed' } catch {}
   }
   exit 1

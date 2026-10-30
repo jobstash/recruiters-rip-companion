@@ -354,7 +354,11 @@ try {
   await until(() => exit, 30000, 'old application exit for native handoff');
   receipt = await until(async () => {
     const value = await readReceipt();
-    if (value) report.lastReceipt = { status: value.status, version: value.version, launchedPid: value.launchedPid ?? null, updatedAt: value.updatedAt ?? null };
+    if (value) {
+      report.lastReceipt = { status: value.status, version: value.version, launchedPid: value.launchedPid ?? null, updatedAt: value.updatedAt ?? null };
+      try { report.helperError = (await readFile(path.join(path.dirname(value.journal), 'helper-error.txt'), 'utf8')).slice(0, 8000); }
+      catch (error) { if (error.code !== 'ENOENT') throw error; }
+    }
     if (['failed', 'rolled-back', 'unconfirmed'].includes(value?.status)) throw new Error(`Native upgrade did not confirm: ${JSON.stringify(value)}`);
     return value?.status === 'confirmed' ? value : null;
   }, 240000, 'new native application ready confirmation');

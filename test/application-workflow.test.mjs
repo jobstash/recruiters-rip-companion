@@ -23,7 +23,7 @@ function fixture({ validateExport = async () => true } = {}) {
   } };
   const workflow = createApplicationWorkflow({ store, assertAvailable() {}, validateExport });
   const tools = new Map([...createApplicationTools({ store }), ...createFormTools({ store }),
-    ...createApplicationPreparationTools({ workflow, openInChrome: async url => opened.push(url) })].map(tool => [tool.name, tool]));
+    ...createApplicationPreparationTools({ workflow, openInBrowser: async url => opened.push(url) })].map(tool => [tool.name, tool]));
   const opened = [];
   const forms = createBrowserForms({ store, assertAvailable() {}, credentials: { read() { assert.fail('Keyless preparation must not read credentials.'); } },
     fetchImpl() { assert.fail('No inference is used in this test.'); } });
@@ -88,10 +88,11 @@ test('web-led complete capture creates once; incomplete capture persists exact c
   assert.equal(view.applicationId, null);
   assert.equal(view.state, 'needs_job');
   const preparation = await other.workflow.prepare({ bindingId: view.bindingId, host: 'claude' });
-  await other.workflow.launched({ preparationId: preparation.preparationId, host: 'claude' });
+  await other.workflow.launched({ preparationId: preparation.preparationId, host: 'claude', mode: 'cli' });
   const launched = await other.workflow.status({ bindingId: view.bindingId });
   assert.equal(launched.state, 'needs_job');
   assert.equal(launched.handoff.state, 'awaiting_agent');
+  assert.equal(launched.handoff.mode, 'cli');
   const read = await other.call('career_application_preparation_read', { preparationId: preparation.preparationId });
   assert.equal(read.context.original.url, advert);
   assert.equal(read.form.fields[0].maxLength, 200);
@@ -315,7 +316,7 @@ test('blocked packages reject preparation, open and receipt replay while retaini
   for (const operation of [
     () => f.workflow.status({ bindingId: view.bindingId }),
     () => f.workflow.prepare({ bindingId: view.bindingId, host: 'claude' }),
-    () => f.workflow.launched({ preparationId: preparation.preparationId, host: 'claude' }),
+    () => f.workflow.launched({ preparationId: preparation.preparationId, host: 'claude', mode: 'desktop' }),
     () => f.workflow.readPreparation({ preparationId: preparation.preparationId }),
     () => f.workflow.bindPreparation({ preparationId: preparation.preparationId, applicationId: created.applicationId }),
     () => f.workflow.document({ bindingId: view.bindingId, kind: 'cv' }),

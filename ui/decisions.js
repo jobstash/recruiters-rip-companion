@@ -1,4 +1,4 @@
-// Settings → Optional Decisions API: one OpenAI key, used only by Chrome Read page to select known form values.
+// Settings → Form filling: one optional OpenAI key selects known browser form answers.
 // The secret lives in the main process; this UI sees a four-character hint and a save date.
 (() => {
   const element = name => document.getElementById(`decisions-${name}`);
@@ -30,10 +30,10 @@
     }
     element('form').setAttribute('aria-busy', String(pending));
     const since = savedDate(credentials?.savedAt);
-    element('key-status').textContent = !available ? 'Open local storage to configure the optional Decisions API.'
-      : !configured ? 'No API key saved. Chrome Read page fills forms from your saved details only; with a key, OpenAI Decisions also picks known answers for the remaining fields. Billed by OpenAI per request.'
+    element('key-status').textContent = !available ? 'Unlock your saved work to use help with forms.'
+      : !configured ? 'No key saved. Read page can still use your saved details in Chrome and Firefox.'
         : replacing ? `The key …${credentials.keyHint} stays active until you save a new one.`
-          : `API key saved${since ? ` on ${since}` : ''}. Chrome Read page can pick known answers with OpenAI Decisions.`;
+          : `Key saved${since ? ` on ${since}` : ''}. OpenAI can help choose answers from your saved details.`;
   }
 
   async function invoke(op, input) {
@@ -76,7 +76,7 @@
     const input = { provider: 'openai', apiKey: key.value };
     key.value = '';
     replacing = false;
-    void perform('decisions-key-save', input, 'Decisions API key saved. Chrome Read page can use it.');
+    void perform('decisions-key-save', input, 'Key saved. OpenAI can help choose answers from your saved details.');
   });
   element('replace').addEventListener('click', () => {
     if (pending || !credentials?.configured) return;
@@ -94,7 +94,7 @@
   element('remove').addEventListener('click', () => {
     key.value = '';
     replacing = false;
-    void perform('decisions-key-remove', { provider: 'openai' }, 'API key removed. Chrome Read page keeps filling from your saved details.');
+    void perform('decisions-key-remove', { provider: 'openai' }, 'Key removed. Read page can still use your saved details.');
   });
   window.decisionsUI = { refresh, clear, clearInput };
 })();

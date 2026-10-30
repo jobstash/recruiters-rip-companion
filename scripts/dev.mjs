@@ -13,7 +13,7 @@ const args = ['.', ...process.argv.slice(2)];
 let child, restarting = false, pending, rebuild = false, stopping = false;
 
 async function runtimeBuild() {
-  for (const args of [['scripts/runtime.mjs'], ['browser-extension/build.mjs', 'production'], ['browser-extension/build.mjs', 'local']]) {
+  for (const args of [['scripts/runtime.mjs'], ...['chrome', 'firefox'].flatMap(browser => ['production', 'local'].map(mode => ['browser-extension/build.mjs', mode, `--browser=${browser}`]))]) {
     await new Promise((resolve, reject) => {
       const build = spawn(process.execPath, args, { cwd: root, stdio: 'inherit' });
       build.once('error', reject);
@@ -50,7 +50,7 @@ watch(path.join(root, 'src'), { recursive: true }, (_event, file) => {
   if (!file) return;
   const relative = path.join('src', file);
   if (relative.startsWith(generated)) return;
-  queue(relative.startsWith(path.join('src', 'documents')) || relative === path.join('src', 'mcp', 'local-runner.cjs'));
+  queue(relative.startsWith(path.join('src', 'documents')) || relative === path.join('src', 'mcp', 'local-runner.cjs') || relative === path.join('src', 'platform-runtime.cjs'));
 });
 watch(path.join(root, 'scripts'), { recursive: true }, (_event, file) => { if (file && file !== 'dev.mjs') queue(true); });
 watch(path.join(root, 'skills'), { recursive: true }, (_event, file) => { if (file) queue(true); });

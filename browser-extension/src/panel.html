@@ -2,19 +2,22 @@
 <html lang="en" data-theme="dark">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Recruiters.rip</title><link rel="stylesheet" href="design-tokens.css"><link rel="stylesheet" href="panel.css"></head>
 <body>
-<header><img src="brand/recruiters-rip-lockup-reversed.svg" alt="Recruiters.rip" width="180" height="32"><button id="settings" class="quiet">Settings</button></header>
+<header><img src="brand/recruiters-rip-lockup-reversed.svg" alt="Recruiters.rip" width="180" height="32"><button id="settings" class="quiet">Open Companion</button></header>
 <main>
+<p id="intro">Save jobs and fill application forms here. You can review jobs in Companion without this extension.</p>
 <nav aria-label="Page tools"><button id="detect">Read page</button></nav>
-<p id="status" role="status" aria-live="polite"></p><p id="error" role="alert" hidden></p><button id="cancel" class="quiet" hidden>Cancel preparation</button>
+<p id="status" role="status" aria-live="polite"></p><p id="error" role="alert" hidden></p><button id="cancel" class="quiet" hidden>Cancel</button>
+<div id="recovery" hidden><p id="recovery-message" role="status"></p><button id="recover">Open Companion</button><button id="install" class="quiet" hidden>Get Companion</button></div>
 <section id="page" hidden><h1 id="title"></h1></section>
 <section id="application" hidden aria-labelledby="application-heading">
 <h2 id="application-heading">For this job</h2>
 <p id="application-title"></p><p id="application-status" role="status" aria-live="polite"></p>
 <button id="application-open-ad" class="quiet" hidden>Read job ad</button>
 <div id="application-preparation">
-<label for="application-host">Prepare with</label><select id="application-host"><option value="claude">Claude</option><option value="codex">Codex</option></select>
-<button id="application-prepare" class="quiet">Prepare this application</button>
+<label for="application-host">AI app</label><select id="application-host"><option value="claude">Claude</option><option value="codex">Codex</option></select>
+<button id="application-prepare">Continue in Claude</button>
 <p id="application-handoff" role="status" hidden></p>
+<button id="application-connect" class="quiet" hidden>Open Companion</button>
 </div>
 <div id="application-documents"></div>
 <p id="application-writing" role="status" hidden></p>
@@ -24,10 +27,10 @@
 </section>
 <section id="form" hidden>
 <p id="ready" role="status" hidden></p><p id="paste" role="status" aria-live="polite" hidden></p>
-<button id="configure" class="quiet" hidden>Configure in Companion</button>
+<details id="optional-settings" hidden><summary>Optional form help</summary><p>Your saved answers work without extra setup. For more help choosing answers from your CV, open Companion → Settings → Form filling. This optional help needs an OpenAI API key and costs extra, separate from your ChatGPT or Claude subscription.</p><button id="configure" class="quiet" hidden>Open settings</button></details>
 <form id="details-form" hidden><h2>Missing details</h2><p>Save on this computer for your next application.</p><div id="question-list"></div><button id="save-details" type="submit">Save details</button></form>
-<details id="review" hidden><summary>Review answers</summary><div id="field-list"></div><div id="unresolved"></div><div id="review-actions" hidden><button id="copy" class="quiet">Copy selected values</button></div></details>
+<details id="review" hidden><summary>Review answers</summary><div id="field-list"></div><div id="unresolved"></div><div id="review-actions" hidden><button id="copy" class="quiet">Copy selected</button></div></details>
 </section>
-<details id="jobs" hidden><summary>Detected jobs</summary><div id="job-list"></div><button id="save" class="quiet">Save selected jobs</button></details>
+<details id="jobs" hidden><summary>Jobs on this page</summary><div id="job-list"></div><button id="save" class="quiet">Save selected</button></details>
 </main><script type="module" src="panel.mjs"></script>
 </body></html>

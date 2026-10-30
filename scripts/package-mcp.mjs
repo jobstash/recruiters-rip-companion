@@ -1,6 +1,6 @@
 import { mkdir, writeFile, copyFile, cp, rm, mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { spawn } from 'node:child_process';
+import AdmZip from 'adm-zip';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { version } from '../src/version.mjs';
@@ -24,7 +24,7 @@ export async function packageMcp() {
     skills: './skills/', mcpServers: './.mcp.json',
     interface: {
       displayName: 'Recruiters.rip', shortDescription: 'Find good jobs and prepare tailored applications.',
-      longDescription: 'Match jobs to your career and preferences and prepare tailored CVs, cover letters and answers. Apply in your own Chrome when your subscription app provides computer-use tools, using its mouse, keyboard and file picker. Companion does not provide browser input; documents and prepared answers remain usable without it. Career data stays in the local companion.',
+      longDescription: 'Match jobs to your career and preferences and prepare tailored CVs, cover letters and answers. Apply in your own supported browser when your subscription app provides computer-use tools, using its mouse, keyboard and file picker. Companion does not provide browser input; documents and prepared answers remain usable without it. Career data stays in the local companion.',
       developerName: 'JobStash', category: 'Productivity', capabilities: ['Read', 'Write'],
       defaultPrompt: ['Use Recruiters.rip. Show my current recommendations with salary, city/location, work mode and JobStash publication date. Keep the complete assessment archive and CSV available separately; do not present unreviewed or unsuitable archive rows as recommendations. Do not start new scoring unless I ask.'],
     },
@@ -33,25 +33,25 @@ export async function packageMcp() {
   try {
     await mkdir(path.join(staging, 'server'));
     await copyFile(path.join(root, 'src/mcp/local-runner.cjs'), path.join(staging, 'server', 'index.cjs'));
+    await copyFile(path.join(root, 'src/platform-runtime.cjs'), path.join(staging, 'platform-runtime.cjs'));
     await cp(path.join(root, 'skills/recruiters-rip'), path.join(staging, 'skills', 'recruiters-rip'), { recursive: true });
     for (const local of [false, true]) {
       const name = local ? 'recruiters-rip-local' : 'recruiters-rip';
       const manifest = {
         manifest_version: '0.3', name, display_name: 'Recruiters.rip', version,
         description: 'Complete saved rankings and grounded CareerCup CV preparation. Requires Recruiters.rip Companion.',
-        long_description: 'Review jobs and prepare tailored application documents in your subscription app. When the host provides computer-use tools, use its native mouse, keyboard and file picker in your own Chrome; Companion does not provide browser input. An optional OpenAI Decisions key, entered only in local companion settings and separately billed, selects known form values for native paste. Keys are never exposed to chat. No web-job-search fallback.',
+        long_description: 'Review jobs and prepare tailored application documents in your subscription app. When the host provides computer-use tools, use its native mouse, keyboard and file picker in your own supported browser; Companion does not provide browser input. An optional OpenAI Decisions key, entered only in local companion settings and separately billed, selects known form values for native paste. Keys are never exposed to chat. No web-job-search fallback.',
         author: { name: 'JobStash' },
         server: { type: 'node', entry_point: 'server/index.cjs', mcp_config: { command: 'node', args: ['${__dirname}/server/index.cjs', ...(local ? ['--local-product'] : [])] } },
         tools_generated: true, prompts_generated: true,
-        compatibility: { platforms: ['darwin', 'linux'], runtimes: { node: '>=22.12.0' } },
+        compatibility: { platforms: ['darwin', 'win32', 'linux'], runtimes: { node: '>=22.12.0' } },
       };
       await writeFile(path.join(staging, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
       const filename = path.join(output, `${name}.mcpb`);
       await rm(filename, { force: true });
-      await new Promise((resolve, reject) => {
-        const child = spawn('zip', ['-q', '-r', filename, 'manifest.json', 'server', 'skills'], { cwd: staging, stdio: ['ignore', 'ignore', 'inherit'] });
-        child.once('error', reject); child.once('exit', code => code === 0 ? resolve() : reject(new Error('Recruiters.rip bundle packaging failed.')));
-      });
+      const archive = new AdmZip();
+      archive.addLocalFolder(staging);
+      archive.writeZip(filename);
     }
   } finally { await rm(staging, { recursive: true, force: true }); }
 }

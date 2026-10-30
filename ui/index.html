@@ -10,6 +10,7 @@
 <script src="career-browser.js" defer></script>
 <script src="decisions.js" defer></script>
 <script src="updates.js" defer></script>
+<script src="backups.js" defer></script>
 <script src="settings.js" defer></script>
 </head>
 <body>
@@ -37,12 +38,16 @@
 <main>
 <section id="storage" class="setup-view locked" hidden>
 <img class="mark-large" src="brand/recruiters-rip-mark-reversed.svg" width="75" height="64" alt="">
-<h1>Local storage is locked</h1><p id="storage-message"></p><button id="unlock" class="primary" type="button">Open local storage</button>
+<h1>Your saved work is locked</h1><p id="storage-message"></p><button id="unlock" class="primary" type="button">Unlock</button>
 </section>
 <div id="settings" hidden>
 <section id="view-me" class="career-view" aria-label="Me" hidden>
 <div id="me-actions" class="me-actions">
-<div class="actions"><button id="import-cv" class="ghost" type="button">Import CV</button><button id="open-exports" class="text" type="button">Open exports</button><button id="backup" class="text" type="button">Export backup</button><button id="me-account" class="text" type="button" hidden>Connect account for job access</button><button id="me-chat-apps" class="text" type="button">Connect your agent</button></div>
+<section id="me-setup" class="setup-next" aria-labelledby="setup-next-title" hidden>
+<div><h2 id="setup-next-title">Start a job review</h2><p id="setup-next-description"></p><p id="setup-next-status" class="caption" role="status"></p></div>
+<button id="setup-next" class="primary" type="button">Connect account</button>
+</section>
+<div class="actions"><button id="import-cv" class="ghost" type="button">Import CV</button><button id="me-jobs" class="ghost" type="button">Jobs</button><button id="me-account" class="text" type="button" hidden>Connect account</button></div>
 </div>
 <div id="me-browser" class="career-browser">
 <div class="career-toolbar">
@@ -55,8 +60,8 @@
 </div>
 <div class="career-panes">
 <section class="career-list panel" aria-label="Saved records">
-<div class="panel-head"><p id="me-list-status" role="status">Open local storage to read saved records.</p></div>
-<button id="me-list-retry" class="ghost" type="button" hidden>Retry loading records</button>
+<div class="panel-head"><p id="me-list-status" role="status">Unlock to see your saved work.</p></div>
+<button id="me-list-retry" class="ghost" type="button" hidden>Retry</button>
 <ul id="me-records" class="career-records" aria-label="Saved records" hidden></ul>
 <nav id="me-pagination" class="actions pagination" aria-label="Record pages" hidden>
 <button id="me-previous" class="text" type="button" disabled>Previous</button>
@@ -97,7 +102,7 @@
 <section class="career-list panel" aria-label="Saved jobs">
 <div class="panel-head career-list-head">
 <div class="career-list-tools">
-<p id="career-list-status" role="status">Open local storage to read saved jobs.</p>
+<p id="career-list-status" role="status">Unlock to see your saved jobs.</p>
 <button id="delete-rankings" class="text" type="button" disabled hidden>Clear reviews</button>
 </div>
 </div>
@@ -120,46 +125,70 @@
 </div>
 </section>
 <section id="view-setup" class="setup-view" aria-label="Settings" hidden>
+<div class="tabs settings-tabs" role="tablist" aria-label="Settings">
+<button id="settings-tab-general" class="tab" type="button" role="tab" aria-controls="settings-general" aria-selected="true" tabindex="0" data-settings-tab="general">General</button>
+<button id="settings-tab-backups" class="tab" type="button" role="tab" aria-controls="settings-backups" aria-selected="false" tabindex="-1" data-settings-tab="backups">Backups</button>
+</div>
+<div id="settings-general" role="tabpanel" aria-labelledby="settings-tab-general">
 <section id="account-settings" class="setup-section account" aria-labelledby="account-title">
 <h2 id="account-title">Account</h2>
 <div class="settings-content"><p id="account-hint">Not connected.</p><button id="connect-account" type="button">Connect account</button>
-<div id="github-row" class="app-row" hidden>
-<h3 class="app-name">GitHub</h3>
-<button id="connect-github" class="ghost app-action" type="button" disabled>Link GitHub</button>
-<p id="github-status" class="app-details" role="status" aria-live="polite"></p>
+<details id="github-row" hidden><summary>GitHub · optional</summary><div class="settings-content">
+<button id="connect-github" class="ghost" type="button" disabled>Link GitHub</button>
+<p id="github-status" role="status" aria-live="polite"></p>
+</div></details>
 </div>
-</div>
-</section>
-<section id="sharing-settings" class="setup-section" aria-labelledby="sharing-title">
-<h2 id="sharing-title">JobStash profile</h2>
-<div class="settings-content"><p id="sharing-status">CV sharing is off.</p><p id="sharing-shared" class="caption" hidden></p><button id="sharing-toggle" class="ghost" type="button">Allow CV sharing</button></div>
 </section>
 <section id="chat-app-settings" class="setup-section" aria-labelledby="chat-app-title">
-<h2 id="chat-app-title">Chat apps</h2>
-<div class="settings-content"><div class="app-row">
-<h3 class="app-name">ChatGPT desktop · Codex</h3>
+<h2 id="chat-app-title">AI apps</h2>
+<div class="settings-content">
+<p>Choose Codex or Claude. Sign in there, then connect it to Companion.</p>
+<div class="app-row">
+<h3 id="codex-host-label" class="app-name">Codex</h3>
 <p id="chatgpt-connection" class="app-status caption" aria-live="polite"></p>
-<button id="install-chatgpt" class="app-action ghost" type="button">Install ChatGPT plugin</button>
-<details class="app-details"><summary>Manual MCP setup</summary><p>Register this command as <strong>recruiters-rip</strong> in your local MCP host.</p><code id="mcp-command" class="command"></code><button id="copy-command" class="text" type="button">Copy command</button></details>
+<button id="install-chatgpt" class="app-action ghost" type="button">Set up</button>
+<button id="get-codex" class="app-action ghost" type="button" hidden>Get Codex</button>
+<div class="app-details"><p id="codex-setup-help"></p><div class="actions"><button id="setup-codex" class="ghost" type="button">Continue in Codex</button></div>
+<details><summary>Advanced</summary><p id="codex-setup-detail" hidden></p><p>Register this command as <strong>recruiters-rip</strong> in your local MCP host.</p><code id="mcp-command" class="command"></code><button id="copy-command" class="text" type="button">Copy command</button></details></div>
 </div>
 <div class="app-row">
-<h3 class="app-name">Claude Desktop</h3>
+<h3 id="claude-host-label" class="app-name">Claude</h3>
 <p id="claude-connection" class="app-status caption" aria-live="polite"></p>
-<button id="install-claude" class="app-action ghost" type="button">Install Claude extension</button>
-<details class="app-details"><summary>Manual configuration</summary><p>Merge this entry into Claude Desktop’s MCP configuration.</p><pre id="mcp-config" class="command"></pre><button id="copy-config" class="text" type="button">Copy configuration</button></details>
-</div>
-<div class="app-row">
-<h3 class="app-name">Chrome extension</h3>
-<button id="open-extension-folder" class="app-action ghost" type="button">Open extension folder</button>
-<p class="app-details">In Chrome, open Extensions → Manage extensions, turn on Developer mode, choose Load unpacked and select the opened folder.</p>
+<button id="install-claude" class="app-action ghost" type="button">Set up</button>
+<button id="get-claude" class="app-action ghost" type="button" hidden>Get Claude</button>
+<div class="app-details"><p id="claude-setup-help"></p><div class="actions"><button id="setup-claude" class="ghost" type="button">Continue in Claude</button></div>
+<details><summary>Advanced</summary><p id="claude-setup-detail" hidden></p><p id="claude-config-help">Merge this entry into your Claude MCP configuration.</p><pre id="mcp-config" class="command"></pre><button id="copy-config" class="text" type="button">Copy configuration</button></details></div>
 </div>
 <p id="other-connections" class="caption" aria-live="polite" hidden></p>
 </div>
 </section>
+<section id="browser-settings" class="setup-section" aria-labelledby="browser-title">
+<h2 id="browser-title">Browser extensions</h2>
+<div class="settings-content"><details><summary>Optional · save jobs and fill forms</summary>
+<p>Add a browser extension to save jobs and help fill application forms. Keep Companion open when using it.</p>
+<div class="app-row">
+<h3 class="app-name">Chrome extension</h3>
+<button id="open-extension-folder" class="app-action ghost" type="button">Open folder</button>
+<ol class="app-details help-steps"><li>Choose Open folder here.</li><li>In Chrome, open <code>chrome://extensions</code> and turn on Developer mode.</li><li>Choose Load unpacked and select the folder that Companion opened.</li><li>Open a job page, choose the recruiters.rip toolbar icon, then Read page.</li></ol>
+<p id="chrome-native-status" class="app-status caption" aria-live="polite"></p>
+</div>
+<div class="app-row">
+<h3 class="app-name">Firefox extension</h3>
+<button id="open-firefox-extension-folder" class="app-action ghost" type="button">Open folder</button>
+<div class="app-details"><ol class="help-steps"><li>Choose Open folder here.</li><li>In Firefox, open <code>about:debugging</code> → This Firefox → Load Temporary Add-on.</li><li>Select <code>manifest.json</code> in the folder that Companion opened.</li><li>Open a job page, choose the recruiters.rip toolbar icon, then Read page.</li></ol><p class="caption">You will need to load it again after closing Firefox. If you downloaded a ZIP file instead, unzip it first.</p></div>
+<p id="firefox-native-status" class="app-status caption" aria-live="polite"></p>
+</div>
+</details></div>
+</section>
+<section id="sharing-settings" class="setup-section" aria-labelledby="sharing-title">
+<h2 id="sharing-title">CV sharing</h2>
+<div class="settings-content"><details><summary>Optional · share with JobStash</summary><p>Allow your AI app to send your CV and work history to JobStash. You can stop future sharing here at any time.</p><p id="sharing-status">CV sharing is off.</p><p id="sharing-shared" class="caption" hidden></p><button id="sharing-toggle" class="ghost" type="button">Allow CV sharing</button></details></div>
+</section>
 <section id="decisions" class="setup-section" aria-labelledby="decisions-title">
-<h2 id="decisions-title">Optional Decisions API</h2>
-<div class="settings-content">
-<p id="decisions-key-status" class="decisions-key-status" role="status" aria-live="polite">Open local storage to configure the optional Decisions API.</p>
+<h2 id="decisions-title">Form filling</h2>
+<div class="settings-content"><details><summary>Optional · help fill forms</summary>
+<p>OpenAI can help choose answers from your saved details. This needs an OpenAI API key, which is a separate service OpenAI charges for. You do not need it to review jobs in Codex or Claude.</p>
+<p id="decisions-key-status" class="decisions-key-status" role="status" aria-live="polite">Unlock your saved work to use help with forms.</p>
 <form id="decisions-form" autocomplete="off">
 <div id="decisions-key-saved" class="actions" hidden>
 <button id="decisions-replace" class="ghost" type="button" disabled>Replace key</button>
@@ -171,7 +200,7 @@
 </div>
 <p id="decisions-key-message" role="status" aria-live="polite"></p>
 </form>
-</div>
+</details></div>
 </section>
 <section id="update-settings" class="setup-section" aria-labelledby="update-title">
 <h2 id="update-title">Updates</h2>
@@ -183,24 +212,59 @@
 <div class="actions"><button id="update-check" class="ghost" type="button" disabled>Check for updates</button><button id="update-download" class="ghost" type="button" hidden>Download update</button><button id="update-install" class="ghost" type="button" hidden>Install update</button><button id="update-cancel" class="text" type="button" hidden>Cancel update</button></div>
 </div>
 </section>
+</div>
+<div id="settings-backups" role="tabpanel" aria-labelledby="settings-tab-backups" hidden>
+<section class="setup-section" aria-labelledby="backups-title">
+<h2 id="backups-title">Backups</h2>
+<div class="settings-content">
+<p>Save a copy of your profile, CVs, saved documents and jobs. You can restore it here, including on another computer.</p>
+<div class="actions"><button id="backup" class="primary" type="button" disabled>Save backup</button><button id="backup-choose" class="ghost" type="button" disabled>Restore backup</button><button id="backup-open-folder" class="text" type="button" disabled>Open backups</button></div>
+<p class="caption">Backup files aren’t password-protected. Keep them private. Sign-in and API keys aren’t included.</p>
+<p id="backup-availability" role="status">Checking your saved work…</p>
+<p id="backup-status" role="status" aria-live="polite" aria-atomic="true"></p>
+<p id="backup-error" role="alert" hidden></p>
+<ul id="backup-save-warnings" class="backup-warnings" hidden></ul>
+</div>
+</section>
+<section id="backup-preview" class="setup-section" aria-labelledby="backup-preview-title" hidden>
+<h2 id="backup-preview-title" tabindex="-1">Restore profile</h2>
+<div class="settings-content">
+<p id="backup-file" class="caption"></p>
+<label id="backup-profile-field" class="backup-field" for="backup-profile" hidden>Profile<select id="backup-profile"></select></label>
+<p id="backup-profile-name"></p>
+<dl id="backup-counts" class="backup-counts"></dl>
+<ul id="backup-warnings" class="backup-warnings" hidden></ul>
+<p id="backup-consequence">This replaces this app’s current profile, CVs, saved documents, jobs and applications. Your sign-in, API keys and CV sharing choice stay the same. A backup of your current profile is saved first; find it in Open backups.</p>
+<div class="actions"><button id="backup-cancel" class="ghost" type="button">Cancel</button><button id="backup-restore" class="primary" type="button" aria-describedby="backup-consequence">Restore profile</button></div>
+</div>
+</section>
+</div>
 </section>
 <section id="view-help" class="setup-view" aria-label="Help" hidden>
 <section class="setup-section account" aria-labelledby="help-start-title">
-<h2 id="help-start-title">Start</h2>
-<div class="settings-content"><p>Paste this into your connected agent:</p><pre id="help-prompt" class="command" tabindex="0">Use the recruiters.rip skill to find me a job.</pre></div>
+<h2 id="help-start-title">Set up and review jobs</h2>
+<div class="settings-content"><ol id="help-steps" class="help-steps">
+<li>In Settings, choose <strong>Connect account</strong>. Sign in in the browser, choose <strong>Connect account → Open Companion</strong>, then approve the named account back here.</li>
+<li>In Me, choose <strong>Import CV</strong> and select a PDF, Word document (.docx) or text file.</li>
+<li>In Settings → AI apps, choose <strong>Get Codex</strong> or <strong>Get Claude</strong> if you need to install one. Sign in there, then choose <strong>Set up</strong> in Companion.</li>
+<li>Open Jobs and choose <strong>Continue in Codex</strong> or <strong>Continue in Claude</strong>. Send the message in that app, or press <strong>Enter</strong> in the text window that opens.</li>
+</ol></div>
 </section>
 <section class="setup-section" aria-labelledby="help-flow-title">
-<h2 id="help-flow-title">How it works</h2>
-<div class="settings-content"><ol id="help-steps" class="help-steps">
-<li>Connect your account in Settings.</li>
-<li>Choose the publication window under Jobs and continue in Codex or Claude.</li>
-<li>Your AI reviews every job in the window against your CVs and facts.</li>
-<li>Tailor documents and apply.</li>
-</ol></div>
+<h2 id="help-flow-title">In your AI app</h2>
+<div class="settings-content"><p>Keep Companion open. To start from a conversation you already have, send:</p><pre id="help-prompt" class="command" tabindex="0">Use recruiters.rip to find jobs that fit my CV. Ask about any missing preferences and explain which roles fit and why.</pre><p>New recruiters.rip jobs need a membership. Codex or Claude uses your own account and any required plan, billed separately. A browser extension and extra API key are not needed to review jobs.</p><details><summary>My AI app cannot find recruiters.rip</summary><p>Follow Set up in Settings → AI apps, enable recruiters.rip in your AI app when asked, then start a new conversation. If Continue in Codex or Continue in Claude does not open the app, copy the message into it yourself.</p></details></div>
+</section>
+<section class="setup-section" aria-labelledby="help-documents-title">
+<h2 id="help-documents-title">Open your CV and letter</h2>
+<div class="settings-content"><ol class="help-steps"><li>Ask your AI to create and save a tailored CV and cover letter for a job.</li><li>Open Jobs in Companion and select that job.</li><li>Under <strong>Job and documents</strong>, choose <strong>Open CV</strong> or <strong>Open letter</strong>. Check them, then choose <strong>Open job</strong> to apply.</li></ol><p>The same saved documents are available when you select the job under Applications. If they are missing, ask your AI to create and save both PDFs.</p></div>
+</section>
+<section class="setup-section" aria-labelledby="help-backups-title">
+<h2 id="help-backups-title">Backups</h2>
+<div class="settings-content"><p>In Settings → Backups, choose <strong>Save backup</strong> to keep a private copy of your work. To recover one, choose <strong>Restore backup</strong>, select the file, check the preview and choose <strong>Restore profile</strong>.</p><p>Restoring replaces your current profile, not your sign-in or API keys. Companion saves the previous profile first; find it in <strong>Open backups</strong>. Backup files are not password-protected.</p><button id="help-backups" class="text" type="button">View backups</button><details><summary>Delete a CV instead</summary><p>Open Me → CVs, select the CV, choose <strong>Delete CV</strong> and confirm. If it was shared with JobStash, that copy must be removed first. If removal fails, the CV stays here so you can try again. Other CVs, applications and backups stay unchanged.</p><p>Use the account that shared it. Stopping CV sharing prevents future uploads; it does not delete a shared copy.</p></details></div>
 </section>
 <section class="setup-section" aria-labelledby="help-links-title">
 <h2 id="help-links-title">Links</h2>
-<div class="settings-content help-links"><p>Documentation: <code>https://recruiters.rip/docs</code></p><p>Downloads: <code>https://recruiters.rip/downloads</code></p></div>
+<div class="settings-content help-links"><p>Instructions: <code>https://recruiters.rip/docs</code></p><p>Downloads: <code>https://recruiters.rip/downloads</code></p></div>
 </section>
 <section class="setup-section" aria-labelledby="help-version-title">
 <h2 id="help-version-title">Version</h2>

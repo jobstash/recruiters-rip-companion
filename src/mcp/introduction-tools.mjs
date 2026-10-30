@@ -1,6 +1,7 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createCareerState, fail, readCareer } from './state.mjs';
 import { assertJobNotBlocked } from './blocklist.mjs';
+import { cvRemoteCopies, withCvOperation } from './cv-deletion.mjs';
 
 // CV sharing with JobStash. The connected agent extracts employers, titles and dates from a saved CV, matches them to
 // JobStash profiles/organizations/projects through the companion's signed relay (unmatched employers are dropped), and,
@@ -96,7 +97,7 @@ function uploadDocument(source) {
   return { filename: (source.name ?? 'CV.txt').replace(/[\\/]/g, '-').slice(0, 255), mediaType: 'text/plain', text: source.text.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, ' ') };
 }
 
-export function createIntroductionTools({ store, platform, shareCv, openGithub }) {
+export function createIntroductionTools({ store, platform, shareCv, openGithub, getAccountId = () => store.get().pairing?.account?.id }) {
   const update = change => { let result; return store.update(next => { result = change(next.career ??= createCareerState()); }).then(() => result); };
   return [
     {
@@ -167,25 +168,46 @@ export function createIntroductionTools({ store, platform, shareCv, openGithub }
       name: 'career_cv_share', readOnly: false, inputSchema: object({ sourceId: text(200) }, ['sourceId']),
       description: 'Send one CV and its saved matched roles to JobStash under standing consent; nothing else is asked. JobStash replaces the CV on their JobStash profile and replaces their CV-derived work history. Requires career_employment_save for the current CV first.',
       async invoke(args = {}) {
-        const career = readCareer(store);
-        const intro = state(career);
-        if (intro.consent?.granted !== true) fail('CONSENT_REQUIRED', 'CV sharing is off in the companion (Settings → JobStash profile). Skip sharing; do not ask the user.');
-        const source = currentSource(career, args.sourceId);
-        const saved = intro.documents?.[source.id];
-        if (!record(saved) || saved.contentHash !== source.contentHash) fail('EXTRACTION_REQUIRED', 'Extract and save this CV\'s matched roles with career_employment_save first.');
-        const document = uploadDocument(source);
-        const sharedAt = new Date().toISOString();
-        const result = await shareCv({ document,
-          employment: saved.employment.map(({ ref, title, startDate, endDate, current }) => ({ ref, title, startDate, endDate, current })),
-          consent: { version: CONSENT_VERSION, grantedAt: intro.consent.at } });
-        if (!record(result) || typeof result.documentId !== 'string') fail('SHARE_FAILED', 'JobStash did not confirm the upload. Try again.');
-        await update(next => {
-          const entry = next.introductions?.documents?.[source.id];
-          // A CV or role change during the upload leaves the new state for a later share.
-          if (entry && entry.contentHash === saved.contentHash && employmentHash(entry.employment) === employmentHash(saved.employment))
-            Object.assign(entry, { sharedAt, documentId: result.documentId, sharedContentHash: saved.contentHash, sharedHash: employmentHash(saved.employment) });
+        return withCvOperation(store, args.sourceId, async () => {
+          const career = readCareer(store);
+          const intro = state(career);
+          if (intro.consent?.granted !== true) fail('CONSENT_REQUIRED', 'CV sharing is off in the companion (Settings → JobStash profile). Skip sharing; do not ask the user.');
+          const source = currentSource(career, args.sourceId);
+          const saved = intro.documents?.[source.id];
+          if (!record(saved) || saved.contentHash !== source.contentHash) fail('EXTRACTION_REQUIRED', 'Extract and save this CV\'s matched roles with career_employment_save first.');
+          const document = uploadDocument(source);
+          const accountId = getAccountId();
+          if (!accountId) fail('PAIRING_REQUIRED', 'Connect your account in companion settings before sharing this CV.');
+          const documentId = randomUUID();
+          const sharedAt = new Date().toISOString();
+          // Save the exact cleanup target before sending bytes. A lost response must not turn a
+          // possibly shared CV into a local-only CV or lose an older copy on a subsequent share.
+          await update(next => {
+            const entry = next.introductions?.documents?.[source.id];
+            if (next.sources[source.id]?.contentHash !== source.contentHash || !entry ||
+                entry.contentHash !== saved.contentHash || employmentHash(entry.employment) !== employmentHash(saved.employment))
+              fail('CV_CHANGED', 'This CV changed. Read it again before sharing.');
+            if (getAccountId() !== accountId) fail('IDENTITY_CHANGED', 'The connected account changed. Reopen this CV before sharing.');
+            const copies = cvRemoteCopies(entry);
+            if (copies.some(copy => copy.accountId !== accountId))
+              fail('CV_ACCOUNT_MISMATCH', 'This CV already has a shared copy linked to another account, or its original account was not saved. Reconnect the original account to manage that copy. To share with this account, import a separate CV.');
+            entry.remoteCopies = [...copies, { documentId, accountId }];
+          });
+          const result = await shareCv({ documentId, document,
+            employment: saved.employment.map(({ ref, title, startDate, endDate, current }) => ({ ref, title, startDate, endDate, current })),
+            consent: { version: CONSENT_VERSION, grantedAt: intro.consent.at } });
+          if (!record(result) || result.documentId !== documentId) fail('SHARE_FAILED', 'JobStash did not confirm this upload. Your CV and its removal details are saved; try again.');
+          await update(next => {
+            const entry = next.introductions?.documents?.[source.id];
+            if (getAccountId() !== accountId) fail('IDENTITY_CHANGED', 'The connected account changed while sharing this CV.');
+            // Keep removal provenance even when extraction changes while the upload is in flight.
+            if (next.sources[source.id]?.contentHash === source.contentHash && entry &&
+                entry.contentHash === saved.contentHash && employmentHash(entry.employment) === employmentHash(saved.employment))
+              Object.assign(entry, { sharedAt, documentId, ...(accountId ? { sharedAccountId: accountId } : {}),
+                sharedContentHash: saved.contentHash, sharedHash: employmentHash(saved.employment) });
+          });
+          return { shared: true, documentId, roles: result.employment ?? saved.employment.length, sharedAt };
         });
-        return { shared: true, documentId: result.documentId, roles: result.employment ?? saved.employment.length, sharedAt };
       },
     },
     {

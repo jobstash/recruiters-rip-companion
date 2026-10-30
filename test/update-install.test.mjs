@@ -108,7 +108,7 @@ test('helper rejects arbitrary targets, linked bundles and occupied backups befo
   for (const attack of ['backup', 'link', 'path']) {
     const { journal, root } = await fixture(t);
     if (attack === 'backup') { await mkdir(journal.backup); await writeFile(path.join(journal.backup, 'keep'), 'retained'); }
-    if (attack === 'link') { const actual = path.join(root, 'Actual.app'); await rename(journal.target, actual); await symlink(actual, journal.target); }
+    if (attack === 'link') { const actual = path.join(root, 'Actual.app'); await rename(journal.target, actual); await symlink(actual, journal.target, process.platform === 'win32' ? 'junction' : 'dir'); }
     if (attack === 'path') journal.staged = path.join(root, 'Unrelated.app');
     let waited = false;
     await assert.rejects(performSwap(journal, { wait: async () => { waited = true; }, launchApp: async () => {} }));

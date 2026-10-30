@@ -2,12 +2,13 @@ import { createRequire } from 'node:module';
 import { cvHeading } from './mcp/application-tools.mjs';
 import { renderableCv } from './mcp/cv-quality.mjs';
 import { createMatchingTools } from './mcp/matching-tools.mjs';
-import { fail, readCareer } from './mcp/state.mjs';
+import { fail, hash, readCareer } from './mcp/state.mjs';
 import { reviewInclusion } from './mcp/review-queue.mjs';
 import { localJobMetadata } from './mcp/job-tools.mjs';
 import { blockedIds, listBlocks } from './mcp/blocklist.mjs';
 import { employmentHistory } from './employment-browser.mjs';
 import { preferenceItems } from './preferences-browser.mjs';
+import { currentApplicationJob, sameApplicationJob } from './application-workflow.mjs';
 
 const kinds = ['sources', 'facts', 'preferences', 'career', 'jobs', 'applications', 'blocks'];
 const forbidden = new Set(['__proto__', 'prototype', 'constructor']);
@@ -42,7 +43,9 @@ function validate(args, fields) {
 }
 
 function sourceDetail(source) {
-  return { title: text(source.name, 'Untitled source'), sections: [
+  return { title: text(source.name, 'Untitled source'),
+    ...(source.purpose === 'cv' && typeof source.contentHash === 'string' ? { deletion: { contentHash: source.contentHash } } : {}),
+    sections: [
     fields(source.purpose === 'cv' ? 'CV' : 'Source', [
       ['Status', source.archived ? 'Archived' : 'Current'], ['Purpose', source.purpose === 'cv' ? undefined : readable(source.purpose)],
       ['Added', displayDate(source.createdAt)],
@@ -85,10 +88,11 @@ function draftSections(kind, draft, career, historical = false) {
 function applicationTitle(app) {
   return [text(app.job?.title, ''), text(app.job?.company, '')].filter(Boolean).join(' — ') || 'Untitled application';
 }
+const savedJobPage = job => [job?.applyUrl, job?.url].find(value => typeof value === 'string' && /^https?:\/\//.test(value));
 function applicationDetail(app, career) {
-  return { title: applicationTitle(app), sections: [
+  return { title: applicationTitle(app), jobPage: Boolean(record(app.job) && savedJobPage(currentApplicationJob(career, app))), sections: [
     fields('Application', [
-      ['Company', app.job?.company], ['Location', app.job?.location], ['Job link', app.job?.url],
+      ['Company', app.job?.company], ['Location', app.job?.location],
       ['Created', displayDate(app.createdAt)], ['Updated', displayDate(app.updatedAt)],
     ], 'No application details saved.'),
     ...draftSections('cv', app.cv, career), ...draftSections('cover_letter', app.coverLetter, career),
@@ -187,10 +191,8 @@ function applicationSection(career, id) {
   const app = entries(career.applications).map(([, item]) => item).find(item => item.job?.id === id);
   if (!app) return [];
   const answers = entries(career.facts).filter(([, fact]) => fact.applicationId === app.id).length;
-  const draft = value => record(value) ? displayDate(value.createdAt) ?? 'Saved' : 'Not drafted';
   return [fields('Your application', [
-    ['Prepared', displayDate(app.createdAt)], ['CV draft', draft(app.cv)], ['Cover letter', draft(app.coverLetter)],
-    ['Exports', Array.isArray(app.exports) && app.exports.length ? plural(app.exports.length, 'export') : undefined],
+    ['Created', displayDate(app.createdAt)],
     ['Interview answers', answers ? plural(answers, 'answer') : undefined],
   ], 'No application details saved.')];
 }
@@ -316,12 +318,85 @@ function employmentItem(entry) {
 }
 
 
+// Saved PDFs are historical artifacts, not a claim that the current draft is ready.
+function documentApplication(career, kind, id) {
+  if (kind === 'applications') {
+    const app = lookup(career.applications, id);
+    if (!app) fail('NOT_FOUND', 'This application is no longer saved. Refresh the list.');
+    return { app, applicationId: id, job: currentApplicationJob(career, app) };
+  }
+  const saved = lookup(career.jobs, id) ?? lookup(career.matching?.jobs, id) ?? lookup(career.matching?.scores, id);
+  if (!saved || blockedIds(career)(id)) fail('NOT_FOUND', 'This job is no longer available. Refresh the list.');
+  const job = { ...saved, id };
+  const matches = entries(career.applications).filter(([, app]) => sameApplicationJob(currentApplicationJob(career, app), job));
+  if (matches.length > 1) fail('AMBIGUOUS_APPLICATION', 'More than one application matches this job. Open the intended application in Applications.');
+  return { app: matches[0]?.[1], applicationId: matches[0]?.[0], job };
+}
+function savedDocument(career, kind, id, document) {
+  const binding = documentApplication(career, kind, id);
+  const exported = [...(binding.app?.exports ?? [])].reverse().find(item => item.kind === document && item.format === 'pdf');
+  if (!exported) fail('DOCUMENT_MISSING', `No saved ${document === 'cv' ? 'CV' : 'letter'} PDF is available for this application.`);
+  return { exported, token: hash({ kind, id, applicationId: binding.applicationId, job: binding.job,
+    applicationJob: binding.app.job, exported }) };
+}
+
 /** Read-only, allowlisted projections: never return the vault or binary source data. */
-export function createCareerBrowser({ store }) {
-  // Every operation reads the store once; canonical projections share that immutable snapshot.
+export function createCareerBrowser({ store, files, openPath }) {
+  // List/read projections share one immutable career snapshot.
   const detail = (kind, item, career) => kind === 'sources' ? sourceDetail(item) :
     kind === 'facts' ? factDetail(item, career) : applicationDetail(item, career);
+  async function documents(career, kind, id) {
+    let binding;
+    try { binding = documentApplication(career, kind, id); }
+    catch (error) { return { documents: [], documentNotice: error.message }; }
+    if (!binding.app) return {};
+    const items = await Promise.all(['cv', 'cover_letter'].map(async document => {
+      const label = document === 'cv' ? 'CV' : 'letter';
+      let saved;
+      try { saved = savedDocument(career, kind, id, document); }
+      catch { return { kind: document, status: 'missing', label, message: `No saved ${label} PDF.` }; }
+      const createdAt = saved.exported.createdAt;
+      try {
+        if (!files) throw new Error('File access unavailable');
+        await files.resolveExport(saved.exported.uri);
+        return { kind: document, status: 'saved', label, token: saved.token, createdAt };
+      } catch {
+        return { kind: document, status: 'unavailable', label, createdAt, message: `Saved ${label} PDF unavailable.` };
+      }
+    }));
+    return { documents: items };
+  }
   return {
+    async openDocument(args = {}) {
+      validate(args, ['kind', 'id', 'document', 'token']);
+      if (!['jobs', 'applications'].includes(args.kind) || typeof args.id !== 'string' || !args.id.trim() ||
+          args.id.length > 500 || forbidden.has(args.id) || !['cv', 'cover_letter'].includes(args.document) ||
+          typeof args.token !== 'string' || !/^[a-f0-9]{64}$/.test(args.token)) fail('INVALID_INPUT', 'Choose a saved application PDF.');
+      const selection = () => {
+        const saved = savedDocument(readCareer(store), args.kind, args.id, args.document);
+        if (saved.token !== args.token) fail('DOCUMENT_CHANGED', 'This application or its saved PDF changed. Select it again.');
+        return saved.exported;
+      };
+      const exported = selection();
+      if (!files || !openPath) fail('DOCUMENT_UNAVAILABLE', 'Saved PDF access is unavailable.');
+      let filename;
+      try {
+        filename = await files.resolveExport(exported.uri);
+        selection();
+        // Revalidate the private resource after checking the selected application again.
+        const currentFilename = await files.resolveExport(exported.uri);
+        selection();
+        if (filename !== currentFilename) fail('DOCUMENT_CHANGED', 'The saved PDF location changed. Select it again.');
+      } catch (error) {
+        if (['DOCUMENT_CHANGED', 'IDENTITY_CHANGED', 'NOT_FOUND', 'AMBIGUOUS_APPLICATION', 'DOCUMENT_MISSING'].includes(error.code)) throw error;
+        fail('DOCUMENT_UNAVAILABLE', 'The saved PDF is missing, damaged or unavailable. Your saved draft is unchanged.');
+      }
+      let error;
+      try { error = await openPath(filename); }
+      catch { error = true; }
+      if (error) fail('DOCUMENT_UNAVAILABLE', 'The saved PDF could not be opened. Check your default PDF app and try again.');
+      return { opened: true };
+    },
     async list(args = {}) {
       validate(args, ['kind', 'offset', 'limit', 'view']);
       const { kind, offset = 0, limit = 25, view = 'jobs' } = args;
@@ -389,7 +464,7 @@ export function createCareerBrowser({ store }) {
         const row = rows.get(id);
         if (!row) fail('NOT_FOUND', 'This saved job was not found. Refresh the list.');
         const { title, heading, header, verdict, sections } = jobItem(row, inclusion, career);
-        return { title, heading, header, verdict, sections };
+        return { title, heading, header, verdict, sections, ...await documents(career, kind, id) };
       }
       if (kind === 'blocks') {
         const entry = listBlocks(career).find(item => item.id === id);
@@ -399,7 +474,7 @@ export function createCareerBrowser({ store }) {
       }
       const item = lookup(career[kind], id);
       if (!item) fail('NOT_FOUND', 'This saved record was not found. Refresh the list.');
-      return detail(kind, item, career);
+      return { ...detail(kind, item, career), ...(kind === 'applications' ? await documents(career, kind, id) : {}) };
     },
   };
 }
@@ -429,13 +504,22 @@ export function requirementContextPrompt({ store }, args) {
 
 /** Opens the saved apply URL of a known job in the default browser; only http(s) URLs the vault already holds qualify. */
 export async function openJobPage({ store, openExternal }, args) {
-  if (!record(args) || typeof args.id !== 'string' || !args.id.trim() || forbidden.has(args.id)) fail('INVALID_INPUT', 'Choose a saved job.');
+  validate(args, ['kind', 'id']);
+  if (!['jobs', 'applications'].includes(args.kind) || typeof args.id !== 'string' || !args.id.trim() ||
+      args.id.length > 500 || forbidden.has(args.id)) fail('INVALID_INPUT', 'Choose a saved job or application.');
   const career = readCareer(store);
-  const { rows } = await jobUnion(career);
-  const row = rows.get(args.id);
-  if (!row) fail('NOT_FOUND', 'This saved job was not found. Refresh the list.');
-  const url = [row.imported?.applyUrl, row.metadata?.applyUrl, row.reviewed?.applyUrl]
-    .find(value => typeof value === 'string' && /^https?:\/\//.test(value));
+  let url;
+  if (args.kind === 'applications') {
+    const app = lookup(career.applications, args.id);
+    if (!app || !record(app.job)) fail('NOT_FOUND', 'This application is no longer saved. Refresh the list.');
+    url = savedJobPage(currentApplicationJob(career, app));
+  } else {
+    const { rows } = await jobUnion(career);
+    const row = rows.get(args.id);
+    if (!row) fail('NOT_FOUND', 'This saved job was not found. Refresh the list.');
+    url = [row.imported?.applyUrl, row.metadata?.applyUrl, row.reviewed?.applyUrl]
+      .find(value => typeof value === 'string' && /^https?:\/\//.test(value));
+  }
   if (!url) fail('NOT_FOUND', 'This job has no saved job page.');
   await openExternal(url);
   return { opened: true, url };

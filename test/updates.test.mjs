@@ -63,6 +63,51 @@ test('release validation requires stable published metadata and exact platform a
   assert.throws(() => validateRelease(valid, { platform: 'linux', arch: 'arm64' }), { code: 'UNSUPPORTED_PLATFORM' });
 });
 
+for (const [platform, suffix] of [['win32', 'win-x64.exe'], ['linux', 'linux-x64.AppImage']]) {
+  function platformRelease() {
+    const metadata = release();
+    metadata.assets[0].name = `recruiters-rip-companion-1.3.0-${suffix}`;
+    metadata.assets[0].browser_download_url = `${REPO}/releases/download/v1.3.0/${metadata.assets[0].name}`;
+    return metadata;
+  }
+  test(`${platform} discovery selects the exact installer and rejects wrong architecture or OS`, () => {
+    const metadata = platformRelease();
+    assert.equal(validateRelease(metadata, { platform, arch: 'x64' }).asset.name, metadata.assets[0].name);
+    assert.throws(() => validateRelease(metadata, { platform, arch: 'arm64' }), { code: 'UNSUPPORTED_PLATFORM' });
+    assert.throws(() => validateRelease(release(), { platform, arch: 'x64' }), { code: 'INVALID_ASSET' });
+    metadata.assets[0].name = metadata.assets[0].name.replace('x64', 'arm64');
+    assert.throws(() => validateRelease(metadata, { platform, arch: 'x64' }), { code: 'INVALID_ASSET' });
+  });
+  test(`${platform} verified update hands off its installer without replacing the running app`, async t => {
+    let approved;
+    const metadata = platformRelease();
+    delete metadata.assets[0].digest;
+    const checksums = `${digest(bytes)}  ${metadata.assets[0].name}\n`;
+    metadata.assets.push({ name: 'SHA256SUMS.txt', state: 'uploaded', size: Buffer.byteLength(checksums),
+      browser_download_url: `${REPO}/releases/download/v1.3.0/SHA256SUMS.txt` });
+    const { controller } = await fixture(t, { controller: { platform, arch: 'x64', packaged: true,
+      authorize: async request => { approved = request; return true; },
+      fetchImpl: async url => url === API ? json(metadata) : new Response(url.endsWith('SHA256SUMS.txt') ? checksums : bytes) } });
+    await controller.check(); await controller.download();
+    const result = await controller.install();
+    assert.equal(path.extname(result.manualPath), platform === 'win32' ? '.exe' : '.AppImage');
+    assert.equal(digest(await readFile(result.manualPath)), digest(bytes));
+    assert.equal(controller.state().status, 'manual-required');
+    assert.equal(approved.action, 'install-update');
+    assert.equal(Boolean(result.reveal), platform === 'linux');
+    assert.match(controller.state().error.message, /saved data is retained/);
+  });
+  test(`${platform} does not hand off a modified or unapproved installer`, async t => {
+    const { controller, directory } = await fixture(t, { release: platformRelease(),
+      controller: { platform, arch: 'x64', authorize: async () => false } });
+    await controller.check(); await controller.download();
+    assert.equal((await controller.install()).status, 'downloaded');
+    const filename = (await readdir(directory)).find(name => name.startsWith('download-'));
+    await writeFile(path.join(directory, filename), Buffer.from('x'.repeat(bytes.length)));
+    await assert.rejects(controller.install(), { code: 'CHECKSUM_MISMATCH' });
+  });
+}
+
 test('download addresses reject credentials, foreign repositories and arbitrary redirect hosts', () => {
   const asset = release().assets[0];
   const options = { tag: 'v1.3.0', name: asset.name };
@@ -270,7 +315,7 @@ test('packaged install cannot target a linked app or an app other than the curre
   t.after(() => rm(root, { recursive: true, force: true }));
   const target = path.join(root, 'Synthetic.app');
   const linked = path.join(root, 'Linked.app');
-  await mkdir(target); await symlink(target, linked);
+  await mkdir(target); await symlink(target, linked, process.platform === 'win32' ? 'junction' : 'dir');
   for (const appPath of [target, linked]) {
     let quits = 0;
     const { controller } = await fixture(t, { controller: { appPath, packaged: true, quit: () => { quits++; } } });
@@ -356,7 +401,7 @@ function zip(entries) {
   return Buffer.concat([...files, index, end]);
 }
 
-test('ZIP extraction accepts bounded internal framework links and rejects traversal or escaping links', async t => {
+test('ZIP extraction accepts bounded internal framework links and rejects traversal or escaping links', { skip: process.platform === 'win32' && 'macOS framework symlink extraction is not a Windows installation path' }, async t => {
   const root = await realpath(await mkdtemp(path.join(tmpdir(), 'recruiters-zip-')));
   t.after(() => rm(root, { recursive: true, force: true }));
   const app = 'Recruiters.rip Companion.app';

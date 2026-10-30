@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createPublicKey, sign, verify } from 'node:crypto';
-import { mkdtemp, rm, readFile, chmod, stat } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, mkdir, rename } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createVault } from '../src/vault.mjs';
 import { CAREER_SCHEMA, createCareerState, mutateCareer, replayCareer, readCareer, upgradeCareer } from '../src/mcp/state.mjs';
 import { createDecisionCredentials } from '../src/decisions/credentials.mjs';
+import { assertPrivatePath } from '../src/platform-runtime.cjs';
 
 async function fixture(t) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'recruiters-career-vault-'));
@@ -28,8 +29,8 @@ test('identity reset isolates old private career data while keeping recoverable 
   assert.equal(current.pairing, null); assert.equal(current.career.profile.name, null); assert.deepEqual(current.career.sources, {});
   assert.deepEqual(current.identityArchives[old.deviceId].career, old.career);
   assert.equal(current.identityArchives[old.deviceId].privateKey, undefined);
-  assert.equal((await stat(path.join(directory, 'vault.json'))).mode & 0o777, 0o600);
-  assert.equal((await stat(directory)).mode & 0o777, 0o700);
+  assertPrivatePath(path.join(directory, 'vault.json'));
+  assertPrivatePath(directory, { directory: true });
 });
 
 test('pre-scan keys persist only in root state and are never archived on reset', async t => {
@@ -77,8 +78,10 @@ test('a v1 career opens as v2 keeping only CV sources and profile', async t => {
 
 test('failed commit preserves previous career revision and identity after reopen', async t => {
   const { vault, reopen, directory } = await fixture(t); const before = vault.get();
-  await chmod(directory, 0o500);
-  try { await assert.rejects(vault.resetIdentity()); } finally { await chmod(directory, 0o700); }
+  const filename = path.join(directory, 'vault.json'), retained = path.join(directory, 'retained.json');
+  await rename(filename, retained); await mkdir(filename);
+  try { await assert.rejects(vault.resetIdentity()); }
+  finally { await rm(filename, { recursive: true }); await rename(retained, filename); }
   assert.deepEqual(vault.get(), before); const reopened = reopen(); await reopened.open(); assert.deepEqual(reopened.get(), before);
 });
 
@@ -163,7 +166,7 @@ test('a 3.4 keychain vault is imported once with its identity, pairing and caree
   assert.equal(state.career.profile.headline, 'Synthetic headline');
   assert.equal('userPaused' in state, false);
   assert.deepEqual((await readdir(directory)).sort(), ['vault.bin.imported', 'vault.json']);
-  assert.equal((await stat(path.join(directory, 'vault.json'))).mode & 0o777, 0o600);
+  assertPrivatePath(path.join(directory, 'vault.json'));
 
   const again = createVault(directory, { decryptLegacy: () => assert.fail('Imported twice') }); await again.open();
   assert.equal(again.get().deviceId, '11111111-1111-4111-8111-111111111111');

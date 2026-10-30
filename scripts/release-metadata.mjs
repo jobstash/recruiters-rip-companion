@@ -12,9 +12,10 @@ if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z
 if (process.argv.length !== 3) throw new Error('Usage: node scripts/release-metadata.mjs <output-directory>');
 const directory = await realpath(path.resolve(process.argv[2]));
 if (!(await lstat(directory)).isDirectory()) throw new Error('The artifact output directory does not exist.');
-const names = ['zip', 'dmg'].map(extension => `recruiters-rip-companion-${version}-mac-arm64.${extension}`);
+const names = ['mac-arm64.zip', 'mac-arm64.dmg', 'win-x64.exe', 'linux-x64.AppImage']
+  .map(suffix => `recruiters-rip-companion-${version}-${suffix}`);
 const present = new Set(await readdir(directory));
-if (!present.has(names[0])) throw new Error(`Missing update ZIP: ${names[0]}`);
+if (!names.some(name => present.has(name))) throw new Error('Missing supported current-version release artifacts.');
 const lines = [];
 for (const name of names) {
   if (!present.has(name)) continue;
@@ -28,4 +29,4 @@ for (const name of names) {
 const output = path.join(directory, 'SHA256SUMS.txt');
 await writeFile(`${output}.tmp`, `${lines.join('\n')}\n`, { mode: 0o644 });
 await rename(`${output}.tmp`, output);
-console.log(`Wrote SHA256SUMS.txt for ${lines.length} existing macOS arm64 artifact${lines.length === 1 ? '' : 's'} at version ${version}.`);
+console.log(`Wrote SHA256SUMS.txt for ${lines.length} existing supported artifact${lines.length === 1 ? '' : 's'} at version ${version}.`);

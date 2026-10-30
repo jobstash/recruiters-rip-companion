@@ -50,6 +50,8 @@ button.primary:hover:not(:disabled) { background-image: linear-gradient(var(--co
 button.ghost:hover:not(:disabled) { background-image: linear-gradient(var(--color-canvas), var(--color-canvas)), var(--rr-dispersion); }
 button.text { padding-inline: var(--spacing-8); }
 button.text:hover:not(:disabled) { color: var(--color-smoke); }
+button.destructive { border-color: var(--color-disperse-red); }
+button.destructive:hover:not(:disabled) { border-color: var(--color-disperse-red); background: transparent; }
 button:disabled { background: transparent; background-image: none; border-color: var(--color-facet); color: var(--color-dust); box-shadow: none; cursor: not-allowed; }
 button:focus-visible { box-shadow: var(--shadow-focus-ring); z-index: 1; }
 .actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--spacing-8) var(--spacing-16); }
@@ -169,6 +171,8 @@ main { flex: 1; min-height: 0; overflow: auto; padding: var(--spacing-32) var(--
 /* Block list: reader actions wrap; a blocked entry's row keeps a Remove text button beside the record. */
 .career-block .actions { align-items: flex-start; }
 .career-row-action { flex: none; align-self: center; margin-right: var(--spacing-16); }
+.career-document-actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--spacing-120)), 1fr)); gap: var(--spacing-16); align-items: start; }
+.career-document-action { display: grid; gap: var(--spacing-8); min-width: 0; }
 .pagination { justify-content: space-between; padding: var(--spacing-8) var(--spacing-16); border-top: 1px solid var(--color-facet); }
 .career-reader { gap: var(--spacing-16); padding: var(--spacing-24); border-left: 0; }
 .career-reader > * { max-width: var(--reading); }
@@ -180,10 +184,9 @@ main { flex: 1; min-height: 0; overflow: auto; padding: var(--spacing-32) var(--
 .career-reader-content dl { display: grid; grid-template-columns: minmax(100px, 150px) minmax(0, 1fr); gap: var(--spacing-8) var(--spacing-16); }
 .career-reader-content dd { color: var(--color-ink-2); }
 .career-reader-content dd.numeric { font-family: var(--font-geist-mono); font-variant-numeric: tabular-nums; }
-/* Reader header: employer · date in mono smoke, one fact line, and the job page as a plain action. */
+/* Reader header: keep employer, publication date and role facts together. */
 .career-reader-meta { display: grid; gap: var(--spacing-8); }
 .career-reader-meta-top { display: flex; align-items: baseline; justify-content: space-between; gap: var(--spacing-16); }
-.career-reader-meta-top .text { flex: none; min-height: 32px; padding-block: 4px; }
 .career-reader-line { font: 400 13px/1.5 var(--font-geist-mono); color: var(--color-smoke); }
 .career-reader-facts { font: 400 13px/1.5 var(--font-geist-mono); color: var(--color-ink-2); overflow-wrap: anywhere; }
 /* The verdict is a compact ruled decision, not another card. */
@@ -220,6 +223,18 @@ main { flex: 1; min-height: 0; overflow: auto; padding: var(--spacing-32) var(--
 .setup-section { display: grid; grid-template-columns: 160px minmax(0, 1fr); gap: var(--spacing-32); min-width: 0; padding-block: var(--spacing-32); border-top: 1px solid var(--color-facet); }
 .setup-section.account { border-top-color: var(--color-ink); }
 .settings-content { display: grid; gap: var(--spacing-24); min-width: 0; }
+.settings-tabs { position: sticky; top: 0; z-index: 2; margin-bottom: var(--spacing-16); background: var(--color-canvas); }
+#settings-general, #settings-backups { min-width: 0; }
+#view-setup .setup-section { scroll-margin-top: var(--spacing-64); }
+#settings-backups .settings-content > p { max-width: var(--reading); overflow-wrap: anywhere; }
+#backup-availability:empty, #backup-status:empty { display: none; }
+.backup-field { display: grid; gap: var(--spacing-8); min-width: 0; font: 500 12px/1.5 var(--font-geist-mono); }
+.backup-field select { width: 100%; min-width: 0; max-width: var(--reading); min-height: 44px; padding: var(--spacing-8) 0; border: 0; border-bottom: 1px solid var(--color-ink); border-radius: 0; background: var(--color-canvas); color: var(--color-ink); font: 400 16px/1.5 var(--font-geist); }
+.backup-field select:disabled { color: var(--color-dust); cursor: not-allowed; }
+.backup-counts { display: grid; grid-template-columns: minmax(0, 1fr) auto; max-width: var(--reading); margin: 0; }
+.backup-counts dt, .backup-counts dd { margin: 0; padding-block: var(--spacing-8); border-bottom: 1px solid var(--color-facet); }
+.backup-counts dd { padding-left: var(--spacing-16); font-family: var(--font-geist-mono); font-variant-numeric: tabular-nums; }
+.backup-warnings { display: grid; gap: var(--spacing-8); max-width: var(--reading); margin: 0; padding-left: var(--spacing-24); overflow-wrap: anywhere; }
 .app-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "name action" "status action" "details details"; gap: var(--spacing-8) var(--spacing-24); }
 .app-name { grid-area: name; min-width: 0; align-self: center; font: 500 14px/1.5 var(--font-geist-mono); }
 .app-status { grid-area: status; min-width: 0; }
@@ -231,7 +246,7 @@ summary::-webkit-details-marker { display: none; }
 summary::before { content: ""; flex: none; width: 6px; height: 6px; border-right: 1.25px solid currentColor; border-bottom: 1.25px solid currentColor; transform: rotate(45deg); }
 details[open] summary::before { transform: rotate(-135deg); }
 summary:hover { color: var(--color-ink); }
-.app-details > :not(summary) { margin-top: var(--spacing-16); }
+.app-details > :not(summary) + *, details > :not(summary) { margin-top: var(--spacing-16); }
 .command { display: block; margin: 0; padding: var(--spacing-16); background: var(--color-surface); border: 1px solid var(--color-facet); font: 400 13px/1.6 var(--font-geist-mono); color: var(--color-ink); white-space: pre-wrap; overflow-wrap: anywhere; }
 #decisions-form, .decisions-key-entry { display: grid; gap: var(--spacing-16); min-width: 0; }
 /* The key state reads as body copy, not a caption: it is the section's primary fact. */
@@ -243,6 +258,9 @@ summary:hover { color: var(--color-ink); }
 .decisions-field input:focus-visible { box-shadow: var(--shadow-focus-ring), var(--shadow-input-focus); }
 .decisions-field input:disabled { border-color: var(--color-facet); color: var(--color-dust); cursor: not-allowed; }
 .me-actions { display: grid; gap: var(--spacing-16); padding-bottom: var(--spacing-24); }
+.setup-next { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--spacing-24); padding-bottom: var(--spacing-16); border-bottom: 1px solid var(--color-facet); }
+.setup-next > div { display: grid; gap: var(--spacing-8); min-width: 0; }
+.setup-next h2 { font-size: 28px; }
 .publication-window { display: grid; gap: var(--spacing-8); min-width: 0; }
 #decisions-key-message:empty { display: none; }
 
@@ -250,7 +268,7 @@ summary:hover { color: var(--color-ink); }
 #update-progress { width: 100%; max-width: var(--reading); accent-color: var(--color-ink); }
 #update-status, #update-error { white-space: pre-wrap; }
 
-/* Help is a short ledger: the starting prompt, four steps, two plain-text URLs and the version. */
+/* Help follows the actual setup sequence, then the conversation handoff and reference links. */
 .help-steps { margin: 0; padding-left: 1.25em; display: grid; gap: var(--spacing-8); color: var(--color-ink-2); line-height: 1.6; max-width: var(--reading); }
 .help-links code { font: 400 14px/1.6 var(--font-geist-mono); color: var(--color-ink); user-select: all; }
 
@@ -272,6 +290,7 @@ dialog::backdrop { background: color-mix(in oklab, var(--color-void) 80%, transp
   .career-reader .back { display: inline-flex; }
   .app-row { grid-template-columns: minmax(0, 1fr); grid-template-areas: "name" "status" "action" "details"; }
   .setup-section { grid-template-columns: minmax(0, 1fr); gap: var(--spacing-24); }
+  .setup-next { grid-template-columns: minmax(0, 1fr); gap: var(--spacing-16); }
   .me-actions button { padding-inline: var(--spacing-8); }
   .career-reader-content dl { grid-template-columns: minmax(0, 1fr); gap: var(--spacing-8); }
   .career-reader-content dd + dt { margin-top: var(--spacing-8); }

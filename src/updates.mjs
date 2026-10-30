@@ -9,6 +9,7 @@ import yauzl from 'yauzl';
 
 const require = createRequire(import.meta.url);
 const installer = require('./update-install.cjs');
+const { protectPrivatePath } = require('./platform-runtime.cjs');
 const REPOSITORY = 'https://github.com/jobstash/recruiters-rip-companion';
 const API = 'https://api.github.com/repos/jobstash/recruiters-rip-companion/releases/latest';
 const PRODUCT = 'Recruiters.rip Companion.app';
@@ -69,7 +70,10 @@ function validateAsset(asset, tag, expectedName, maxSize) {
 }
 
 export function validateRelease(release, { platform, arch }) {
-  if (platform !== 'darwin' || arch !== 'arm64') throw fail('UNSUPPORTED_PLATFORM', 'Automatic updates currently support macOS Apple silicon only. Download a compatible installer from the release page.');
+  const target = platform === 'darwin' && arch === 'arm64' ? 'mac-arm64.zip'
+    : platform === 'win32' && arch === 'x64' ? 'win-x64.exe'
+      : platform === 'linux' && arch === 'x64' ? 'linux-x64.AppImage' : null;
+  if (!target) throw fail('UNSUPPORTED_PLATFORM', 'Updates support macOS Apple silicon, Windows x64 and Linux x64. Download an installer compatible with your computer.');
   if (!release || release.draft !== false || release.prerelease !== false || !release.published_at || !Number.isFinite(Date.parse(release.published_at))) {
     throw fail('INVALID_RELEASE', 'The repository has no valid published stable release.');
   }
@@ -80,10 +84,10 @@ export function validateRelease(release, { platform, arch }) {
   const releaseUrl = `${REPOSITORY}/releases/tag/${encodeURIComponent(tag)}`;
   const page = secureUrl(release.html_url);
   if (page.hostname !== 'github.com' || decodedPath(page) !== `/jobstash/recruiters-rip-companion/releases/tag/${tag}` || page.search) throw fail('UNTRUSTED_URL', 'The release page does not belong to the official companion repository.');
-  const name = `recruiters-rip-companion-${version}-mac-arm64.zip`;
-  if (!Array.isArray(release.assets)) throw fail('INVALID_ASSET', 'The public release is missing its macOS Apple silicon ZIP.');
+  const name = `recruiters-rip-companion-${version}-${target}`;
+  if (!Array.isArray(release.assets)) throw fail('INVALID_ASSET', 'The public release is missing its compatible installer.');
   const matching = release.assets.filter(asset => asset?.name === name);
-  if (matching.length !== 1) throw fail('INVALID_ASSET', 'The public release is missing its unique macOS Apple silicon ZIP.');
+  if (matching.length !== 1) throw fail('INVALID_ASSET', 'The public release is missing a unique installer for this operating system and architecture.');
   const asset = validateAsset(matching[0], tag, name, MAX_ASSET);
   let checksums = null;
   if (!asset.digest) {
@@ -176,7 +180,7 @@ async function privateDirectory(directory) {
   const info = await lstat(directory);
   if (!info.isDirectory() || info.isSymbolicLink() || await realpath(directory) !== path.resolve(directory) ||
       (process.getuid && info.uid !== process.getuid())) throw fail('INVALID_DIRECTORY', 'The update directory must be a private directory owned by the current user.');
-  await chmod(directory, 0o700);
+  protectPrivatePath(directory, { directory: true });
 }
 
 function archivePath(name) {
@@ -420,7 +424,7 @@ export function createUpdateController({ version, platform = process.platform, a
       update({ status: 'downloading', progress: { received: 0, total: release.asset.size }, error: null });
       const id = randomBytes(16).toString('hex');
       const partial = path.join(directory, `download-${id}.partial`);
-      const file = path.join(directory, `download-${id}.zip`);
+      const file = path.join(directory, `download-${id}${path.extname(release.asset.name)}`);
       let handle;
       try {
         let expected = release.asset.digest;
@@ -469,10 +473,19 @@ export function createUpdateController({ version, platform = process.platform, a
       const approved = await abortable(authorize({ action: 'install-update', version, latestVersion: release.version,
         message: replaceable
           ? `Replace ${appPath}\nVersion ${version} → ${release.version}\n\nThe companion will close and reopen.`
-          : `Open Recruiters.rip Companion ${release.version} ZIP for manual installation?\n${downloaded.file}` }), signal);
+          : platform === 'win32'
+            ? `Open the verified Recruiters.rip Companion ${release.version} Windows installer?\nFinish installation in the installer window. This download is not represented as code-signed.\n${downloaded.file}`
+            : platform === 'linux'
+              ? `Show the verified Recruiters.rip Companion ${release.version} AppImage for manual installation?\nQuit the companion, move this executable AppImage to your preferred application folder, then run it. Saved data stays in place.\n${downloaded.file}`
+              : `Open Recruiters.rip Companion ${release.version} ZIP for manual installation?\n${downloaded.file}` }), signal);
       if (approved !== true) return update({ status: 'downloaded', error: { code: 'APPROVAL_DECLINED', message: 'The update was not installed. The verified download is ready when you choose to install it.' } });
       const manual = message => { update({ status: 'manual-required', error: { code: 'MANUAL_INSTALL_REQUIRED', message } }); return { manualPath: downloaded.file }; };
-      if (platform !== 'darwin' || arch !== 'arm64' || !packaged || !appPath) return manual('This is not a packaged macOS Apple silicon installation. Open the verified ZIP and install its app manually; this source checkout will not be replaced.');
+      if (platform === 'win32') return manual('The verified Windows installer is ready. Complete its installation steps, closing the companion when requested. Your saved data is retained; this is not an automatic replacement or a claim of code signing.');
+      if (platform === 'linux') {
+        await chmod(downloaded.file, 0o700);
+        return { ...manual('The verified executable AppImage is shown in your file manager. Quit the companion, move it to your preferred application folder and run it instead of the previous AppImage. Your saved data is retained.'), reveal: true };
+      }
+      if (!packaged || !appPath) return manual('This is not a packaged macOS Apple silicon installation. Open the verified ZIP and install its app manually; this source checkout will not be replaced.');
       if (!Number.isSafeInteger(pid) || pid < 1 || typeof quit !== 'function') throw fail('INVALID_CONFIGURATION', 'The companion cannot safely hand over this update. Use the release page to install manually.');
       const target = path.resolve(appPath);
       if (!target.endsWith('.app') || target !== appPath || await realpath(target) !== target || !(await lstat(target)).isDirectory()) throw fail('INVALID_TARGET', 'Updates can replace only the actual installed app bundle, never a source checkout or linked app.');

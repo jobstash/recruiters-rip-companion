@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
 import { createHash } from "node:crypto";
+import { pathToFileURL } from "node:url";
 import * as Ajv from "ajv-legacy";
 import * as mammoth from "mammoth";
 interface PdfCanvas {
@@ -217,7 +218,7 @@ class BoundedCanvasFactory extends CanvasFactory {
   }
 }
 // Use the package's Node worker and native canvas, including Node 22 DOM polyfills.
-PDFParse.setWorker(getPath());
+PDFParse.setWorker(pathToFileURL(getPath()).href);
 
 const crcTable = Uint32Array.from({ length: 256 }, (_, value) => {
   for (let bit = 0; bit < 8; bit++) value = (value >>> 1) ^ ((value & 1) ? 0xedb88320 : 0);

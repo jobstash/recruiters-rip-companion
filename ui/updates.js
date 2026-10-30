@@ -10,7 +10,7 @@
     'awaiting-approval': 'Approve installation in the companion dialog.', staging: 'Preparing update…',
     installing: 'Installing update. The companion will reopen.', launched: 'Update launched; awaiting confirmation.',
     confirmed: 'Update confirmed.', 'rolled-back': 'The previous version was restored.',
-    'manual-required': 'Manual installation is needed. Check for updates or follow the download instructions below.',
+    'manual-required': 'The verified download is ready. Follow the installation instructions below.',
     cancelled: 'Update canceled.', error: 'Update stopped.',
   };
   const active = new Set(['checking', 'downloading', 'awaiting-approval', 'staging']);
@@ -24,7 +24,7 @@
     element('download').disabled = pending || current?.blocked;
     element('install').hidden = status !== 'downloaded' && !(status === 'manual-required' && current?.error?.code === 'MANUAL_INSTALL_REQUIRED');
     element('install').disabled = pending || current?.blocked;
-    element('install').textContent = status === 'manual-required' ? 'Open downloaded update' : 'Install update';
+    element('install').textContent = status === 'manual-required' ? 'Continue installation' : 'Install update';
     element('cancel').hidden = !active.has(status);
     element('cancel').disabled = !current;
     const progress = current?.progress;

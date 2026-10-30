@@ -1,5 +1,8 @@
 import { BUILD_ID } from './config.mjs';
 
+const chrome = globalThis.browser ?? globalThis.chrome;
+const pasteShortcut = /Mac/i.test(navigator.userAgentData?.platform ?? navigator.platform ?? '') ? '⌘V' : 'Ctrl+V';
+
 const $ = id => document.getElementById(id);
 let state, port, reconnect, pageKey, questionKey, fieldKey, jobKey, documentKey, receipt;
 const drafts = new Map();
@@ -21,7 +24,7 @@ function connect() {
   port.onDisconnect.addListener(() => {
     void chrome.runtime.lastError; port = null;
     if (state) {
-      state = { ...state, application: null, prepared: null, form: null, busy: null, error: 'The panel disconnected. Reconnecting; nothing was submitted.' };
+      state = { ...state, application: null, prepared: null, form: null, busy: null, errorCode: null, error: 'The panel disconnected. Reconnecting; nothing was submitted.' };
       render();
     }
     clearTimeout(reconnect); reconnect = setTimeout(connect, 500);
@@ -40,6 +43,9 @@ $('detect').onclick = () => {
   return pageAction('detect');
 };
 $('settings').onclick = () => send('settings');
+$('recover').onclick = () => state?.errorCode === 'COMPANION_UNAVAILABLE' ? pageAction('detect') : send('settings');
+$('install').onclick = () => send('install');
+$('application-connect').onclick = () => send('settings');
 $('configure').onclick = () => send('configure');
 $('cancel').onclick = () => send('cancel');
 $('save').onclick = () => send('save', { indexes: [...document.querySelectorAll('[data-job]:checked')].map(n => Number(n.dataset.job)) });
@@ -81,25 +87,39 @@ function renderApplication(busy) {
   $('application-preparation').hidden = app?.state === 'ready';
   $('application-host').disabled = busy;
   $('application-host').value = state.applicationHost || app?.preferredHost || app?.handoff?.host || 'claude';
+  for (const option of $('application-host').options ?? []) {
+    const info = app?.hostInfo?.[option.value];
+    option.disabled = info?.available === false;
+    option.textContent = option.value === 'codex' ? 'Codex' : 'Claude';
+  }
   $('application-title').textContent = app ? [app.title, app.company].filter(Boolean).join(' · ') : '';
   const status = !app ? '' : {
     needs_job: app.jobUrl
-      ? 'The full job advert is needed. Read the job ad, or prepare with your agent to retrieve that exact link.'
-      : 'This job could not be identified unambiguously. Open the original job advert and click Read page, or ask your agent to connect the right saved job.',
-    needs_documents: 'Prepare a CV and cover letter for this job.',
-    needs_refresh: 'The job or your career details changed. Prepare this application again before using its documents and answers.',
-    drafts: 'Preparation is incomplete. Continue in your agent to save the documents and written answers.',
-    ready: 'Ready for review.',
+      ? 'Read the full job ad, or continue in Codex or Claude to open it.'
+      : 'Open the original job ad and choose Read page so the application is linked to the right job.',
+    needs_documents: 'Continue in Codex or Claude to write a CV and cover letter for this job.',
+    needs_refresh: 'The job or your details changed. Continue in Codex or Claude to update your documents and answers.',
+    drafts: 'Continue in Codex or Claude to finish the documents and written answers.',
+    ready: 'Documents and saved answers are ready to review.',
   }[app.state];
   $('application-status').textContent = status;
   $('application-open-ad').hidden = !app?.jobUrl || !['needs_job', 'needs_refresh'].includes(app.state);
-  const hostName = $('application-host').value === 'codex' ? 'Codex' : 'Claude';
+  const host = $('application-host').value, info = app?.hostInfo?.[host];
+  const hostName = host === 'codex' ? 'Codex' : 'Claude';
   const awaiting = app?.handoff?.requiresSend === true;
-  $('application-prepare').textContent = awaiting ? `Open in ${hostName} and send the prepared prompt` : 'Prepare this application';
-  $('application-handoff').hidden = !app?.handoff;
-  $('application-handoff').textContent = !app?.handoff ? '' : awaiting
-    ? `Send the prepared prompt in ${app.handoff.host === 'codex' ? 'Codex' : 'Claude'} to start. Opening the app alone does not prepare documents.`
-    : 'Your agent has read this application request. Documents appear here when saved and exported.';
+  const cli = app?.handoff?.mode === 'cli';
+  const unavailable = info?.available === false;
+  $('application-prepare').textContent = `Continue in ${hostName}`;
+  $('application-prepare').hidden = unavailable;
+  $('application-connect').hidden = !unavailable;
+  $('application-handoff').hidden = !app?.handoff && !unavailable;
+  const handoffName = app?.handoff?.host === 'codex' ? 'Codex' : 'Claude';
+  $('application-handoff').textContent = unavailable
+    ? `${hostName} is unavailable. Open Companion → Settings → AI apps to connect it, or choose another AI app.`
+    : !app?.handoff ? '' : awaiting
+      ? cli ? `In the ${handoffName} window that opened, check the message, then press Enter to start.`
+        : `In ${handoffName}, check the message and click Send to start.`
+      : `${handoffName} has read your message. Documents appear here when ready.`;
   const docs = app?.documents || [];
   const nextDocuments = JSON.stringify([app?.bindingId, docs]);
   if (documentKey !== nextDocuments) {
@@ -109,7 +129,7 @@ function renderApplication(busy) {
       row.append(el('p', `${label} · ${doc.ready ? 'Ready' : 'Not ready'}`));
       if (doc.ready) {
         const actions = el('div', '', 'document-actions');
-        for (const [action, text] of [['open', 'Open'], ['reveal', 'Show in Finder']]) {
+        for (const [action, text] of [['open', 'Open'], ['reveal', 'Show in folder']]) {
           const button = el('button', text, 'quiet');
           button.setAttribute('aria-label', `${text}: ${label}`);
           button.onclick = () => send('application-document', { kind: doc.kind, action });
@@ -128,30 +148,54 @@ function renderApplication(busy) {
   $('application-notice').textContent = state.applicationNotice || '';
   $('application-upload').hidden = !docs.some(doc => doc.ready);
 }
+function renderRecovery(busy) {
+  const unavailable = state.errorCode === 'COMPANION_UNAVAILABLE';
+  const locked = state.errorCode === 'LOCAL_LOCKED';
+  const pairing = state.errorCode === 'PAIRING_REQUIRED';
+  const needsCv = !state.error && !state.errorCode && state.companion?.hasCv === false && !state.companion.locked &&
+    state.application && state.application.state !== 'ready';
+  const message = unavailable
+    ? 'Open Recruiters.rip Companion, then retry. If you haven’t installed it, install Companion first.'
+    : locked ? 'Open Companion and unlock your saved data, then choose Read page.'
+    : pairing ? 'In Companion, choose Connect account to finish this action, then return here and choose Read page.'
+    : needsCv ? 'Add your CV in Companion → Me → Import CV, then return here and choose Read page.'
+    : '';
+  $('recovery').hidden = busy || !message;
+  $('recovery-message').textContent = message;
+  $('recover').textContent = unavailable ? 'Retry' : 'Open Companion';
+  $('install').hidden = !unavailable;
+  $('settings').hidden = unavailable || locked || pairing;
+  $('detect').hidden = !busy && (unavailable || locked || pairing);
+  $('intro').hidden = busy || !!message || !!state.page || !!state.error;
+  if (unavailable || locked || pairing) { $('error').hidden = true; $('status').hidden = true; }
+}
 function render() {
   const busy = !!state.busy;
   for (const button of document.querySelectorAll('button')) button.disabled = busy;
   const outdated = state.buildId !== BUILD_ID;
   $('detect').textContent = outdated ? 'Reload extension' : 'Read page';
   $('settings').hidden = outdated;
+  $('detect').hidden = false;
   if (outdated) {
     $('status').textContent = 'Extension updated. Reload to continue.';
     $('status').hidden = false;
-    for (const id of ['error', 'cancel', 'page', 'application', 'form', 'jobs', 'ready', 'paste', 'review', 'details-form']) $(id).hidden = true;
+    for (const id of ['intro', 'recovery', 'error', 'cancel', 'page', 'application', 'form', 'jobs', 'ready', 'paste', 'review', 'details-form']) $(id).hidden = true;
     return;
   }
   $('cancel').hidden = state.busy !== 'prepare'; $('cancel').disabled = false;
-  const working = { prepare: 'Preparing answers…', 'profile-save': 'Saving details…', detect: 'Reading page…', save: 'Saving jobs…', settings: 'Opening Companion…',
-    'application-prepare': 'Opening your agent…', 'application-document': 'Opening the saved document…', 'application-open-ad': 'Opening the job advert…' };
+  const working = { prepare: 'Finding saved answers…', 'profile-save': 'Saving details…', detect: 'Reading page…', save: 'Saving jobs…', settings: 'Opening Companion…',
+    'application-prepare': `Opening ${state.applicationHost === 'codex' ? 'Codex' : 'Claude'}…`, 'application-document': 'Opening the saved document…', 'application-open-ad': 'Opening the job advert…', install: 'Opening downloads…' };
   $('status').textContent = busy ? working[state.busy] || 'Working…' : state.notice;
   $('status').hidden = !$('status').textContent;
   $('error').hidden = !state.error; $('error').textContent = state.error;
+  renderRecovery(busy);
   $('page').hidden = !state.page || !!state.application; $('title').textContent = state.page?.title || 'Current page';
   const currentPage = JSON.stringify([state.tabId, state.documentId, state.page?.url]);
   if (pageKey !== currentPage) { pageKey = currentPage; drafts.clear(); questionKey = fieldKey = null; }
   renderApplication(busy);
   // Newly rendered document controls obey the same busy boundary as existing ones.
   for (const button of document.querySelectorAll('button')) if (button !== $('cancel')) button.disabled = busy;
+  $('application-prepare').disabled = busy || state.application?.hostInfo?.[$('application-host').value]?.available === false;
   if (state.saveReceipt && receipt !== state.saveReceipt.id) {
     receipt = state.saveReceipt.id;
     for (const key of state.saveReceipt.keys) { drafts.delete(key); if (questionInputs.has(key)) questionInputs.get(key).value = ''; }
@@ -163,27 +207,28 @@ function render() {
     const jobList = $('job-list'); jobList.replaceChildren();
     state.jobs.forEach((job, index) => {
       const row = el('div', '', 'row'), label = el('label', '', 'check'), check = el('input'); check.type = 'checkbox'; check.dataset.job = index;
-      label.append(check, el('span', job.title)); row.append(label, el('small', [job.company, job.complete ? 'Full advert captured' : 'Partial capture · full advert needed before assessment'].filter(Boolean).join(' · ')));
-      if (job.description) { const detail = el('details'); detail.append(el('summary', 'Captured text'), el('p', job.description)); row.append(detail); }
+      label.append(check, el('span', job.title)); row.append(label, el('small', [job.company, job.complete ? 'Full job ad found' : 'Only part of the job ad found · open the full ad before review'].filter(Boolean).join(' · ')));
+      if (job.description) { const detail = el('details'); detail.append(el('summary', 'Job description'), el('p', job.description)); row.append(detail); }
       jobList.append(row);
     });
   }
   for (const check of document.querySelectorAll('[data-job]')) check.disabled = busy;
-  $('form').hidden = !state.form && !state.prepared;
+  $('form').hidden = !state.prepared;
   $('configure').hidden = state.prepared?.api?.configured !== false;
+  $('optional-settings').hidden = $('configure').hidden;
   $('review-actions').hidden = !state.prepared?.fields.length;
   $('review').hidden = !state.prepared;
   $('ready').hidden = !state.prepared && (busy || !!state.error);
   $('ready').textContent = state.answersStale ? 'Saved answers changed. Use the current saved answers before copying or pasting.'
-    : !state.prepared ? 'Answers are not ready. Read page to prepare them.'
+    : !state.prepared ? 'Choose Read page to find your saved answers.'
     : state.prepared.fields.length ? `${state.prepared.fields.length} ${state.prepared.fields.length === 1 ? 'answer' : 'answers'} ready`
-    : 'No paste answers ready.';
+    : 'No answers are ready to paste.';
   const paste = $('paste');
   paste.hidden = !state.prepared?.fields.length || state.answersStale === true;
-  paste.textContent = !state.paste ? 'Click a field on the page, then press ⌘V.'
-    : state.paste.ok === false ? `Clipboard access refused for ${state.paste.label}. Copy it in Review answers.`
-    : state.paste.ok === true ? `Clipboard ready for ${state.paste.label}. Press ⌘V in that field.`
-    : `Preparing the clipboard for ${state.paste.label}…`;
+  paste.textContent = !state.paste ? `Click an empty answer box, then press ${pasteShortcut} to paste a saved answer; you submit the form yourself.`
+    : state.paste.ok === false ? `Could not copy ${state.paste.label}. Open Review answers to copy it yourself.`
+    : state.paste.ok === true ? `Ready to paste: ${state.paste.label}. Press ${pasteShortcut} in that answer box.`
+    : `Getting the answer for ${state.paste.label} ready to paste…`;
   const questions = (state.prepared?.questions || []).filter(question => question.key !== 'personalSummary');
   $('details-form').hidden = !questions.length;
   const nextQuestions = JSON.stringify(questions);
@@ -216,7 +261,7 @@ function render() {
   const reusableLabels = new Set(questions.map(question => question.label));
   const unknown = (state.prepared?.unresolved || []).filter(item => !reusableLabels.has(item.label));
   if (unknown.length) {
-    unresolved.append(el('p', 'These answers could not be determined from your saved CV or profile. Ask your agent for application text.'));
+    unresolved.append(el('p', 'These answers are not in your saved CV or profile. Continue in Codex or Claude for help writing them.'));
     const list = el('ul'); for (const item of unknown) list.append(el('li', item.label)); unresolved.append(list);
   }
   for (const [id, { input, check, manual }] of reviewInputs) {

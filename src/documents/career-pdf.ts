@@ -3,12 +3,13 @@ import { PDFDocument, PDFFont, rgb, StandardFonts } from "pdf-lib";
 import * as fontkit from "@pdf-lib/fontkit";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { buildStructuredCvPresentation, type CvDocument, type CvHeading } from "./cv-document-layout";
 
 // Match the codec's Node worker initialization before loading PDFParse.
 const { getPath }: { getPath(): string } = require("pdf-parse/worker");
 import { PDFParse } from "pdf-parse";
-PDFParse.setWorker(getPath());
+PDFParse.setWorker(pathToFileURL(getPath()).href);
 
 // PDF extraction commonly uses BLACK CIRCLE for a list marker. Render the
 // equivalent typographic bullet; the saved document text remains exact.

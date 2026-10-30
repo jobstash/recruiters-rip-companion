@@ -19,7 +19,7 @@ async function rejectionReason(response) {
 export function createDeviceClient(store, localOnly, { onUnpaired } = {}) {
   const originAllowed = origin => origin === PRODUCT_ORIGINS[localOnly ? 1 : 0];
   // The CV share carries a ≤5 MiB document as base64 JSON; every other device route stays within 16 KiB.
-  const limits = { '/device/activate': 16 * 1024, '/device/heartbeat': 16 * 1024, '/device/platform': 16 * 1024, '/device/cv': 7.5 * 1024 * 1024 };
+  const limits = { '/device/activate': 16 * 1024, '/device/heartbeat': 16 * 1024, '/device/platform': 16 * 1024, '/device/cv': 7.5 * 1024 * 1024, '/device/cv/delete': 16 * 1024 };
   async function request(method, backendPath, body, options = {}) {
     if (!['GET', 'POST'].includes(method) || !Object.hasOwn(limits, backendPath)) throw new Error('Device operation is unavailable.');
     const state = store.get();
@@ -39,7 +39,7 @@ export function createDeviceClient(store, localOnly, { onUnpaired } = {}) {
     if (!response.ok) {
       const reason = await rejectionReason(response);
       const error = new Error(`${response.status === 403
-        ? 'Check your membership and account connection.'
+        ? backendPath === '/device/cv/delete' ? 'Reconnect the account used to share this CV.' : 'Check your membership and account connection.'
         : response.status === 401 ? 'Reconnect your account in companion settings.'
         : 'The product could not accept this device operation.'} Platform (${response.status})${reason ? `: ${reason}` : '.'}`);
       error.status = response.status; error.code = response.status === 401 || response.status === 403 ? 'DEVICE_UNAUTHORIZED' : 'DEVICE_REQUEST_FAILED';

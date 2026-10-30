@@ -4,15 +4,18 @@ import { constants } from 'node:fs';
 import path from 'node:path';
 import { privateDirectory } from './vault.mjs';
 import { assertPrivatePath, protectPrivatePath } from './platform-runtime.cjs';
-import { createDocumentFiles, validExport, exportTypes } from './mcp/files.mjs';
+import { createDocumentFiles, validExport, exportTypes, documentURI, documentName } from './mcp/files.mjs';
 import { CAREER_SCHEMA, fail, hash } from './mcp/state.mjs';
 import { BLOCK_KINDS } from './mcp/blocklist.mjs';
 import { FACT_KINDS } from './mcp/facts.mjs';
+import { applicationContextFingerprint } from './application-workflow.mjs';
 
 export const BACKUP_VERSION = 2;
 export const MAX_BACKUP_BYTES = 128 * 1024 * 1024;
 const MAX_NODES = 1_000_000, MAX_PROFILES = 100, MAX_FILES = 2000;
-const exportURI = /^recruiters:\/\/exports\/([a-f0-9]{64})\.(pdf|csv|txt)$/;
+const legacyExportURI = /^recruiters:\/\/exports\/([a-f0-9]{64})\.(pdf|csv|txt)$/;
+const exportURI = { exec: uri => documentURI.exec(uri) ?? legacyExportURI.exec(uri), test: uri => documentURI.test(uri) || legacyExportURI.test(uri) };
+const validDigest = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 const forbidden = new Set(['__proto__', 'prototype', 'constructor']);
 const secrets = new Set(['privateKey', 'publicKey', 'prescanCredentials', 'apiKey', 'accessToken', 'refreshToken']);
 const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -197,9 +200,10 @@ function references(career) {
   walk(career, value => {
     // Old paths are never opened, copied, or trusted, including receipt copies.
     if (Object.hasOwn(value, 'path')) delete value.path;
-    if (typeof value.uri === 'string' && value.uri.startsWith('recruiters://exports/')) {
-      const match = exportURI.exec(value.uri);
-      if (!match || (value.sha256 !== undefined && value.sha256 !== match[1]) || (value.mediaType !== undefined && value.mediaType !== exportTypes[match[2]])) invalid('a saved document reference is invalid');
+    if (typeof value.uri === 'string' && /^recruiters:\/\/(?:exports|documents)\//.test(value.uri)) {
+      const match = exportURI.exec(value.uri), legacy = legacyExportURI.exec(value.uri);
+      if (!match || (value.sha256 !== undefined && (!validDigest(value.sha256) || (legacy && value.sha256 !== legacy[1]))) ||
+        (value.mediaType !== undefined && value.mediaType !== exportTypes[match[2]])) invalid('a saved document reference is invalid');
       refs.push(value);
     } else if (value.uri !== undefined && (value.sha256 !== undefined || value.documentVersion !== undefined)) invalid('a saved document reference is not a local export');
   });
@@ -239,7 +243,7 @@ export function parseBackup(json) {
     if (saved.length > MAX_FILES) invalid('there are too many document files');
     for (const file of saved) {
       object(file, 'document file'); const match = typeof file.uri === 'string' && exportURI.exec(file.uri);
-      if (!match || files.has(file.uri) || file.sha256 !== match[1] || file.mediaType !== exportTypes[match[2]]) invalid('a document file reference is invalid');
+      if (!match || files.has(file.uri) || !validDigest(file.sha256) || (legacyExportURI.test(file.uri) && file.sha256 !== match[1]) || file.mediaType !== exportTypes[match[2]]) invalid('a document file reference is invalid');
       const bytes = base64(file.base64, 12 * 1024 * 1024, 'A saved document');
       if (bytes.length !== file.bytes || digest(bytes) !== file.sha256 || !validExport(bytes, match[2])) invalid('a saved document failed its file check');
       files.set(file.uri, file);
@@ -260,9 +264,19 @@ export function parseBackup(json) {
       if (!file) {
         if (!missing.has(ref.uri)) invalid('a saved document is absent from the backup');
         delete ref.uri; ref.unavailable = true;
-      } else if (ref.bytes !== undefined && ref.bytes !== file.bytes) invalid('a saved document size does not match its file');
+      } else if ((ref.bytes !== undefined && ref.bytes !== file.bytes) || (ref.sha256 !== undefined && ref.sha256 !== file.sha256)) invalid('a saved document does not match its file');
     }
     for (const app of Object.values(career.applications)) for (const file of app.exports) if (!file.uri) file.unavailable = true;
+    // Only actual application records supply naming and ownership. Never restore a raw path or guess a candidate.
+    for (const app of Object.values(career.applications)) for (const ref of app.exports) {
+      if (!ref.uri || ref.uri.endsWith('.csv')) continue;
+      try {
+        documentName(career.profile.name); documentName(app.job.company); documentName(app.job.title);
+        if (!['cv', 'cover_letter'].includes(ref.kind)) throw new Error('Unbound document');
+      } catch {
+        missing.add(ref.uri); delete ref.uri; ref.unavailable = true;
+      }
+    }
     if (data.version === 1) warnings.push('This older backup does not include saved PDF, TXT or CSV files. Saved drafts and any original CV files in the backup are included.');
     else {
       const unbound = Object.values(career.applications).flatMap(app => app.exports).filter(file => !file.uri).length;
@@ -325,7 +339,7 @@ export function createBackups({ directory, store, selectBackup, selectDestinatio
     for (const [index, item] of entries.entries()) {
       const career = structuredClone(validateBackupCareer(item.career));
       const refs = references(career), missing = new Set();
-      const localFiles = createDocumentFiles({ directory, store: { get: () => ({ deviceId: item.deviceId }) }, assertAvailable });
+      const localFiles = createDocumentFiles({ directory, store: { get: () => ({ deviceId: item.deviceId, career: item.career }) }, assertAvailable });
       for (const ref of refs) {
         if (files.has(ref.uri) || missing.has(ref.uri)) continue;
         try {
@@ -398,8 +412,12 @@ export function createBackups({ directory, store, selectBackup, selectDestinatio
       return exclusive(async () => {
         check(selected.context);
         const createdFiles = new Set();
+        const previousRecords = Object.values(store.get().career.applications ?? {}).flatMap(app => app.exports ?? []);
+        let materializing;
+        const localFiles = createDocumentFiles({ directory, store: { get: () => materializing ?? store.get() }, assertAvailable,
+          onCreated: filename => createdFiles.add(filename) });
         try {
-          await store.update(async state => {
+          await localFiles.withExportTransaction(() => store.update(async state => {
             check(selected.context);
             if (context(state) !== selected.context) fail('BACKUP_STALE', 'Your profile changed. Choose the backup again before restoring.');
             counter(state.career.revision, 'current profile revision');
@@ -409,29 +427,57 @@ export function createBackups({ directory, store, selectBackup, selectDestinatio
             await saveFile(path.join(await privateFolder(), `before-restore-${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID()}.json`), safety.payload);
             check(selected.context);
             const career = structuredClone(profile.career);
-            const localFiles = createDocumentFiles({ directory, store: { get: () => ({ deviceId: state.deviceId }) }, assertAvailable,
-              onCreated: filename => createdFiles.add(filename) });
-            const rebound = new Map();
-            for (const ref of references(career)) {
-              if (!rebound.has(ref.uri)) {
-                const file = selected.files.get(ref.uri);
-                if (!file) invalid('a saved document is unavailable');
-                rebound.set(ref.uri, await localFiles.exportDocument({ bytes: Buffer.from(file.base64, 'base64'), mediaType: file.mediaType }));
+            materializing = { deviceId: state.deviceId, career };
+            for (const app of Object.values(career.applications)) {
+              const current = new Map();
+              for (const ref of app.exports) {
+                for (const field of ['folderNumber', 'companyLimit', 'jobLimit']) delete ref[field];
+                if (!ref.uri || ref.uri.endsWith('.csv')) continue;
+                const draft = ref.kind === 'cv' ? app.cv : app.coverLetter;
+                if (draft && (ref.documentVersion !== draft.version || (draft.contextFingerprint &&
+                  (ref.contextFingerprint !== draft.contextFingerprint || draft.contextFingerprint !== applicationContextFingerprint(career, app))))) continue;
+                const key = `${ref.kind}:${ref.format ?? (ref.uri.endsWith('.txt') ? 'txt' : 'pdf')}`;
+                const previous = current.get(key);
+                if (!previous || (ref.documentVersion ?? 0) >= (previous.documentVersion ?? 0)) current.set(key, ref);
               }
-              Object.assign(ref, rebound.get(ref.uri));
+              const selectedDocuments = new Set(current.values());
+              for (const ref of app.exports) {
+                if (!ref.uri || ref.uri.endsWith('.csv')) continue;
+                if (!selectedDocuments.has(ref)) { delete ref.uri; ref.unavailable = true; continue; }
+                // Only this device's prior application may reserve an existing readable folder.
+                const prior = [...(state.career.applications[app.id]?.exports ?? [])].reverse().find(item =>
+                  item.applicationId === app.id && item.company === app.job.company && item.jobTitle === app.job.title && Number.isSafeInteger(item.folderNumber));
+                if (prior) for (const field of ['folderNumber', 'companyLimit', 'jobLimit', 'company', 'jobTitle', 'applicationId']) ref[field] = prior[field];
+              }
+            }
+            const owned = new Map(Object.values(career.applications).flatMap(app => app.exports.map(ref => [ref, app])));
+            const reboundRankings = new Map();
+            for (const ref of references(career)) {
+              const file = selected.files.get(ref.uri);
+              if (!file) invalid('a saved document is unavailable');
+              const app = owned.get(ref);
+              if (file.mediaType !== 'text/csv' && !app) { delete ref.uri; ref.unavailable = true; continue; }
+              let exported = file.mediaType === 'text/csv' ? reboundRankings.get(ref.uri) : null;
+              if (!exported) exported = await localFiles.exportDocument({ bytes: Buffer.from(file.base64, 'base64'), mediaType: file.mediaType,
+                applicationId: app?.id, kind: ref.kind, documentVersion: ref.documentVersion });
+              if (file.mediaType === 'text/csv') reboundRankings.set(ref.uri, exported);
+              Object.assign(ref, exported); delete ref.unavailable;
             }
             check(selected.context);
             invalidateRuntime(career, state.career.introductions?.consent);
             career.revision = revision;
             state.career = career;
-          }, { beforeCommit: () => check(selected.context) });
+          }, { beforeCommit: () => check(selected.context) }));
         } catch (error) {
           // The exclusive gate remains closed through rollback; only files opened with wx by this attempt are removed.
           await Promise.all([...createdFiles].map(filename => unlink(filename).catch(cleanup => { if (cleanup.code !== 'ENOENT') throw cleanup; })));
           throw error;
         }
         onRestored();
-        return { restored: true, profileName: profile.name, safetyBackupSaved: true };
+        const result = { restored: true, profileName: profile.name, safetyBackupSaved: true };
+        try { await createDocumentFiles({ directory, store, assertAvailable }).cleanupExports(previousRecords); }
+        catch { result.cleanupWarning = 'Your profile was restored, but some obsolete generated files could not be removed.'; }
+        return result;
       }, operation);
     },
     async openFolder() { assertAvailable(); const target = await privateFolder(); await openFolder(target); return { opened: true }; },

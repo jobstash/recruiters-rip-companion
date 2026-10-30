@@ -191,14 +191,16 @@ test('external websites can only pair, read account connection status or open se
   for (const op of ['status','open_settings']) assert.equal(safeDeviceRequest(request(op), origin).op, op);
   const pairing = { productOrigin: origin, pairing: { deviceId: randomUUID(), challenge: 'one-time', expiresAt: new Date(Date.now() + 60000).toISOString(), account: { id: 'synthetic', label: 'Synthetic' } } };
   assert.equal(safeDeviceRequest(request('pair', pairing), origin).op, 'pair');
-  for (const op of ['capture_jobs','forms_prepare','forms_profile_save','forms_cancel','application_resolve','application_status','application_prepare','application_document','application_open_ad','career_facts','credential_read','connect_provider']) assert.throws(() => safeDeviceRequest(request(op), origin));
+  for (const op of ['capture_jobs','forms_prepare','forms_profile_save','forms_cancel','application_resolve','application_status','application_prepare','application_document','application_open_ad','application_host','application_copy_intro','career_facts','credential_read','connect_provider']) assert.throws(() => safeDeviceRequest(request(op), origin));
   assert.throws(() => safeDeviceRequest(request('status', { apiKey: 'secret' }), origin));
   assert.throws(() => safeDeviceRequest(request('pair', { ...pairing, productOrigin: 'https://other.test' }), origin));
   const port = { name: 'recruiters-device', sender: { url: `${origin}/account`, origin, tab: { id: 1 }, frameId: 0 } };
   assert.equal(externalSenderAllowed(port, origin), true);
   assert.equal(externalSenderAllowed({ ...port, sender: { ...port.sender, frameId: 1 } }, origin), false);
   assert.equal(externalSenderAllowed({ ...port, sender: { ...port.sender, origin: 'https://other.test' } }, origin), false);
-  const result = deviceResult('status', { installed: true, paired: true, deviceId: 'device', publicKey: 'public', career: { facts: ['secret'] }, credentials: 'secret', decisionApiConfigured: true, execution: { state: 'ready', private: 'secret' } });
+  const result = deviceResult('status', { installed: true, paired: true, deviceId: 'device', publicKey: 'public', career: { facts: ['secret'] }, credentials: 'secret', decisionApiConfigured: true,
+    applicationWorkflowVersion: 2, workflowVersion: 2, preferredHost: 'codex', hostInfo: { codex: { available: true, mode: 'desktop' } }, introduction: { ready: true },
+    execution: { state: 'ready', private: 'secret' } });
   assert.deepEqual(result, { installed: true, mode: 'local_mcp', paired: true, deviceId: 'device', publicKey: 'public', connections: [], execution: { state: 'ready' } });
 });
 
@@ -742,10 +744,12 @@ async function backgroundFixture(page = pastePage(), options = {}) {
   const calls = [], injections = [], timers = new Map();
   let nextTimer = 0, application = applicationMetadata({ applicationId: null, ...options.application });
   let resolveApplication = async () => application, applicationStatus = async () => application;
-  let launchApplication = async payload => (application = { ...application, handoff: { host: payload.host, state: 'awaiting_agent', requiresSend: true }, preferredHost: payload.host, opened: true, requiresSend: true });
+  let launchApplication = async payload => (application = { ...application, handoff: { host: payload.host, state: 'awaiting_agent', requiresSend: true, mode: 'desktop' }, preferredHost: payload.host, opened: true, requiresSend: true, mode: 'desktop' });
   let nativeOptions, messageHandler, access, documentId = 'document-1', permission = true, validate = async () => ({ valid: true });
   let saveDetails = async payload => ({ saved: Object.keys(payload.values) });
-  let readStatus = async () => ({ installed: true, paired: false, hasCv: options.hasCv ?? true, execution: { state: 'ready' }, career: { facts: ['must not reach panel'] } });
+  let preferredHost = options.preferredHost ?? null;
+  let readStatus = async () => ({ installed: true, paired: false, hasCv: options.hasCv ?? true, applicationWorkflowVersion: 2, preferredHost, hostInfo: { codex: { available: true, mode: 'desktop' }, claude: { available: true, mode: 'desktop' } }, decisionApiConfigured: false, execution: { state: 'ready' }, career: { facts: ['must not reach panel'] } });
+  let copyIntro = async () => ({ copied: true });
   const createdTabs = [];
   let prepareResult = options.prepare || (payload => ({ formId: 'form:synthetic', snapshot: 'snapshot:synthetic', questions: [{ key: 'phone', label: 'Phone', type: 'tel' }], fields: payload.fields.filter(field => field.empty && !field.manualOnly).slice(0, 1).map(field => ({ ...field, value: 'Synthetic Candidate' })) }));
   const extensionId = options.firefox ? BROWSER_IDENTITIES.local.firefoxExtensionId : 'extension';
@@ -790,6 +794,8 @@ async function backgroundFixture(page = pastePage(), options = {}) {
         if (op === 'application_resolve') return resolveApplication(payload);
         if (op === 'application_status') return applicationStatus(payload);
         if (op === 'application_prepare') return launchApplication(payload);
+        if (op === 'application_host') { preferredHost = payload.host; return { host: preferredHost }; }
+        if (op === 'application_copy_intro') return copyIntro(payload);
         if (op === 'application_document' || op === 'application_open_ad') return { opened: true };
         throw new Error(`Unexpected request: ${op}`);
       } };
@@ -823,6 +829,7 @@ async function backgroundFixture(page = pastePage(), options = {}) {
     resolveApplication: fn => { resolveApplication = fn; },
     applicationStatus: fn => { applicationStatus = fn; },
     launchApplication: fn => { launchApplication = fn; },
+    copyIntro: fn => { copyIntro = fn; },
     connectPanel(sender = { id: extensionId, url: chrome.runtime.getURL('panel.html') }) { const panel = fakePort(); panel.name = 'recruiters-panel'; panel.sender = sender; chrome.runtime.onConnect.emit(panel); return panel; },
     poll: () => vm.runInContext('pollApplication()', context),
     get scheduledPolls() { return timers.size; },
@@ -912,10 +919,10 @@ test('form destination attributes stay bound even when a named control shadows f
   assert.equal(page.buttons[0].clicks, 0);
 });
 
-test('reading an application and toolbar access each prepare once without an API switch', async () => {
+test('reading an application and toolbar access each prepare answers, allowing a configured key', async () => {
   const fixture = await backgroundFixture();
   assert.equal(fixture.calls.filter(([op]) => op === 'forms_prepare').length, 1);
-  assert.equal(Object.hasOwn(fixture.calls.find(([op]) => op === 'forms_prepare')[1], 'useApi'), false);
+  assert.equal(fixture.calls.find(([op]) => op === 'forms_prepare')[1].useApi, true);
   await fixture.toolbar(7);
   assert.equal(fixture.calls.filter(([op]) => op === 'forms_prepare').length, 2);
   assert.equal(fixture.state().error, '');
@@ -1025,12 +1032,14 @@ test('application metadata projection never exposes files, prompts, credentials 
   const view = applicationView(applicationMetadata({
     documents: [{ kind: 'cv', ready: true, label: '/private/candidate.pdf', uri: 'file:///private/candidate.pdf', bytes: 'private CV' }],
     writing: [{ fieldId: 'why', label: 'Why this role?', ready: true, value: 'Private narrative' }],
+    introduction: { ready: true, paragraphs: ['Private introduction'], path: '/private/letter.pdf' },
     credentials: 'secret-key', prompt: 'private prompt', preferredHost: 'codex', state: 'drafts',
   }));
   assert.equal(view.documents[0].label, 'CV');
   assert.equal(view.documents[0].ready, true);
   assert.equal(view.documents[1].ready, false);
   assert.equal(view.preferredHost, 'codex');
+  assert.deepEqual(view.introduction, { ready: true });
   assert.doesNotMatch(JSON.stringify(view), /private|Private|secret-key|file:/);
   assert.equal(applicationView(applicationMetadata({ jobUrl: 'file:///private/candidate.pdf' })).jobUrl, null);
   assert.throws(() => applicationView({ state: 'ready' }), /Read page/);
@@ -1038,7 +1047,7 @@ test('application metadata projection never exposes files, prompts, credentials 
 
 test('native application operations are internal and do not expand website permissions', async () => {
   const port = fakePort(), client = createNativeClient({ host: 'synthetic', connect: () => port });
-  for (const op of ['application_resolve', 'application_status', 'application_prepare', 'application_document', 'application_open_ad']) {
+  for (const op of ['application_resolve', 'application_status', 'application_prepare', 'application_document', 'application_open_ad', 'application_host', 'application_copy_intro']) {
     const pending = client.request(op, { bindingId: 'binding:synthetic' });
     assert.equal(port.sent.at(-1).op, op);
     port.onMessage.emit({ version: 1, id: port.sent.at(-1).id, ok: true, result: { accepted: true } });
@@ -1047,7 +1056,7 @@ test('native application operations are internal and do not expand website permi
   }
 });
 
-test('reading captures original context and resolves the application before key-gated preparation', async () => {
+test('reading resolves exact context before preparation and one Prepare hands it to the chosen app', async () => {
   const context = { jobLinks: [{ url: 'https://jobs.example.test/role', title: 'Read job description' }] };
   const fixture = await backgroundFixture(pastePage(), {
     context, application: { state: 'needs_job', preferredHost: 'codex' },
@@ -1266,7 +1275,11 @@ test('native errors retain actionable codes without confusing account requiremen
 test('reading exposes only actual prerequisite facts and does not require account pairing', async () => {
   for (const firefox of [false, true]) {
     const fixture = await backgroundFixture(pastePage(), { firefox, hasCv: false });
-    assert.deepEqual(plain(fixture.state().companion), { paired: false, hasCv: false, locked: false });
+    assert.equal(fixture.state().companion.paired, false);
+    assert.equal(fixture.state().companion.hasCv, false);
+    assert.equal(fixture.state().companion.locked, false);
+    assert.equal(fixture.state().companion.workflowVersion, 2);
+    assert.equal(fixture.state().companion.decisionApiConfigured, false);
     assert.ok(fixture.state().prepared);
     assert.equal(fixture.state().errorCode, null);
     assert.doesNotMatch(JSON.stringify(fixture.state()), /must not reach panel/);
@@ -1305,5 +1318,237 @@ test('permission, unsupported page and actual script failure remain distinct in 
     await assert.rejects(inject(7, inspectForm), { code: 'PAGE_UNSUPPORTED' });
     url = 'https://example.test/apply'; cause = new Error('Script crashed');
     await assert.rejects(inject(7, inspectForm), { code: 'PAGE_READ_FAILED' });
+  }
+});
+
+function applicationContextFixture({ title = 'Market prices', body = 'Prices and market news.', metadata = [], apply = false, description = false, links = [] } = {}) {
+  const main = { innerHTML: body };
+  const document = {
+    title, createElement: inertTemplate,
+    querySelector(selector) {
+      if (selector === 'h1') return { textContent: title };
+      if (selector.includes('job-description')) return description ? main : null;
+      if (selector === 'main,article,[role="main"]') return main;
+      return null;
+    },
+    querySelectorAll(selector) {
+      if (selector.startsWith('script')) return metadata.map(value => ({ textContent: JSON.stringify(value) }));
+      if (selector === 'a[href]') return links.map(link => ({ textContent: link.title, getAttribute: () => link.url }));
+      if (selector.startsWith('a[href],')) return apply ? [{ textContent: 'Apply now' }] : [];
+      return [];
+    },
+  };
+  const context = vm.createContext({ URL, document, location: { href: 'https://example.test/jobs/engineer' }, AbortController, setTimeout, clearTimeout });
+  return () => vm.runInContext(`(${captureApplicationContext.toString()})()`, context);
+}
+
+test('generic articles and price pages never become original adverts from their main text or title', async () => {
+  for (const value of [
+    { title: 'Asset price', body: 'Market cap, trading volume, historical prices and news.' },
+    { title: 'Software engineer careers', body: 'An article about software engineering careers and the latest industry news.' },
+    { title: 'Job market report', body: 'Salary and compensation trends. Requirements vary by industry. Responsibilities are changing.' },
+    { title: 'Apply for newsletter', body: 'Read our daily market news.', apply: true },
+  ]) {
+    const context = await applicationContextFixture(value)();
+    assert.equal(context.original, undefined, value.title);
+    assert.deepEqual(plain(context.jobLinks), []);
+  }
+});
+
+test('genuine generic, selector-backed and structured adverts retain exact useful context', async () => {
+  const body = 'Responsibilities: build browser tools. Requirements: JavaScript experience. Benefits: paid leave.';
+  const generic = await applicationContextFixture({ title: 'Browser engineer', body, apply: true })();
+  assert.equal(generic.original.title, 'Browser engineer');
+  assert.equal(generic.original.text, body);
+  assert.equal(generic.original.complete, false);
+  const selector = await applicationContextFixture({ title: 'Engineer', body: 'Original role details.', description: true })();
+  assert.equal(selector.original.text, 'Original role details.');
+  const structured = await applicationContextFixture({ metadata: [{ '@type': 'JobPosting', title: 'Platform engineer', url: 'https://example.test/jobs/platform', description: body }] })();
+  assert.equal(structured.original.url, 'https://example.test/jobs/platform');
+  assert.equal(structured.original.complete, true);
+  const listing = await applicationContextFixture({ body, apply: true, metadata: [
+    { '@type': 'JobPosting', title: 'First', description: body }, { '@type': 'JobPosting', title: 'Second', description: body },
+  ] })();
+  assert.equal(listing.original, undefined, 'multiple structured adverts cannot become one generic original');
+});
+
+test('a non-job reading surface does not connect, resolve an application or launch inference', async () => {
+  const page = pastePage(); page.controls.splice(0); page.buttons.splice(0); page.context.document.title = 'Asset price';
+  const fixture = await backgroundFixture(page);
+  assert.equal(fixture.state().pageKind, 'none');
+  assert.deepEqual(fixture.calls, []);
+  await fixture.act({ action: 'application-prepare' });
+  assert.equal(fixture.calls.length, 0);
+  assert.equal(fixture.state().application, null);
+});
+
+test('a generic advert outside the catalogue needs only one Prepare and exact original context', async () => {
+  const page = pastePage(); page.controls.splice(0); page.buttons.splice(0);
+  const original = { url: page.context.location.href, title: 'Independent engineer', text: 'Responsibilities and requirements for this exact role.', complete: false };
+  const fixture = await backgroundFixture(page, { context: { original, jobLinks: [], diagnostic: 'not a native field' }, preferredHost: 'claude' });
+  assert.equal(fixture.state().pageKind, 'job');
+  const resolve = fixture.calls.find(([op]) => op === 'application_resolve')[1];
+  assert.deepEqual(resolve.jobs, [{ title: original.title, url: original.url, description: original.text, complete: false }]);
+  assert.equal(Object.hasOwn(resolve.context, 'diagnostic'), false);
+  assert.equal(fixture.calls.some(([op]) => op === 'application_prepare'), false);
+  await fixture.act({ action: 'application-prepare' });
+  assert.deepEqual(fixture.calls.filter(([op]) => op === 'application_prepare'), [['application_prepare', { bindingId: 'binding:synthetic', host: 'claude' }]]);
+  assert.equal(fixture.state().application.handoff.state, 'awaiting_agent');
+});
+
+test('partial application forms prepare deterministic answers without an account or API key', async () => {
+  const page = pastePage(); page.controls.splice(1); page.context.document.title = 'Apply for engineer';
+  const fixture = await backgroundFixture(page);
+  assert.equal(fixture.state().pageKind, 'application');
+  assert.ok(fixture.state().prepared);
+  assert.equal(fixture.state().companion.paired, false);
+  assert.equal(fixture.calls.find(([op]) => op === 'forms_prepare')[1].useApi, true);
+  await fixture.act({ action: 'prepare-saved' });
+  assert.equal(fixture.calls.filter(([op]) => op === 'forms_prepare').length, 2);
+  assert.equal(fixture.calls.at(-1)[1].useApi, false);
+  assert.equal(fixture.calls.some(([op]) => op.includes('settings') || op === 'application_prepare'), false);
+});
+
+test('listings never resolve the first job and open only an exact current candidate', async () => {
+  const jobs = [
+    { title: 'First role', url: 'https://jobs.example.test/jobs/one', complete: false },
+    { title: 'Second role', url: 'https://jobs.example.test/jobs/two', complete: false },
+  ];
+  const fixture = await backgroundFixture(pastePage(), { jobs });
+  assert.equal(fixture.state().pageKind, 'listing');
+  assert.equal(fixture.calls.some(([op]) => op === 'application_resolve' || op === 'forms_prepare'), false);
+  await fixture.act({ action: 'application-prepare' });
+  assert.equal(fixture.calls.some(([op]) => op === 'application_prepare'), false);
+  await fixture.act({ action: 'open-job', payload: { url: 'https://unrelated.example/' } });
+  assert.deepEqual(fixture.createdTabs, []);
+  await fixture.act({ action: 'open-job', payload: { url: jobs[1].url } });
+  assert.deepEqual(plain(fixture.createdTabs), [{ url: jobs[1].url }]);
+});
+
+test('a complete single posting whose declared URL differs from the tab is still the current job', async () => {
+  const page = pastePage(); page.controls.splice(0);
+  const declared = 'https://jobs.example.test/jobs/canonical-role';
+  const fixture = await backgroundFixture(page, { jobs: [{ title: 'Role', url: declared, complete: true }],
+    context: { original: { url: declared, title: 'Role', text: 'Full description', complete: true }, jobLinks: [] } });
+  assert.notEqual(fixture.state().pageKind, 'listing');
+  assert.ok(fixture.calls.some(([op]) => op === 'application_resolve'));
+});
+
+test('persisted AI choice survives another read and is used by Prepare without launching on selection', async () => {
+  const fixture = await backgroundFixture();
+  await fixture.act({ action: 'application-host', payload: { host: 'claude', prompt: 'not forwarded' } });
+  assert.deepEqual(fixture.calls.at(-1), ['application_host', { host: 'claude' }]);
+  assert.equal(fixture.calls.some(([op]) => op === 'application_prepare'), false);
+  await fixture.toolbar(7);
+  assert.equal(fixture.state().applicationHost, 'claude');
+  await fixture.act({ action: 'application-prepare' });
+  assert.deepEqual(fixture.calls.at(-1), ['application_prepare', { bindingId: 'binding:synthetic', host: 'claude' }]);
+});
+
+test('ready packages are reused and copying introduction requires a confirmed current receipt', async () => {
+  const fixture = await backgroundFixture(pastePage(), { application: { state: 'ready', answerVersion: 'v1', introduction: { ready: true } } });
+  await fixture.act({ action: 'application-prepare' });
+  assert.equal(fixture.calls.some(([op]) => op === 'application_prepare'), false);
+  await fixture.act({ action: 'copy-intro', payload: { text: 'arbitrary text', path: '/arbitrary/file' } });
+  assert.deepEqual(fixture.calls.at(-1), ['application_copy_intro', { bindingId: 'binding:synthetic' }]);
+  assert.equal(fixture.state().notice, 'Introduction copied.');
+  fixture.copyIntro(async () => ({ copied: false }));
+  await fixture.act({ action: 'copy-intro' });
+  assert.equal(fixture.state().notice, '');
+  assert.match(fixture.state().error, /did not confirm/);
+  fixture.copyIntro(async () => { throw Object.assign(new Error('The introduction changed.'), { code: 'INTRODUCTION_NOT_CURRENT' }); });
+  await fixture.act({ action: 'copy-intro' });
+  assert.equal(fixture.state().errorCode, 'INTRODUCTION_NOT_CURRENT');
+  assert.equal(fixture.state().notice, '');
+});
+
+test('late introduction receipts cannot report success after navigation or native disconnect', async () => {
+  for (const invalidate of [fixture => fixture.updateTab(7, { status: 'loading' }), fixture => fixture.disconnect()]) {
+    const fixture = await backgroundFixture(pastePage(), { application: { introduction: { ready: true } } });
+    let release;
+    fixture.copyIntro(() => new Promise(resolve => { release = resolve; }));
+    const pending = fixture.act({ action: 'copy-intro' });
+    await tick();
+    invalidate(fixture);
+    release({ copied: true }); await pending;
+    assert.notEqual(fixture.state().notice, 'Introduction copied.');
+    assert.equal(fixture.state().application, null);
+  }
+});
+
+test('same-document rereading and saved-answer refresh preserve manual edits and selections', async () => {
+  const fixture = await backgroundFixture(), field = fixture.state().prepared.fields[0];
+  await fixture.act({ action: 'edit', payload: { edits: { [field.id]: 'My reviewed answer' }, selected: [field.id] } });
+  await fixture.toolbar(7);
+  assert.equal(fixture.state().edits[field.id], 'My reviewed answer');
+  assert.deepEqual(plain(fixture.state().selected), [field.id]);
+  await fixture.act({ action: 'prepare-saved' });
+  assert.equal(fixture.state().edits[field.id], 'My reviewed answer');
+});
+
+test('old and locked Companion states stop before unsupported application operations', async () => {
+  for (const [status, code] of [
+    [{ hasCv: true, execution: { state: 'ready' } }, 'COMPANION_UPDATE_REQUIRED'],
+    [{ applicationWorkflowVersion: 1, execution: { state: 'locked' } }, 'LOCAL_LOCKED'],
+  ]) {
+    const fixture = await backgroundFixture();
+    fixture.status(async () => status);
+    const count = fixture.calls.length;
+    await fixture.toolbar(7);
+    assert.equal(fixture.state().errorCode, code);
+    assert.deepEqual(fixture.calls.slice(count).map(([op]) => op), ['status']);
+    assert.equal(fixture.state().prepared, null);
+    assert.equal(fixture.state().application, null);
+  }
+});
+
+test('ambiguous advert links remain selectable rather than binding or preparing either job', async () => {
+  const jobLinks = [
+    { title: 'View job description', url: 'https://jobs.example.test/jobs/one' },
+    { title: 'Position details', url: 'https://jobs.example.test/jobs/two' },
+  ];
+  const fixture = await backgroundFixture(pastePage(), { context: { jobLinks } });
+  assert.equal(fixture.state().pageKind, 'listing');
+  assert.deepEqual(plain(fixture.state().jobs).map(job => job.url), jobLinks.map(link => link.url));
+  assert.equal(fixture.calls.some(([op]) => op === 'application_resolve' || op === 'forms_prepare'), false);
+  await fixture.act({ action: 'open-job', payload: { url: jobLinks[1].url } });
+  assert.deepEqual(plain(fixture.createdTabs), [{ url: jobLinks[1].url }]);
+});
+
+test('changed controls and documents cannot launch a host or copy an introduction', async () => {
+  for (const action of ['application-prepare', 'copy-intro']) {
+    for (const change of [fixture => { fixture.page.controls[0].type = 'password'; }, fixture => fixture.navigate('replacement-document')]) {
+      const fixture = await backgroundFixture(pastePage(), { application: { introduction: { ready: true } } });
+      change(fixture);
+      await fixture.act({ action });
+      assert.equal(fixture.calls.some(([op]) => op === 'application_prepare' || op === 'application_copy_intro'), false);
+      assert.equal(fixture.state().application, null);
+      assert.equal(fixture.state().prepared, null);
+      assert.match(fixture.state().notice, /page changed/);
+    }
+  }
+});
+
+test('failed refresh keeps reviewed edits visible but never keeps clipboard eligibility', async () => {
+  const fixture = await backgroundFixture(), field = fixture.state().prepared.fields[0];
+  await fixture.act({ action: 'edit', payload: { edits: { [field.id]: 'Keep my reviewed answer' }, selected: [field.id] } });
+  fixture.prepare(async () => { throw new Error('Companion could not refresh these answers.'); });
+  await fixture.toolbar(7);
+  assert.equal(fixture.state().edits[field.id], 'Keep my reviewed answer');
+  assert.deepEqual(plain(fixture.state().selected), [field.id]);
+  assert.equal(fixture.state().answersStale, true);
+  fixture.page.focus(fixture.page.controls[0]);
+  await tick();
+  assert.deepEqual(fixture.page.clipboard, []);
+});
+
+test('handoff notices use only the confirmed host mode and never imply active generation', async () => {
+  for (const [mode, expected] of [['desktop', /click Send/], ['cli', /press Enter/], [undefined, /review your message/]]) {
+    const fixture = await backgroundFixture();
+    fixture.launchApplication(async () => applicationMetadata({ opened: true, requiresSend: true, ...(mode ? { mode } : {}) }));
+    await fixture.act({ action: 'application-prepare' });
+    assert.match(fixture.state().notice, expected);
+    assert.doesNotMatch(fixture.state().notice, /generating|writing|ready/i);
+    if (!mode) assert.doesNotMatch(fixture.state().notice, /click Send|press Enter/);
   }
 });

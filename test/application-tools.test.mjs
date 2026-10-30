@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID, createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import Ajv from 'ajv';
@@ -13,6 +13,7 @@ import { ASSESSMENT_POLICY_ID } from '../src/mcp/matching-contract.mjs';
 import { matchingProfileVersion } from '../src/mcp/assessment-policy.mjs';
 import { createCareerState } from '../src/mcp/state.mjs';
 import { addBlock, removeBlock } from '../src/mcp/blocklist.mjs';
+import { createDocumentFiles } from '../src/mcp/files.mjs';
 
 // Built from this repository's document engine by build:runtime, so these
 // tests exercise the real layout, PDF rendering and PDF text read-back.
@@ -43,7 +44,7 @@ async function fixture(t, options = {}) {
   career.sources[cvSource] = { id: cvSource, name: 'Imported CV', purpose: 'cv', mediaType: 'text/plain', text: cvText, originalBase64: 'BINARY', createdAt: at };
   career.sources[archived] = { id: archived, name: 'Old CV', purpose: 'cv', archived: true, mediaType: 'text/plain', text: 'Old text: Hooli | Engineer | 2010 – 2012', createdAt: at };
   career.sources[note] = { id: note, name: 'Notes', purpose: 'supporting', mediaType: 'text/plain', text: 'Private note', createdAt: at };
-  let state = { career }, queue = Promise.resolve();
+  let state = { deviceId: randomUUID(), career }, queue = Promise.resolve();
   const store = {
     get: () => structuredClone(state),
     update(change) {
@@ -64,20 +65,17 @@ async function fixture(t, options = {}) {
     if (operation === 'job_read') return structuredClone(catalogue);
     assert.fail(`Unexpected platform operation: ${operation}`);
   };
-  const exportDocument = async input => {
-    exported.push(input);
-    const sha256 = digest(input.bytes), extension = path.extname(input.filename), destination = path.join(directory, `${sha256}${extension}`);
-    await writeFile(destination, input.bytes, { mode: 0o600 });
-    return { path: destination, sha256, bytes: input.bytes.length, mediaType: input.mediaType, uri: `recruiters://exports/${sha256}${extension}` };
-  };
-  const tools = new Map(createApplicationTools({ store, platform, documents: options.documents ?? documents, exportDocument }).map(tool => [tool.name, tool]));
+  const files = createDocumentFiles({ directory, store, assertAvailable() {} });
+  const exportDocument = async input => { exported.push(input); return files.exportDocument(input); };
+  const tools = new Map(createApplicationTools({ store, platform, documents: options.documents ?? documents, exportDocument,
+    cleanupExports: files.cleanupExports, withExportTransaction: files.withExportTransaction }).map(tool => [tool.name, tool]));
   const call = (name, args = {}) => tools.get(`career_${name}`).invoke(args);
   const mutation = args => ({ requestId: randomUUID(), revision: state.career.revision, ...args });
   const create = (args = { job: pastedJob }) => call('application_create', mutation(args));
   const saveCv = (applicationId, cv, extra = {}) => call('application_cv_save', mutation({ applicationId, cv, ...extra }));
   const saveLetter = (applicationId, paragraphs) => call('application_letter_save', mutation({ applicationId, paragraphs }));
   const exportDraft = (applicationId, kind, format) => call('application_export', mutation({ applicationId, kind, ...(format ? { format } : {}) }));
-  return { store, state: () => state.career, tools, call, mutation, create, saveCv, saveLetter, exportDraft, requests, exported, catalogue, facts, sources: { cvSource, archived, note } };
+  return { store, files, state: () => state.career, tools, call, mutation, create, saveCv, saveLetter, exportDraft, requests, exported, catalogue, facts, sources: { cvSource, archived, note } };
 }
 
 const cited = (text, cv) => ({ text, support: { cv } });

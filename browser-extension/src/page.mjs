@@ -350,14 +350,32 @@ export async function captureApplicationContext(_request, expectedDocument) {
     if (postings.length === 1) {
       const job = postings[0], body = textFromHtml(job.description);
       const title = clean(typeof job.title === 'string' ? job.title : typeof job.name === 'string' ? job.name : doc.querySelector('h1')?.textContent).slice(0, 300);
-      if (title && body && body.length <= 100000) return { url, title, text: body, complete: true };
+      let originalUrl = url;
+      try {
+        const declared = new URL(job.url || job.mainEntityOfPage?.['@id'] || url, url);
+        if (!['http:', 'https:'].includes(declared.protocol) || declared.username || declared.password || declared.href.length > 2000) return null;
+        originalUrl = declared.href;
+      } catch { return null; }
+      if (title && body && body.length <= 100000) return { url: originalUrl, title, text: body, complete: true };
     }
-    const main = doc.querySelector('main,article,[role="main"]');
+    if (postings.length > 1) return null;
+    const description = doc.querySelector('[itemtype*="JobPosting"] [itemprop="description"],[data-job-description],#job-description,#jobDescription,.job-description,.jobDescription');
+    const main = description || doc.querySelector('main,article,[role="main"]');
     if (!main) return null;
     const text = textFromHtml(main.innerHTML);
     if (!text || text.length > 100000) return null;
-    // Unstructured static HTML may omit client-rendered job sections. Preserve
-    // it as context, never claim the complete advert merely from its length.
+    // A main/article element is a reading surface, not evidence of a vacancy.
+    // Generic adverts need both substantive hiring sections and an apply action.
+    const sections = [
+      /\b(?:responsibilities|what you(?: will|'ll) do|about (?:the|this) role)\b/i,
+      /\b(?:qualifications|requirements|what you(?: will|'ll) bring|what we(?: are|'re) looking for)\b/i,
+      /\b(?:benefits|compensation|salary|employment type|full[ -]time|part[ -]time)\b/i,
+    ].filter(pattern => pattern.test(text)).length;
+    const apply = [...doc.querySelectorAll('a[href],button,input[type="submit"]')].slice(0, 1000)
+      .some(node => /^(?:apply(?: now| here| for (?:this|the) (?:job|role|position))?|submit application)$/i.test(clean(node.textContent || node.getAttribute('value'))));
+    if (!description && !(sections >= 2 && apply)) return null;
+    // Unstructured HTML can omit client-rendered sections. Keep it useful to the
+    // host, but never claim completeness from headings or text length alone.
     return { url, title: clean(doc.querySelector('h1')?.textContent || doc.title).slice(0, 300), text, complete: false };
   };
   const current = originalFrom(document, here.href);

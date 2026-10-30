@@ -2,472 +2,288 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
+import { derivePanelFlow } from '../browser-extension/src/panel-flow.mjs';
 
 const BUILD_ID = 'synthetic-panel-build';
-
-async function panelFixture(initialState = {}, { platform = 'MacIntel', firefox = false } = {}) {
-  const nodes = new Map(), sent = [];
+async function panelFixture(initialState = {}, { platform = 'MacIntel', firefox = false, clipboardDenied = false } = {}) {
+  const nodes = new Map(), sent = [], copied = [];
+  let document;
   class Element {
     constructor(tag) { this.tagName = tag.toUpperCase(); this.children = []; this.dataset = {}; this.value = ''; this.hidden = false; this.disabled = false; }
     append(...children) { this.children.push(...children); }
     replaceChildren(...children) { this.children = children; }
     setAttribute(name, value) { this[name] = value; }
+    focus() { document.activeElement = this; }
+    setSelectionRange(start, end) { this.selectionStart = start; this.selectionEnd = end; }
     reportValidity() { this.validityChecks = (this.validityChecks || 0) + 1; return this.valid !== false; }
   }
   const html = await readFile(new URL('../browser-extension/src/panel.html', import.meta.url), 'utf8');
   for (const match of html.matchAll(/<(\w+)[^>]*\bid="([^"]+)"/g)) nodes.set(match[2], new Element(match[1]));
   const descendants = node => [node, ...node.children.flatMap(descendants)];
   const all = () => [...nodes.values()].flatMap(descendants);
+  document = { activeElement: null, getElementById: id => nodes.get(id) || all().find(node => node.id === id), createElement: tag => new Element(tag), querySelectorAll: selector => all().filter(node => selector === 'button' ? node.tagName === 'BUTTON' : Object.hasOwn(node.dataset, 'job') && (!selector.endsWith(':checked') || node.checked)) };
   let receive, disconnected, reloads = 0, tabQueries = 0;
   const port = { onMessage: { addListener(fn) { receive = fn; } }, onDisconnect: { addListener(fn) { disconnected = fn; } }, postMessage(message) { sent.push(JSON.parse(JSON.stringify(message))); } };
   const context = vm.createContext({
-    document: { getElementById: id => nodes.get(id), createElement: tag => new Element(tag), querySelectorAll: selector => all().filter(node => selector === 'button' ? node.tagName === 'BUTTON' : Object.hasOwn(node.dataset, 'job') && (!selector.endsWith(':checked') || node.checked)) },
+    document, derivePanelFlow,
     [firefox ? 'browser' : 'chrome']: { runtime: { connect: () => port, reload() { reloads++; } }, tabs: { query: async () => { tabQueries++; return [{ id: 7 }]; } } },
-    navigator: { platform, clipboard: { writeText: async () => {} } }, setInterval() {}, setTimeout() {}, clearTimeout() {},
+    navigator: { platform, clipboard: { writeText: async text => { if (clipboardDenied) throw Error('denied'); copied.push(text); } } }, setInterval() {}, setTimeout() {}, clearTimeout() {},
   });
   const source = await readFile(new URL('../browser-extension/src/panel.mjs', import.meta.url), 'utf8');
-  assert.match(source, /^import \{ BUILD_ID \} from '\.\/config\.mjs';/);
-  vm.runInContext(source.replace(/^import \{ BUILD_ID \} from '\.\/config\.mjs';/, `const BUILD_ID = ${JSON.stringify(BUILD_ID)};`), context);
-  const state = { buildId: BUILD_ID, busy: null, notice: '', error: '', tabId: 7, documentId: 'doc', page: { title: 'Application · Example', url: 'https://example.test/apply' }, jobs: [], form: { fields: [] }, selected: [], edits: { name: 'Saved Name' }, paste: null,
+  vm.runInContext(source.replace(/^import \{ BUILD_ID \} from '\.\/config\.mjs';/, `const BUILD_ID = ${JSON.stringify(BUILD_ID)};`).replace(/^import \{ derivePanelFlow \} from '\.\/panel-flow\.mjs';/m, ''), context);
+  const state = { buildId: BUILD_ID, busy: null, notice: '', error: '', pageKind: 'application', companion: { workflowVersion: 2, hasCv: true }, tabId: 7, documentId: 'doc', page: { title: 'Application · Example', url: 'https://example.test/apply' }, jobs: [], form: { fields: [] }, selected: ['name'], edits: { name: 'Saved Name' }, paste: null,
     prepared: { formId: 'form:synthetic', snapshot: 'snapshot:synthetic', api: { configured: false, used: false }, fields: [{ id: 'name', label: 'Full name', type: 'text', value: 'Saved Name', empty: true }], questions: [{ key: 'phone', label: 'Phone', type: 'tel', required: true }], unresolved: [{ label: 'Why this role?', reason: 'private internal reason' }] } };
   const update = patch => { Object.assign(state, patch); receive(JSON.parse(JSON.stringify(state))); };
   update(initialState);
-  const inputs = id => descendants(nodes.get(id)).filter(node => ['INPUT','SELECT','TEXTAREA'].includes(node.tagName));
-  return { nodes, sent, state, update, inputs, html, descendants, disconnect: () => disconnected(), get reloads() { return reloads; }, get tabQueries() { return tabQueries; } };
+  const inputs = id => descendants(nodes.get(id)).filter(node => ['INPUT', 'SELECT', 'TEXTAREA'].includes(node.tagName));
+  return { nodes, sent, copied, state, update, inputs, html, descendants, document, disconnect: () => disconnected(), get reloads() { return reloads; }, get tabQueries() { return tabQueries; } };
 }
+const application = (overrides = {}) => ({
+  bindingId: 'binding:private-internal', title: 'Engineer', company: 'Example', state: 'needs_documents',
+  documents: [{ kind: 'cv', ready: false }, { kind: 'cover_letter', ready: false }], introduction: { ready: false },
+  writing: [], handoff: null, jobUrl: 'https://jobs.example.test/role', ...overrides,
+});
 
-test('Firefox sidebar uses the browser namespace and native paste shortcut on each desktop OS', async () => {
-  for (const [platform, shortcut] of [['MacIntel', '⌘V'], ['Win32', 'Ctrl+V'], ['Linux x86_64', 'Ctrl+V']]) {
-    const panel = await panelFixture({}, { platform, firefox: true });
+test('Chrome and Firefox offer the native clipboard shortcut on every supported desktop OS', async () => {
+  for (const firefox of [false, true]) for (const [platform, shortcut] of [['MacIntel', '⌘V'], ['Win32', 'Ctrl+V'], ['Linux x86_64', 'Ctrl+V']]) {
+    const panel = await panelFixture({}, { platform, firefox });
     assert.ok(panel.nodes.get('paste').textContent.includes(shortcut));
-    assert.match(panel.nodes.get('paste').textContent, /submit.*yourself/);
     panel.update({ paste: { label: 'Full name', ok: true } });
     assert.ok(panel.nodes.get('paste').textContent.includes(shortcut));
     assert.ok(panel.nodes.get('paste').textContent.includes('Full name'));
-    await panel.nodes.get('detect').onclick();
+    await panel.nodes.get('refresh').onclick();
     assert.deepEqual(panel.sent.at(-1), { action: 'detect', payload: { tabId: 7 } });
   }
 });
 
-test('CLI handoffs require terminal confirmation and unavailable hosts cannot launch', async () => {
-  const waiting = {
-    bindingId: 'binding:cli', state: 'needs_documents', title: 'Engineer', documents: [], writing: [],
-    handoff: { host: 'codex', state: 'awaiting_agent', requiresSend: true, mode: 'cli' },
-    hostInfo: {
-      codex: { available: true, label: 'Codex CLI', mode: 'cli' },
-      claude: { available: false, label: 'Claude', reason: 'Install Claude Code to continue.' },
-    },
-  };
-  const panel = await panelFixture({ application: waiting, applicationHost: 'codex' });
-  assert.match(panel.nodes.get('application-prepare').textContent, /Continue in Codex/);
-  assert.ok(panel.nodes.get('application-handoff').textContent.includes('Enter'));
-  assert.ok(!panel.nodes.get('application-handoff').textContent.includes('Send'));
-  panel.nodes.get('application-host').options = [{ value: 'claude' }, { value: 'codex' }];
-  panel.update({ applicationHost: 'claude' });
-  assert.equal(panel.nodes.get('application-prepare').disabled, true);
-  assert.equal(panel.nodes.get('application-prepare').hidden, true);
-  assert.equal(panel.nodes.get('application-connect').hidden, false);
-  panel.nodes.get('application-connect').onclick();
-  assert.deepEqual(panel.sent.at(-1), { action: 'settings', payload: {} });
-  assert.equal(panel.nodes.get('application-host').options[0].disabled, true);
-  assert.equal(panel.nodes.get('application-host').options[1].disabled, false);
-  assert.match(panel.nodes.get('application-handoff').textContent, /Claude.*unavailable.*Companion.*AI apps/);
-  panel.update({ applicationHost: 'codex' });
-  assert.equal(panel.nodes.get('application-prepare').disabled, false);
-});
-
-test('paste and error updates preserve focused question and reviewed answer drafts', async () => {
-  const panel = await panelFixture();
-  const question = panel.inputs('question-list')[0], reviewed = panel.inputs('field-list').find(node => node.type !== 'checkbox');
-  question.value = '+44 1234567890'; question.oninput();
-  reviewed.value = 'Reviewed Candidate'; reviewed.oninput();
-  panel.update({ paste: { label: 'Full name', ok: true } });
-  assert.equal(panel.inputs('question-list')[0], question);
-  assert.equal(panel.inputs('field-list').find(node => node.type !== 'checkbox'), reviewed);
-  assert.equal(question.value, '+44 1234567890');
-  assert.equal(reviewed.value, 'Reviewed Candidate');
-  panel.update({ error: 'Storage is locked. Unlock Companion and try again.' });
-  assert.equal(question.value, '+44 1234567890');
-  assert.equal(panel.nodes.get('error').hidden, false);
-  assert.match(panel.nodes.get('error').textContent, /Unlock Companion/);
-});
-
-test('save details uses native validation and dispatches only explicitly entered answers', async () => {
-  const panel = await panelFixture(), form = panel.nodes.get('details-form'), question = panel.inputs('question-list')[0];
-  question.value = '+44 1234567890'; question.oninput();
-  form.valid = false; form.onsubmit({ preventDefault() {} });
-  assert.equal(panel.sent.length, 0);
-  form.valid = true; form.onsubmit({ preventDefault() {} });
-  assert.deepEqual(panel.sent, [{ action: 'profile-save', payload: { values: { phone: '+44 1234567890' } } }]);
-  assert.equal(form.validityChecks, 2);
-  assert.equal(question.value, '+44 1234567890', 'dispatch alone is not persistence');
-  panel.update({ busy: 'profile-save' });
-  assert.equal(question.disabled, true);
-  panel.update({ busy: null, error: 'Companion did not confirm saving these details.' });
-  assert.equal(question.value, '+44 1234567890');
-  assert.equal(question.disabled, false);
-  assert.doesNotMatch(panel.nodes.get('status').textContent, /saved/);
-  panel.update({ error: '', saveReceipt: { id: 'receipt', keys: ['phone'] }, notice: 'Details saved on this computer.' });
-  assert.equal(question.value, '');
-  assert.match(panel.nodes.get('status').textContent, /saved on this computer/);
-});
-
-test('default panel exposes missing questions and recovery, with technical answers collapsed', async () => {
-  const panel = await panelFixture();
-  assert.equal(panel.nodes.get('details-form').hidden, false);
-  assert.equal(panel.nodes.get('configure').hidden, false);
-  assert.equal(panel.nodes.get('ready').textContent, '1 answer ready');
-  assert.match(panel.html, /<details id="review" hidden>/);
-  assert.match(panel.html, /<details id="optional-settings" hidden>/);
-  assert.equal(panel.nodes.get('review').hidden, false);
-  assert.doesNotMatch(panel.html, /id="(?:api|prepare|url|form-id)"/);
-  assert.match(panel.nodes.get('unresolved').children[0].textContent, /saved CV or profile.*Codex or Claude/);
-  assert.doesNotMatch(JSON.stringify(panel.nodes.get('unresolved')), /private internal reason/);
-  panel.update({ busy: 'prepare' });
-  assert.equal(panel.nodes.get('cancel').hidden, false);
-  assert.equal(panel.nodes.get('cancel').disabled, false);
-  assert.equal(panel.nodes.get('status').hidden, false);
-  panel.update({ busy: null, prepared: { ...panel.state.prepared, questions: [], api: { configured: true, used: false } } });
-  assert.equal(panel.nodes.get('details-form').hidden, true);
-  assert.equal(panel.nodes.get('configure').hidden, true);
-});
-
-test('job-specific personal summaries never appear as reusable profile details', async () => {
-  const panel = await panelFixture();
-  panel.update({ prepared: { ...panel.state.prepared, questions: [{ key: 'personalSummary', label: 'Personal summary', type: 'textarea' }] } });
-  assert.equal(panel.inputs('question-list').length, 0);
-  assert.equal(panel.nodes.get('details-form').hidden, true);
-  panel.nodes.get('details-form').onsubmit({ preventDefault() {} });
-  assert.equal(panel.sent.length, 0);
-});
-
-test('sponsorship remains blank until an explicit Yes or No selection', async () => {
-  const panel = await panelFixture();
-  panel.update({ prepared: { ...panel.state.prepared, questions: [{ key: 'requiresSponsorship', label: 'Do you require visa sponsorship?', type: 'boolean', options: [{ value: true, label: 'Yes' }, { value: false, label: 'No' }] }] } });
-  const input = panel.inputs('question-list')[0];
-  assert.equal(input.tagName, 'SELECT');
-  assert.equal(input.value, '');
-  assert.equal(input.children[0].value, '');
-  panel.nodes.get('details-form').onsubmit({ preventDefault() {} });
-  assert.equal(panel.sent.length, 0);
-  input.value = 'false'; input.oninput();
-  panel.nodes.get('details-form').onsubmit({ preventDefault() {} });
-  assert.deepEqual(panel.sent.at(-1), { action: 'profile-save', payload: { values: { requiresSponsorship: false } } });
-});
-
-test('local detail saves allow a nonempty subset of employer-required questions', async () => {
-  const panel = await panelFixture();
-  panel.update({ prepared: { ...panel.state.prepared, questions: [
-    { key: 'phone', label: 'Phone', type: 'tel', required: true },
-    { key: 'email', label: 'Email', type: 'email', required: true },
-  ] } });
-  const [phone, email] = panel.inputs('question-list');
-  assert.notEqual(phone.required, true);
-  assert.notEqual(email.required, true);
-  phone.value = '+44 1234567890'; phone.oninput();
-  panel.nodes.get('details-form').onsubmit({ preventDefault() {} });
-  assert.deepEqual(panel.sent.at(-1), { action: 'profile-save', payload: { values: { phone: '+44 1234567890' } } });
-  assert.equal(email.value, '');
-});
-
-test('inspected fields stay hidden until preparation succeeds, including during preparation and errors', async () => {
-  const panel = await panelFixture({ prepared: null, form: { fields: [
-    { id: 'name', label: 'Full name', type: 'text', value: 'Private webpage value' },
-    { id: 'email', label: 'Email', type: 'email' },
-  ] } });
-  const assertUnprepared = () => {
-    assert.equal(panel.nodes.get('review').hidden, true);
-    assert.equal(panel.nodes.get('field-list').children.length, 0);
-    assert.equal(panel.inputs('field-list').length, 0);
-    assert.equal(panel.nodes.get('details-form').hidden, true);
-    assert.equal(panel.nodes.get('paste').hidden, true);
-    assert.equal(panel.nodes.get('review-actions').hidden, true);
-    assert.doesNotMatch(JSON.stringify([...panel.nodes.values()]), /Private webpage value|Answer on the page/);
-  };
-  assertUnprepared();
-  assert.equal(panel.nodes.get('ready').hidden, false);
-  panel.update({ busy: 'prepare' });
-  assertUnprepared();
-  assert.equal(panel.nodes.get('ready').hidden, true);
-  assert.equal(panel.nodes.get('status').hidden, false);
-  panel.update({ busy: null, error: 'Preparation was cancelled. Read page to try again.' });
-  assertUnprepared();
-  assert.equal(panel.nodes.get('ready').hidden, true);
-  assert.equal(panel.nodes.get('error').hidden, false);
-  panel.update({ error: '', prepared: { formId: 'form:prepared', snapshot: 'snapshot:prepared', fields: [
-    { id: 'name', label: 'Full name', type: 'text', empty: true },
-  ], questions: [], unresolved: [] } });
-  assert.equal(panel.nodes.get('review').hidden, false);
-  assert.equal(panel.nodes.get('ready').textContent, '1 answer ready');
-  assert.equal(panel.inputs('field-list').length, 2);
-  assert.equal(panel.nodes.get('paste').hidden, false);
-});
-
-test('clipboard progress, failure and success remain distinct and name the current answer', async () => {
-  const panel = await panelFixture(), paste = panel.nodes.get('paste'), initial = paste.textContent;
-  const notices = new Set([initial]);
-  for (const ok of [undefined, false, true]) {
-    panel.update({ paste: { label: 'Full name', ok } });
-    assert.ok(paste.textContent.includes('Full name'));
-    notices.add(paste.textContent);
-    assert.equal(panel.nodes.get('details-form').hidden, false, 'one clipboard answer does not resolve missing details');
-  }
-  assert.equal(notices.size, 4, 'unknown, pending, failed and confirmed clipboard states must not look alike');
-  assert.ok(paste.textContent.includes('⌘V'));
-  panel.update({ paste: null });
-  assert.equal(paste.textContent, initial);
-});
-
-test('prepared forms with no supported answers show missing details without fake answer controls', async () => {
-  const panel = await panelFixture();
-  panel.update({ prepared: { ...panel.state.prepared, fields: [], unresolved: [
-    { label: 'Phone', reason: 'missing basic detail' },
-    { label: 'Why this role?', reason: 'private reason' },
-    { label: 'Cover letter', reason: 'another private reason' },
-  ] } });
-  assert.equal(panel.nodes.get('paste').hidden, true);
-  assert.equal(panel.nodes.get('review-actions').hidden, true);
-  assert.equal(panel.nodes.get('review').hidden, false);
-  assert.equal(panel.nodes.get('field-list').children.length, 0);
-  assert.equal(panel.nodes.get('details-form').hidden, false);
-  assert.equal(panel.inputs('question-list').length, 1);
-  const unresolved = panel.nodes.get('unresolved');
-  assert.equal(unresolved.children.filter(node => node.tagName === 'P').length, 1);
-  assert.deepEqual(unresolved.children[1].children.map(node => node.textContent), ['Why this role?', 'Cover letter']);
-  assert.doesNotMatch(JSON.stringify(unresolved), /Phone|private reason|Answer on the page/);
-  panel.update({ prepared: { ...panel.state.prepared, unresolved: [] } });
-  assert.equal(unresolved.children.length, 0, 'unresolved state updates independently of prepared field values');
-});
-
-test('missing-detail drafts survive preparation resets but never cross to another page', async () => {
-  const panel = await panelFixture(), prepared = panel.state.prepared;
-  const question = panel.inputs('question-list')[0];
-  question.value = '+44 1234567890'; question.oninput();
-  panel.update({ prepared: null, busy: 'prepare' });
-  assert.equal(panel.nodes.get('details-form').hidden, true);
-  panel.update({ prepared, busy: null });
-  assert.equal(panel.inputs('question-list')[0].value, '+44 1234567890');
-  panel.update({ documentId: 'different-page' });
-  assert.equal(panel.inputs('question-list')[0].value, '');
-});
-
-test('missing or outdated worker build blocks page reads and exposes only an explicit reload action', async () => {
-  for (const buildId of [undefined, 'older-build']) {
-    const panel = await panelFixture({ buildId, page: null, notice: 'Application form detected. Prepare values.', error: 'Old worker error' });
-    assert.equal(panel.nodes.get('status').textContent, 'Extension updated. Reload to continue.');
-    assert.equal(panel.nodes.get('status').hidden, false);
-    for (const id of ['settings', 'error', 'cancel', 'page', 'application', 'form', 'jobs', 'ready', 'paste', 'review', 'details-form']) {
-      assert.equal(panel.nodes.get(id).hidden, true, `${id} must be hidden for a stale worker`);
-    }
-    assert.equal(panel.nodes.get('field-list').children.length, 0);
-    assert.equal(panel.nodes.get('detect').textContent, 'Reload extension');
-    assert.equal(panel.tabQueries, 0);
-    assert.equal(panel.sent.length, 0);
-    assert.equal(panel.reloads, 0, 'updates never silently reload the extension');
-    panel.update({ busy: 'prepare' });
-    assert.equal(panel.nodes.get('detect').disabled, true);
-    panel.nodes.get('detect').onclick();
-    assert.equal(panel.reloads, 0);
-    panel.update({ busy: null });
-    assert.equal(panel.nodes.get('detect').disabled, false);
-    panel.nodes.get('detect').onclick();
-    assert.equal(panel.reloads, 1);
-    assert.equal(panel.tabQueries, 0);
-    assert.equal(panel.sent.length, 0);
-  }
-});
-
-test('build mismatch hides but preserves drafts until a compatible worker returns', async () => {
-  const panel = await panelFixture(), question = panel.inputs('question-list')[0];
-  question.value = '+44 1234567890'; question.oninput();
-  panel.update({ buildId: 'older-build' });
-  assert.equal(panel.nodes.get('details-form').hidden, true);
-  assert.equal(panel.reloads, 0);
-  panel.update({ buildId: BUILD_ID });
-  assert.equal(panel.nodes.get('detect').textContent, 'Read page');
-  assert.equal(panel.nodes.get('details-form').hidden, false);
-  assert.equal(panel.nodes.get('settings').hidden, false);
-  assert.equal(panel.inputs('question-list')[0], question);
-  assert.equal(question.value, '+44 1234567890');
-  await panel.nodes.get('detect').onclick();
-  assert.deepEqual(panel.sent, [{ action: 'detect', payload: { tabId: 7 } }]);
-});
-
-const application = (overrides = {}) => ({
-  bindingId: 'binding:private-internal', formId: 'form:private-internal', applicationId: 'application:private-internal',
-  title: 'Engineer', company: 'Example', state: 'needs_documents',
-  documents: [{ kind: 'cv', ready: false, label: 'CV' }, { kind: 'cover_letter', ready: false, label: 'Cover letter' }],
-  writing: [{ fieldId: 'writing:private-internal', label: 'Why this role?', ready: false }], handoff: null,
-  answerVersion: null, jobUrl: 'https://jobs.example.test/role',
-  ...overrides,
-});
-
-test('application preparation remains available without Decisions or prepared values', async () => {
-  const panel = await panelFixture({ application: application(), applicationHost: 'codex', prepared: null, error: 'Configure Decisions to map these fields.' });
-  assert.equal(panel.nodes.get('application').hidden, false);
-  assert.equal(panel.nodes.get('application-title').textContent, 'Engineer · Example');
-  assert.equal(panel.nodes.get('application-host').value, 'codex');
-  assert.equal(panel.nodes.get('application-prepare').disabled, false);
-  assert.match(panel.nodes.get('application-prepare').textContent, /Continue in Codex/);
+test('one Prepare action launches the selected app, while Options persists the choice independently', async () => {
+  const panel = await panelFixture({ application: application(), applicationHost: 'codex', prepared: null });
+  assert.equal(panel.nodes.get('title').textContent, 'Engineer');
+  assert.equal(panel.nodes.get('company').textContent, 'Example');
+  assert.equal(panel.nodes.get('application-prepare').hidden, false);
+  assert.equal(panel.nodes.get('detect').hidden, true);
   panel.nodes.get('application-prepare').onclick();
   assert.deepEqual(panel.sent.at(-1), { action: 'application-prepare', payload: { host: 'codex' } });
-  assert.equal(panel.nodes.get('application-writing').textContent, '0 of 1 written answer saved for this job.');
-  assert.equal(panel.nodes.get('application-documents').children.length, 2);
-  assert.equal(panel.descendants(panel.nodes.get('application-documents')).filter(node => node.tagName === 'BUTTON').length, 0);
-  assert.equal(panel.nodes.get('application-upload').hidden, true);
-  assert.doesNotMatch(JSON.stringify([...panel.nodes.values()]), /private-internal|file:\/\/|apiKey|Copy agent prompt/);
+  panel.nodes.get('application-host').value = 'claude'; panel.nodes.get('application-host').onchange();
+  assert.deepEqual(panel.sent.at(-1), { action: 'application-host', payload: { host: 'claude' } });
+  assert.equal(panel.nodes.get('application').hidden, true, 'no empty document section');
 });
 
-test('opening the agent tells the user to send, never claims writing or document readiness', async () => {
-  const waiting = application({ handoff: { host: 'claude', state: 'awaiting_agent', requiresSend: true } });
-  const panel = await panelFixture({ application: waiting, applicationHost: 'claude', prepared: null });
-  assert.match(panel.nodes.get('application-prepare').textContent, /Continue in Claude/);
-  assert.ok(panel.nodes.get('application-handoff').textContent.includes('Send'));
-  assert.ok(!panel.nodes.get('application-handoff').textContent.includes('Enter'));
-  const waitingNotice = panel.nodes.get('application-handoff').textContent;
-  assert.doesNotMatch(panel.nodes.get('application-status').textContent, /saved|ready|generating/i);
-  assert.equal(panel.nodes.get('application-answers').hidden, true);
-  panel.update({ application: { ...waiting, handoff: { ...waiting.handoff, state: 'agent_read', requiresSend: false } } });
-  assert.notEqual(panel.nodes.get('application-handoff').textContent, waitingNotice);
-  assert.equal(panel.nodes.get('application-upload').hidden, true, 'reading the request is not a saved export');
-  panel.update({ busy: 'application-prepare' });
-  assert.equal(panel.nodes.get('application-host').disabled, true);
-  assert.equal(panel.nodes.get('application-prepare').disabled, true);
-  assert.match(panel.nodes.get('status').textContent, /Opening Claude/);
+test('handoffs give actual Send or Enter instructions and never expose Stop or another Start', async () => {
+  for (const [mode, instruction] of [['cli', 'Enter'], ['desktop', 'Send']]) {
+    const waiting = application({ handoff: { host: 'codex', requiresSend: true, mode } });
+    const panel = await panelFixture({ application: waiting });
+    assert.ok(panel.nodes.get('status').textContent.includes(instruction));
+    assert.equal(panel.nodes.get('application-prepare').hidden, true);
+    assert.equal(panel.nodes.get('cancel').hidden, true);
+    panel.update({ application: { ...waiting, handoff: { host: 'codex', state: 'agent_read', requiresSend: false } } });
+    assert.match(panel.nodes.get('status').textContent, /has read/);
+    assert.doesNotMatch(panel.nodes.get('status').textContent, /writing|generating/i);
+    assert.equal(panel.nodes.get('application').hidden, true);
+  }
 });
 
-test('saved documents update in place, expose exact native actions, and never render private file metadata', async () => {
-  const panel = await panelFixture({ application: application() });
+test('only owned preparation exposes Stop and removes its inactive primary action', async () => {
+  const panel = await panelFixture({ busy: 'prepare' });
+  assert.equal(panel.nodes.get('cancel').hidden, false); assert.equal(panel.nodes.get('cancel').disabled, false);
+  assert.equal(panel.nodes.get('application-prepare').hidden, true);
+  panel.nodes.get('cancel').onclick(); assert.equal(panel.sent.at(-1).action, 'cancel');
+  panel.update({ busy: 'application-prepare' }); assert.equal(panel.nodes.get('cancel').hidden, true);
+});
+
+test('paste, errors and saved answer refreshes preserve explicit edits, selections and focused controls', async () => {
+  const panel = await panelFixture();
   const question = panel.inputs('question-list')[0], reviewed = panel.inputs('field-list').find(node => node.type !== 'checkbox');
   question.value = '+44 1234567890'; question.oninput();
-  reviewed.value = 'My reviewed answer'; reviewed.oninput();
-  panel.update({ application: application({
-    state: 'ready', answerVersion: 'version:private-internal',
-    documents: [{ kind: 'cv', ready: true, label: '/private/candidate.pdf', uri: 'file:///private/candidate.pdf', bytes: 'private CV' }, { kind: 'cover_letter', ready: true, label: 'Cover letter' }],
-    writing: [{ fieldId: 'private-internal', label: 'Why?', ready: true, value: 'Private written answer' }], credentials: 'secret-key',
-  }) });
-  assert.equal(panel.inputs('question-list')[0], question);
-  assert.equal(panel.inputs('field-list').find(node => node.type !== 'checkbox'), reviewed);
-  assert.equal(question.value, '+44 1234567890');
-  assert.equal(reviewed.value, 'My reviewed answer');
-  const buttons = panel.descendants(panel.nodes.get('application-documents')).filter(node => node.tagName === 'BUTTON');
-  assert.deepEqual(buttons.map(button => button.textContent), ['Open', 'Show in folder', 'Open', 'Show in folder']);
-  buttons[0].onclick(); buttons[3].onclick();
-  assert.deepEqual(panel.sent.slice(-2), [
-    { action: 'application-document', payload: { kind: 'cv', action: 'open' } },
-    { action: 'application-document', payload: { kind: 'cover_letter', action: 'reveal' } },
-  ]);
-  assert.equal(panel.nodes.get('application-upload').hidden, false);
-  assert.equal(panel.nodes.get('application-writing').textContent, '1 of 1 written answer saved for this job.');
-  assert.doesNotMatch(JSON.stringify([...panel.nodes.values()]), /private-internal|\/private\/|file:\/\/|private CV|Private written answer|secret-key/);
-  panel.update({ busy: 'application-document' });
-  assert.ok(buttons.every(button => button.disabled));
+  reviewed.value = 'Reviewed Candidate'; reviewed.oninput(); reviewed.focus(); reviewed.setSelectionRange(4, 8);
+  for (const patch of [{ paste: { label: 'Full name', ok: true } }, { error: 'Storage is locked. Unlock Companion and try again.' }, { error: '', prepared: { ...panel.state.prepared, snapshot: 'new', fields: [{ ...panel.state.prepared.fields[0], value: 'New saved name' }] }, edits: { name: 'New saved name' } }]) {
+    panel.update(patch);
+    assert.equal(panel.inputs('question-list')[0], question);
+    assert.equal(panel.inputs('field-list').find(node => node.type !== 'checkbox'), reviewed);
+    assert.equal(question.value, '+44 1234567890'); assert.equal(reviewed.value, 'Reviewed Candidate');
+    assert.equal(panel.document.activeElement, reviewed); assert.equal(reviewed.selectionStart, 4);
+  }
+  await panel.nodes.get('copy').onclick(); assert.deepEqual(panel.copied, ['Full name: Reviewed Candidate']);
 });
 
-test('missing and ambiguous jobs offer original-ad recovery without title-only writing claims', async () => {
+test('schema changes restore focus and draft only for the same surviving answer', async () => {
+  const panel = await panelFixture(), input = panel.inputs('field-list').find(node => node.type !== 'checkbox');
+  input.value = 'Explicit edit'; input.oninput(); input.focus(); input.setSelectionRange(2, 4);
+  panel.update({ prepared: { ...panel.state.prepared, fields: [{ ...panel.state.prepared.fields[0], label: 'Your full name' }] } });
+  const replacement = panel.inputs('field-list').find(node => node.type !== 'checkbox');
+  assert.equal(replacement.value, 'Explicit edit'); assert.equal(panel.document.activeElement, replacement); assert.equal(replacement.selectionStart, 2);
+});
+
+test('save details uses native validation, allows a subset and clears only confirmed saved values', async () => {
+  const panel = await panelFixture();
+  panel.update({ prepared: { ...panel.state.prepared, questions: [{ key: 'phone', label: 'Phone', type: 'tel', required: true }, { key: 'email', label: 'Email', type: 'email', required: true }] } });
+  const form = panel.nodes.get('details-form'), [phone, email] = panel.inputs('question-list');
+  phone.value = '+44 1234567890'; phone.oninput();
+  assert.notEqual(phone.required, true); assert.notEqual(email.required, true);
+  form.valid = false; form.onsubmit({ preventDefault() {} }); assert.equal(panel.sent.length, 0);
+  form.valid = true; form.onsubmit({ preventDefault() {} });
+  assert.deepEqual(panel.sent.at(-1), { action: 'profile-save', payload: { values: { phone: '+44 1234567890' } } });
+  assert.equal(phone.value, '+44 1234567890');
+  panel.update({ busy: 'profile-save' }); assert.equal(phone.disabled, true);
+  panel.update({ busy: null, error: 'Could not save.' }); assert.equal(phone.value, '+44 1234567890');
+  panel.update({ error: '', saveReceipt: { id: 'receipt', keys: ['phone'] }, notice: 'Details saved.' }); assert.equal(phone.value, '');
+});
+
+test('job-specific summaries are never reusable details; boolean answers require an explicit choice', async () => {
+  const panel = await panelFixture();
+  panel.update({ prepared: { ...panel.state.prepared, questions: [{ key: 'personalSummary', label: 'Summary', type: 'textarea' }] } });
+  assert.equal(panel.inputs('question-list').length, 0); assert.equal(panel.nodes.get('missing-details').hidden, true);
+  panel.update({ prepared: { ...panel.state.prepared, questions: [{ key: 'requiresSponsorship', label: 'Sponsorship?', type: 'boolean', options: [{ value: true, label: 'Yes' }, { value: false, label: 'No' }] }] } });
+  const input = panel.inputs('question-list')[0]; assert.equal(input.value, '');
+  panel.nodes.get('details-form').onsubmit({ preventDefault() {} }); assert.equal(panel.sent.length, 0);
+  input.value = 'false'; input.oninput(); panel.nodes.get('details-form').onsubmit({ preventDefault() {} });
+  assert.deepEqual(panel.sent.at(-1).payload.values, { requiresSponsorship: false });
+});
+
+test('inspected webpage values never become answer controls before successful preparation', async () => {
+  const panel = await panelFixture({ prepared: null, form: { fields: [{ id: 'name', value: 'Private webpage value' }] } });
+  for (const patch of [{}, { busy: 'prepare' }, { busy: null, error: 'Preparation cancelled.' }]) {
+    panel.update(patch); assert.equal(panel.nodes.get('review').hidden, true); assert.equal(panel.inputs('field-list').length, 0); assert.equal(panel.nodes.get('paste').hidden, true);
+    assert.doesNotMatch(JSON.stringify([...panel.nodes.values()]), /Private webpage value/);
+  }
+});
+
+test('clipboard progress, failure, confirmation and browser denial remain distinct', async () => {
+  const panel = await panelFixture(), notices = new Set([panel.nodes.get('paste').textContent]);
+  for (const ok of [undefined, false, true]) { panel.update({ paste: { label: 'Full name', ok } }); notices.add(panel.nodes.get('paste').textContent); }
+  assert.equal(notices.size, 4);
+  const denied = await panelFixture({}, { clipboardDenied: true }); await denied.nodes.get('copy').onclick();
+  assert.equal(denied.nodes.get('error').hidden, false); assert.match(denied.nodes.get('error').textContent, /manually/);
+});
+
+test('missing answers show reusable details separately and do not leak internal reasons', async () => {
+  const panel = await panelFixture();
+  panel.update({ prepared: { ...panel.state.prepared, fields: [], unresolved: [{ label: 'Phone', reason: 'private reason' }, { label: 'Why this role?', reason: 'private reason' }] } });
+  assert.equal(panel.nodes.get('paste').hidden, true); assert.equal(panel.nodes.get('review-actions').hidden, true);
+  assert.equal(panel.nodes.get('details-form').hidden, false);
+  assert.deepEqual(panel.nodes.get('unresolved').children[1].children.map(node => node.textContent), ['Why this role?']);
+  assert.doesNotMatch(JSON.stringify(panel.nodes.get('unresolved')), /private reason|Phone/);
+  panel.update({ prepared: { ...panel.state.prepared, unresolved: [] } }); assert.equal(panel.nodes.get('unresolved').children.length, 0);
+});
+
+test('drafts survive preparation resets but do not cross document boundaries', async () => {
+  const panel = await panelFixture(), prepared = panel.state.prepared;
+  const input = panel.inputs('question-list')[0]; input.value = 'Unsaved phone'; input.oninput();
+  panel.update({ prepared: null, busy: 'prepare' }); panel.update({ prepared, busy: null });
+  assert.equal(panel.inputs('question-list')[0].value, 'Unsaved phone');
+  panel.update({ documentId: 'another-page' }); assert.equal(panel.inputs('question-list')[0].value, '');
+});
+
+test('build mismatch offers only explicit reload and preserves drafts until the compatible worker returns', async () => {
+  const panel = await panelFixture(), question = panel.inputs('question-list')[0]; question.value = 'Draft'; question.oninput();
+  for (const buildId of [undefined, 'older-build']) {
+    panel.update({ buildId });
+    for (const id of ['settings', 'error', 'cancel', 'page', 'application', 'form', 'jobs', 'options']) assert.equal(panel.nodes.get(id).hidden, true);
+    assert.equal(panel.nodes.get('detect').textContent, 'Reload extension');
+    panel.update({ busy: 'prepare' }); panel.nodes.get('detect').onclick(); assert.equal(panel.reloads, 0);
+    panel.update({ busy: null });
+  }
+  panel.nodes.get('detect').onclick(); assert.equal(panel.reloads, 1); assert.equal(panel.tabQueries, 0);
+  panel.update({ buildId: BUILD_ID }); assert.equal(panel.inputs('question-list')[0], question); assert.equal(question.value, 'Draft');
+});
+
+test('ready documents expose one Show CV and Copy intro, never paths or duplicate document actions', async () => {
+  const panel = await panelFixture({ application: application({ state: 'ready', introduction: { ready: true }, documents: [{ kind: 'cv', ready: true, uri: 'file:///private/candidate.pdf', bytes: 'private CV' }, { kind: 'cover_letter', ready: true }] }) });
+  assert.equal(panel.nodes.get('show-cv').hidden, false); assert.equal(panel.nodes.get('copy-intro').hidden, false);
+  assert.equal(panel.nodes.get('application-prepare').hidden, true);
+  panel.nodes.get('show-cv').onclick(); panel.nodes.get('copy-intro').onclick();
+  assert.deepEqual(panel.sent.slice(-2), [{ action: 'application-document', payload: { kind: 'cv', action: 'reveal' } }, { action: 'copy-intro', payload: {} }]);
+  assert.doesNotMatch(JSON.stringify([...panel.nodes.values()]), /private-internal|file:\/\/|private CV/);
+  assert.equal(panel.nodes.get('application-notice').hidden, true, 'dispatch alone is not a copied receipt');
+  panel.update({ applicationNotice: 'Introduction copied.' }); assert.equal(panel.nodes.get('application-notice').textContent, 'Introduction copied.');
+  panel.update({ busy: 'application-document' }); assert.equal(panel.nodes.get('show-cv').disabled, true);
+});
+
+test('partial and stale application state never expose missing or outdated artifacts', async () => {
+  const panel = await panelFixture({ application: application({ state: 'drafts', documents: [{ kind: 'cv', ready: true }], introduction: { ready: false } }) });
+  assert.equal(panel.nodes.get('show-cv').hidden, false); assert.equal(panel.nodes.get('copy-intro').hidden, true);
+  panel.update({ application: application({ state: 'ready' }), answersStale: true, applicationAnswersPending: true });
+  assert.equal(panel.nodes.get('application-answers').hidden, false); assert.equal(panel.nodes.get('paste').hidden, true); assert.equal(panel.nodes.get('copy').disabled, true);
+  panel.nodes.get('application-answers').onclick(); assert.equal(panel.sent.at(-1).action, 'application-answers');
+  panel.update({ application: application({ state: 'needs_refresh' }) });
+  assert.equal(panel.nodes.get('application-prepare').hidden, false); assert.equal(panel.nodes.get('show-cv').hidden, true);
+});
+
+test('non-job and listing states win over irrelevant setup and listing choice uses an exact URL', async () => {
+  const panel = await panelFixture({ pageKind: 'none', companion: { locked: true }, prepared: null });
+  assert.equal(panel.nodes.get('recover').hidden, true); assert.equal(panel.nodes.get('application-prepare').hidden, true);
+  const jobs = [{ title: '<Engineer>', company: 'Example', url: 'https://example.test/one' }, { title: 'Designer', url: 'https://example.test/two' }];
+  panel.update({ pageKind: 'listing', jobs });
+  assert.equal(panel.nodes.get('job-selection').hidden, false); assert.equal(panel.nodes.get('page').hidden, true);
+  assert.equal(panel.nodes.get('application-prepare').hidden, true);
+  const buttons = panel.descendants(panel.nodes.get('candidate-list')).filter(node => node.tagName === 'BUTTON');
+  assert.equal(buttons[0].textContent, '<Engineer>'); buttons[1].onclick();
+  assert.deepEqual(panel.sent.at(-1), { action: 'open-job', payload: { url: jobs[1].url } });
+});
+
+test('Companion recovery distinguishes unavailable, locked, old, missing CV and unavailable AI without account gating', async () => {
+  const panel = await panelFixture({ application: application(), companion: { workflowVersion: 2, hasCv: true, paired: false } });
+  assert.equal(panel.nodes.get('application-prepare').hidden, false);
+  panel.update({ errorCode: 'COMPANION_UNAVAILABLE' }); assert.equal(panel.nodes.get('install').hidden, false); assert.equal(panel.nodes.get('detect').textContent, 'Retry');
+  await panel.nodes.get('detect').onclick(); assert.equal(panel.sent.at(-1).action, 'detect');
+  for (const [companion, expected] of [[{ locked: true }, /Unlock/], [{ workflowVersion: 1 }, /Update/], [{ workflowVersion: 2, hasCv: false }, /Import CV/], [{ workflowVersion: 2, hostInfo: { claude: { available: false } } }, /unavailable/]]) {
+    panel.update({ errorCode: null, companion }); assert.match(panel.nodes.get('status').textContent, expected); assert.equal(panel.nodes.get('recover').hidden, false);
+    assert.equal(panel.nodes.get('application-prepare').hidden, true); panel.nodes.get('recover').onclick(); assert.equal(panel.sent.at(-1).action, 'settings');
+  }
+});
+
+test('extra-help errors recover with saved answers and other errors preserve drafts', async () => {
+  const panel = await panelFixture(), input = panel.inputs('question-list')[0]; input.value = 'Draft'; input.oninput();
+  panel.update({ errorCode: 'DECISIONS_KEY_REQUIRED', error: 'Internal API diagnostic' });
+  assert.equal(panel.nodes.get('prepare-saved').hidden, false); panel.nodes.get('prepare-saved').onclick(); assert.equal(panel.sent.at(-1).action, 'prepare-saved');
+  for (const errorCode of ['PAGE_PERMISSION_REQUIRED', 'PAGE_UNSUPPORTED', 'PAGE_READ_FAILED', 'FORM_CONTEXT_CHANGED']) {
+    panel.update({ errorCode, error: 'Read the page again.' }); assert.equal(panel.nodes.get('error').hidden, false); assert.equal(panel.nodes.get('detect').hidden, false);
+    assert.equal(panel.inputs('question-list')[0], input); assert.equal(input.value, 'Draft');
+  }
+});
+
+test('application disappearance and disconnect hide documents rather than carrying them to another page', async () => {
+  const ready = application({ state: 'ready', documents: [{ kind: 'cv', ready: true }], introduction: { ready: true } });
+  const panel = await panelFixture({ application: ready });
+  panel.update({ application: null, page: null, pageKind: 'unknown', form: null, prepared: null, tabId: 9, documentId: null });
+  assert.equal(panel.nodes.get('application').hidden, true); assert.equal(panel.nodes.get('show-cv').hidden, true);
+  panel.update({ application: ready }); panel.disconnect();
+  assert.equal(panel.nodes.get('application').hidden, true); assert.equal(panel.nodes.get('review').hidden, true); assert.match(panel.nodes.get('error').textContent, /disconnected/);
+});
+
+test('exact linked adverts keep one Prepare action and secondary original-ad recovery', async () => {
   const panel = await panelFixture({ application: application({ state: 'needs_job' }) });
   assert.equal(panel.nodes.get('application-open-ad').hidden, false);
-  assert.match(panel.nodes.get('application-status').textContent, /full job ad/);
+  assert.equal(panel.nodes.get('application-prepare').hidden, false);
   panel.nodes.get('application-open-ad').onclick();
   assert.deepEqual(panel.sent.at(-1), { action: 'application-open-ad', payload: {} });
   panel.update({ application: application({ state: 'needs_job', jobUrl: null }) });
   assert.equal(panel.nodes.get('application-open-ad').hidden, true);
-  assert.match(panel.nodes.get('application-status').textContent, /original job ad/);
-  assert.match(panel.nodes.get('application-status').textContent, /linked to the right job/);
-  assert.equal(panel.nodes.get('application-prepare').disabled, false, 'the connected agent can explicitly bind the correct saved job');
+  assert.equal(panel.nodes.get('detect').hidden, false);
+  assert.match(panel.nodes.get('status').textContent, /original job ad/);
 });
 
-test('current package readiness does not pretend old clipboard values are ready after answers change', async () => {
-  const panel = await panelFixture({ application: application({ state: 'ready' }), answersStale: true, applicationAnswersPending: true });
-  assert.equal(panel.nodes.get('application-preparation').hidden, true);
-  assert.match(panel.nodes.get('ready').textContent, /Saved answers changed/);
-  assert.equal(panel.nodes.get('application-answers').hidden, false);
-  assert.equal(panel.nodes.get('paste').hidden, true);
-  assert.equal(panel.nodes.get('copy').disabled, true);
-  panel.nodes.get('application-answers').onclick();
-  assert.deepEqual(panel.sent.at(-1), { action: 'application-answers', payload: {} });
+test('job saving retains explicit choices on metadata refresh but not on another page', async () => {
+  const jobs = [{ title: 'Engineer', url: 'https://example.test/one' }, { title: 'Designer', url: 'https://example.test/two' }];
+  const panel = await panelFixture({ pageKind: 'listing', jobs, prepared: null });
+  panel.inputs('job-list')[1].checked = true;
+  panel.update({ jobs: jobs.map(job => ({ ...job, company: 'Example' })) });
+  assert.equal(panel.inputs('job-list')[0].checked, false);
+  assert.equal(panel.inputs('job-list')[1].checked, true);
+  panel.nodes.get('save').onclick();
+  assert.deepEqual(panel.sent.at(-1), { action: 'save', payload: { indexes: [1] } });
+  panel.update({ documentId: 'new-page' });
+  assert.equal(panel.inputs('job-list')[1].checked, false);
+});
+
+test('owned preparation restores a suspended answer focus without stealing a new focus', async () => {
+  const panel = await panelFixture(), input = panel.inputs('field-list').find(node => node.type !== 'checkbox');
+  input.focus(); input.setSelectionRange(2, 4);
+  panel.update({ busy: 'prepare' }); panel.document.activeElement = null;
+  panel.update({ busy: null });
+  assert.equal(panel.document.activeElement, input); assert.equal(input.selectionStart, 2);
   panel.update({ busy: 'prepare' });
-  assert.equal(panel.nodes.get('cancel').disabled, false);
-  assert.equal(panel.nodes.get('application-answers').disabled, true);
-  panel.update({ busy: null, error: 'Approval cancelled.' });
-  assert.equal(panel.nodes.get('application-answers').hidden, false);
-  panel.update({ application: application({ state: 'needs_refresh' }) });
-  assert.equal(panel.nodes.get('application-preparation').hidden, false);
-});
-
-test('application disappearance and disconnect remove documents, without carrying them to another tab', async () => {
-  const ready = application({ state: 'ready', documents: [{ kind: 'cv', ready: true }, { kind: 'cover_letter', ready: true }] });
-  const panel = await panelFixture({ application: ready });
-  assert.equal(panel.nodes.get('application-documents').children.length, 2);
-  panel.update({ application: null, page: null, form: null, prepared: null, tabId: 9, documentId: null });
-  assert.equal(panel.nodes.get('application').hidden, true);
-  assert.equal(panel.nodes.get('application-documents').children.length, 0);
-  assert.equal(panel.nodes.get('application-title').textContent, '');
-  panel.update({ application: ready });
-  panel.disconnect();
-  assert.equal(panel.nodes.get('application').hidden, true);
-  assert.equal(panel.nodes.get('application-documents').children.length, 0);
-  assert.equal(panel.nodes.get('review').hidden, true);
-  assert.match(panel.nodes.get('error').textContent, /disconnected/);
-});
-
-test('first use explains optional page tools without inventing account or CV requirements', async () => {
-  for (const firefox of [false, true]) {
-    const panel = await panelFixture({ page: null, form: null, prepared: null }, { firefox });
-    assert.equal(panel.nodes.get('intro').hidden, false);
-    assert.equal(panel.nodes.get('recovery').hidden, true);
-    assert.equal(panel.nodes.get('form').hidden, true);
-    assert.equal(panel.nodes.get('detect').hidden, false);
-    panel.update({ page: { url: 'https://example.test/apply' }, companion: { paired: false, hasCv: true }, application: application() });
-    assert.equal(panel.nodes.get('recovery').hidden, true, 'unpaired status alone must not block local work');
-    assert.equal(panel.nodes.get('application-prepare').disabled, false);
-  }
-});
-
-test('unavailable, locked and required account connection each offer a real recovery action', async () => {
-  for (const firefox of [false, true]) {
-    const panel = await panelFixture({ errorCode: 'COMPANION_UNAVAILABLE', error: 'Internal transport detail', prepared: null }, { firefox });
-    assert.equal(panel.nodes.get('recovery').hidden, false);
-    assert.equal(panel.nodes.get('error').hidden, true);
-    assert.equal(panel.nodes.get('detect').hidden, true);
-    assert.equal(panel.nodes.get('install').hidden, false);
-    assert.match(panel.nodes.get('recovery-message').textContent, /Open.*Companion.*retry/i);
-    await panel.nodes.get('recover').onclick();
-    assert.deepEqual(panel.sent.at(-1), { action: 'detect', payload: { tabId: 7 } });
-    panel.nodes.get('install').onclick();
-    assert.deepEqual(panel.sent.at(-1), { action: 'install', payload: {} });
-    for (const errorCode of ['LOCAL_LOCKED', 'PAIRING_REQUIRED']) {
-      panel.update({ errorCode });
-      assert.equal(panel.nodes.get('install').hidden, true);
-      panel.nodes.get('recover').onclick();
-      assert.deepEqual(panel.sent.at(-1), { action: 'settings', payload: {} });
-      assert.match(panel.nodes.get('recovery-message').textContent, errorCode === 'LOCAL_LOCKED' ? /unlock/ : /Connect account/);
-    }
-  }
-});
-
-test('CV guidance uses saved-source status and never blocks ready documents or prepared answers', async () => {
-  const panel = await panelFixture({ application: application(), companion: { paired: false, hasCv: false } });
-  assert.equal(panel.nodes.get('recovery').hidden, false);
-  assert.match(panel.nodes.get('recovery-message').textContent, /Companion.*Me.*Import CV/);
-  assert.equal(panel.nodes.get('application-prepare').disabled, false);
-  assert.equal(panel.nodes.get('paste').hidden, false);
-  panel.update({ companion: { paired: false } });
-  assert.equal(panel.nodes.get('recovery').hidden, true, 'unknown source state is not missing');
-  panel.update({ companion: { paired: false, hasCv: false }, application: application({ state: 'ready' }) });
-  assert.equal(panel.nodes.get('recovery').hidden, true);
-});
-
-test('page access errors and actual failures stay distinct from Companion setup', async () => {
-  const panel = await panelFixture();
-  const question = panel.inputs('question-list')[0];
-  question.value = 'Unsaved phone'; question.oninput();
-  for (const errorCode of ['PAGE_PERMISSION_REQUIRED', 'PAGE_UNSUPPORTED', 'PAGE_READ_FAILED', 'FORM_CONTEXT_CHANGED']) {
-    panel.update({ errorCode, error: `Recovery for ${errorCode}` });
-    assert.equal(panel.nodes.get('recovery').hidden, true);
-    assert.equal(panel.nodes.get('error').hidden, false);
-    assert.equal(panel.nodes.get('detect').hidden, false);
-    assert.equal(panel.inputs('question-list')[0], question);
-    assert.equal(question.value, 'Unsaved phone');
-  }
+  panel.nodes.get('options').focus();
+  panel.update({ busy: null });
+  assert.equal(panel.document.activeElement, panel.nodes.get('options'));
 });

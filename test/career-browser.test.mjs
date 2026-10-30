@@ -1191,10 +1191,12 @@ async function savedPdfFixture(t) {
   const { state, store } = fixture();
   state.deviceId = 'synthetic-document-reader';
   const files = createDocumentFiles({ directory, store, assertAvailable() {} });
-  const pdf = await files.exportDocument({ bytes: Buffer.from('%PDF-1.7\nsynthetic saved CV\n%%EOF'), mediaType: 'application/pdf' });
   const job = catalogueJob('local:exact', currentDate(), { title: 'Engineer', company: 'Same employer',
     url: 'https://jobs.example.test/roles/exact', applyUrl: 'https://jobs.example.test/roles/exact' });
   state.career.matching = { jobs: { [job.id]: job }, scores: {} };
+  state.career.profile.name = 'Synthetic Candidate';
+  state.career.applications.exact = { id: 'exact', job: { ...job }, exports: [] };
+  const pdf = await files.exportDocument({ applicationId: 'exact', kind: 'cv', bytes: Buffer.from('%PDF-1.7\nsynthetic saved CV\n%%EOF'), mediaType: 'application/pdf' });
   const exported = { ...pdf, kind: 'cv', format: 'pdf', documentVersion: 1, createdAt: '2025-01-02T12:00:00.000Z' };
   state.career.applications.exact = { id: 'exact', job: { ...job }, exports: [exported] };
   const opened = [];
@@ -1295,7 +1297,7 @@ test('selection and file validity are rechecked after asynchronous resolution, w
 test('selected detail groups exact job and document actions once, preserves counts and narrow selection', async t => {
   const f = await savedPdfFixture(t);
   f.state.career.applications.exact.job.applyUrl = 'https://jobs.example.test/roles/exact/apply';
-  const letter = await f.files.exportDocument({ bytes: Buffer.from('%PDF-1.7\nsynthetic letter for grouped actions\n%%EOF'), mediaType: 'application/pdf' });
+  const letter = await f.files.exportDocument({ applicationId: 'exact', kind: 'cover_letter', bytes: Buffer.from('%PDF-1.7\nsynthetic letter for grouped actions\n%%EOF'), mediaType: 'application/pdf' });
   f.state.career.applications.exact.exports.push({ ...letter, kind: 'cover_letter', format: 'pdf', createdAt: '2025-02-03T12:00:00.000Z' });
   const pages = { jobs: await f.browser.list({ kind: 'jobs' }), applications: await f.browser.list({ kind: 'applications' }) };
   let application = await f.browser.read({ kind: 'applications', id: 'exact' });
@@ -1369,7 +1371,7 @@ test('selected detail groups exact job and document actions once, preserves coun
 
 test('CV and letter select separate saved PDFs and shell failures are not reported as opened', async t => {
   const f = await savedPdfFixture(t);
-  const letter = await f.files.exportDocument({ bytes: Buffer.from('%PDF-1.7\nsynthetic saved letter\n%%EOF'), mediaType: 'application/pdf' });
+  const letter = await f.files.exportDocument({ applicationId: 'exact', kind: 'cover_letter', bytes: Buffer.from('%PDF-1.7\nsynthetic saved letter\n%%EOF'), mediaType: 'application/pdf' });
   f.state.career.applications.exact.exports.push({ ...letter, kind: 'cover_letter', format: 'pdf', createdAt: '2025-01-03T12:00:00.000Z' });
   const detail = await f.browser.read({ kind: 'applications', id: 'exact' });
   const args = { kind: 'applications', id: 'exact', document: 'cover_letter', token: detail.documents[1].token };

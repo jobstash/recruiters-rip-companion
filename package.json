@@ -1,6 +1,6 @@
 {
   "name": "recruiters-companion",
-  "version": "3.10.0",
+  "version": "3.11.0",
   "private": true,
   "description": "Local career tools for Codex and Claude",
   "main": "src/main.mjs",

@@ -42,6 +42,7 @@ export function applicationView(result) {
     bindingId: result.bindingId, formId: text(result.formId, 200), applicationId: text(result.applicationId, 200),
     title: text(result.title) || 'This application', company: text(result.company), state: result.state,
     documents: ['cv', 'cover_letter'].map(kind => ({ kind, ready: result.documents?.some(doc => doc.kind === kind && doc.ready === true) === true, label: kind === 'cv' ? 'CV' : 'Cover letter' })),
+    introduction: { ready: result.introduction?.ready === true },
     writing: (Array.isArray(result.writing) ? result.writing : []).slice(0, 64).map(field => ({ fieldId: text(field.fieldId, 200), label: text(field.label) || 'Written answer', ready: field.ready === true })),
     handoff: host(result.handoff?.host) && ['awaiting_agent', 'agent_read'].includes(result.handoff?.state)
       ? { host: result.handoff.host, state: result.handoff.state, requiresSend: result.handoff.requiresSend === true,
@@ -113,7 +114,7 @@ export function createNativeClient({ connect, host, onCommand = null, onDisconne
   }
   function request(op, payload) {
     insist(['status','pair','open_settings','open_decisions_settings','capture_jobs','forms_prepare','forms_profile_save','forms_cancel','forms_validate',
-      'application_resolve','application_status','application_prepare','application_document','application_open_ad'].includes(op), 'This native operation is unavailable.');
+      'application_resolve','application_status','application_host','application_prepare','application_document','application_open_ad','application_copy_intro'].includes(op), 'This native operation is unavailable.');
     insist(pending.size < maxPending, 'The companion is busy. Cancel or finish the current request.');
     const id = randomUUID(), message = { version: 1, id, op, payload };
     insist(new TextEncoder().encode(JSON.stringify(message)).length <= 1024 * 1024, 'This page exceeds the capture limit. Select fewer jobs.');

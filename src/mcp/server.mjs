@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { CareerError } from './state.mjs';
 import { version } from '../version.mjs';
 import { MATCHING_PROTOCOL } from './matching-contract.mjs';
+import { documentURI, documentName } from './files.mjs';
 const publicErrors = new Set(['INVALID_INPUT', 'NOT_FOUND', 'FACT_CHANGED', 'REVISION_CONFLICT', 'REQUEST_CONFLICT', 'STORAGE_LIMIT', 'RESULT_LIMIT', 'LOCAL_LOCKED', 'LOCAL_BUSY', 'IDENTITY_CHANGED', 'PAIRING_REQUIRED', 'DEVICE_OFFLINE', 'DEVICE_UNAUTHORIZED', 'DEVICE_REQUEST_FAILED', 'UNAVAILABLE', 'INVALID_JOB', 'FULL_AD_REQUIRED', 'UNCLEAR_FACT', 'CV_TONE', 'UNKNOWN_EMPLOYER', 'UNSUPPORTED_NUMBER', 'MISSING_DRAFT', 'LAYOUT_OVERFLOW', 'EXPORT_CORRUPT', 'CANCELLED', 'POLICY_CHANGED', 'UNSUPPORTED_REQUIREMENT', 'UNKNOWN_QUOTE', 'UNKNOWN_FACT', 'SALARY_BELOW_MINIMUM', 'MISATTRIBUTED_FACT', 'NOT_IN_RERANK_SET', 'FORM_CANCELLED', 'FORM_CONTEXT_CHANGED', 'FORM_INVALID_RESPONSE', 'FORM_INPUT_TOO_LARGE', 'FORM_AUTH', 'FORM_RATE_LIMIT', 'FORM_PROVIDER_ERROR', 'FORM_NETWORK', 'FORM_TIMEOUT']);
 
 export const instructions = [
@@ -85,9 +86,9 @@ export function createMcpServer({ tools, assertAvailable, readResource, listReso
       if (Buffer.byteLength(text) > 12 * 1024 * 1024) return error('RESULT_LIMIT', 'Read a smaller page of saved records.');
       notifyActivity(tool.name);
       const content = [{ type: 'text', text }];
-      if (tool.name === 'career_application_export' && /^recruiters:\/\/exports\/[a-f0-9]{64}\.(pdf|txt)$/.test(result?.export?.uri ?? '')) {
+      if (tool.name === 'career_application_export' && documentURI.test(result?.export?.uri ?? '')) {
         const extension = result.export.uri.endsWith('.txt') ? 'txt' : 'pdf';
-        content.push({ type: 'resource_link', uri: result.export.uri, name: `${result.export.kind === 'cv' ? 'Tailored CV' : 'Cover letter'}.${extension}`,
+        content.push({ type: 'resource_link', uri: result.export.uri, name: `${documentName(result.export.candidateName)} - ${result.export.kind === 'cv' ? 'CV' : 'COVER LETTER'}.${extension}`,
           mimeType: extension === 'txt' ? 'text/plain' : 'application/pdf', size: result.export.bytes });
       }
       if (tool.name === 'career_matches_export' && /^recruiters:\/\/exports\/[a-f0-9]{64}\.csv$/.test(result?.export?.uri ?? ''))

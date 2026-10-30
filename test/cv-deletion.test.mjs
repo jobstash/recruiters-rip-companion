@@ -107,7 +107,7 @@ test('deletion invalidates dependent reviews, generated document exports and sta
     const app = career.applications.app = { id: 'app', job: { id: 'local:job', title: 'Role', company: 'Company', description: 'Synthetic role' }, formAnswers: {} };
     const fingerprint = applicationContextFingerprint(career, app);
     app.cv = { version: 1, contextFingerprint: fingerprint };
-    app.exports = [{ kind: 'cv', format: 'pdf', documentVersion: 1, contextFingerprint: fingerprint, textValidation: { passed: true }, uri: `recruiters://exports/${'a'.repeat(64)}.pdf` }];
+    app.exports = [{ kind: 'cv', format: 'pdf', documentVersion: 1, contextFingerprint: fingerprint, textValidation: { passed: true }, uri: 'recruiters://documents/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.pdf' }];
     app.formAnswers[applicationQuestionKey(field)] = { value: 'Derived prose', contextFingerprint: fingerprint };
     career.formDrafts = { form: { answers: { answer: 'Derived prose' }, evidenceRevision: career.evidenceRevision } };
     career.matching = { scores: { job: { profileVersion: matchingProfileVersion(career) } } };

@@ -352,7 +352,8 @@ test('explicit Check preserves an unresolved installation receipt instead of hid
   const staged = path.join(root, `.recruiters-update-${id}.app`);
   const work = path.join(directory, `install-${id}`);
   await mkdir(target); await mkdir(staged); await mkdir(work);
-  const journal = { schema: 1, id, version: '1.3.0', pid: process.pid, target, staged,
+  const journal = { schema: 1, platform: 'darwin', executable: 'Recruiters.rip Companion', userData: root, digest: '0'.repeat(64),
+    id, version: '1.3.0', pid: process.pid, target, staged,
     backup: path.join(root, `.recruiters-backup-${id}.app`), journal: path.join(work, 'journal.json'), status: 'staged' };
   await writeFile(journal.journal, JSON.stringify(journal), { mode: 0o600 });
   await writeFile(path.join(directory, 'active.json'), JSON.stringify({ id }), { mode: 0o600 });

@@ -118,7 +118,17 @@ test('build environment drops Node/Electron injection flags and credentials', ()
   const env = sourceEnvironment();
   for (const key of ['NODE_OPTIONS', 'ELECTRON_RUN_AS_NODE', 'NODE_PATH', 'GITHUB_TOKEN', 'OPENAI_API_KEY', 'npm_config_prefix', 'GIT_SSH_COMMAND']) assert.equal(env[key], undefined);
   assert.equal(env.GIT_TERMINAL_PROMPT, '0');
-  assert.equal(env.GIT_CONFIG_GLOBAL, os.devNull);
+});
+
+test('real Git ignores a broken user config through the source child environment', async t => {
+  const home = await temporary(t);
+  await fs.writeFile(path.join(home, '.gitconfig'), '[intentionally invalid user config');
+  const output = await runSourceCommand('git', ['config', '--global', '--list'], {
+    cwd: home,
+    env: { ...sourceEnvironment(), HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: path.join(home, '.config') },
+    timeout: 30000,
+  });
+  assert.equal(output, '');
 });
 
 test('transition receipt rejects foreign targets, replayed versions and traversal', async t => {

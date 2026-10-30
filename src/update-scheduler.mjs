@@ -10,7 +10,7 @@ const BUSY = new Set(['checking', 'downloading', 'staging', 'installing', 'launc
 
 export function updateAppPath({ packaged, localOnly = false, platform, executable, appImage }) {
   if (!packaged || localOnly) return null;
-  if (platform === 'darwin') return path.resolve(executable, '../../..');
+  if (platform === 'darwin') return path.posix.resolve(executable, '../../..');
   if (platform === 'win32') return path.win32.dirname(executable);
   if (platform === 'linux' && typeof appImage === 'string' && path.posix.isAbsolute(appImage)) return appImage;
   return null;

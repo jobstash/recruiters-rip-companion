@@ -23,7 +23,8 @@ export function sourceEnvironment(tools) {
   const keys = ['PATH', 'HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'SystemRoot', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PATHEXT', 'TMP', 'TEMP', 'TMPDIR', 'DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY', 'DBUS_SESSION_BUS_ADDRESS', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_RUNTIME_DIR'];
   const env = Object.fromEntries(keys.filter(key => process.env[key]).map(key => [key, process.env[key]]));
   if (tools) env.PATH = [path.dirname(tools.node), path.dirname(tools.git), tools.bin, env.PATH].filter(Boolean).join(path.delimiter);
-  return { ...env, GIT_TERMINAL_PROMPT: '0', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: os.devNull, GIT_ALLOW_PROTOCOL: 'https:file', CI: 'true' };
+  // Git for Windows accepts its NUL device name, not Node's Win32 \\.\nul path.
+  return { ...env, GIT_TERMINAL_PROMPT: '0', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : os.devNull, GIT_ALLOW_PROTOCOL: 'https:file', CI: 'true' };
 }
 export function runSourceCommand(executable, args, { cwd, env = sourceEnvironment(), signal, timeout = 20 * 60 * 1000, maxOutput = 4 * 1024 * 1024 } = {}) {
   abort(signal);

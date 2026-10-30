@@ -22,7 +22,12 @@ async function claimInstallation(target) {
         server.once('error', reject);
         server.listen(`\\\\.\\pipe\\${lock.pipe}`, resolve);
       });
-    } catch (error) { if (['EADDRINUSE', 'EACCES'].includes(error.code)) return null; throw error; }
+    } catch (error) {
+      // A .NET helper's single-instance pipe reports EBUSY through libuv;
+      // it is an occupied installation, never permission to proceed unlocked.
+      if (['EADDRINUSE', 'EACCES', 'EBUSY'].includes(error.code)) return null;
+      throw error;
+    }
     server.unref();
     let releasing;
     return () => releasing ??= new Promise(resolve => server.close(resolve));

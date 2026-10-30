@@ -7,7 +7,7 @@ import path from 'node:path';
 import net from 'node:net';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { endpoint, deviceDirectory, connectAuthenticated, createAuthenticationChallenge, verifyAuthenticationProof } from '../src/platform-runtime.cjs';
+import { endpoint, deviceDirectory, protectPrivatePath, connectAuthenticated, createAuthenticationChallenge, verifyAuthenticationProof } from '../src/platform-runtime.cjs';
 import { privateDirectory } from '../src/vault.mjs';
 import { startMcpBroker } from '../src/mcp/broker.mjs';
 import { BROWSER_IDENTITIES } from '../src/browser-identity.mjs';
@@ -61,6 +61,9 @@ for (const channel of ['native', 'mcp']) test(`${channel} client withholds its p
     args: [stub, `--user-data-dir=${userData}`], directory: selected, userData, localOnly: false }), { mode: 0o600 });
   else await writeFile(path.join(directory, 'native-config.json'), JSON.stringify({ executable: process.execPath, appPath: stub, directory: selected, userData, packaged: false, localOnly: false }), { mode: 0o600 });
   await writeFile(path.join(directory, channel === 'mcp' ? 'mcp-bridge.json' : 'bridge.json'), JSON.stringify({ socket: socketPath, token }), { mode: 0o600 });
+  // Match production's explicit file DACLs, not only POSIX mode bits.
+  protectPrivatePath(path.join(directory, channel === 'mcp' ? 'mcp-launch.json' : 'native-config.json'));
+  protectPrivatePath(path.join(directory, channel === 'mcp' ? 'mcp-bridge.json' : 'bridge.json'));
   const captured = [];
   let disconnected;
   const rejected = new Promise(resolve => { disconnected = resolve; });
@@ -80,11 +83,12 @@ for (const channel of ['native', 'mcp']) test(`${channel} client withholds its p
   const script = fileURLToPath(new URL(channel === 'mcp' ? '../src/mcp/local-runner.cjs' : '../src/native-host.cjs', import.meta.url));
   const args = channel === 'mcp' ? [`--directory=${selected}`] : [path.join(directory, 'native-config.json'), `chrome-extension://${BROWSER_IDENTITIES.production.extensionId}/`];
   const child = spawn(process.execPath, [script, ...args], { env, stdio: ['pipe', 'ignore', 'ignore'] });
-  const exited = new Promise(resolve => child.once('exit', resolve));
+  const exited = new Promise((resolve, reject) => { child.once('exit', resolve); child.once('error', reject); });
   t.after(() => child.kill());
   child.stdin.on('error', () => {});
   child.stdin.write(frame(channel, { privateApplication: 'private-career-sentinel' }));
-  await rejected; child.kill(); await exited;
+  await Promise.race([rejected, exited.then(code => { throw new Error(`Client exited (${code}) before rejecting the impersonating endpoint.`); })]);
+  child.kill(); await exited;
   const bytes = Buffer.concat(captured), first = message(channel, bytes);
   assert.deepEqual(Object.keys(first), ['hello']);
   assert.match(first.hello, /^[a-f0-9]{64}$/);

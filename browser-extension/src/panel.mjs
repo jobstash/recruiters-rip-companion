@@ -229,6 +229,7 @@ function render() {
   renderAnswers(busy, noJob || ['locked', 'unavailable', 'update'].includes(flow.kind));
   renderJobs(busy);
   for (const button of document.querySelectorAll('button')) if (button !== $('cancel')) button.disabled = busy;
+  if (state.answersStale) $('copy').disabled = true;
   if (!busy && suspendedFocus) {
     const saved = suspendedFocus, focused = document.activeElement, target = $(saved.id);
     suspendedFocus = null;

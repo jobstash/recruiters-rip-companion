@@ -176,6 +176,7 @@ test('drafts survive preparation resets but do not cross document boundaries', a
 
 test('build mismatch offers only explicit reload and preserves drafts until the compatible worker returns', async () => {
   const panel = await panelFixture(), question = panel.inputs('question-list')[0]; question.value = 'Draft'; question.oninput();
+  const tabQueries = panel.tabQueries;
   for (const buildId of [undefined, 'older-build']) {
     panel.update({ buildId });
     for (const id of ['settings', 'error', 'cancel', 'page', 'application', 'form', 'jobs', 'options']) assert.equal(panel.nodes.get(id).hidden, true);
@@ -183,7 +184,7 @@ test('build mismatch offers only explicit reload and preserves drafts until the 
     panel.update({ busy: 'prepare' }); panel.nodes.get('detect').onclick(); assert.equal(panel.reloads, 0);
     panel.update({ busy: null });
   }
-  panel.nodes.get('detect').onclick(); assert.equal(panel.reloads, 1); assert.equal(panel.tabQueries, 0);
+  panel.nodes.get('detect').onclick(); assert.equal(panel.reloads, 1); assert.equal(panel.tabQueries, tabQueries);
   panel.update({ buildId: BUILD_ID }); assert.equal(panel.inputs('question-list')[0], question); assert.equal(question.value, 'Draft');
 });
 

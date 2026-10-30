@@ -1,5 +1,6 @@
 import { BUILD_ID } from './config.mjs';
 import { derivePanelFlow } from './panel-flow.mjs';
+import { reviewIdentity } from './protocol.mjs';
 
 const chrome = globalThis.browser ?? globalThis.chrome;
 const pasteShortcut = /Mac/i.test(navigator.userAgentData?.platform || navigator.platform || navigator.userAgent) ? '⌘V' : 'Ctrl+V';
@@ -8,6 +9,7 @@ const el = (tag, text, className) => { const node = document.createElement(tag);
 let state, port, reconnect, pageKey, questionKey, fieldKey, jobKey, receipt, flow, lastAction, suspendedFocus;
 // Memory only: explicit panel edits, never values typed into the employer's page.
 const drafts = new Map(), answerDrafts = new Map(), selections = new Map();
+let answerContext;
 const questionInputs = new Map(), reviewInputs = new Map();
 function send(action, payload = {}) {
   if (state?.buildId !== BUILD_ID) return;
@@ -63,7 +65,7 @@ $('details-form').onsubmit = event => {
   if (!Object.keys(values).length) { $('error').hidden = false; $('error').textContent = 'Enter a missing detail before saving.'; return; }
   send('profile-save', { values });
 };
-function edited() { send('edit', { edits: state.edits, selected: state.selected }); }
+function edited() { send('edit', { identity: reviewIdentity(state), snapshot: state.prepared?.snapshot, edits: state.edits, selected: state.selected }); }
 function selection(id, selected) { selections.set(id, selected); state.selected = state.selected.filter(value => value !== id); if (selected) state.selected.push(id); edited(); }
 $('copy').onclick = async () => {
   if (state.answersStale) return;
@@ -117,7 +119,7 @@ function renderAnswers(busy, hidden) {
   $('review').hidden = !prepared;
   $('review-actions').hidden = !fields.length;
   // Value/version refreshes update existing inputs, not their DOM identity or focused selection.
-  const nextFields = JSON.stringify(fields.map(({ id, label, type, options }) => ({ id, label, type, options })));
+  const nextFields = JSON.stringify(fields.map(({ id, signature, label, type, options }) => ({ id, signature, label, type, options })));
   if (fieldKey !== nextFields) preserveFocus(() => {
     fieldKey = nextFields; reviewInputs.clear(); $('field-list').replaceChildren();
     for (const field of fields) {
@@ -184,6 +186,10 @@ function render() {
   const currentPage = JSON.stringify([state.tabId, state.documentId, state.page?.url]);
   if (pageKey !== currentPage) { pageKey = currentPage; drafts.clear(); answerDrafts.clear(); selections.clear(); suspendedFocus = null; questionKey = fieldKey = jobKey = null; }
   state.edits ||= {}; state.selected ||= [];
+  if (state.prepared) {
+    const identity = reviewIdentity(state);
+    if (answerContext !== identity) { answerContext = identity; answerDrafts.clear(); selections.clear(); suspendedFocus = null; }
+  }
   for (const field of state.prepared?.fields || []) {
     if (answerDrafts.has(field.id)) state.edits[field.id] = answerDrafts.get(field.id);
     if (selections.has(field.id)) { state.selected = state.selected.filter(id => id !== field.id); if (selections.get(field.id)) state.selected.push(field.id); }

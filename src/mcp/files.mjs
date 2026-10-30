@@ -292,13 +292,23 @@ export function createDocumentFiles({ directory, store, assertAvailable, onCreat
     try { dir = await privateRoot(); } catch (error) { if (error.code === 'ENOENT') return; throw error; }
     const active = new Set(currentRecords().map(record => record.uri));
     const activePaths = new Set(currentRecords().map(record => path.join(dir, ...documentParts(record))));
+    const activeIdentities = new Set();
+    for (const filename of activePaths) {
+      try {
+        const info = await lstat(filename);
+        assertPrivatePath(filename, { info, maxSize: MAX_EXPORT });
+        activeIdentities.add(`${info.dev}:${info.ino}`);
+      } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    }
     const obsolete = [...previousRecords, ...Object.values(store.get().career?.applications ?? {}).flatMap(app => app.exports ?? [])];
     for (const record of obsolete) {
       if (!documentURI.test(record.uri) || active.has(record.uri)) continue;
       try {
         const filename = await documentPath(record);
         if (activePaths.has(filename)) continue;
-        assertPrivatePath(filename, { info: await lstat(filename), maxSize: MAX_EXPORT });
+        const info = await lstat(filename);
+        assertPrivatePath(filename, { info, maxSize: MAX_EXPORT });
+        if (activeIdentities.has(`${info.dev}:${info.ino}`)) continue;
         assertAvailable(true);
         await unlink(filename);
         const folder = path.dirname(filename);

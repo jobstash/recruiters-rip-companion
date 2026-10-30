@@ -1,15 +1,23 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { constants, createReadStream } from 'node:fs';
-import { access, chmod, copyFile, lstat, mkdir, open, readFile, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { copyFile as copyBundledFile } from 'node:fs/promises';
 import { spawn, execFile } from 'node:child_process';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import yauzl from 'yauzl';
+import { createSourceUpdateController } from './source-updates.mjs';
 
 const require = createRequire(import.meta.url);
+// Update artifacts and receipts are physical disk objects, never ASAR mounts.
+// Only bundled helper sources below retain Electron's virtual-file resolution.
+const physicalFs = require(process.versions.electron ? 'original-fs' : 'node:fs');
+const { createReadStream, writeFileSync } = physicalFs;
+const disk = physicalFs.promises;
+const { access, chmod, copyFile, lstat, mkdir, open, readFile, realpath, rename, rm, writeFile } = disk;
 const installer = require('./update-install.cjs');
 const { protectPrivatePath } = require('./platform-runtime.cjs');
+const { validateMacExecutable } = require('./update-macho.cjs');
 const REPOSITORY = 'https://github.com/jobstash/recruiters-rip-companion';
 const API = 'https://api.github.com/repos/jobstash/recruiters-rip-companion/releases/latest';
 const PRODUCT = 'Recruiters.rip Companion.app';
@@ -21,7 +29,7 @@ const MAX_RELEASE = 1024 * 1024;
 const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 const DIGEST = /^sha256:([a-fA-F0-9]{64})$/;
 const ASSET_HOSTS = new Set(['release-assets.githubusercontent.com', 'objects.githubusercontent.com']);
-const CHECK_STATES = ['idle', 'available', 'current', 'no-release', 'downloaded', 'error', 'cancelled', 'manual-required', 'launched', 'confirmed', 'rolled-back'];
+const CHECK_STATES = ['idle', 'available', 'current', 'ahead', 'no-release', 'downloaded', 'error', 'cancelled', 'manual-required', 'launched', 'confirmed', 'rolled-back'];
 
 function fail(code, message) { return Object.assign(new Error(message), { code, publicUpdateError: true }); }
 function versionParts(version) {
@@ -195,7 +203,9 @@ function archivePath(name) {
 // Extract regular files before creating any symlinks. Electron framework links
 // are allowed only when their eventual real target stays inside this bundle.
 export async function extractUpdateZip(file, destination, signal) {
-  await mkdir(destination, { mode: 0o700 });
+  // These are physical ZIP entries, including app.asar itself. Electron's
+  // normal fs treats .asar paths as virtual archives, even while creating them.
+  await disk.mkdir(destination, { mode: 0o700 });
   const zip = await new Promise((resolve, reject) => yauzl.open(file, { lazyEntries: true, autoClose: false, decodeStrings: true, strictFileNames: true, validateEntrySizes: true }, (error, result) => error ? reject(error) : resolve(result)));
   const seen = new Set(), links = [];
   let entries = 0, expanded = 0, inputStream = null, entryWork = Promise.resolve();
@@ -220,9 +230,9 @@ export async function extractUpdateZip(file, destination, signal) {
           const isDirectory = entry.fileName.endsWith('/');
           if (![0, 0x8000, 0x4000, 0xa000].includes(kind) || (kind === 0x4000 && !isDirectory) || (isDirectory && ![0, 0x4000].includes(kind))) throw fail('UNSAFE_ARCHIVE', 'The ZIP contains an unsupported file type.');
           const output = path.join(destination, ...parts);
-          if (isDirectory) await mkdir(output, { recursive: true, mode: 0o755 });
+          if (isDirectory) await disk.mkdir(output, { recursive: true, mode: 0o755 });
           else {
-            await mkdir(path.dirname(output), { recursive: true, mode: 0o755 });
+            await disk.mkdir(path.dirname(output), { recursive: true, mode: 0o755 });
             const input = await new Promise((res, rej) => zip.openReadStream(entry, (error, stream) => error ? rej(error) : res(stream)));
             inputStream = input;
             if (kind === 0xa000) {
@@ -235,7 +245,7 @@ export async function extractUpdateZip(file, destination, signal) {
               if (!resolved.startsWith(`/${PRODUCT}/`)) throw fail('UNSAFE_ARCHIVE', 'A ZIP symbolic link escapes the app.');
               links.push({ output, target });
             } else {
-              const handle = await open(output, 'wx', ((entry.externalFileAttributes >>> 16) & 0o111) ? 0o755 : 0o644);
+              const handle = await disk.open(output, 'wx', ((entry.externalFileAttributes >>> 16) & 0o111) ? 0o755 : 0o644);
               try {
                 let written = 0;
                 for await (const chunk of input) {
@@ -256,13 +266,13 @@ export async function extractUpdateZip(file, destination, signal) {
       zip.readEntry();
     });
     throwIfAborted(signal);
-    for (const link of links) { throwIfAborted(signal); await symlink(link.target, link.output); }
+    for (const link of links) { throwIfAborted(signal); await disk.symlink(link.target, link.output); }
     const bundle = path.join(destination, PRODUCT);
     for (const link of links) {
       throwIfAborted(signal);
-      if (!(await realpath(link.output)).startsWith(`${bundle}${path.sep}`)) throw fail('UNSAFE_ARCHIVE', 'An extracted symbolic link escapes the app.');
+      if (!(await disk.realpath(link.output)).startsWith(`${bundle}${path.sep}`)) throw fail('UNSAFE_ARCHIVE', 'An extracted symbolic link escapes the app.');
     }
-    if (!(await lstat(bundle)).isDirectory()) throw fail('INVALID_BUNDLE', 'The update ZIP contains no companion app.');
+    if (!(await disk.lstat(bundle)).isDirectory()) throw fail('INVALID_BUNDLE', 'The update ZIP contains no companion app.');
     return bundle;
   } finally {
     signal.removeEventListener('abort', abort);
@@ -274,8 +284,8 @@ export async function extractUpdateZip(file, destination, signal) {
 
 function system(binary, args, signal) {
   return new Promise((resolve, reject) => {
-    execFile(binary, args, { signal, timeout: 90000, maxBuffer: 128 * 1024, env: { PATH: '/usr/bin:/bin:/usr/sbin:/sbin', TMPDIR: '/tmp' } }, (error, stdout) => {
-      if (error) reject(fail('BUNDLE_VALIDATION_FAILED', 'macOS could not validate the update app. Keep the existing app and use a compatible release.'));
+    execFile(binary, args, { signal, timeout: 90000, maxBuffer: 128 * 1024, env: installer.launchEnvironment() }, (error, stdout) => {
+      if (error) reject(fail('BUNDLE_VALIDATION_FAILED', 'The operating system could not validate the installed app. Keep the existing app and use a compatible release.'));
       else resolve(stdout.trim());
     });
   });
@@ -289,13 +299,17 @@ async function validateBundle(bundle, version, signal, { signature = true } = {}
   if (!executable || executable === '.' || executable === '..' || /[\/\\:\x00-\x1f]/.test(executable)) throw fail('INVALID_BUNDLE', 'The update app has an invalid executable.');
   const binary = path.join(bundle, 'Contents', 'MacOS', executable);
   if (!(await lstat(binary)).isFile() || !(await realpath(binary)).startsWith(`${bundle}${path.sep}`)) throw fail('INVALID_BUNDLE', 'The update app executable is missing or unsafe.');
-  await system('/usr/bin/lipo', ['-verify_arch', 'arm64', binary], signal);
+  try { await validateMacExecutable(binary, signal); }
+  catch (error) {
+    if (error.code !== 'INVALID_MACHO') throw error;
+    throw fail('INVALID_BUNDLE', 'The app does not contain a valid Apple silicon executable.');
+  }
   if (signature) await system('/usr/bin/codesign', ['--verify', '--deep', '--strict', bundle], signal);
   // A valid ad-hoc signature is allowed. This does not assert Apple notarization.
   return binary;
 }
 
-async function launchHelper(helper, journal, executable, signal) {
+async function launchHelper(helper, journal, executable, signal, acquireAdmission) {
   const child = spawn(executable, [helper, journal.journal], { detached: true, env: installer.minimalEnvironment(), stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
   try {
     await abortable(new Promise((resolve, reject) => {
@@ -303,6 +317,8 @@ async function launchHelper(helper, journal, executable, signal) {
       child.once('exit', () => reject(fail('HELPER_FAILED', 'The update helper exited before handover. The existing app was not replaced.')));
       child.once('message', message => message?.type === 'ready' ? resolve() : reject(fail('HELPER_FAILED', 'The update helper could not prepare the replacement.')));
     }), signal);
+    const admission = await acquireAdmission();
+    if (admission && !admission.valid()) throw fail('INSTALL_DEFERRED', 'The update is waiting until the app is idle.');
     throwIfAborted(signal);
     await abortable(new Promise((resolve, reject) => child.send({ type: 'commit' }, error => error ? reject(error) : resolve())), signal);
     child.unref();
@@ -311,10 +327,65 @@ async function launchHelper(helper, journal, executable, signal) {
   } catch (error) { child.kill(); throw error; }
 }
 
-export function createUpdateController({ version, platform = process.platform, arch = process.arch, directory, appPath, packaged, pid = process.pid, authorize, quit, fetchImpl = globalThis.fetch, onChange = () => {} }) {
+const powershell = () => path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+const encodePowerShell = source => Buffer.from(source, 'utf16le').toString('base64');
+const encodedCommand = source => ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', encodePowerShell(source)];
+const powerShellString = value => `'${value.replaceAll("'", "''")}'`;
+
+async function launchNativeHelper(helper, journal, signal, acquireAdmission) {
+  const work = path.dirname(journal.journal);
+  const command = journal.platform === 'win32' ? powershell() : '/bin/sh';
+  // Node's detached Windows PowerShell exits before running any script, while
+  // an attached child dies with the app. Start-Process hands the helper to
+  // Windows; reading the copied file keeps the command under OS length limits.
+  const helperCommand = `& ([ScriptBlock]::Create([IO.File]::ReadAllText(${powerShellString(helper)}))) -Journal ${powerShellString(journal.journal)}`;
+  const args = journal.platform === 'win32'
+    ? encodedCommand(`$ErrorActionPreference='Stop'; Start-Process -FilePath ${powerShellString(powershell())} -WindowStyle Hidden -ArgumentList @('-NoLogo','-NoProfile','-NonInteractive','-EncodedCommand',${powerShellString(encodePowerShell(helperCommand))})`)
+    : [helper, work, journal.target, journal.staged, journal.backup, String(journal.pid), journal.digest, journal.id, journal.userData, journal.lock.file];
+  const lockHandle = journal.platform === 'linux' ? await open(journal.lock.file, constants.O_CREAT | constants.O_RDWR | constants.O_NOFOLLOW, 0o600) : null;
+  let child, spawnError, helperStderr = '';
+  try {
+    if (lockHandle) {
+      const info = await lockHandle.stat();
+      if (!info.isFile() || info.nlink !== 1 || await realpath(journal.lock.file) !== journal.lock.file) throw fail('INVALID_TARGET', 'The installation exclusion file is unsafe.');
+    }
+    child = spawn(command, args, { detached: journal.platform !== 'win32', env: installer.launchEnvironment(), stdio: lockHandle ? ['ignore', 'ignore', 'pipe', lockHandle.fd] : ['ignore', 'ignore', 'pipe'] });
+    child.stderr.on('data', bytes => { if (helperStderr.length < 8192) helperStderr += bytes.toString('utf8').slice(0, 8192 - helperStderr.length); });
+    child.once('error', error => { spawnError = error; });
+  } finally { await lockHandle?.close(); }
+  try {
+    const deadline = Date.now() + 30000;
+    for (;;) {
+      throwIfAborted(signal);
+      if (spawnError) throw spawnError;
+      const launcherFailed = child.exitCode !== null && (journal.platform !== 'win32' || child.exitCode !== 0);
+      if (launcherFailed || child.signalCode || Date.now() >= deadline) {
+        const error = fail('HELPER_FAILED', 'The native updater could not prepare this installation. Use the release installer.');
+        error.cause = new Error(helperStderr.trim() || `Native helper did not become ready (exit ${child.exitCode}, signal ${child.signalCode}).`);
+        throw error;
+      }
+      try {
+        const ready = path.join(work, 'ready');
+        const info = await lstat(ready);
+        if (!info.isFile() || info.isSymbolicLink() || info.size !== 32 || await readFile(ready, 'utf8') !== journal.id) throw fail('HELPER_FAILED', 'Invalid native updater handover.');
+        break;
+      } catch (error) { if (error.code !== 'ENOENT') throw error; }
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    const admission = await acquireAdmission();
+    throwIfAborted(signal);
+    if (admission && !admission.valid()) throw fail('INSTALL_DEFERRED', 'The update is waiting until the app is idle.');
+    writeFileSync(path.join(work, 'commit'), journal.id, { flag: 'wx', mode: 0o600 });
+    child.stderr.unref();
+    child.unref();
+  } catch (error) { child.kill(); throw error; }
+}
+
+export function createUpdateController({ version, platform = process.platform, arch = process.arch, directory, appPath, packaged, sourceRoot, pid = process.pid, quit, fetchImpl = globalThis.fetch, onChange = () => {}, acquireInstallAdmission }) {
+  if (!packaged && sourceRoot) return createSourceUpdateController({ version, sourceRoot, directory, pid, quit, fetchImpl, onChange, acquireInstallAdmission });
   versionParts(version);
   if (typeof directory !== 'string' || !path.isAbsolute(directory)) throw fail('INVALID_DIRECTORY', 'A private absolute update directory is required.');
-  let view = { version, latestVersion: null, status: 'idle', progress: null, releaseUrl: null, error: null };
+  let view = { version, latestVersion: null, status: 'idle', progress: null, releaseUrl: null, error: null, automaticSupported: false, automaticReason: 'Checking this installation.' };
   let active = null, initialized = false, release = null, downloaded = null, handover = false;
   const activeFile = path.join(directory, 'active.json');
   const state = () => structuredClone(view);
@@ -352,18 +423,59 @@ export function createUpdateController({ version, platform = process.platform, a
 
   function requireInitialized() { if (!initialized) throw fail('NOT_INITIALIZED', 'Initialize updates before checking or installing.'); }
 
+  async function automaticSupport(signal) {
+    let reason = null;
+    try {
+      if (!packaged) throw new Error('Run the source installer once to enable automatic updates.');
+      if (!appPath) throw new Error('Reinstall the app to enable automatic updates.');
+      if (platform !== process.platform || !((platform === 'darwin' && arch === 'arm64') || (['win32', 'linux'].includes(platform) && arch === 'x64'))) throw new Error('Automatic updates are not supported on this platform.');
+      const target = path.resolve(appPath), parent = path.dirname(target);
+      if (target !== appPath || await realpath(target) !== target || await realpath(parent) !== parent || parent === target ||
+          target.split(path.sep).includes('node_modules') || directory === target || directory.startsWith(`${target}${path.sep}`)) throw new Error('Install the app in a real application folder, not a linked or source directory.');
+      const info = await lstat(target);
+      if (platform === 'linux') {
+        if (!info.isFile() || !target.endsWith('.AppImage') || process.env.APPIMAGE !== target || !process.env.APPDIR ||
+            !(await realpath(process.execPath)).startsWith(`${await realpath(process.env.APPDIR)}${path.sep}`)) throw new Error('Run the installed AppImage to enable automatic updates.');
+        await access(target, constants.X_OK);
+      } else {
+        if (!info.isDirectory() || !(await realpath(process.execPath)).startsWith(`${target}${path.sep}`)) throw new Error('Only the currently running installed app can update itself.');
+        if (platform === 'darwin') {
+          if (!target.endsWith('.app')) throw new Error('Install the app bundle in Applications first.');
+          await validateBundle(target, version, signal, { signature: false });
+        } else {
+          if (path.dirname(process.execPath) !== target || path.basename(process.execPath) !== 'Recruiters.rip Companion.exe') throw new Error('Run the installed Windows companion to enable automatic updates.');
+          const literal = target.replaceAll("'", "''");
+          const result = await system(powershell(), encodedCommand(`$u=@(Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -eq ('Recruiters.rip Companion ' + $_.DisplayVersion) -and $_.UninstallString -match '^"([^"]+)"' -and [IO.Path]::GetDirectoryName($Matches[1]) -eq '${literal}' }); $m=@(Get-ItemProperty 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -eq ('Recruiters.rip Companion ' + $_.DisplayVersion) }); if ($u.Count -eq 1 -and $m.Count -eq 0) { 'per-user' }`), signal);
+          if (result !== 'per-user') throw new Error('Use the Windows installer for a per-user installation; administrator-managed installations require manual updates.');
+          await access(target, constants.W_OK);
+        }
+      }
+      if (platform !== 'win32' && ((await lstat(parent)).mode & 0o002)) throw new Error('Move the app out of the shared writable folder to enable automatic updates.');
+      await access(parent, constants.W_OK | constants.X_OK);
+    } catch (error) {
+      if (signal.aborted) throw error;
+      reason = ['EACCES', 'EPERM', 'EROFS'].includes(error.code) ? 'The installation is read-only. Move the app to a writable application folder or install the release manually.' : error.publicUpdateError ? error.message : error.code ? 'This installation cannot be updated automatically. Install the packaged release in a writable application folder.' : error.message;
+    }
+    update({ automaticSupported: !reason, automaticReason: reason });
+    return !reason;
+  }
+
   function initialize() {
     return operate('initialize updates', ['idle', 'error', 'manual-required', 'launched'], 120000, async signal => {
       initialized = false;
       await privateDirectory(directory);
+      await automaticSupport(signal);
       const journal = await readActive();
       if (journal) {
         if (!packaged || !appPath || path.resolve(appPath) !== journal.target) throw fail('INVALID_RECEIPT', 'This update receipt belongs to a different installation. No app was changed.');
         await installer.validatePaths(journal, { recovery: true });
         update({ latestVersion: journal.version, releaseUrl: `${REPOSITORY}/releases` });
-        if (version === journal.version && ['launching', 'launched', 'unconfirmed', 'confirmed'].includes(journal.status)) {
-          if (!(await realpath(process.execPath)).startsWith(`${journal.target}${path.sep}`)) throw fail('INVALID_TARGET', 'Only startup from the updated installed app can confirm its installation.');
-          await validateBundle(journal.target, version, signal);
+        if (version === journal.version && ['swapping', 'installing', 'launching', 'launched', 'unconfirmed', 'confirmed'].includes(journal.status)) {
+          if (platform === 'linux') {
+            if (process.env.APPIMAGE !== journal.target || !process.env.APPDIR || !(await realpath(process.execPath)).startsWith(`${await realpath(process.env.APPDIR)}${path.sep}`)) throw fail('INVALID_TARGET', 'Only the updated AppImage can confirm startup.');
+            if (await digestFile(journal.target, signal) !== journal.digest) throw fail('CHECKSUM_MISMATCH', 'The installed AppImage changed before startup confirmation.');
+          } else if (!(await realpath(process.execPath)).startsWith(`${journal.target}${path.sep}`)) throw fail('INVALID_TARGET', 'Only startup from the updated installed app can confirm its installation.');
+          if (platform === 'darwin') await validateBundle(journal.target, version, signal);
           await installer.confirmUpdate(journal);
           // Only a startup of the exact staged version retires its old backup.
           await rm(journal.backup, { recursive: true, force: true });
@@ -371,6 +483,8 @@ export function createUpdateController({ version, platform = process.platform, a
           update({ status: 'confirmed' });
         } else if (journal.status === 'rolled-back') {
           update({ status: 'rolled-back', error: { code: 'ROLLED_BACK', message: 'The previous app was restored because the update could not be installed or launched. Check the release page before trying again.' } });
+        } else if (journal.status === 'failed') {
+          update({ status: 'error', error: { code: 'INSTALL_FAILED', message: 'The previous update stopped before replacement. Your installed app is unchanged; check for updates to try again.' } });
         } else if (['swapping', 'launching'].includes(journal.status)) {
           // A helper crash between renames can leave the original name absent.
           // Recovery never replaces a running target; restore only if missing.
@@ -398,6 +512,8 @@ export function createUpdateController({ version, platform = process.platform, a
       await initialize();
       if (!initialized) return state();
     }
+    // Keep the verified pending release while the scheduler waits for idle.
+    if (downloaded && view.status === 'downloaded') return state();
     return operate('check for updates', CHECK_STATES, 30000, async signal => {
       requireInitialized();
       update({ status: 'checking', progress: null, error: null, latestVersion: null, releaseUrl: `${REPOSITORY}/releases` });
@@ -413,7 +529,8 @@ export function createUpdateController({ version, platform = process.platform, a
       try { metadata = JSON.parse(await boundedText(response, MAX_RELEASE, signal)); }
       catch (error) { if (signal.aborted || error.code) throw error; throw fail('INVALID_RELEASE', 'GitHub returned malformed release metadata.'); }
       release = validateRelease(metadata, { platform, arch });
-      return update({ latestVersion: release.version, releaseUrl: release.releaseUrl, status: compareVersions(release.version, version) > 0 ? 'available' : 'current' });
+      const comparison = compareVersions(release.version, version);
+      return update({ latestVersion: release.version, releaseUrl: release.releaseUrl, status: comparison > 0 ? 'available' : comparison < 0 ? 'ahead' : 'current' });
     });
   }
 
@@ -454,77 +571,95 @@ export function createUpdateController({ version, platform = process.platform, a
         return update({ status: 'downloaded', progress: null });
       } catch (error) {
         if (handle) await handle.close().catch(() => {});
-        await rm(partial, { force: true });
-        await rm(file, { force: true });
+        const cleanup = await Promise.allSettled([rm(partial, { force: true }), rm(file, { force: true })]);
+        const failed = cleanup.find(result => result.status === 'rejected');
+        if (failed) error.cleanupError = failed.reason;
         throw error;
       }
     });
   }
 
-  function install() {
+  function install({ automatic = false } = {}) {
     return operate('install an update', ['downloaded', 'manual-required'], 6 * 60 * 1000, async signal => {
       requireInitialized();
       if (!downloaded || !release || downloaded.version !== release.version) throw fail('INVALID_STATE', 'Download and verify an update before installing.');
       const info = await lstat(downloaded.file);
       if (!info.isFile() || info.isSymbolicLink() || info.size !== release.asset.size || await digestFile(downloaded.file, signal) !== downloaded.digest) throw fail('CHECKSUM_MISMATCH', 'The saved update no longer matches its checksum. Download it again before installing.');
-      if (typeof authorize !== 'function') throw fail('APPROVAL_REQUIRED', 'Installing an update requires explicit approval in the companion.');
-      const replaceable = platform === 'darwin' && arch === 'arm64' && packaged && appPath;
-      update({ status: 'awaiting-approval', error: null });
-      const approved = await abortable(authorize({ action: 'install-update', version, latestVersion: release.version,
-        message: replaceable
-          ? `Replace ${appPath}\nVersion ${version} → ${release.version}\n\nThe companion will close and reopen.`
-          : platform === 'win32'
-            ? `Open the verified Recruiters.rip Companion ${release.version} Windows installer?\nFinish installation in the installer window. This download is not represented as code-signed.\n${downloaded.file}`
-            : platform === 'linux'
-              ? `Show the verified Recruiters.rip Companion ${release.version} AppImage for manual installation?\nQuit the companion, move this executable AppImage to your preferred application folder, then run it. Saved data stays in place.\n${downloaded.file}`
-              : `Open Recruiters.rip Companion ${release.version} ZIP for manual installation?\n${downloaded.file}` }), signal);
-      if (approved !== true) return update({ status: 'downloaded', error: { code: 'APPROVAL_DECLINED', message: 'The update was not installed. The verified download is ready when you choose to install it.' } });
-      const manual = message => { update({ status: 'manual-required', error: { code: 'MANUAL_INSTALL_REQUIRED', message } }); return { manualPath: downloaded.file }; };
-      if (platform === 'win32') return manual('The verified Windows installer is ready. Complete its installation steps, closing the companion when requested. Your saved data is retained; this is not an automatic replacement or a claim of code signing.');
-      if (platform === 'linux') {
-        await chmod(downloaded.file, 0o700);
-        return { ...manual('The verified executable AppImage is shown in your file manager. Quit the companion, move it to your preferred application folder and run it instead of the previous AppImage. Your saved data is retained.'), reveal: true };
+      const manual = message => { update({ status: 'manual-required', error: { code: 'MANUAL_INSTALL_REQUIRED', message } }); return { manualPath: downloaded.file, ...(platform === 'linux' ? { reveal: true } : {}) }; };
+      if (!await automaticSupport(signal)) {
+        if (platform === 'linux') await chmod(downloaded.file, 0o700);
+        return manual(view.automaticReason);
       }
-      if (!packaged || !appPath) return manual('This is not a packaged macOS Apple silicon installation. Open the verified ZIP and install its app manually; this source checkout will not be replaced.');
       if (!Number.isSafeInteger(pid) || pid < 1 || typeof quit !== 'function') throw fail('INVALID_CONFIGURATION', 'The companion cannot safely hand over this update. Use the release page to install manually.');
-      const target = path.resolve(appPath);
-      if (!target.endsWith('.app') || target !== appPath || await realpath(target) !== target || !(await lstat(target)).isDirectory()) throw fail('INVALID_TARGET', 'Updates can replace only the actual installed app bundle, never a source checkout or linked app.');
-      if (target.split(path.sep).includes('node_modules') || directory === target || directory.startsWith(`${target}${path.sep}`)) throw fail('INVALID_TARGET', 'The update target or private staging directory is unsafe. Use the release installer.');
-      if (!(await realpath(process.execPath)).startsWith(`${target}${path.sep}`)) throw fail('INVALID_TARGET', 'Updates can replace only the app that is currently running, not a different app or a source checkout.');
-      await validateBundle(target, version, signal, { signature: false });
+      const target = appPath;
       const parent = path.dirname(target);
-      if (await realpath(parent) !== parent) throw fail('INVALID_TARGET', 'The app installation directory is linked. Use the release installer to update manually.');
-      if ((await lstat(parent)).mode & 0o002) return manual('The app is in a shared writable directory. Move it to Applications or install the verified ZIP manually.');
-      try { await access(parent, constants.W_OK | constants.X_OK); }
-      catch { return manual('The installed app directory is not writable. Open the verified ZIP and replace the app using Finder with the permissions it requires.'); }
       const previous = await readActive();
-      if (previous && !['confirmed', 'rolled-back', 'failed'].includes(previous.status)) return manual('A previous update is still unconfirmed. Quit the companion and reinstall from the verified ZIP; the retained previous app will not be overwritten.');
+      if (previous && !['confirmed', 'rolled-back', 'failed'].includes(previous.status)) return manual('A previous update is still unconfirmed. The previous app is retained; quit and reinstall the release if startup recovery does not finish.');
       const id = randomBytes(16).toString('hex');
       const work = path.join(directory, `install-${id}`);
-      const staged = path.join(parent, `.recruiters-update-${id}.app`);
-      const backup = path.join(parent, `.recruiters-backup-${id}.app`);
-      let committed = false, stagedOwned = false;
+      const suffix = platform === 'linux' ? '.AppImage' : platform === 'win32' ? '' : '.app';
+      const staged = path.join(parent, `.recruiters-update-${id}${suffix}`);
+      const backup = path.join(parent, `.recruiters-backup-${id}${suffix}`);
+      let committed = false, stagedOwned = false, admission = null;
+      const acquireAdmission = async () => {
+        if (typeof acquireInstallAdmission !== 'function') {
+          if (automatic) throw fail('INSTALL_DEFERRED', 'Automatic installation is waiting for idle admission.');
+          return null; // Explicit manual harnesses have already admitted their operation.
+        }
+        throwIfAborted(signal);
+        const pending = Promise.resolve(acquireInstallAdmission({ automatic })).then(token => {
+          if (signal.aborted) { token?.release?.(); throw signal.reason; }
+          admission = token;
+          return token;
+        });
+        await abortable(pending, signal);
+        if (!admission || typeof admission.valid !== 'function' || typeof admission.release !== 'function' || !admission.valid()) throw fail('INSTALL_DEFERRED', 'The update is waiting until the app is idle.');
+        return admission;
+      };
       await mkdir(work, { mode: 0o700 });
       try {
         update({ status: 'staging' });
-        const extracted = await extractUpdateZip(downloaded.file, path.join(work, 'extract'), signal);
-        await validateBundle(extracted, release.version, signal);
-        // ditto preserves the signed app's framework links and executable modes.
-        // Destination is an unpredictable sibling, never an existing app.
-        await mkdir(staged, { mode: 0o700 });
-        stagedOwned = true;
-        await system('/usr/bin/ditto', [extracted, staged], signal);
-        await validateBundle(staged, release.version, signal);
-        await rm(path.join(work, 'extract'), { recursive: true, force: true });
-        const journal = { schema: 1, id, version: release.version, previousVersion: version, pid, target, staged, backup, journal: path.join(work, 'journal.json') };
+        let executable = path.basename(process.execPath);
+        if (platform === 'darwin') {
+          const extracted = await extractUpdateZip(downloaded.file, path.join(work, 'extract'), signal);
+          await validateBundle(extracted, release.version, signal);
+          await mkdir(staged, { mode: 0o700 });
+          stagedOwned = true;
+          await system('/usr/bin/ditto', [extracted, staged], signal);
+          executable = path.basename(await validateBundle(staged, release.version, signal));
+          await rm(path.join(work, 'extract'), { recursive: true, force: true });
+        } else if (platform === 'linux') {
+          await copyFile(downloaded.file, staged, constants.COPYFILE_EXCL);
+          stagedOwned = true;
+          await chmod(staged, 0o700);
+          if (await digestFile(staged, signal) !== downloaded.digest) throw fail('CHECKSUM_MISMATCH', 'The staged AppImage failed its checksum.');
+          const handle = await open(staged, 'r');
+          try {
+            const header = Buffer.alloc(20); await handle.read(header, 0, header.length, 0);
+            if (header.subarray(0, 4).toString('hex') !== '7f454c46' || header[4] !== 2 || header[5] !== 1 || header.readUInt16LE(18) !== 62 || header.subarray(8, 11).toString('hex') !== '414902') throw fail('INVALID_BUNDLE', 'The release is not a supported x64 AppImage.');
+          } finally { await handle.close(); }
+        } else {
+          await copyFile(downloaded.file, path.join(work, 'installer.exe'), constants.COPYFILE_EXCL);
+        }
+        const journal = { schema: 1, platform, id, version: release.version, previousVersion: version, pid, target, staged, backup, executable, userData: path.dirname(directory),
+          digest: downloaded.digest, lock: installer.installationLock(target), ...(platform === 'win32' ? { installer: path.join(work, 'installer.exe') } : {}), journal: path.join(work, 'journal.json') };
         await installer.writeJournal(journal, 'staged');
-        const helper = path.join(work, 'update-install.cjs');
-        await copyFile(fileURLToPath(new URL('./update-install.cjs', import.meta.url)), helper, constants.COPYFILE_EXCL);
+        if (platform === 'linux') {
+          for (const status of ['swapping', 'launching', 'launched', 'confirmed', 'unconfirmed', 'rolled-back', 'failed']) {
+            await writeFile(path.join(work, `receipt-${status}.json`), JSON.stringify({ ...journal, status }), { mode: 0o600 });
+          }
+          await writeFile(path.join(work, 'expected-confirmation.json'), JSON.stringify({ id, version: release.version }), { mode: 0o600 });
+        }
+        const helperName = platform === 'win32' ? 'update-install.ps1' : platform === 'linux' ? 'update-install.sh' : 'update-install.cjs';
+        const helper = path.join(work, helperName);
+        await copyBundledFile(fileURLToPath(new URL(`./${helperName}`, import.meta.url)), helper, constants.COPYFILE_EXCL);
         await chmod(helper, 0o600);
+        if (platform === 'darwin') await copyBundledFile(fileURLToPath(new URL('./update-install-lock.cjs', import.meta.url)), path.join(work, 'update-install-lock.cjs'), constants.COPYFILE_EXCL);
         await writeFile(`${activeFile}.tmp`, JSON.stringify({ id }), { mode: 0o600 });
         await rename(`${activeFile}.tmp`, activeFile);
         throwIfAborted(signal);
-        await launchHelper(helper, journal, process.execPath, signal);
+        if (platform === 'darwin') await launchHelper(helper, journal, process.execPath, signal, acquireAdmission);
+        else await launchNativeHelper(helper, journal, signal, acquireAdmission);
         committed = true;
         handover = true;
         update({ status: 'installing' });
@@ -534,10 +669,15 @@ export function createUpdateController({ version, platform = process.platform, a
         return state();
       } catch (error) {
         if (!committed) {
-          if (stagedOwned) await rm(staged, { recursive: true, force: true });
-          await rm(work, { recursive: true, force: true });
-          await rm(activeFile, { force: true });
-          if (['EACCES', 'EPERM', 'EROFS'].includes(error.code)) return manual('The app directory could not be updated. Open the verified ZIP and replace the app manually using Finder.');
+          admission?.release?.();
+          const cleanup = await Promise.allSettled([
+            ...(stagedOwned ? [rm(staged, { recursive: true, force: true })] : []),
+            rm(work, { recursive: true, force: true }), rm(activeFile, { force: true }),
+          ]);
+          const failed = cleanup.find(result => result.status === 'rejected');
+          if (failed) { error.cleanupError = failed.reason; throw error; }
+          if (error.code === 'INSTALL_DEFERRED') return update({ status: 'downloaded', progress: null, error: null });
+          if (['EACCES', 'EPERM', 'EROFS'].includes(error.code)) return manual('The installation directory could not be updated. Install the verified release manually with the required permissions.');
         }
         throw error;
       }
@@ -545,7 +685,7 @@ export function createUpdateController({ version, platform = process.platform, a
   }
 
   async function cancel() {
-    if (handover) throw fail('INVALID_STATE', 'The approved update has already been handed to the installer.');
+    if (handover) throw fail('INVALID_STATE', 'The update has already been handed to the installer.');
     if (!active || active.name === 'initialize updates') throw fail('INVALID_STATE', 'There is no cancellable update operation.');
     const pending = active.promise;
     active.controller.abort(fail('CANCELLED', 'The update was cancelled. The installed app and saved data were not changed.'));

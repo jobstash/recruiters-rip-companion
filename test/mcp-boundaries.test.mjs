@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, rm, readFile, writeFile, chmod, symlink, mkdir, rename, readdir } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, writeFile, chmod, symlink, mkdir, rename, readdir, lstat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -448,4 +448,25 @@ test('generated cleanup only removes obsolete generated files and refuses linked
   await assert.rejects(f.files.resolveExport(cv.uri), { code: 'EXPORT_CORRUPT' });
   await assert.rejects(f.files.listResources(), { code: 'EXPORT_CORRUPT' });
   assert.ok((await readFile(path.join(moved, path.basename(cv.path)))).subarray(0, 5).equals(Buffer.from('%PDF-')));
+});
+
+test('case-only candidate renames preserve the current PDF bytes, URI and listing', async t => {
+  const f = await readableDocuments(t, { candidate: 'Jane Candidate' });
+  const old = await f.publish('first', 'cv');
+  const alias = path.join(path.dirname(old.path), 'JANE Candidate - CV.pdf');
+  let caseInsensitive = false;
+  try { const a = await lstat(old.path), b = await lstat(alias); caseInsensitive = a.dev === b.dev && a.ino === b.ino; }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  await f.store.update(state => { state.career.profile.name = 'JANE Candidate'; state.career.applications.first.cv.version++; });
+  const bytes = Buffer.from('%PDF-1.7\\nCurrent case-only replacement\\n%%EOF');
+  const current = await f.publish('first', 'cv', bytes);
+  assert.notEqual(current.path, old.path);
+  assert.deepEqual(await readFile(current.path), bytes);
+  assert.equal(await f.files.resolveExport(current.uri), current.path);
+  assert.equal((await f.files.readResource(current.uri)).blob, bytes.toString('base64'));
+  assert.deepEqual((await f.files.listResources()).map(item => item.uri), [current.uri]);
+  if (caseInsensitive) {
+    const a = await lstat(old.path), b = await lstat(current.path);
+    assert.equal(a.dev, b.dev); assert.equal(a.ino, b.ino);
+  }
 });

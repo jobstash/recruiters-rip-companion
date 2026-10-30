@@ -7,7 +7,7 @@ import path from 'node:path';
 import net from 'node:net';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { endpoint, deviceDirectory, connectAuthenticated, createAuthenticationChallenge, verifyAuthenticationProof } from '../src/platform-runtime.cjs';
+import { endpoint, deviceDirectory, protectPrivatePath, connectAuthenticated, createAuthenticationChallenge, verifyAuthenticationProof } from '../src/platform-runtime.cjs';
 import { privateDirectory } from '../src/vault.mjs';
 import { startMcpBroker } from '../src/mcp/broker.mjs';
 import { BROWSER_IDENTITIES } from '../src/browser-identity.mjs';
@@ -54,11 +54,17 @@ for (const channel of ['native', 'mcp']) test(`${channel} client withholds its p
   const env = { ...process.env, HOME: home, USERPROFILE: home, APPDATA: path.join(home, 'Roaming'), XDG_CONFIG_HOME: path.join(home, 'config') };
   const directory = deviceDirectory({ env, home });
   await privateDirectory(directory);
+  const selected = await realpath(directory), userData = path.dirname(selected);
   const socketPath = await privateEndpoint(directory, channel, t);
+  assert.equal(socketPath, endpoint(selected, channel), 'Short and canonical profile paths must identify the same endpoint.');
   const stub = path.join(home, 'synthetic-app.cjs'); await writeFile(stub, '');
-  if (channel === 'mcp') await writeFile(path.join(directory, 'mcp-launch.json'), JSON.stringify({ executable: process.execPath, args: [stub], localOnly: false }), { mode: 0o600 });
-  else await writeFile(path.join(directory, 'native-config.json'), JSON.stringify({ executable: process.execPath, appPath: stub, directory, packaged: false, localOnly: false }), { mode: 0o600 });
+  if (channel === 'mcp') await writeFile(path.join(directory, 'mcp-launch.json'), JSON.stringify({ executable: process.execPath,
+    args: [stub, `--user-data-dir=${userData}`], directory: selected, userData, localOnly: false }), { mode: 0o600 });
+  else await writeFile(path.join(directory, 'native-config.json'), JSON.stringify({ executable: process.execPath, appPath: stub, directory: selected, userData, packaged: false, localOnly: false }), { mode: 0o600 });
   await writeFile(path.join(directory, channel === 'mcp' ? 'mcp-bridge.json' : 'bridge.json'), JSON.stringify({ socket: socketPath, token }), { mode: 0o600 });
+  // Match production's explicit file DACLs, not only POSIX mode bits.
+  protectPrivatePath(path.join(directory, channel === 'mcp' ? 'mcp-launch.json' : 'native-config.json'));
+  protectPrivatePath(path.join(directory, channel === 'mcp' ? 'mcp-bridge.json' : 'bridge.json'));
   const captured = [];
   let disconnected;
   const rejected = new Promise(resolve => { disconnected = resolve; });
@@ -76,13 +82,18 @@ for (const channel of ['native', 'mcp']) test(`${channel} client withholds its p
   await new Promise((resolve, reject) => { fake.once('error', reject); fake.listen(socketPath, resolve); });
   t.after(() => { for (const peer of peers) peer.destroy(); fake.close(); });
   const script = fileURLToPath(new URL(channel === 'mcp' ? '../src/mcp/local-runner.cjs' : '../src/native-host.cjs', import.meta.url));
-  const args = channel === 'mcp' ? [] : [path.join(directory, 'native-config.json'), `chrome-extension://${BROWSER_IDENTITIES.production.extensionId}/`];
+  // Windows clients may receive case/short-name aliases; generated config uses
+  // the native canonical name. Both must connect to the same protected profile.
+  const selectedAlias = process.platform === 'win32' ? selected.toUpperCase() : selected;
+  const configAlias = path.join(process.platform === 'win32' ? directory.toUpperCase() : directory, 'native-config.json');
+  const args = channel === 'mcp' ? [`--directory=${selectedAlias}`] : [configAlias, `chrome-extension://${BROWSER_IDENTITIES.production.extensionId}/`];
   const child = spawn(process.execPath, [script, ...args], { env, stdio: ['pipe', 'ignore', 'ignore'] });
-  const exited = new Promise(resolve => child.once('exit', resolve));
+  const exited = new Promise((resolve, reject) => { child.once('exit', resolve); child.once('error', reject); });
   t.after(() => child.kill());
   child.stdin.on('error', () => {});
   child.stdin.write(frame(channel, { privateApplication: 'private-career-sentinel' }));
-  await rejected; child.kill(); await exited;
+  await Promise.race([rejected, exited.then(code => { throw new Error(`Client exited (${code}) before rejecting the impersonating endpoint.`); })]);
+  child.kill(); await exited;
   const bytes = Buffer.concat(captured), first = message(channel, bytes);
   assert.deepEqual(Object.keys(first), ['hello']);
   assert.match(first.hello, /^[a-f0-9]{64}$/);

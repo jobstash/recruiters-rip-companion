@@ -265,6 +265,8 @@ summary:hover { color: var(--color-ink); }
 #decisions-key-message:empty { display: none; }
 
 .update-content { gap: var(--spacing-16); }
+.update-preference { display: flex; align-items: center; gap: var(--spacing-8); min-height: 44px; color: var(--color-ink); cursor: pointer; }
+.update-preference input { width: auto; margin: 0; accent-color: var(--color-ink); flex: 0 0 auto; }
 #update-progress { width: 100%; max-width: var(--reading); accent-color: var(--color-ink); }
 #update-status, #update-error { white-space: pre-wrap; }
 

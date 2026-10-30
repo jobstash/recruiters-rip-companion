@@ -1,17 +1,17 @@
 # Recruiters.rip Companion
 
-Companion keeps your CVs and applications on your computer. Use Codex or Claude to find suitable jobs and write tailored applications. An optional Chrome or Firefox extension helps with application forms.
+Companion keeps your CVs and applications on your computer. Use Codex or Claude to find suitable jobs, tailor your documents and apply for you. Install a ready-made app or build it from the [public source code](https://github.com/jobstash/recruiters-rip-companion).
 
 
 ## Start here
 
-You need Companion, a readable CV, and your own Codex or Claude account. Downloads and new recruiters.rip jobs require a membership; any plan required by your AI app is billed separately. The browser extension is optional.
+You need Companion, a readable CV, and your own Codex or Claude account. The same account and subscription requirements apply whether you download the app or build it from source. Any charges for your AI app are separate. The browser extension is optional.
 
 ### 1. Install Companion
 
-Open [Downloads](https://recruiters.rip/downloads) and choose **Mac**, **Windows** or **Linux**. Check availability before paying for a membership, then follow the steps for your computer. Only the validated Mac and Chrome downloads are currently published; Windows, Linux and Firefox support in this source does not mean their downloads are available yet.
+Open [Downloads](https://recruiters.rip/downloads) and choose **Mac**, **Windows** or **Linux**, then follow the steps for your computer. Prefer to build it yourself? Use the [one-command source installation](#install-from-source).
 
-| Computer | When its download is available |
+| Computer | Install the app |
 | --- | --- |
 | Mac with an M1 chip or newer | Open the download, move **Recruiters.rip Companion** to **Applications**, then open it. |
 | Windows 10 or newer | Open the downloaded installer, follow its steps, then open **Recruiters.rip Companion** from Start. |
@@ -60,11 +60,11 @@ Keep Companion open. In **Settings → AI apps**, follow the instructions for yo
 Choose **Continue in Codex** or **Continue in Claude**, then send the message there. Companion will show **Connected now** when the connection is working.
 </details>
 
-### 6. Prepare your application
+### 6. Apply for a job
 
-Choose a job with your AI and ask: **Create a CV and cover letter for this job using my saved CV and answers. Ask about anything missing, then save both as PDFs.**
+Choose a job with your AI and ask: **Use recruiters.rip to apply for this job. Use my saved experience, ask about missing facts and save my answers. Tailor my CV and cover letter, fill the form, attach the files and submit. Report the employer’s confirmation or anything left unfinished.**
 
-Check the saved documents before you use **Open job** to apply.
+Your AI handles the application. Find its saved documents again under the job in Companion.
 
 ## Open a generated CV or letter
 
@@ -82,6 +82,8 @@ Portable backups verify document bytes and rebind them to fresh local document i
 Use it to save job adverts and help fill application forms. You can find and review jobs without it.
 
 Use Chrome 125 or newer, or Firefox 128 or newer. Keep Companion open. If your version includes the extension, open **Settings → Browser extensions** and choose **Open folder** for your browser. Otherwise, check availability on [Downloads](https://recruiters.rip/downloads#extension).
+
+Use the folder opened by Companion once so future app updates can refresh it. These managed extensions reload when the browser is idle and no application work is active. A separately unzipped archive or an old app-bundle folder needs a one-time move to the managed folder; it cannot update itself. Firefox’s temporary-loading requirement still applies.
 
 <details>
 <summary>Chrome</summary>
@@ -114,7 +116,7 @@ Saved answers work without an API key. Extra help choosing saved answers is opti
 
 ### Apply with Codex or Claude
 
-Your AI app may be able to fill a form when you ask. If it cannot, use the saved documents and answers yourself. Complete any website security checks. An application is only submitted when the employer confirms it.
+Your connected AI fills the employer’s form, attaches your documents and submits for you. If a website needs a security check or a field the AI cannot complete, handle that step and ask it to continue. Use the employer’s confirmation to know the application was sent.
 
 ## Back up or restore your profile
 
@@ -139,6 +141,26 @@ In **Me → CVs**, open the CV, choose **Delete CV** at the top and confirm the 
 If it was shared with JobStash, its shared copies are removed before it is deleted from Companion. If JobStash cannot confirm removal, the CV stays in Companion so you can try again. Other CVs, applications and backup files stay unchanged.
 
 Use the account that shared the CV. Older uploads without a recorded owner need ownership verification before JobStash can remove them. **Stop sharing** in **Settings → CV sharing** prevents future uploads; it does not delete a shared copy.
+
+## Install from source
+
+Install **Git** and **Node.js 24 with npm**, then run one command for your computer. It clones the published source, installs dependencies, builds locally and opens Companion. No Apple developer key is needed.
+
+**Mac or Linux**
+
+```sh
+curl -fsSL https://github.com/jobstash/recruiters-rip-companion/releases/latest/download/install-source.sh | sh
+```
+
+**Windows PowerShell**
+
+```powershell
+irm https://github.com/jobstash/recruiters-rip-companion/releases/latest/download/install-source.ps1 | iex
+```
+
+Review the [repository and installer scripts](https://github.com/jobstash/recruiters-rip-companion/tree/main/scripts) before running them. Source installation builds on your computer; it does not substitute a downloaded installer.
+
+Managed source installs receive automatic updates from published source releases. Each update builds in a separate folder, retains the previous version for recovery and keeps your profile in place. Local source changes pause replacement rather than being overwritten. An ordinary developer clone is not silently adopted or reset; use this installer for managed updates.
 
 ## Developer setup
 
@@ -168,13 +190,17 @@ Job capture uses `career_job_import` and `career_jobs`. Complete local originals
 
 ## Public releases and updates
 
-In **Settings → Updates**, choose **Check for updates**, then **Download update** and **Install update**. Checks use the official repository's latest stable published release without a GitHub token. No release means unavailable, not up to date.
+**Settings → Updates → Keep the app up to date** is on by default. Companion checks after startup, on resume when due, and every six hours. It verifies the download, then waits for active work to finish and a quiet, unfocused computer before restarting. **Check now** checks immediately; you can turn automatic updates off.
 
-The updater selects the exact artifact for the current OS and architecture: `recruiters-rip-companion-<version>-mac-arm64.zip`, `-win-x64.exe`, or `-linux-x64.AppImage`. A GitHub SHA-256 digest or matching `SHA256SUMS.txt` entry is required. `pnpm release:metadata <output-directory>` hashes actual versioned artifacts; publishing remains a separate operator action.
+Quitting saves your career data without waiting for background update checks or builds.
 
-Downloads are bounded and checksum-verified before installation. macOS packaged production installs retain the existing bundle identity/signature checks, native approval, write draining and rollback until the new app confirms startup. Windows hands off the verified NSIS installer; Linux reveals the verified executable AppImage for the user to quit Companion and replace/run it. Installer handoff is not reported as a completed installation. No Windows/Linux in-place self-replacement or signing/notarization claim is made.
+The installed version and latest published version are shown separately. A newer local build says it is ahead of the published release; it is never downgraded or incorrectly described as the published version. No release means unavailable, not up to date.
 
-Source runs and local-product builds use verified manual installer handoff rather than replacing a checkout or changing product channels. Unwritable installation directories also use the manual path. Neither flow migrates or deletes career data, changes the app/storage identity, or accesses signing credentials. Update state is separate from career storage; local and production receipts are isolated.
+Ready-made installs use the exact Mac arm64 ZIP, Windows x64 NSIS installer or Linux x64 AppImage. Downloads are bounded and SHA-256 verified, with official repository and target checks. Mac replacement covers apps originally installed from ZIP or DMG; Windows installs silently without killing another running app; Linux replaces the actual AppImage, not its temporary mounted folder. The previous installation is retained until the new app confirms startup. Unsafe or unwritable locations explain what needs changing rather than pretending installation succeeded.
+
+Managed source installs fetch the exact published source, install locked dependencies and build a separate version locally before the same safe restart. They do not overwrite developer edits or switch silently to prebuilt binaries. Ordinary unmanaged clones remain under their owner's control.
+
+Automatic-update preferences and receipts live outside career backups. Updates keep the app identity, profile and account connection; they do not reset career data. Mac releases remain ad-hoc signed, not notarized; Windows releases remain unsigned. No update requires an Apple developer key or disables operating-system protections.
 
 ## Repository boundary and privacy
 
@@ -245,7 +271,7 @@ Say **“Reassess roles.”** The host performs one ranking reset, then reviews 
 
 The companion's **Clear reviews** action and `career_rankings_delete` clear rankings, pairwise comparisons and cached jobs. They preserve profile, preferences, CVs, facts, job applications, account data and API credentials. A reset invalidates in-flight writers so deleted results cannot reappear. `career_match_jobs.profileVersion` binds profile changes and ranking resets; bounded saved-job reassessments can read it as `career_profile_read.matchingProfileVersion`.
 
-Navigation is **Me / Jobs / Settings / Help**; Me opens by default. Me keeps **Import CV** and **Jobs**, with account/setup guidance when needed, above **CVs / Facts / Preferences / Career**. The CV detail starts with **Delete CV**; a red border distinguishes this destructive action. Generated files belong to their jobs and applications through **Open CV / Open letter**, not to a global file button in Me. Settings has **General / Backups** subtabs: General holds account, app, browser, sharing, form and update controls; Backups holds save, preview, restore and folder actions. Manual connection details stay under **Advanced**. Import and restore use native file pickers, never renderer-supplied paths. Locked storage, account connection, update approval and explicit CV deletion confirmation retain their boundaries.
+Navigation is **Me / Jobs / Settings / Help**; Me opens by default. Me keeps **Import CV** and **Jobs**, with account/setup guidance when needed, above **CVs / Facts / Preferences / Career**. The CV detail starts with **Delete CV**; a red border distinguishes this destructive action. Generated files belong to their jobs and applications through **Open CV / Open letter**, not to a global file button in Me. Settings has **General / Backups** subtabs: General holds account, app, browser, sharing, form and update controls; Backups holds save, preview, restore and folder actions. Manual connection details stay under **Advanced**. Import and restore use native file pickers, never renderer-supplied paths. Locked storage, account connection and explicit CV deletion confirmation retain their boundaries. Automatic updates use the saved update preference and safe restart admission, not a per-release approval dialog.
 
 Backup JSON version 2 contains profile records and SHA-256-verified document bytes, limited to 128 MiB per file, 100 profiles and 2,000 saved documents. Original CV files are limited to 5 MiB and saved documents to 12 MiB each. Current career-schema-2 records in version-1 exports remain importable; unsupported career schemas fail rather than passing through the destructive schema upgrade. Missing historical files are disclosed. Restore materializes only each application's current document version, independent of historical-record ordering. Restores retain sign-in, device identity, credentials, other identity archives and current sharing consent, while clearing runtime receipts and invalidating stale operations. Failed restores roll back replacements and newly created files without removing preexisting exports. Shared-CV references remain untrusted provenance for server-authorized deletion, not permission or proof of current sharing.
 
@@ -309,7 +335,7 @@ The scorer validates every reply against `assessmentSchema` and the same citatio
 
 ## Build from a fresh clone
 
-Requires Node.js 22.12+, pnpm 10.28.0, and `zip`. macOS ARM64 packaging also requires macOS and its standard signing tools.
+Developer builds require Node.js 22.12+ and pnpm 10.28.0; the supported one-command source installer uses Node.js 24/npm and Git. Native packaging must run on its target OS. Mac ad-hoc packaging uses the system signing tools without an Apple developer account.
 
 ```sh
 pnpm install --frozen-lockfile
@@ -337,11 +363,13 @@ Every runtime build and standalone MCP packaging command deletes the entire repo
 | `pnpm package:linux` | Linux x64 | `recruiters-rip-companion-<version>-linux-x64.AppImage` |
 | `pnpm package:local` | Any supported runner | Isolated unpacked developer app, no production protocol registration |
 
-The CI matrix runs build/check/tests and packaging on each native OS and uploads artifacts without publishing. MCPB and extension ZIP generation use JavaScript archive creation, not an external `zip` command. Package the matching browser source ZIPs with every version; a Firefox ZIP must go through Mozilla signing before it can be offered as a permanent add-on.
+The native CI matrix builds, checks and packages on Mac, Windows and Linux, then exercises installation and replacement with synthetic profiles. Candidate artifacts pass the current updater's verification and handoff path, launch the expected version, confirm startup and preserve synthetic data. A pinned public binary serves only as a disposable replacement fixture, not an old-version compatibility requirement. Targeted helper regressions cover failed-startup rollback.
 
-Publishing is explicit: commit the root version, tag `v<version>`, gather native runner artifacts, generate/merge their `SHA256SUMS.txt` entries and create a stable GitHub release. The website operator must mount the matching files before advertising downloads. Never reuse an older published version number for new binaries.
+After all native gates pass on an eligible main commit, the release job assembles a draft containing the exact source version's installers, browser archives, source installers and SHA-256 sums. It publishes only the complete verified inventory. Runtime/package changes require a version increase; existing public version assets are never overwritten. Documentation-only changes do not republish a version.
 
-`pnpm package:release` uses native release targets. On macOS it still requires a genuine Developer ID Application identity and Apple notarization credentials; `pnpm package:adhoc` is the no-Apple-key route. Windows builds without signing credentials remain unsigned. No command disables operating-system security controls or silently publishes.
+Official hosted downloads synchronize verified published releases into an atomically switched directory. A complete validated set becomes visible together; the previous set is retained for recovery. The website's read-only mount points to the stable parent directory, not an individual file or the exchanged directory inode.
+
+`pnpm package:release` still requires genuine signing/notarization credentials for signed Mac packaging; `pnpm package:adhoc` is the no-Apple-key route. Windows builds without signing credentials remain unsigned. A Firefox source ZIP is not a Mozilla-signed permanent add-on. Source installers build locally from the official published commit. No command disables operating-system security controls.
 
 ## Document source and asset notices
 

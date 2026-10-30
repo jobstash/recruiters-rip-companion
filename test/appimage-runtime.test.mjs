@@ -90,7 +90,7 @@ test('AppImage extension folders survive mount removal and refresh the same brow
   await writeFile(path.join(bundled, 'manifest.json'), '{"version":"2.0.0"}');
   await writeFile(path.join(bundled, 'current.js'), 'new');
   assert.equal(await persistBrowserExtension(options), persistent);
-  assert.deepEqual((await readdir(persistent)).sort(), ['current.js', 'manifest.json']);
+  assert.deepEqual((await readdir(persistent)).sort(), ['current.js', 'managed-update.json', 'manifest.json']);
   assert.deepEqual(JSON.parse(await readFile(path.join(persistent, 'manifest.json'), 'utf8')), { version: '2.0.0' });
   await writeFile(path.join(bundled, 'manifest.json'), '{"version":"3.0.0"}');
   await assert.rejects(persistBrowserExtension({ ...options, rename: async (from, to) => {
@@ -108,8 +108,24 @@ test('AppImage extension folders survive mount removal and refresh the same brow
   await assert.rejects(persistBrowserExtension(options), /private storage/);
 });
 
-test('stable installed and source extension folders are not relocated', async () => {
-  const source = '/existing/browser-extension';
-  for (const options of [{ platform: 'darwin', packaged: true }, { platform: 'win32', packaged: true }, { platform: 'linux', packaged: false }, { platform: 'linux', packaged: true }])
-    assert.equal(await persistBrowserExtension({ source, directory: '/unused', browser: 'chrome', ...options, env: {} }), source);
+test('unmanaged source stays untouched while packaged and verified managed-source folders refresh on every supported OS', async t => {
+  const home = await mkdtemp(path.join(tmpdir(), 'rr-managed-extension-'));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const source = path.join(home, 'bundled');
+  await mkdir(source);
+  for (const platform of ['darwin', 'win32', 'linux']) {
+    for (const managedSource of [false, undefined, 'true'])
+      assert.equal(await persistBrowserExtension({ source, directory: home, browser: 'chrome', platform, packaged: false, managedSource,
+        env: { RECRUITERS_MANAGED_SOURCE: '1' } }), source);
+    for (const browser of ['chrome', 'firefox']) for (const packaged of [true, false]) {
+      const managedSource = !packaged;
+      const directory = path.join(home, platform, browser, packaged ? 'packaged' : 'managed-source');
+      await writeFile(path.join(source, 'manifest.json'), '{"version":"3.11.0"}');
+      const destination = await persistBrowserExtension({ source, directory, browser, platform, packaged, managedSource });
+      await writeFile(path.join(source, 'manifest.json'), '{"version":"3.12.0"}');
+      assert.equal(await persistBrowserExtension({ source, directory, browser, platform, packaged, managedSource }), destination);
+      assert.deepEqual(JSON.parse(await readFile(path.join(destination, 'manifest.json'), 'utf8')), { version: '3.12.0' });
+      assert.deepEqual(JSON.parse(await readFile(path.join(destination, 'managed-update.json'), 'utf8')), { version: '3.12.0' });
+    }
+  }
 });

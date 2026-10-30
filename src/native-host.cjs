@@ -1,16 +1,20 @@
 'use strict';
 const path = require('node:path');
+const { native: realpathSync } = require('node:fs').realpathSync;
 const { spawn } = require('node:child_process');
 const { endpoint, restrictedEnvironment, assertPrivatePath, privateJSON, connectAuthenticated } = require('./platform-runtime.cjs');
 const MAX_INPUT = 1024 * 1024 + 65536;
 const MAX_OUTPUT = 1024 * 1024 - 1024;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 (async () => {
-  const configPath = process.argv[2];
-  if (typeof configPath !== 'string' || !path.isAbsolute(configPath)) throw new Error('Invalid native configuration path.');
-  const config = privateJSON(configPath);
+  const selected = process.argv[2];
+  if (typeof selected !== 'string' || !path.isAbsolute(selected)) throw new Error('Invalid native configuration path.');
+  assertPrivatePath(selected);
+  const configPath = realpathSync(selected), config = privateJSON(configPath);
   if (!config || typeof config.localOnly !== 'boolean' || typeof config.packaged !== 'boolean' ||
-      !['executable', 'appPath', 'directory'].every(key => typeof config[key] === 'string' && path.isAbsolute(config[key])) ||
+      !['executable', 'appPath', 'directory', 'userData'].every(key => typeof config[key] === 'string' && path.isAbsolute(config[key])) ||
+      config.directory !== realpathSync(config.directory) || config.userData !== realpathSync(config.userData) ||
+      config.directory !== path.join(config.userData, config.localOnly ? 'local-device' : 'device') ||
       configPath !== path.join(config.directory, 'native-config.json')) throw new Error('Invalid native configuration.');
   if (config.firefoxManifest !== undefined && (typeof config.firefoxManifest !== 'string' || !path.isAbsolute(config.firefoxManifest))) throw new Error('Invalid Firefox manifest path.');
   const { BROWSER_IDENTITIES, nativeInvocationIdentity } = await import('./browser-identity.mjs');
@@ -30,7 +34,7 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
         // The harness owns model authentication; do not inherit its API/session keys.
         const env = restrictedEnvironment();
         if (config.localOnly && typeof config.localOrigin === 'string') env.BROWSER_APPLICATION_LOCAL_ORIGIN = config.localOrigin;
-        const args = [...(config.packaged ? [] : [config.appPath]), '--bridge', ...(config.localOnly ? ['--local-product'] : [])];
+        const args = [...(config.packaged ? [] : [config.appPath]), `--user-data-dir=${config.userData}`, '--bridge', ...(config.localOnly ? ['--local-product'] : [])];
         const child = spawn(config.executable, args, { detached: true, stdio: 'ignore', env }); child.on('error', () => {}); child.unref();
       }
       await sleep(250);

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
 import { derivePanelFlow } from '../browser-extension/src/panel-flow.mjs';
+import { reviewIdentity } from '../browser-extension/src/protocol.mjs';
 
 const BUILD_ID = 'synthetic-panel-build';
 async function panelFixture(initialState = {}, { platform = 'MacIntel', firefox = false, clipboardDenied = false } = {}) {
@@ -25,12 +26,12 @@ async function panelFixture(initialState = {}, { platform = 'MacIntel', firefox 
   let receive, disconnected, reloads = 0, tabQueries = 0;
   const port = { onMessage: { addListener(fn) { receive = fn; } }, onDisconnect: { addListener(fn) { disconnected = fn; } }, postMessage(message) { sent.push(JSON.parse(JSON.stringify(message))); } };
   const context = vm.createContext({
-    document, derivePanelFlow,
+    document, derivePanelFlow, reviewIdentity,
     [firefox ? 'browser' : 'chrome']: { runtime: { connect: () => port, reload() { reloads++; } }, tabs: { query: async () => { tabQueries++; return [{ id: 7 }]; } } },
     navigator: { platform, clipboard: { writeText: async text => { if (clipboardDenied) throw Error('denied'); copied.push(text); } } }, setInterval() {}, setTimeout() {}, clearTimeout() {},
   });
   const source = await readFile(new URL('../browser-extension/src/panel.mjs', import.meta.url), 'utf8');
-  vm.runInContext(source.replace(/^import \{ BUILD_ID \} from '\.\/config\.mjs';/, `const BUILD_ID = ${JSON.stringify(BUILD_ID)};`).replace(/^import \{ derivePanelFlow \} from '\.\/panel-flow\.mjs';/m, ''), context);
+  vm.runInContext(source.replace(/^import \{ BUILD_ID \} from '\.\/config\.mjs';/, `const BUILD_ID = ${JSON.stringify(BUILD_ID)};`).replace(/^import .*;\r?\n/gm, ''), context);
   const state = { buildId: BUILD_ID, busy: null, notice: '', error: '', pageKind: 'application', companion: { workflowVersion: 2, hasCv: true }, tabId: 7, documentId: 'doc', page: { title: 'Application · Example', url: 'https://example.test/apply' }, jobs: [], form: { fields: [] }, selected: ['name'], edits: { name: 'Saved Name' }, paste: null,
     prepared: { formId: 'form:synthetic', snapshot: 'snapshot:synthetic', api: { configured: false, used: false }, fields: [{ id: 'name', label: 'Full name', type: 'text', value: 'Saved Name', empty: true }], questions: [{ key: 'phone', label: 'Phone', type: 'tel', required: true }], unresolved: [{ label: 'Why this role?', reason: 'private internal reason' }] } };
   const update = patch => { Object.assign(state, patch); receive(JSON.parse(JSON.stringify(state))); };
@@ -287,4 +288,26 @@ test('owned preparation restores a suspended answer focus without stealing a new
   panel.nodes.get('options').focus();
   panel.update({ busy: null });
   assert.equal(panel.document.activeElement, panel.nodes.get('options'));
+});
+
+test('replacement field signatures and application contexts discard panel-only edits and selections', async () => {
+  for (const change of ['signature', 'binding', 'context']) {
+    const panel = await panelFixture({ application: application({ applicationId: 'app', contextFingerprint: 'career-1' }) });
+    const reviewed = panel.inputs('field-list').find(node => node.type !== 'checkbox');
+    reviewed.value = 'PRIVATE OLD ANSWER'; reviewed.oninput();
+    const selected = panel.inputs('field-list').find(node => node.type === 'checkbox');
+    selected.checked = true; selected.onchange();
+    const next = { ...panel.state.prepared, fields: [{ ...panel.state.prepared.fields[0], value: 'Current answer',
+      ...(change === 'signature' ? { signature: 'replacement-question', label: 'Different question' } : {}) }] };
+    panel.update({ prepared: next, edits: { name: 'Current answer' }, selected: [],
+      application: application({ applicationId: 'app', bindingId: change === 'binding' ? 'new-binding' : 'binding:private-internal',
+        contextFingerprint: change === 'context' ? 'career-2' : 'career-1' }) });
+    assert.equal(panel.inputs('field-list').find(node => node.type !== 'checkbox').value, 'Current answer', change);
+    assert.equal(panel.inputs('field-list').find(node => node.type === 'checkbox').checked, false, change);
+    const check = panel.inputs('field-list').find(node => node.type === 'checkbox'); check.checked = true; check.onchange();
+    assert.equal(panel.sent.at(-1).payload.edits.name, 'Current answer');
+    assert.equal(panel.sent.at(-1).payload.identity, reviewIdentity(panel.state));
+    await panel.nodes.get('copy').onclick();
+    assert.ok(panel.copied.every(text => !text.includes('PRIVATE OLD ANSWER')));
+  }
 });

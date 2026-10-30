@@ -1,16 +1,26 @@
 #!/usr/bin/env node
 'use strict';
 const path = require('node:path');
+const { native: realpathSync } = require('node:fs').realpathSync;
 const { spawn } = require('node:child_process');
-const { deviceDirectory, endpoint, restrictedEnvironment, assertPrivatePath, privateJSON, connectAuthenticated } = require('../platform-runtime.cjs');
+const { endpoint, restrictedEnvironment, assertPrivatePath, privateJSON, connectAuthenticated } = require('../platform-runtime.cjs');
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function main() {
-  if (process.argv.slice(2).some(arg => arg !== '--local-product')) throw new Error('Unsupported connection option.');
-  const local = process.argv.includes('--local-product');
-  const directory = deviceDirectory({ localOnly: local });
-  assertPrivatePath(directory, { directory: true });
+  let local = false, selected;
+  for (const arg of process.argv.slice(2)) {
+    if (arg === '--local-product' && !local) local = true;
+    else if (arg.startsWith('--directory=') && selected === undefined) selected = arg.slice('--directory='.length);
+    else throw new Error('Unsupported connection option.');
+  }
+  if (typeof selected !== 'string' || !path.isAbsolute(selected)) throw new Error('Choose the configured companion profile.');
+  assertPrivatePath(selected, { directory: true });
+  const directory = realpathSync(selected), userData = realpathSync(path.dirname(directory));
+  if (directory !== path.join(userData, local ? 'local-device' : 'device')) throw new Error('Invalid companion profile.');
   const launch = privateJSON(path.join(directory, 'mcp-launch.json'));
-  if (!path.isAbsolute(launch.executable) || !Array.isArray(launch.args) || launch.args.some(arg => typeof arg !== 'string') || launch.localOnly !== local) throw new Error('Invalid companion installation.');
+  if (!path.isAbsolute(launch.executable) || !Array.isArray(launch.args) || launch.args.some(arg => typeof arg !== 'string') ||
+      launch.localOnly !== local || launch.directory !== directory || launch.userData !== userData) throw new Error('Invalid companion installation.');
+  const profileArgs = launch.args.filter(arg => arg.startsWith('--user-data-dir'));
+  if (profileArgs.length !== 1 || profileArgs[0] !== `--user-data-dir=${userData}`) throw new Error('Invalid companion launch profile.');
   let socket;
   for (let attempt = 0; attempt < 60; attempt++) {
     try {

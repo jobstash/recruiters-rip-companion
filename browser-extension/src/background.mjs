@@ -1,7 +1,8 @@
 import { PRODUCT_ORIGIN, NATIVE_HOST, BUILD_ID } from './config.mjs';
-import { createNativeClient, safeDeviceRequest, externalSenderAllowed, deviceResult, applicationView } from './protocol.mjs';
+import { createNativeClient, safeDeviceRequest, externalSenderAllowed, deviceResult, applicationView, reviewIdentity } from './protocol.mjs';
 import { captureJobs, captureApplicationContext, inspectForm, checkFormBindings, armSmartPaste, disarmSmartPaste } from './page.mjs';
 import { createPageAccess, preparedPageSender } from './page-access.mjs';
+import { installManagedUpdates } from './managed-update.mjs';
 
 const chrome = globalThis.browser ?? globalThis.chrome;
 const firefox = !!chrome.sidebarAction;
@@ -52,6 +53,10 @@ function schedulePoll() {
 }
 function setApplication(result, restoreHost = false) {
   const view = applicationView(result);
+  if (state.prepared && state.application && (state.application.bindingId !== view.bindingId ||
+      state.application.applicationId !== view.applicationId || state.application.contextFingerprint !== view.contextFingerprint)) {
+    state.prepared = null; state.edits = {}; state.selected = []; state.paste = null; pasteSession = null;
+  }
   state.application = view;
   if (restoreHost) state.applicationHost = view.preferredHost || view.handoff?.host || state.applicationHost;
 }
@@ -151,7 +156,7 @@ async function checkCurrentPage(token) {
   return false;
 }
 async function detect(tabId, token) {
-  const reviewed = { tabId: state.tabId, documentId: state.documentId, form: state.form, prepared: state.prepared, edits: state.edits, selected: state.selected, changed: hasReviewedEdits() };
+  const reviewed = { tabId: state.tabId, documentId: state.documentId, application: state.application, form: state.form, prepared: state.prepared, edits: state.edits, selected: state.selected, changed: hasReviewedEdits() };
   clearApplication(); clearForm(); inspectedPage = null; state.pageKind = 'unknown';
   if (tabId !== state.tabId) { state.tabId = tabId; state.documentId = null; state.page = null; state.jobs = []; }
   publish();
@@ -207,7 +212,7 @@ async function detect(tabId, token) {
 async function prepare(token, automatic = false, useApi = true, reviewed = null) {
   requireWorkflow();
   if (!state.form || !isApplication(state.form, !!state.application?.applicationId)) throw new Error('Open a job application form, then choose Read page.');
-  reviewed ??= { form: state.form, prepared: state.prepared, edits: state.edits, selected: state.selected };
+  reviewed ??= { application: state.application, form: state.form, prepared: state.prepared, edits: state.edits, selected: state.selected };
   state.busy = 'prepare'; publish();
   await arm(false);
   if (generation !== token || (automatic && !panels.size)) return;
@@ -216,6 +221,10 @@ async function prepare(token, automatic = false, useApi = true, reviewed = null)
   preparingRequest = crypto.randomUUID();
   const result = await native.request('forms_prepare', { requestId: preparingRequest, ...state.form, useApi });
   if (generation !== token || (automatic && !panels.size)) return;
+  if (reviewed.application?.bindingId !== state.application?.bindingId ||
+      reviewed.application?.applicationId !== state.application?.applicationId ||
+      reviewed.application?.contextFingerprint !== state.application?.contextFingerprint)
+    reviewed = { prepared: null, edits: {}, selected: [] };
   const previous = new Map((reviewed.prepared?.fields ?? []).map(field => [field.id, field]));
   state.prepared = result;
   state.edits = Object.fromEntries(result.fields.map(field => {
@@ -233,7 +242,7 @@ async function act(message) {
   const { action, payload = {} } = message;
   if (action === 'ping') return;
   if (action === 'edit') {
-    if (state.busy || !state.prepared) return;
+    if (state.busy || !state.prepared || state.answersStale || payload.identity !== reviewIdentity(state) || payload.snapshot !== state.prepared.snapshot) return;
     const fields = new Map(state.prepared.fields.map(f => [f.id, f]));
     state.edits = Object.fromEntries(Object.entries(payload.edits || {}).filter(([id, v]) => fields.has(id) && typeof v === 'string' && v.length <= 20000));
     state.selected = [...new Set(payload.selected || [])].filter(id => fields.has(id)); return;
@@ -427,3 +436,6 @@ chrome.tabs.onUpdated.addListener((tabId, change) => {
 chrome.tabs.onRemoved.addListener(tabId => {
   if (tabId === state.tabId) void leavePage('Open an application tab, then click Read page.');
 });
+
+installManagedUpdates({ browser: chrome, browserName: firefox ? 'firefox' : 'chrome', status: () => native.request('status', {}),
+  isSafe: () => native.idle() && !panels.size && !state.busy && !pollInFlight && !preparingRequest && !state.application && !state.prepared && state.tabId === null });

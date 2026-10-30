@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, realpath, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { execFile } from 'node:child_process';
@@ -26,12 +26,15 @@ export async function installNative({ executable, appPath, directory, packaged, 
   const identity = localOnly ? BROWSER_IDENTITIES.local : BROWSER_IDENTITIES.production;
   const paths = platform === 'win32' ? path.win32 : path;
   await privateDirectory(directory);
+  directory = await realpath(directory);
+  const userData = await realpath(paths.dirname(directory));
+  if (directory !== paths.join(userData, localOnly ? 'local-device' : 'device')) throw new Error('Invalid native profile directory.');
   const launcher = paths.join(directory, `recruiters-native-host${platform === 'win32' ? '.bat' : ''}`);
   const hostScript = paths.join(packaged ? appPath.replace(/app\.asar$/, 'app.asar.unpacked') : appPath, 'src', 'native-host.cjs');
   const configPath = paths.join(directory, 'native-config.json');
   const locations = nativeLocations({ directory, identity, platform, env, home });
   const firefoxManifest = locations.find(location => location.browser === 'firefox').manifest;
-  await writeFile(configPath, JSON.stringify({ executable, appPath, directory, packaged, localOnly, firefoxManifest, localOrigin: localOnly ? localOrigin : undefined }), { mode: 0o600 });
+  await writeFile(configPath, JSON.stringify({ executable, appPath, directory, userData, packaged, localOnly, firefoxManifest, localOrigin: localOnly ? localOrigin : undefined }), { mode: 0o600 });
   protectPrivatePath(configPath);
   await writeFile(launcher, launcherScript({ executable, script: hostScript, args: [configPath], forwardArgs: true, platform }), { mode: 0o700 });
   protectPrivatePath(launcher, { mode: 0o700 });

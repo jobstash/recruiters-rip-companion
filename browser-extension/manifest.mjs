@@ -8,7 +8,7 @@ export function createManifest(identity, version, local = false, browser = 'chro
     name: `Recruiters.rip${local ? ' (local)' : ''}`,
     version,
     description: 'Save jobs to Companion and prepare application answers for native paste. Your own AI fills forms or submits only when you ask.',
-    permissions: ['nativeMessaging', 'activeTab', 'scripting', ...(!firefox ? ['sidePanel'] : []), 'clipboardWrite'],
+    permissions: ['nativeMessaging', 'activeTab', 'scripting', ...(!firefox ? ['sidePanel'] : []), 'clipboardWrite', 'alarms', 'idle', 'storage'],
     background: firefox ? { scripts: ['background.mjs'], type: 'module' } : { service_worker: 'background.mjs', type: 'module' },
     action: { default_title: 'Read this page: jobs or application form', default_icon: 'brand/favicon-32.png' },
     icons: { 32: 'brand/favicon-32.png' },

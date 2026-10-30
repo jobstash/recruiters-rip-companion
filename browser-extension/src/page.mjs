@@ -354,7 +354,8 @@ export async function captureApplicationContext(_request, expectedDocument) {
       try {
         const declared = new URL(job.url || job.mainEntityOfPage?.['@id'] || url, url);
         if (!['http:', 'https:'].includes(declared.protocol) || declared.username || declared.password || declared.href.length > 2000) return null;
-        originalUrl = declared.href;
+        // A foreign canonical claim cannot establish where this advert was read.
+        if (declared.origin === new URL(url).origin) originalUrl = declared.href;
       } catch { return null; }
       if (title && body && body.length <= 100000) return { url: originalUrl, title, text: body, complete: true };
     }

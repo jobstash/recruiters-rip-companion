@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { createRequire } from 'node:module';
 import { mkdtemp, mkdir, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -24,7 +25,7 @@ async function fixture(t, options = {}) {
   const calls = [];
   const metadata = options.release ?? release();
   const controller = createUpdateController({ version: '1.2.3', platform: 'darwin', arch: 'arm64', directory: path.join(root, 'updates'),
-    appPath: null, packaged: false, authorize: async () => true, quit: () => { throw new Error('Source installation must not quit'); },
+    appPath: null, packaged: false, quit: () => { throw new Error('Source installation must not quit'); },
     fetchImpl: async (url, init) => {
       calls.push({ url, init });
       if (url === API) return json(metadata);
@@ -78,30 +79,27 @@ for (const [platform, suffix] of [['win32', 'win-x64.exe'], ['linux', 'linux-x64
     metadata.assets[0].name = metadata.assets[0].name.replace('x64', 'arm64');
     assert.throws(() => validateRelease(metadata, { platform, arch: 'x64' }), { code: 'INVALID_ASSET' });
   });
-  test(`${platform} verified update hands off its installer without replacing the running app`, async t => {
-    let approved;
+  test(`${platform} unsupported installation offers a verified manual file without quitting`, async t => {
     const metadata = platformRelease();
     delete metadata.assets[0].digest;
     const checksums = `${digest(bytes)}  ${metadata.assets[0].name}\n`;
     metadata.assets.push({ name: 'SHA256SUMS.txt', state: 'uploaded', size: Buffer.byteLength(checksums),
       browser_download_url: `${REPO}/releases/download/v1.3.0/SHA256SUMS.txt` });
     const { controller } = await fixture(t, { controller: { platform, arch: 'x64', packaged: true,
-      authorize: async request => { approved = request; return true; },
+      quit: () => assert.fail('An unsupported installation must not quit'),
       fetchImpl: async url => url === API ? json(metadata) : new Response(url.endsWith('SHA256SUMS.txt') ? checksums : bytes) } });
     await controller.check(); await controller.download();
     const result = await controller.install();
     assert.equal(path.extname(result.manualPath), platform === 'win32' ? '.exe' : '.AppImage');
     assert.equal(digest(await readFile(result.manualPath)), digest(bytes));
     assert.equal(controller.state().status, 'manual-required');
-    assert.equal(approved.action, 'install-update');
     assert.equal(Boolean(result.reveal), platform === 'linux');
-    assert.match(controller.state().error.message, /saved data is retained/);
+    assert.equal(controller.state().automaticSupported, false);
   });
-  test(`${platform} does not hand off a modified or unapproved installer`, async t => {
+  test(`${platform} does not hand off a modified installer`, async t => {
     const { controller, directory } = await fixture(t, { release: platformRelease(),
-      controller: { platform, arch: 'x64', authorize: async () => false } });
+      controller: { platform, arch: 'x64' } });
     await controller.check(); await controller.download();
-    assert.equal((await controller.install()).status, 'downloaded');
     const filename = (await readdir(directory)).find(name => name.startsWith('download-'));
     await writeFile(path.join(directory, filename), Buffer.from('x'.repeat(bytes.length)));
     await assert.rejects(controller.install(), { code: 'CHECKSUM_MISMATCH' });
@@ -158,7 +156,7 @@ test('download verifies digest, publishes bounded progress and keeps all private
   assert.equal(names.filter(name => name.endsWith('.zip')).length, 1);
   assert.equal(names.some(name => name.endsWith('.partial')), false);
   assert.deepEqual(states.find(state => state.progress?.received === bytes.length)?.progress, { received: bytes.length, total: bytes.length });
-  assert.deepEqual(Object.keys(controller.state()).sort(), ['error', 'latestVersion', 'progress', 'releaseUrl', 'status', 'version']);
+  assert.deepEqual(Object.keys(controller.state()).sort(), ['automaticReason', 'automaticSupported', 'error', 'latestVersion', 'progress', 'releaseUrl', 'status', 'version']);
   assert.equal(JSON.stringify(controller.state()).includes(root), false);
   const snapshot = controller.state(); snapshot.status = 'invented';
   assert.equal(controller.state().status, 'downloaded');
@@ -253,46 +251,41 @@ test('a stalled release check times out cleanly without a retry', async t => {
   assert.equal(controller.state().error.code, 'UPDATE_TIMEOUT');
 });
 
-test('cancelling an unanswered installation approval cannot launch or replace an app', async t => {
-  let started, quits = 0;
-  const ready = new Promise(resolve => { started = resolve; });
-  const { controller, directory } = await fixture(t, { controller: {
-    authorize: () => { started(); return new Promise(() => {}); }, quit: () => { quits++; },
-  } });
-  await controller.check(); await controller.download();
-  const pending = controller.install();
-  const rejection = assert.rejects(pending, { code: 'CANCELLED' });
-  await ready;
-  await controller.cancel();
-  await rejection;
-  assert.equal(quits, 0);
-  assert.equal(controller.state().status, 'cancelled');
-  assert.equal((await readdir(directory)).filter(name => name.endsWith('.zip')).length, 1);
-});
-
-test('installation requires verified download and exact explicit approval', async t => {
-  let approvals = 0, quits = 0;
-  const { controller } = await fixture(t, { controller: { authorize: async () => { approvals++; return false; }, quit: () => { quits++; } } });
+test('unmanaged developer checkouts offer a manual installer without quitting', async t => {
+  let quits = 0;
+  const { controller } = await fixture(t, { controller: { quit: () => { quits++; } } });
+  assert.equal(controller.state().automaticSupported, false);
   await assert.rejects(controller.install(), { code: 'INVALID_STATE' });
   await controller.check(); await controller.download();
-  await controller.install();
-  assert.equal(approvals, 1);
+  assert.ok((await controller.install()).manualPath);
   assert.equal(quits, 0);
-  assert.equal(controller.state().status, 'downloaded');
-  assert.equal(controller.state().error.code, 'APPROVAL_DECLINED');
+  assert.equal(controller.state().status, 'manual-required');
 });
 
-test('approved source update returns only a manual verified ZIP and leaves the checkout and identity alone', async t => {
-  let request;
-  const { root, controller } = await fixture(t, { controller: { authorize: async value => { request = value; return true; } } });
+test('ahead builds identify the latest published version and never downgrade', async t => {
+  const { controller } = await fixture(t, { release: release('1.2.2') });
+  assert.equal((await controller.check()).status, 'ahead');
+  assert.equal(controller.state().latestVersion, '1.2.2');
+  await assert.rejects(controller.download(), { code: 'INVALID_STATE' });
+  assert.equal((await controller.check()).status, 'ahead');
+});
+
+test('checks preserve a verified pending download while waiting for idle', async t => {
+  const { controller, calls, directory } = await fixture(t);
+  await controller.check(); await controller.download();
+  const names = await readdir(directory);
+  assert.equal((await controller.check()).status, 'downloaded');
+  assert.equal(calls.length, 2);
+  assert.deepEqual(await readdir(directory), names);
+});
+
+test('unmanaged checkout downloads return a verified ZIP without modifying local files', async t => {
+  const { root, controller } = await fixture(t);
   const checkout = path.join(root, 'synthetic-checkout');
   await mkdir(checkout);
   await writeFile(path.join(checkout, 'identity.txt'), 'synthetic-device-identity');
   await controller.check(); await controller.download();
   const result = await controller.install();
-  assert.equal(request.action, 'install-update');
-  assert.equal(request.latestVersion, '1.3.0');
-  assert.match(request.message, /manual installation/);
   assert.equal(controller.state().status, 'manual-required');
   assert.deepEqual(Object.keys(result), ['manualPath']);
   assert.equal(digest(await readFile(result.manualPath)), digest(bytes));
@@ -301,13 +294,11 @@ test('approved source update returns only a manual verified ZIP and leaves the c
 });
 
 test('a changed saved ZIP is never handed to a manual or automatic installer', async t => {
-  let approved = false;
-  const { controller, directory } = await fixture(t, { controller: { authorize: async () => { approved = true; return true; } } });
+  const { controller, directory } = await fixture(t);
   await controller.check(); await controller.download();
   const name = (await readdir(directory)).find(item => item.endsWith('.zip'));
   await writeFile(path.join(directory, name), Buffer.from('x'.repeat(bytes.length)));
   await assert.rejects(controller.install(), { code: 'CHECKSUM_MISMATCH' });
-  assert.equal(approved, false);
 });
 
 test('packaged install cannot target a linked app or an app other than the currently running bundle', async t => {
@@ -320,7 +311,8 @@ test('packaged install cannot target a linked app or an app other than the curre
     let quits = 0;
     const { controller } = await fixture(t, { controller: { appPath, packaged: true, quit: () => { quits++; } } });
     await controller.check(); await controller.download();
-    await assert.rejects(controller.install(), { code: 'INVALID_TARGET' });
+    assert.ok((await controller.install()).manualPath);
+    assert.equal(controller.state().automaticSupported, false);
     assert.equal(quits, 0);
     assert.deepEqual(await readdir(target), []);
   }
@@ -360,7 +352,8 @@ test('explicit Check preserves an unresolved installation receipt instead of hid
   const staged = path.join(root, `.recruiters-update-${id}.app`);
   const work = path.join(directory, `install-${id}`);
   await mkdir(target); await mkdir(staged); await mkdir(work);
-  const journal = { schema: 1, id, version: '1.3.0', pid: process.pid, target, staged,
+  const journal = { schema: 1, platform: 'darwin', executable: 'Recruiters.rip Companion', userData: root, digest: '0'.repeat(64),
+    id, version: '1.3.0', pid: process.pid, target, staged,
     backup: path.join(root, `.recruiters-backup-${id}.app`), journal: path.join(work, 'journal.json'), status: 'staged' };
   await writeFile(journal.journal, JSON.stringify(journal), { mode: 0o600 });
   await writeFile(path.join(directory, 'active.json'), JSON.stringify({ id }), { mode: 0o600 });
@@ -427,4 +420,24 @@ test('ZIP extraction accepts bounded internal framework links and rejects traver
     await assert.rejects(extractUpdateZip(file, path.join(root, `attack-${index}`), signal));
   }
   assert.equal((await readdir(root)).includes('outside'), false);
+});
+
+test('ZIP extraction writes app.asar as physical bytes alongside unpacked resources', async t => {
+  const disk = createRequire(import.meta.url)(process.versions.electron ? 'original-fs' : 'node:fs').promises;
+  const root = await disk.realpath(await disk.mkdtemp(path.join(tmpdir(), 'recruiters-physical-asar-')));
+  t.after(() => disk.rm(root, { recursive: true, force: true }));
+  const app = 'Recruiters.rip Companion.app';
+  const bytes = 'Opaque synthetic archive bytes, not a mounted ASAR filesystem.';
+  const archive = path.join(root, 'update.zip');
+  await disk.writeFile(archive, zip([
+    { name: `${app}/Contents/Resources/app.asar`, content: bytes },
+    { name: `${app}/Contents/Resources/app.asar.unpacked/src/update-install.cjs`, content: 'synthetic unpacked helper' },
+  ]));
+  const bundle = await extractUpdateZip(archive, path.join(root, 'extract'), new AbortController().signal);
+  const extracted = path.join(bundle, 'Contents/Resources/app.asar');
+  assert.equal((await disk.lstat(extracted)).isFile(), true);
+  assert.equal(await disk.readFile(extracted, 'utf8'), bytes);
+  assert.equal(await disk.readFile(path.join(bundle, 'Contents/Resources/app.asar.unpacked/src/update-install.cjs'), 'utf8'), 'synthetic unpacked helper');
+  await disk.rm(path.join(root, 'extract'), { recursive: true, force: true });
+  assert.deepEqual(await disk.readdir(root), ['update.zip']);
 });

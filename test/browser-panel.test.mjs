@@ -67,7 +67,9 @@ test('one Prepare action launches the selected app, while Options persists the c
   assert.deepEqual(panel.sent.at(-1), { action: 'application-prepare', payload: { host: 'codex' } });
   panel.nodes.get('application-host').value = 'claude'; panel.nodes.get('application-host').onchange();
   assert.deepEqual(panel.sent.at(-1), { action: 'application-host', payload: { host: 'claude' } });
-  assert.equal(panel.nodes.get('application').hidden, true, 'no empty document section');
+  assert.equal(panel.nodes.get('cv-state').textContent, 'Not ready'); assert.equal(panel.nodes.get('show-cv').hidden, true);
+  const answers = (await panelFixture()).nodes.get('answer-list').children;
+  assert.deepEqual(answers.map(row => row.children.map(node => node.textContent ?? node.className)), [['dot done', 'Full name', 'Ready'], ['dot', 'Why this role?', 'Missing']]);
 });
 
 test('handoffs give actual Send or Enter instructions and never expose Stop or another Start', async () => {
@@ -80,7 +82,7 @@ test('handoffs give actual Send or Enter instructions and never expose Stop or a
     panel.update({ application: { ...waiting, handoff: { host: 'codex', state: 'agent_read', requiresSend: false } } });
     assert.match(panel.nodes.get('status').textContent, /has read/);
     assert.doesNotMatch(panel.nodes.get('status').textContent, /writing|generating/i);
-    assert.equal(panel.nodes.get('application').hidden, true);
+    assert.equal(panel.nodes.get('show-cv').hidden, true); assert.equal(panel.nodes.get('copy-intro').hidden, true);
   }
 });
 
@@ -133,7 +135,7 @@ test('save details uses native validation, allows a subset and clears only confi
 test('job-specific summaries are never reusable details; boolean answers require an explicit choice', async () => {
   const panel = await panelFixture();
   panel.update({ prepared: { ...panel.state.prepared, questions: [{ key: 'personalSummary', label: 'Summary', type: 'textarea' }] } });
-  assert.equal(panel.inputs('question-list').length, 0); assert.equal(panel.nodes.get('missing-details').hidden, true);
+  assert.equal(panel.inputs('question-list').length, 0); assert.equal(panel.nodes.get('details-form').hidden, true);
   panel.update({ prepared: { ...panel.state.prepared, questions: [{ key: 'requiresSponsorship', label: 'Sponsorship?', type: 'boolean', options: [{ value: true, label: 'Yes' }, { value: false, label: 'No' }] }] } });
   const input = panel.inputs('question-list')[0]; assert.equal(input.value, '');
   panel.nodes.get('details-form').onsubmit({ preventDefault() {} }); assert.equal(panel.sent.length, 0);
@@ -160,11 +162,11 @@ test('clipboard progress, failure, confirmation and browser denial remain distin
 test('missing answers show reusable details separately and do not leak internal reasons', async () => {
   const panel = await panelFixture();
   panel.update({ prepared: { ...panel.state.prepared, fields: [], unresolved: [{ label: 'Phone', reason: 'private reason' }, { label: 'Why this role?', reason: 'private reason' }] } });
-  assert.equal(panel.nodes.get('paste').hidden, true); assert.equal(panel.nodes.get('review-actions').hidden, true);
+  assert.equal(panel.nodes.get('paste').hidden, true); assert.equal(panel.nodes.get('review').hidden, true);
   assert.equal(panel.nodes.get('details-form').hidden, false);
-  assert.deepEqual(panel.nodes.get('unresolved').children[1].children.map(node => node.textContent), ['Why this role?']);
-  assert.doesNotMatch(JSON.stringify(panel.nodes.get('unresolved')), /private reason|Phone/);
-  panel.update({ prepared: { ...panel.state.prepared, unresolved: [] } }); assert.equal(panel.nodes.get('unresolved').children.length, 0);
+  assert.deepEqual(panel.nodes.get('answer-list').children.map(row => row.children[1].textContent), ['Why this role?']);
+  assert.doesNotMatch(JSON.stringify(panel.nodes.get('answer-list')), /private reason|Phone/);
+  panel.update({ prepared: { ...panel.state.prepared, unresolved: [] } }); assert.equal(panel.nodes.get('answer-list').children.length, 0);
 });
 
 test('drafts survive preparation resets but do not cross document boundaries', async () => {
@@ -180,7 +182,7 @@ test('build mismatch offers only explicit reload and preserves drafts until the 
   const tabQueries = panel.tabQueries;
   for (const buildId of [undefined, 'older-build']) {
     panel.update({ buildId });
-    for (const id of ['settings', 'error', 'cancel', 'page', 'application', 'form', 'jobs', 'options']) assert.equal(panel.nodes.get(id).hidden, true);
+    for (const id of ['error', 'cancel', 'page', 'application', 'form', 'jobs', 'options']) assert.equal(panel.nodes.get(id).hidden, true);
     assert.equal(panel.nodes.get('detect').textContent, 'Reload extension');
     panel.update({ busy: 'prepare' }); panel.nodes.get('detect').onclick(); assert.equal(panel.reloads, 0);
     panel.update({ busy: null });
@@ -192,6 +194,7 @@ test('build mismatch offers only explicit reload and preserves drafts until the 
 test('ready documents expose one Show CV and Copy intro, never paths or duplicate document actions', async () => {
   const panel = await panelFixture({ application: application({ state: 'ready', introduction: { ready: true }, documents: [{ kind: 'cv', ready: true, uri: 'file:///private/candidate.pdf', bytes: 'private CV' }, { kind: 'cover_letter', ready: true }] }) });
   assert.equal(panel.nodes.get('show-cv').hidden, false); assert.equal(panel.nodes.get('copy-intro').hidden, false);
+  assert.deepEqual(['cv-state', 'letter-state'].map(id => panel.nodes.get(id).textContent), ['Ready', 'Ready']);
   assert.equal(panel.nodes.get('application-prepare').hidden, true);
   panel.nodes.get('show-cv').onclick(); panel.nodes.get('copy-intro').onclick();
   assert.deepEqual(panel.sent.slice(-2), [{ action: 'application-document', payload: { kind: 'cv', action: 'reveal' } }, { action: 'copy-intro', payload: {} }]);
@@ -214,12 +217,15 @@ test('partial and stale application state never expose missing or outdated artif
 test('non-job and listing states win over irrelevant setup and listing choice uses an exact URL', async () => {
   const panel = await panelFixture({ pageKind: 'none', companion: { locked: true }, prepared: null });
   assert.equal(panel.nodes.get('recover').hidden, true); assert.equal(panel.nodes.get('application-prepare').hidden, true);
+  assert.equal(panel.nodes.get('detect').hidden, false); assert.equal(panel.nodes.get('detect').className, 'text');
   const jobs = [{ title: '<Engineer>', company: 'Example', url: 'https://example.test/one' }, { title: 'Designer', url: 'https://example.test/two' }];
   panel.update({ pageKind: 'listing', jobs });
-  assert.equal(panel.nodes.get('job-selection').hidden, false); assert.equal(panel.nodes.get('page').hidden, true);
+  assert.equal(panel.nodes.get('jobs').hidden, false); assert.equal(panel.nodes.get('page').hidden, true);
   assert.equal(panel.nodes.get('application-prepare').hidden, true);
-  const buttons = panel.descendants(panel.nodes.get('candidate-list')).filter(node => node.tagName === 'BUTTON');
-  assert.equal(buttons[0].textContent, '<Engineer>'); buttons[1].onclick();
+  const rows = panel.nodes.get('job-list').children;
+  assert.equal(rows[0].children[0].children[1].textContent, '<Engineer> · Example');
+  const buttons = panel.descendants(panel.nodes.get('job-list')).filter(node => node.tagName === 'BUTTON');
+  buttons[1].onclick();
   assert.deepEqual(panel.sent.at(-1), { action: 'open-job', payload: { url: jobs[1].url } });
 });
 

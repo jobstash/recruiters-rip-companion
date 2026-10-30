@@ -45,7 +45,7 @@ $('detect').onclick = () => {
   return pageAction();
 };
 $('refresh').onclick = () => { if (!state?.busy) return pageAction(); };
-$('settings').onclick = $('recover').onclick = () => send('settings');
+$('recover').onclick = () => send('settings');
 $('install').onclick = () => send('install');
 $('configure').onclick = () => send('configure');
 $('cancel').onclick = () => send('cancel');
@@ -92,18 +92,29 @@ function preserveFocus(renderControls) {
     if (typeof start === 'number' && typeof next.setSelectionRange === 'function') next.setSelectionRange(start, end);
   }
 }
+// One plain row per item: check (done) or empty circle, ellipsised label, right-aligned mono status.
+function listRow(label, status, done) {
+  const row = el('li', '', 'item'), mark = el('span', '', done ? 'dot done' : 'dot'), name = el('span', label, 'name');
+  mark.setAttribute('aria-hidden', 'true'); name.title = label;
+  row.append(mark, name, el('span', status, 'state'));
+  return row;
+}
+function answerStatus(field) {
+  if (state.answersStale) return ['Changed', false];
+  if (!field.empty) return ['Filled', true];
+  if (field.manualOnly) return ['By you', false];
+  if (!String(state.edits[field.id] ?? field.value ?? '').trim()) return ['Missing', false];
+  return [state.paste?.ok === true && state.paste.label === field.label ? 'Copied' : 'Ready', true];
+}
 function renderAnswers(busy, hidden) {
   const prepared = hidden ? null : state.prepared;
-  $('form').hidden = !prepared;
-  $('ready').hidden = !prepared || ['ready', 'answers'].includes(flow.kind);
-  $('ready').textContent = state.answersStale ? 'Saved answers changed. Refresh before copying or pasting.' : `${flow.answerCount} ${flow.answerCount === 1 ? 'answer' : 'answers'} ready`;
   $('paste').hidden = !prepared || !flow.answerCount || !!state.answersStale;
-  $('paste').textContent = !state.paste ? `Click an empty answer box, then press ${pasteShortcut}. You submit the form yourself.`
-    : state.paste.ok === false ? `Could not copy ${state.paste.label}. Copy it from Review answers instead.`
-    : state.paste.ok === true ? `Ready to paste: ${state.paste.label}. Press ${pasteShortcut} in that answer box.`
+  $('paste').textContent = !state.paste ? `Answers ready. Click a field and paste with ${pasteShortcut}.`
+    : state.paste.ok === false ? `Could not copy ${state.paste.label}. Copy it from Edit answers instead.`
+    : state.paste.ok === true ? `Ready to paste: ${state.paste.label}. Press ${pasteShortcut} in that field.`
     : `Getting ${state.paste.label} ready to paste…`;
   const questions = (prepared?.questions || []).filter(question => question.key !== 'personalSummary');
-  $('details-form').hidden = $('missing-details').hidden = !questions.length;
+  $('details-form').hidden = !questions.length;
   const nextQuestions = JSON.stringify(questions);
   if (questionKey !== nextQuestions) preserveFocus(() => {
     questionKey = nextQuestions; questionInputs.clear(); $('question-list').replaceChildren();
@@ -116,7 +127,7 @@ function renderAnswers(busy, hidden) {
   });
   for (const input of questionInputs.values()) input.disabled = busy;
   const fields = prepared?.fields || [];
-  $('review').hidden = !prepared;
+  $('review').hidden = !fields.length;
   $('review-actions').hidden = !fields.length;
   // Value/version refreshes update existing inputs, not their DOM identity or focused selection.
   const nextFields = JSON.stringify(fields.map(({ id, signature, label, type, options }) => ({ id, signature, label, type, options })));
@@ -138,35 +149,29 @@ function renderAnswers(busy, hidden) {
     input.disabled = check.disabled = busy || !!field.manualOnly || !field.empty || !!state.answersStale;
     check.checked = state.selected.includes(field.id);
   }
-  const unresolved = $('unresolved'); unresolved.replaceChildren();
   const reusableLabels = new Set(questions.map(question => question.label));
   const unknown = (prepared?.unresolved || []).filter(item => !reusableLabels.has(item.label));
-  if (unknown.length) {
-    unresolved.append(el('p', 'These answers are not saved yet. Prepare this application in Codex or Claude to write them.'));
-    const list = el('ul'); for (const item of unknown) list.append(el('li', item.label)); unresolved.append(list);
-  }
+  $('answer-list').replaceChildren(...fields.map(field => listRow(field.label, ...answerStatus(field))),
+    ...unknown.map(item => listRow(item.label, 'Missing', false)));
+  $('answers-label').hidden = $('answer-list').hidden = !fields.length && !unknown.length;
+  $('form').hidden = !prepared || (!fields.length && !unknown.length && !questions.length);
   $('copy').disabled = busy || !!state.answersStale;
 }
 function renderJobs(busy) {
   const jobs = state.jobs || [];
-  $('job-selection').hidden = flow.kind !== 'listing';
   $('jobs').hidden = jobs.length < 2 || state.pageKind === 'none';
   const nextJobs = JSON.stringify(jobs);
   if (jobKey !== nextJobs) {
     const selected = new Set(jobKey ? [...document.querySelectorAll('[data-job]:checked')].map(node => node.dataset.jobUrl) : []);
-    jobKey = nextJobs; $('job-list').replaceChildren(); $('candidate-list').replaceChildren();
+    jobKey = nextJobs; $('job-list').replaceChildren();
     jobs.forEach((job, index) => {
-      const row = el('div', '', 'row'), label = el('label', '', 'check'), check = el('input');
+      const row = el('li', '', 'item'), label = el('label'), check = el('input');
+      const text = [job.title || 'Job', job.company].filter(Boolean).join(' · '), name = el('span', text, 'name');
       check.type = 'checkbox'; check.dataset.job = index; check.dataset.jobUrl = job.url || `${index}:${job.title}`; check.checked = selected.has(check.dataset.jobUrl);
-      label.append(check, el('span', job.title || 'Job')); row.append(label, el('small', job.company || ''));
-      if (job.description) { const detail = el('details'); detail.append(el('summary', 'Job description'), el('p', job.description)); row.append(detail); }
-      $('job-list').append(row);
-      const candidate = el('div', '', 'row');
+      name.title = text; label.append(check, name); row.append(label);
       // The worker accepts only the exact captured candidate URL; labels never become HTML.
-      if (job.url) { const button = el('button', job.title || 'Open job', 'quiet'); button.onclick = () => send('open-job', { url: job.url }); candidate.append(button); }
-      else candidate.append(el('p', job.title || 'Job'), el('small', 'Open this job from the page to continue.'));
-      if (job.company) candidate.append(el('small', job.company));
-      $('candidate-list').append(candidate);
+      if (job.url) { const open = el('button', 'Open', 'text'); open.setAttribute('aria-label', `Open ${text}`); open.onclick = () => send('open-job', { url: job.url }); row.append(open); }
+      $('job-list').append(row);
     });
   }
   for (const check of document.querySelectorAll('[data-job]')) check.disabled = busy;
@@ -179,9 +184,9 @@ function render() {
   }
   for (const button of document.querySelectorAll('button')) button.disabled = busy;
   if (state.buildId !== BUILD_ID) {
-    for (const id of ['settings', 'error', 'cancel', 'page', 'application', 'form', 'jobs', 'job-selection', 'options', 'install', 'recover', 'application-prepare', 'application-answers', 'prepare-saved', 'application-open-ad', 'ready', 'paste', 'review', 'details-form']) $(id).hidden = true;
+    for (const id of ['error', 'cancel', 'page', 'application', 'form', 'jobs', 'options', 'install', 'recover', 'application-prepare', 'application-answers', 'prepare-saved', 'application-open-ad', 'paste', 'review', 'details-form']) $(id).hidden = true;
     $('status').textContent = 'Extension updated. Reload to continue.'; $('status').hidden = false;
-    $('detect').hidden = false; $('detect').textContent = 'Reload extension'; return;
+    $('detect').hidden = false; $('detect').className = ''; $('detect').textContent = 'Reload extension'; return;
   }
   const currentPage = JSON.stringify([state.tabId, state.documentId, state.page?.url]);
   if (pageKey !== currentPage) { pageKey = currentPage; drafts.clear(); answerDrafts.clear(); selections.clear(); suspendedFocus = null; questionKey = fieldKey = jobKey = null; }
@@ -200,39 +205,43 @@ function render() {
   $('title').textContent = state.application?.title || (state.jobs?.length === 1 ? state.jobs[0].title : '') || state.page?.title || 'This application';
   $('company').textContent = state.application?.company || (state.jobs?.length === 1 ? state.jobs[0].company : '') || '';
   $('company').hidden = !$('company').textContent;
-  $('settings').hidden = flow.primary?.id === 'settings';
-  $('refresh').hidden = flow.primary?.id === 'detect';
   $('status').textContent = flow.kind === 'error' ? '' : flow.message;
-  if (!busy && state.notice && !noJob && ['save', 'profile-save', 'copy-intro', 'application-document', 'application-open-ad', 'cancel'].includes(lastAction)) $('status').textContent += ` ${state.notice}`;
-  $('status').hidden = !$('status').textContent;
+  if (!busy && state.notice && (lastAction === 'save' || (!noJob && ['profile-save', 'copy-intro', 'application-document', 'application-open-ad', 'cancel'].includes(lastAction)))) $('status').textContent += ` ${state.notice}`;
   $('error').hidden = flow.kind !== 'error'; $('error').textContent = flow.kind === 'error' ? flow.message : '';
   for (const id of ['detect', 'application-prepare', 'recover', 'cancel', 'application-open-ad', 'application-answers', 'prepare-saved']) $(id).hidden = true;
   if (flow.primary) {
     const id = flow.primary.id === 'settings' ? 'recover' : flow.primary.id;
     $(id).hidden = false; $(id).textContent = flow.primary.label;
   }
+  // Re-reading a page without a job is a quiet suggestion, not the panel's task.
+  $('detect').className = ['no-job', 'connecting'].includes(flow.kind) ? 'text' : '';
   $('cancel').disabled = false;
   $('install').hidden = !flow.install;
-  $('options').hidden = false;
+  $('options').hidden = noJob || flow.kind === 'unavailable';
   $('application-open-ad').hidden = noJob || !state.application?.jobUrl || !['needs_job', 'needs_refresh'].includes(state.application.state);
   $('application-host').disabled = busy || noJob || !state.companion || state.companion.locked || state.companion.workflowVersion < 2;
   if (document.activeElement !== $('application-host')) $('application-host').value = flow.host;
   for (const option of $('application-host').options ?? []) option.disabled = (state.companion?.hostInfo || state.application?.hostInfo)?.[option.value]?.available === false;
   $('optional-settings').hidden = noJob || state.prepared?.api?.configured !== false;
   $('configure').hidden = $('optional-settings').hidden;
-  const allowDocuments = !noJob && !['locked', 'unavailable', 'update', 'stale'].includes(flow.kind);
-  $('application').hidden = !allowDocuments || !(flow.cvReady || flow.introReady || state.applicationNotice);
-  $('application-documents').hidden = !allowDocuments || !(flow.cvReady || flow.introReady);
-  for (const [id, ready] of [['show-cv', flow.cvReady], ['copy-intro', flow.introReady]]) {
-    $(id).hidden = !allowDocuments || !ready;
-    $(id).className = flow.primary?.id === id ? '' : 'quiet';
+  const allowDocuments = !noJob && !!state.application && !['locked', 'unavailable', 'update', 'stale'].includes(flow.kind);
+  const letterReady = flow.introReady || !!state.application?.documents?.some(doc => doc.kind === 'cover_letter' && doc.ready);
+  $('application').hidden = !allowDocuments;
+  for (const [prefix, ready] of [['cv', flow.cvReady], ['letter', letterReady]]) {
+    $(`${prefix}-mark`).className = ready ? 'dot done' : 'dot';
+    $(`${prefix}-state`).textContent = ready ? 'Ready' : 'Not ready';
   }
+  $('show-cv').hidden = !allowDocuments || !flow.cvReady;
+  $('copy-intro').hidden = !allowDocuments || !flow.introReady;
   $('application-notice').hidden = !state.applicationNotice; $('application-notice').textContent = state.applicationNotice || '';
   if (state.saveReceipt && receipt !== state.saveReceipt.id) {
     receipt = state.saveReceipt.id;
     for (const key of state.saveReceipt.keys) { drafts.delete(key); if (questionInputs.has(key)) questionInputs.get(key).value = ''; }
   }
-  renderAnswers(busy, noJob || ['locked', 'unavailable', 'update'].includes(flow.kind));
+  const answersHidden = noJob || ['locked', 'unavailable', 'update'].includes(flow.kind);
+  renderAnswers(busy, answersHidden);
+  // The footer carries one sentence: the paste instruction replaces a bare answer count.
+  $('status').hidden = !$('status').textContent || (!$('paste').hidden && ['ready', 'answers'].includes(flow.kind));
   renderJobs(busy);
   for (const button of document.querySelectorAll('button')) if (button !== $('cancel')) button.disabled = busy;
   if (state.answersStale) $('copy').disabled = true;

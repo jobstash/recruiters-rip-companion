@@ -164,21 +164,20 @@
 </section>
 <section id="browser-settings" class="setup-section" aria-labelledby="browser-title">
 <h2 id="browser-title">Browser extensions</h2>
-<div class="settings-content"><details><summary>Optional · save jobs and fill forms</summary>
-<p>Add a browser extension to save jobs and help fill application forms. Keep Companion open when using it.</p>
+<div class="settings-content"><p>Optional. Add a browser extension to save jobs and help fill application forms. Keep Companion open when using it.</p>
 <div class="app-row">
 <h3 class="app-name">Chrome extension</h3>
-<button id="open-extension-folder" class="app-action ghost" type="button">Open folder</button>
-<ol class="app-details help-steps"><li>Choose Open folder here.</li><li>In Chrome, open <code>chrome://extensions</code> and turn on Developer mode.</li><li>Choose Load unpacked and select the folder that Companion opened.</li><li>Open a job ad or application and choose the recruiters.rip toolbar icon. It reads the page.</li></ol>
+<button id="save-extension" class="app-action ghost" type="button">Save to Downloads</button>
+<div class="app-details"><ol class="help-steps"><li>Choose Save to Downloads.</li><li>In Chrome, open <code>chrome://extensions</code> and turn on Developer mode.</li><li>Choose Load unpacked and select the “Recruiters.rip Chrome extension” folder in Downloads.</li><li>Open a job and choose the recruiters.rip toolbar icon.</li></ol><p class="caption">It updates itself while Companion is open. Keep the folder in Downloads.</p><p id="chrome-saved" class="caption" role="status" hidden></p></div>
 <p id="chrome-native-status" class="app-status caption" aria-live="polite"></p>
 </div>
 <div class="app-row">
 <h3 class="app-name">Firefox extension</h3>
-<button id="open-firefox-extension-folder" class="app-action ghost" type="button">Open folder</button>
-<div class="app-details"><ol class="help-steps"><li>Choose Open folder here.</li><li>In Firefox, open <code>about:debugging</code> → This Firefox → Load Temporary Add-on.</li><li>Select <code>manifest.json</code> in the folder that Companion opened.</li><li>Open a job ad or application and choose the recruiters.rip toolbar icon. It reads the page.</li></ol><p class="caption">You will need to load it again after closing Firefox. If you downloaded a ZIP file instead, unzip it first.</p></div>
+<button id="save-firefox-extension" class="app-action ghost" type="button">Save to Downloads</button>
+<div class="app-details"><ol class="help-steps"><li>Choose Save to Downloads.</li><li>In Firefox, open <code>about:debugging</code> → This Firefox → Load Temporary Add-on.</li><li>Select <code>manifest.json</code> in the “Recruiters.rip Firefox extension” folder in Downloads.</li><li>Open a job and choose the recruiters.rip toolbar icon.</li></ol><p class="caption">Load it again after closing Firefox.</p><p id="firefox-saved" class="caption" role="status" hidden></p></div>
 <p id="firefox-native-status" class="app-status caption" aria-live="polite"></p>
 </div>
-</details></div>
+</div>
 </section>
 <section id="sharing-settings" class="setup-section" aria-labelledby="sharing-title">
 <h2 id="sharing-title">CV sharing</h2>

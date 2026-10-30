@@ -543,24 +543,35 @@ test('source setup opens only the fixed official migration guide', async () => {
   assert.deepEqual(opened, ['https://recruiters.rip/downloads#source-install']);
 });
 
-test('managed source extensions advertise versions only after successful persistent refresh', async () => {
-  for (const managedSource of [null, { root: '/synthetic/managed', sourceRoot: '/synthetic/source' }]) {
-    const copied = deferred(), copying = deferred(), calls = [];
+test('Save to Downloads creates the managed folder; launches refresh only saved folders and advertise after the copy', async () => {
+  for (const localOnly of [false, true]) {
+    let record = null, copied = deferred(), copying = deferred();
+    const calls = [], downloads = '/synthetic/Downloads', directory = '/synthetic/profile/device';
     const context = vm.createContext({
-      root: '/synthetic/source', directory: '/synthetic/profile/device', app: { isPackaged: false }, localOnly: false, managedSource, path,
+      root: '/synthetic/source', directory, app: { isPackaged: false, getPath: name => { assert.equal(name, 'downloads'); return downloads; } }, localOnly, path,
       packageMetadata: { version: '3.12.0' }, browserIdentity: { key: 'synthetic-key' }, browserExtensions: {}, fail,
       readFile: async () => JSON.stringify({ version: '3.12.0', key: 'synthetic-key' }),
+      privateJSON: () => { if (!record) throw Object.assign(new Error('missing'), { code: 'ENOENT' }); return JSON.parse(record); },
+      writeFile: async (file, data) => { assert.equal(file, path.join(directory, 'browser-extension-folders.json')); record = data; },
+      protectPrivatePath: () => {},
       persistBrowserExtension: options => { calls.push(options); copying.resolve(); return copied.promise; },
     });
     vm.runInContext(mainSource.slice(mainSource.indexOf('async function refreshBrowserExtension('), mainSource.indexOf('async function nativeOperation(')), context);
-    const refresh = context.refreshBrowserExtension('chrome');
+    assert.equal(await context.refreshBrowserExtension('chrome'), null, 'nothing saved: launch leaves Downloads alone');
+    assert.equal(calls.length, 0);
+    const folder = path.join(downloads, `Recruiters.rip Chrome extension${localOnly ? ' (local)' : ''}`);
+    const saving = context.refreshBrowserExtension('chrome', true);
     await copying.promise;
+    assert.deepEqual({ ...calls[0] }, { source: path.join('/synthetic/source', 'browser-extension', 'dist', localOnly ? 'local' : 'production'), destination: folder, create: true });
     assert.equal(context.browserExtensions.chrome, undefined);
-    assert.equal(calls[0].packaged, false);
-    assert.equal(calls[0].managedSource, Boolean(managedSource));
-    copied.resolve('/synthetic/persisted/chrome');
-    assert.equal(await refresh, '/synthetic/persisted/chrome');
-    assert.equal(context.browserExtensions.chrome.managed, Boolean(managedSource));
-    assert.equal(context.browserExtensions.chrome.version, '3.12.0');
+    copied.resolve(folder);
+    assert.equal(await saving, folder);
+    assert.deepEqual({ ...context.browserExtensions.chrome }, { managed: true, version: '3.12.0' });
+    assert.deepEqual(JSON.parse(record), { chrome: folder });
+    copied = deferred(); copying = deferred();
+    const launching = context.refreshBrowserExtension('chrome');
+    await copying.promise;
+    assert.equal(calls[1].destination, folder); assert.equal(calls[1].create, false);
+    copied.resolve(folder); assert.equal(await launching, folder);
   }
 });

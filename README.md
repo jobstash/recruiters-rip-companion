@@ -81,16 +81,16 @@ Portable backups verify document bytes and rebind them to fresh local document i
 
 Use it to save job adverts and help fill application forms. You can find and review jobs without it.
 
-Use Chrome 125 or newer, or Firefox 128 or newer. Keep Companion open. If your version includes the extension, open **Settings → Browser extensions** and choose **Open folder** for your browser. Otherwise, check availability on [Downloads](https://recruiters.rip/downloads#extension).
+Use Chrome 125 or newer, or Firefox 128 or newer. Keep Companion open. Open **Settings → Browser extensions** and choose **Save to Downloads** for your browser. Companion saves a `Recruiters.rip Chrome extension` or `Recruiters.rip Firefox extension` folder in your Downloads folder and shows it.
 
-Use the folder opened by Companion once so future app updates can refresh it. These managed extensions reload when the browser is idle and no application work is active. A separately unzipped archive or an old app-bundle folder needs a one-time move to the managed folder; it cannot update itself. Firefox’s temporary-loading requirement still applies.
+Keep that folder in Downloads: Companion refreshes it when it starts after an update, and the extension reloads itself when the browser is idle and no application work is active. Companion never replaces a folder with the same name that it did not create; rename or remove that folder first. Firefox’s temporary-loading requirement still applies.
 
 <details>
 <summary>Chrome</summary>
 
 1. Open `chrome://extensions`.
 2. Turn on **Developer mode**.
-3. Choose **Load unpacked** and select the Chrome folder Companion opened.
+3. Choose **Load unpacked** and select the **Recruiters.rip Chrome extension** folder in Downloads.
 4. Open a job page and choose **recruiters.rip** from Chrome’s **Extensions** menu, or click its **rr** icon.
 </details>
 
@@ -99,7 +99,7 @@ Use the folder opened by Companion once so future app updates can refresh it. Th
 
 1. Open `about:debugging` and choose **This Firefox**.
 2. Choose **Load Temporary Add-on**.
-3. Select `manifest.json` in the Firefox folder Companion opened.
+3. Select `manifest.json` in the **Recruiters.rip Firefox extension** folder in Downloads.
 4. Open a job page and choose **recruiters.rip** from Firefox’s **Extensions** menu, or click its **rr** icon.
 
 You will need to load this version again after closing Firefox.
@@ -212,7 +212,7 @@ Local records use plain `vault.json`, without keychain storage or at-rest encryp
 
 Installed identity stays `rip.recruiters.companion`, displayed app **Recruiters.rip Companion**, storage name **Recruiters Companion**, protocol `recruiters-companion://`. Vault paths are `~/Library/Application Support/Recruiters Companion/device/vault.json` on macOS, `%APPDATA%\\Recruiters Companion\\device\\vault.json` on Windows, and `${XDG_CONFIG_HOME:-~/.config}/Recruiters Companion/device/vault.json` on Linux. Local builds use `local-device`. Never test against real user data.
 
-AppImage launchers retain the installed AppImage path, not its temporary mount. Native and MCP scripts are cached under the private device directory in `bridge-runtime/<version>`. Revealing an unpacked extension copies its validated files to the stable `browser-extensions/chrome` or `browser-extensions/firefox` directory; replacing the AppImage does not invalidate the browser's loaded extension path. Reload the extension after updating its files.
+AppImage launchers retain the installed AppImage path, not its temporary mount. Native and MCP scripts are cached under the private device directory in `bridge-runtime/<version>`. **Save to Downloads** copies the validated unpacked extension to a folder in Downloads that Companion refreshes on later launches; replacing the AppImage does not invalidate the browser's loaded extension path.
 
 AppImage bridge launchers use FUSE, not `APPIMAGE_EXTRACT_AND_RUN`. The bundled runtime's extraction output corrupts native-messaging/stdin-stdout protocols, and concurrent extraction processes share a cleanup directory. The extraction flag is not forwarded to bridge processes.
 

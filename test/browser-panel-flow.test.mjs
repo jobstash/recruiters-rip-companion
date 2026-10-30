@@ -51,7 +51,7 @@ test('answer count excludes empty, protected, manual and stale values', () => {
 test('ready package exposes current artifacts without re-generation; partial and stale remain distinct', () => {
   const application = { state: 'ready', documents: [{ kind: 'cv', ready: true }], introduction: { ready: true } };
   const ready = derivePanelFlow({ ...base, application });
-  assert.equal(ready.kind, 'ready'); assert.equal(ready.primary.id, 'show-cv'); assert.equal(ready.introReady, true);
+  assert.equal(ready.kind, 'ready'); assert.equal(ready.primary, null); assert.equal(ready.introReady, true);
   assert.equal(derivePanelFlow({ ...base, application: { ...application, state: 'drafts' } }).kind, 'partial');
   assert.equal(derivePanelFlow({ ...base, application: { ...application, state: 'needs_refresh' } }).kind, 'stale');
   assert.equal(derivePanelFlow({ ...base, application, answersStale: true }).primary.id, 'application-answers');

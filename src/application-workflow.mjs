@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { fail, hash, mutateCareer, readCareer } from './mcp/state.mjs';
-import { canonicalJobUrl } from './mcp/job-tools.mjs';
+import { canonicalJobUrl, importCapturedJobs } from './mcp/job-tools.mjs';
 import { formEvidence, formFingerprint, unavailableField, validFormValue, validateFormSnapshot } from './mcp/form-tools.mjs';
 import { assertJobNotBlocked } from './mcp/blocklist.mjs';
 
@@ -82,6 +82,19 @@ export function upsertApplication(career, job) {
     app.jobSourceFingerprint = sourceJobFingerprint(career.jobs?.[app.job.id]);
   }
   return app;
+}
+/** Panel "Save as applied": save the captured jobs, then give each one its exact job-bound application (reused, never duplicated). */
+export async function saveAppliedJobs({ store, ...capture }) {
+  const saved = await importCapturedJobs({ store, ...capture });
+  const ids = saved.jobs.map(job => job.id);
+  const { revision } = await mutateCareer(store, { requestId: randomUUID(), revision: saved.revision }, 'browser_jobs_applied', { ids }, career => {
+    for (const id of ids) {
+      const { title, company, description, applyUrl, url, location } = career.jobs[id];
+      upsertApplication(career, { id, title, company, description, url: applyUrl ?? url, originalUrl: url, ...(location ? { location } : {}) });
+    }
+    return {};
+  });
+  return { ...saved, revision };
 }
 export const applicationQuestionKey = field => hash({ label: normalized(field.label), type: field.type,
   options: (field.options ?? []).map(option => ({ value: option.value, label: normalized(option.label) })), maxLength: field.maxLength ?? null });

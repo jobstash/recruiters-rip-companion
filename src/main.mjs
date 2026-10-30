@@ -12,7 +12,7 @@ import { createDeviceClient } from './client.mjs';
 import { installNative } from './install-native.mjs';
 import { BROWSER_IDENTITIES, nativeBrowser } from './browser-identity.mjs';
 import { claimInstance } from './instance-lock.mjs';
-import { endpoint, launcherScript, mcpCommand, protectPrivatePath, createAuthenticationChallenge, verifyAuthenticationProof, prepareBridgeRuntime, persistBrowserExtension } from './platform-runtime.cjs';
+import { endpoint, launcherScript, mcpCommand, protectPrivatePath, privateJSON, createAuthenticationChallenge, verifyAuthenticationProof, prepareBridgeRuntime, persistBrowserExtension } from './platform-runtime.cjs';
 import { createIntroductionTools, introductionsStatus, setSharingConsent } from './mcp/introduction-tools.mjs';
 import { deleteCv } from './mcp/cv-deletion.mjs';
 import { openEmploymentProfile } from './employment-browser.mjs';
@@ -32,13 +32,13 @@ import { createCareerBrowser } from './career-browser.mjs';
 import { createDecisionCredentials, decisionCredentialStatus } from './decisions/credentials.mjs';
 import { savedPublicationRange, setPublicationRange } from './mcp/review-queue.mjs';
 import { startPairingReturn } from './pairing-return.mjs';
-import { createJobTools, importCapturedJobs } from './mcp/job-tools.mjs';
+import { createJobTools } from './mcp/job-tools.mjs';
 import { createFormTools, currentForm, formEvidence } from './mcp/form-tools.mjs';
 import { createBrowserForms } from './browser-forms.mjs';
 import { createUpdateController } from './updates.mjs';
 import { createUpdatePreferences, createUpdateScheduler, createUpdateWorkGate, updateAppPath } from './update-scheduler.mjs';
 import { inspectManagedSource } from './source-updates.mjs';
-import { createApplicationWorkflow, createApplicationPreparationTools } from './application-workflow.mjs';
+import { createApplicationWorkflow, createApplicationPreparationTools, saveAppliedJobs } from './application-workflow.mjs';
 import { createApplicationLauncher, REVIEW_PROMPT } from './application-launcher.mjs';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -539,18 +539,31 @@ async function installConnections() {
     catch { delete browserExtensions[browser]; }
   }));
 }
-async function refreshBrowserExtension(browser) {
+// Save to Downloads creates the managed folder; launches refresh only folders the user saved,
+// so Companion never touches Downloads (or triggers OS folder prompts) uninvited.
+async function refreshBrowserExtension(browser, save = false) {
   const firefox = browser === 'firefox';
   const source = path.join(app.isPackaged ? root.replace(/app\.asar$/, 'app.asar.unpacked') : root,
     'browser-extension', 'dist', `${firefox ? 'firefox-' : ''}${localOnly ? 'local' : 'production'}`);
   let manifest;
   try { manifest = JSON.parse(await readFile(path.join(source, 'manifest.json'), 'utf8')); }
-  catch { fail('HOST_INSTALL_FAILED', app.isPackaged ? 'The bundled browser extension is missing. Reinstall the complete companion.' : 'Build the companion before opening its browser extension folder.'); }
+  catch { fail('HOST_INSTALL_FAILED', app.isPackaged ? 'The bundled browser extension is missing. Reinstall the complete companion.' : 'Build the companion before saving its browser extension.'); }
   if (manifest.version !== packageMetadata.version || (firefox ? manifest.browser_specific_settings?.gecko?.id !== browserIdentity.firefoxExtensionId : manifest.key !== browserIdentity.key))
     fail('HOST_INSTALL_FAILED', 'The bundled browser extension does not match this companion. Rebuild or reinstall the complete companion.');
-  const managed = app.isPackaged || Boolean(managedSource);
-  const folder = await persistBrowserExtension({ source, directory, browser, packaged: app.isPackaged, managedSource: Boolean(managedSource) });
-  browserExtensions[browser] = { managed, version: manifest.version };
+  const record = path.join(directory, 'browser-extension-folders.json');
+  let folders = {};
+  try { folders = privateJSON(record); } catch { /* Nothing saved yet. */ }
+  const destination = save ? path.join(app.getPath('downloads'), `Recruiters.rip ${firefox ? 'Firefox' : 'Chrome'} extension${localOnly ? ' (local)' : ''}`) : folders[browser];
+  if (typeof destination !== 'string') return null;
+  let folder;
+  try { folder = await persistBrowserExtension({ source, destination, create: save }); }
+  catch (error) { fail('HOST_INSTALL_FAILED', error.code === 'HOST_INSTALL_FAILED' ? error.message : 'Companion could not save the extension to Downloads. Allow Companion to use your Downloads folder, then try again.'); }
+  if (!folder) return null;
+  browserExtensions[browser] = { managed: true, version: manifest.version };
+  if (save && folders[browser] !== folder) {
+    await writeFile(record, JSON.stringify({ ...folders, [browser]: folder }), { mode: 0o600 });
+    protectPrivatePath(record);
+  }
   return folder;
 }
 async function nativeOperation(op, payload, socket = null) {
@@ -643,7 +656,7 @@ async function nativeOperation(op, payload, socket = null) {
   }
   if (op === 'capture_jobs') return mutation(async () => {
     const scoped = createScopedAccess(store, { assertAvailable, epoch: () => sessionEpoch });
-    const result = await importCapturedJobs({ store: scoped.store, ...payload, revision: scoped.store.get().career?.revision ?? 0 });
+    const result = await saveAppliedJobs({ store: scoped.store, ...payload, revision: scoped.store.get().career?.revision ?? 0 });
     scoped.assertAvailable(false); careerViewRevision++; emit(); return result;
   });
   if (payload.useApi !== undefined && typeof payload.useApi !== 'boolean') fail('INVALID_INPUT', 'Choose whether to use the optional Decisions API.');
@@ -939,12 +952,10 @@ async function settingsOperation(op, input, ownMutation) {
         if (error) fail('INVALID_INPUT', 'The Claude extension could not be opened. Use the displayed local MCP configuration instead.');
       }
     }
-    else if (op === 'open-extension-folder' || op === 'open-firefox-extension-folder') {
-      const firefox = op === 'open-firefox-extension-folder', browser = firefox ? 'Firefox' : 'Chrome';
-      const folder = await refreshBrowserExtension(firefox ? 'firefox' : 'chrome');
-      const error = await shell.openPath(folder);
-      if (error) fail('HOST_INSTALL_FAILED', `The ${browser} extension folder could not be opened. Reinstall the complete companion and try again.`);
-      result = { opened: true };
+    else if (op === 'save-extension' || op === 'save-firefox-extension') {
+      const folder = await refreshBrowserExtension(op === 'save-firefox-extension' ? 'firefox' : 'chrome', true);
+      shell.showItemInFolder(folder);
+      result = { saved: true, folder: path.basename(folder) };
     }
     else fail('INVALID_INPUT', 'This settings action is unavailable.');
     emit(); return { ok: true, result };

@@ -8,7 +8,7 @@ function newer(candidate, current) {
   return false;
 }
 
-// The marker is present only in Companion's stable managed folder, never source ZIPs.
+// The marker is present only in the Downloads folder Companion saves and refreshes, never source ZIPs.
 // No candidate state is persisted; a version-only receipt prevents failed reload loops.
 export function installManagedUpdates({ browser, browserName, status, isSafe, fetchImpl = fetch }) {
   let checking = false;

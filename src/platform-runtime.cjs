@@ -170,19 +170,23 @@ async function prepareBridgeRuntime({ executable, appPath, directory, packaged, 
   }
   return { executable: image, appPath: cached, runtimeRoot: cached };
 }
-async function persistBrowserExtension({ source, directory, browser, packaged, managedSource = false, platform = process.platform, rename = fs.promises.rename }) {
-  // managedSource is supplied only after the caller verifies its installation receipt.
-  if (!packaged && managedSource !== true) return source;
-  if (!['chrome', 'firefox'].includes(browser) || !['darwin', 'win32', 'linux'].includes(platform)) throw new Error('Invalid browser extension installation.');
-  const base = path.join(directory, 'browser-extensions'), destination = path.join(base, browser);
-  for (const entry of [directory, base]) {
-    await fs.promises.mkdir(entry, { recursive: true, mode: 0o700 });
-    protectPrivatePath(entry, { directory: true });
-  }
+// Refreshes a user-visible, Companion-managed extension folder (in Downloads) in place.
+// managed-update.json marks Companion's folders; any other existing entry is never replaced.
+async function persistBrowserExtension({ source, destination, create = true, rename = fs.promises.rename }) {
+  const base = path.dirname(destination), name = path.basename(destination);
   let existing = false;
-  try { assertPrivatePath(destination, { directory: true }); existing = true; }
-  catch (error) { if (error.code !== 'ENOENT') throw error; }
-  const nonce = randomBytes(12).toString('hex'), staged = path.join(base, `.${browser}-${nonce}.tmp`), backup = path.join(base, `.${browser}-${nonce}.previous`);
+  try {
+    const info = await fs.promises.lstat(destination);
+    const marker = info.isDirectory() ? await fs.promises.lstat(path.join(destination, 'managed-update.json')).catch(() => null) : null;
+    if (info.isSymbolicLink() || !marker?.isFile())
+      throw Object.assign(new Error(`A "${name}" folder that Companion did not create is already in ${path.basename(base)}. Rename or remove it, then try again.`), { code: 'HOST_INSTALL_FAILED' });
+    existing = true;
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    if (!create) return null;
+    await fs.promises.mkdir(base, { recursive: true });
+  }
+  const nonce = randomBytes(12).toString('hex'), staged = path.join(base, `.${name}-${nonce}.tmp`), backup = path.join(base, `.${name}-${nonce}.previous`);
   async function copyTree(from, to) {
     const info = await fs.promises.lstat(from);
     if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('Invalid bundled extension directory.');

@@ -16,22 +16,22 @@ export function derivePanelFlow(state = {}) {
       detect: 'Reading this page…', prepare: 'Preparing saved answers…', 'prepare-saved': 'Preparing saved answers…',
       'application-prepare': `Preparing this application in ${hostName}…`, 'profile-save': 'Saving details…',
       'application-host': 'Saving AI app choice…', 'application-document': 'Showing your CV…',
-      'copy-intro': 'Copying introduction…', save: 'Saving selected jobs…', settings: 'Opening Companion…',
+      'copy-intro': 'Copying introduction…', save: 'Saving as applied…', settings: 'Opening Companion…',
       configure: 'Opening settings…', install: 'Opening downloads…', 'open-job': 'Opening job…', 'application-open-ad': 'Opening job ad…',
     }[state.busy] || 'Working…';
     return result('working', message, state.busy === 'prepare' || state.busy === 'prepare-saved' ? action('cancel', 'Stop') : null);
   }
   // Page evidence wins over setup requirements: there is no application to prepare here.
-  if (state.pageKind === 'none') return result('no-job', 'No job found on this page. Open a job ad or application, then read the page.', action('detect', 'Read page'));
-  if (state.pageKind === 'listing') return result('listing', 'Choose the job you want to apply for.', null);
-  if (state.errorCode === 'COMPANION_UNAVAILABLE') return result('unavailable', 'Open Companion, then retry. Not installed? Get Companion below.', action('detect', 'Retry'), { recovery: true, install: true });
+  if (state.pageKind === 'none') return result('no-job', 'No job found on this page. Open a job ad or application form.', action('detect', 'Read page'));
+  if (state.pageKind === 'listing') return result('listing', 'Open the job you want to apply for, or select the jobs you applied to and save them.', null);
+  if (state.errorCode === 'COMPANION_UNAVAILABLE') return result('unavailable', 'Companion is not running. Open it, then retry. Not installed? Choose Get Companion.', action('detect', 'Retry'), { recovery: true, install: true });
   if (state.companion?.locked || state.errorCode === 'LOCAL_LOCKED') return result('locked', 'Unlock your saved data in Companion, then read the page again.', action('settings', 'Open Companion'), { recovery: true });
   if (state.errorCode === 'COMPANION_UPDATE_REQUIRED' || (state.companion && !(state.companion.workflowVersion >= 2))) return result('update', 'Update Companion to prepare this application, then read the page again.', action('settings', 'Open Companion'), { recovery: true });
   if (state.errorCode && /^(DECISIONS_|OPENAI_|API_)/.test(state.errorCode)) return result('extra-help-error', 'Extra form help is unavailable. You can still use saved answers.', action('prepare-saved', 'Use saved answers'));
   if (state.error) return result('error', state.error, action('detect', 'Read again'));
   if (state.companion?.hasCv === false && app?.state !== 'ready') return result('missing-cv', 'Import your CV in Companion → Me → Import CV, then read the page again.', action('settings', 'Open Companion'), { recovery: true });
   if (state.answersStale || app?.state === 'needs_refresh') return result('stale', 'The job or your saved details changed. Refresh this application before using its answers.', app?.state === 'ready' ? action('application-answers', 'Refresh answers') : app ? action('application-prepare', 'Update application') : action('prepare-saved', 'Refresh answers'));
-  if (app?.state === 'ready') return result('ready', answerCount ? `${answerCount} ${answerCount === 1 ? 'answer' : 'answers'} ready` : 'Your application is ready.', state.applicationAnswersPending ? action('application-answers', 'Use saved answers') : cvReady ? action('show-cv', 'Show CV') : introReady ? action('copy-intro', 'Copy intro') : null);
+  if (app?.state === 'ready') return result('ready', answerCount ? `${answerCount} ${answerCount === 1 ? 'answer' : 'answers'} ready` : 'Your application is ready.', state.applicationAnswersPending ? action('application-answers', 'Use saved answers') : null);
   if (app?.handoff?.state === 'agent_read') {
     const name = app.handoff.host === 'codex' ? 'Codex' : 'Claude';
     return result('host-read', `${name} has read the request. Return there to continue; saved documents appear here when available.`);

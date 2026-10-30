@@ -55,7 +55,7 @@ function openSettings(target) {
   selectSettingsTab('general');
   const section = $(target);
   if (!section) return;
-  if (['browser-settings', 'decisions', 'sharing-settings'].includes(target)) {
+  if (['decisions', 'sharing-settings'].includes(target)) {
     section.querySelector('details').open = true;
   }
   section.scrollIntoView({ block: 'start' });
@@ -227,6 +227,12 @@ async function action(op, success) {
   catch (error) { notice(error.message, 'error', true); }
   finally { busy = false; controls.forEach((control, index) => { control.disabled = disabled[index]; }); window.backupsUI?.setBusy(false); await refresh(); }
 }
+// The confirmation stays beside the browser that was saved; no toast repeats it.
+function savedExtension(browser, result) {
+  $(`${browser}-saved`).textContent = `Saved to Downloads › ${result.folder}`;
+  $(`${browser}-saved`).hidden = false;
+  return '';
+}
 for (const [id, op, message] of [
   ['connect-account', 'connect-account', result => result.pairingRequired ? 'Complete sign-in in the browser, then choose Open Companion and approve the account on this computer.' : ''],
   ['get-codex', 'get-codex', result => `${result.destination} opened in your browser.`],
@@ -235,8 +241,8 @@ for (const [id, op, message] of [
   ['copy-command', 'copy-command', 'MCP command copied.'],
   ['copy-config', 'copy-config', 'Configuration copied.'],
   ['install-claude', 'install-claude', result => result?.configured ? 'Claude setup saved. Choose Continue in Claude to start a conversation.' : 'Finish adding recruiters.rip in the Claude window that opened.'],
-  ['open-extension-folder', 'open-extension-folder', 'Folder opened. In Chrome, open chrome://extensions, enable Developer mode, choose Load unpacked and select this folder.'],
-  ['open-firefox-extension-folder', 'open-firefox-extension-folder', 'Extension folder opened. In Firefox, use about:debugging → This Firefox → Load Temporary Add-on and select manifest.json.'],
+  ['save-extension', 'save-extension', result => savedExtension('chrome', result)],
+  ['save-firefox-extension', 'save-firefox-extension', result => savedExtension('firefox', result)],
   ['import-cv', 'import-cv', result => result.cancelled ? 'Import canceled.' : 'CV imported.'],
   ['copy-review-prompt', 'copy-review-prompt', 'Copied. Paste into your connected Codex or Claude conversation and send.'],
   ['review-codex', 'review-codex', result => result.mode === 'cli' ? 'Codex opened. Press Enter in that window to send the message.' : 'Codex opened. Send the message there to start the review.'],

@@ -323,9 +323,9 @@ async function act(message) {
       try { await prepare(token, automaticPreparation); } finally { automaticPreparation = false; }
     } else if (action === 'save') {
       const indexes = [...new Set(payload.indexes || [])].filter(i => Number.isInteger(i) && i >= 0 && i < state.jobs.length);
-      if (!indexes.length) throw new Error('Select at least one job to save.');
+      if (!indexes.length) throw new Error('Select the jobs you applied to.');
       const result = await native.request('capture_jobs', { requestId: crypto.randomUUID(), sourceUrl: state.page.url, jobs: indexes.map(i => state.jobs[i]) });
-      state.notice = `Saved ${result.added} new jobs; updated ${result.updated}. Open Jobs in the companion to review.`;
+      state.notice = `Saved ${result.jobs.length} ${result.jobs.length === 1 ? 'job' : 'jobs'} as applied. See Jobs → Applications in Companion.`;
     } else if (action === 'profile-save') {
       if (!state.prepared?.snapshot || !state.form) throw new Error('Read page before saving details.');
       const allowed = new Map((state.prepared.questions || []).filter(question => question.key !== 'personalSummary').map(question => [question.key, question]));

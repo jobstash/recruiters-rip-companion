@@ -72,60 +72,44 @@ test('Linux bridges discard extraction-mode controls that can corrupt protocol s
   }
 });
 
-test('AppImage extension folders survive mount removal and refresh the same browser path transactionally', { skip: process.platform === 'win32' }, async t => {
+test('Downloads extension folders refresh in place transactionally and never replace folders Companion did not create', { skip: process.platform === 'win32' }, async t => {
   const home = await mkdtemp(path.join(tmpdir(), 'rr-extension-persistence-'));
   t.after(() => rm(home, { recursive: true, force: true }));
-  const bundled = path.join(home, 'mounted-extension'), directory = path.join(home, 'device');
-  const options = { source: bundled, directory, browser: 'chrome', packaged: true, platform: 'linux', env: { APPIMAGE: '/installed/Companion.AppImage' } };
+  const bundled = path.join(home, 'mounted-extension'), downloads = path.join(home, 'Downloads');
+  const persistent = path.join(downloads, 'Recruiters.rip Chrome extension'), options = { source: bundled, destination: persistent };
   await mkdir(bundled);
   await writeFile(path.join(bundled, 'manifest.json'), '{"version":"1.0.0"}');
   await writeFile(path.join(bundled, 'obsolete.js'), 'old');
-  const persistent = await persistBrowserExtension(options);
-  assert.equal(persistent, path.join(directory, 'browser-extensions', 'chrome'));
-  const firefox = await persistBrowserExtension({ ...options, browser: 'firefox' });
-  assert.equal(firefox, path.join(directory, 'browser-extensions', 'firefox'));
+  assert.equal(await persistBrowserExtension({ ...options, create: false }), null, 'launch refresh never creates a folder the user did not save');
+  await assert.rejects(readdir(downloads), { code: 'ENOENT' });
+  assert.equal(await persistBrowserExtension(options), persistent);
   await rm(bundled, { recursive: true });
   assert.deepEqual(JSON.parse(await readFile(path.join(persistent, 'manifest.json'), 'utf8')), { version: '1.0.0' });
   await mkdir(bundled);
   await writeFile(path.join(bundled, 'manifest.json'), '{"version":"2.0.0"}');
   await writeFile(path.join(bundled, 'current.js'), 'new');
-  assert.equal(await persistBrowserExtension(options), persistent);
+  assert.equal(await persistBrowserExtension({ ...options, create: false }), persistent);
   assert.deepEqual((await readdir(persistent)).sort(), ['current.js', 'managed-update.json', 'manifest.json']);
   assert.deepEqual(JSON.parse(await readFile(path.join(persistent, 'manifest.json'), 'utf8')), { version: '2.0.0' });
+  assert.deepEqual(JSON.parse(await readFile(path.join(persistent, 'managed-update.json'), 'utf8')), { version: '2.0.0' });
   await writeFile(path.join(bundled, 'manifest.json'), '{"version":"3.0.0"}');
   await assert.rejects(persistBrowserExtension({ ...options, rename: async (from, to) => {
     if (from.endsWith('.tmp') && to === persistent) throw new Error('Synthetic replacement failure');
     return rename(from, to);
   } }), /Synthetic replacement failure/);
   assert.deepEqual(JSON.parse(await readFile(path.join(persistent, 'manifest.json'), 'utf8')), { version: '2.0.0' });
-  assert.deepEqual((await readdir(path.dirname(persistent))).sort(), ['chrome', 'firefox']);
+  assert.deepEqual(await readdir(downloads), ['Recruiters.rip Chrome extension']);
   await symlink(path.join(bundled, 'manifest.json'), path.join(bundled, 'unsafe.json'));
   await assert.rejects(persistBrowserExtension(options), /symbolic links/);
   assert.deepEqual(JSON.parse(await readFile(path.join(persistent, 'manifest.json'), 'utf8')), { version: '2.0.0' });
   await rm(path.join(bundled, 'unsafe.json'));
+  const foreign = path.join(downloads, 'Recruiters.rip Firefox extension');
+  await mkdir(foreign);
+  await writeFile(path.join(foreign, 'notes.txt'), 'mine');
+  for (const create of [true, false])
+    await assert.rejects(persistBrowserExtension({ source: bundled, destination: foreign, create }), { code: 'HOST_INSTALL_FAILED', message: /did not create.*Rename or remove it/ });
+  assert.deepEqual(await readdir(foreign), ['notes.txt']);
   await rm(persistent, { recursive: true });
   await symlink(bundled, persistent);
-  await assert.rejects(persistBrowserExtension(options), /private storage/);
-});
-
-test('unmanaged source stays untouched while packaged and verified managed-source folders refresh on every supported OS', async t => {
-  const home = await mkdtemp(path.join(tmpdir(), 'rr-managed-extension-'));
-  t.after(() => rm(home, { recursive: true, force: true }));
-  const source = path.join(home, 'bundled');
-  await mkdir(source);
-  for (const platform of ['darwin', 'win32', 'linux']) {
-    for (const managedSource of [false, undefined, 'true'])
-      assert.equal(await persistBrowserExtension({ source, directory: home, browser: 'chrome', platform, packaged: false, managedSource,
-        env: { RECRUITERS_MANAGED_SOURCE: '1' } }), source);
-    for (const browser of ['chrome', 'firefox']) for (const packaged of [true, false]) {
-      const managedSource = !packaged;
-      const directory = path.join(home, platform, browser, packaged ? 'packaged' : 'managed-source');
-      await writeFile(path.join(source, 'manifest.json'), '{"version":"3.11.0"}');
-      const destination = await persistBrowserExtension({ source, directory, browser, platform, packaged, managedSource });
-      await writeFile(path.join(source, 'manifest.json'), '{"version":"3.12.0"}');
-      assert.equal(await persistBrowserExtension({ source, directory, browser, platform, packaged, managedSource }), destination);
-      assert.deepEqual(JSON.parse(await readFile(path.join(destination, 'manifest.json'), 'utf8')), { version: '3.12.0' });
-      assert.deepEqual(JSON.parse(await readFile(path.join(destination, 'managed-update.json'), 'utf8')), { version: '3.12.0' });
-    }
-  }
+  await assert.rejects(persistBrowserExtension(options), /did not create/);
 });

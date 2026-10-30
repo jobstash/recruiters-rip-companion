@@ -9,6 +9,7 @@ import { createCareerState } from '../src/mcp/state.mjs';
 import { ASSESSMENT_POLICY_ID } from '../src/mcp/matching-contract.mjs';
 import { publicationInWindow } from '../src/mcp/publication-range.mjs';
 import { addBlock, removeBlock } from '../src/mcp/blocklist.mjs';
+import { saveAppliedJobs } from '../src/application-workflow.mjs';
 
 const sourceUrl = 'https://jobs.example.test/search';
 const full = (suffix = 'a', overrides = {}) => ({ title: 'Reporting engineer', company: 'Example',
@@ -60,6 +61,17 @@ test('native capture validates jobs and URLs atomically, without relying on MCP 
   await rejects(f.capture(Array.from({ length: 12 }, (_, i) => full(String(i), { description: 'x'.repeat(100000) }))), 'INVALID_INPUT');
   await rejects(f.capture([full()], { revision: 1 }), 'REVISION_CONFLICT');
   await rejects(f.capture([full()], { requestId: 'not-a-uuid' }), 'INVALID_INPUT');
+});
+
+test('Save as applied records each saved job as one application and re-saving reuses it', async () => {
+  const f = fixture();
+  const save = jobs => saveAppliedJobs({ store: f.store, ...f.mutation(), sourceUrl, jobs });
+  const first = await save([full('a'), full('b', { complete: false, description: undefined })]);
+  assert.equal(first.added, 2); assert.equal(first.revision, f.store.get().career.revision);
+  const apps = () => Object.values(f.store.get().career.applications);
+  assert.deepEqual(apps().map(app => app.job.id).sort(), first.jobs.map(job => job.id).sort());
+  await save([full('a')]);
+  assert.equal(apps().length, 2);
 });
 
 test('batch capture receipts replay exact requests and reject changed retries', async () => {

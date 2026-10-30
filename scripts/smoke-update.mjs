@@ -136,7 +136,12 @@ async function readReceipt() {
     const active = JSON.parse(await readFile(path.join(updates, 'active.json'), 'utf8'));
     assert.match(active.id, /^[a-f0-9]{32}$/);
     return JSON.parse(await readFile(path.join(updates, `install-${active.id}`, 'journal.json'), 'utf8'));
-  } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    // The Windows helper atomically replaces this file; a concurrent read can briefly see EBUSY.
+    if (process.platform === 'win32' && error.code === 'EBUSY') return null;
+    throw error;
+  }
 }
 async function stop(pid) {
   if (!Number.isSafeInteger(pid) || pid <= 1 || pid === process.pid) return;

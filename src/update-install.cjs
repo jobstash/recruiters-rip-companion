@@ -34,11 +34,19 @@ function validateJournal(journal, journalFile) {
 }
 
 async function readJournal(file) {
-  const info = await fs.lstat(file);
-  if (!info.isFile() || info.isSymbolicLink() || info.size > 16 * 1024) throw new Error('Invalid update receipt.');
-  const journal = validateJournal(JSON.parse(await fs.readFile(file, 'utf8')), file);
-  if (await hasConfirmation(journal)) journal.status = 'confirmed';
-  return journal;
+  // The Windows helper atomically replaces receipts; a concurrent read can briefly see EBUSY.
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const info = await fs.lstat(file);
+      if (!info.isFile() || info.isSymbolicLink() || info.size > 16 * 1024) throw new Error('Invalid update receipt.');
+      const journal = validateJournal(JSON.parse(await fs.readFile(file, 'utf8')), file);
+      if (await hasConfirmation(journal)) journal.status = 'confirmed';
+      return journal;
+    } catch (error) {
+      if (error.code !== 'EBUSY' || attempt >= 20) throw error;
+      await delay(50);
+    }
+  }
 }
 
 async function writeJournal(journal, status, extra = {}) {

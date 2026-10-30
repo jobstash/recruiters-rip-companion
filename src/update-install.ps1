@@ -39,8 +39,9 @@ function Receipt([string]$status) {
   $j.updatedAt = [DateTime]::UtcNow.ToString('o')
   $temp = "$Journal.ps-tmp"
   [IO.File]::WriteAllText($temp, ($j | ConvertTo-Json -Compress), (New-Object Text.UTF8Encoding($false)))
-  # MoveFileEx replacement is atomic; File.Replace works for the existing receipt.
-  [IO.File]::Replace($temp, $Journal, $null)
+  # PowerShell converts $null to an empty path for .NET string arguments.
+  # [NullString]::Value passes a real null, so File.Replace keeps no backup.
+  [IO.File]::Replace($temp, $Journal, [NullString]::Value)
 }
 function Target-Processes {
   @(Get-Process | Where-Object { try { $_.Path -and $_.Path.StartsWith($j.target + '\', [StringComparison]::OrdinalIgnoreCase) } catch { $false } })

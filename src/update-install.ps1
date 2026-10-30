@@ -2,8 +2,8 @@ param([Parameter(Mandatory=$true)][string]$Journal)
 $ErrorActionPreference = 'Stop'
 # Runs in Windows PowerShell, never the installed Electron executable: NSIS can
 # uninstall every old binary without the updater holding an executable/DLL lock.
-$j = Get-Content -LiteralPath $Journal -Raw | ConvertFrom-Json
-$work = Split-Path -Parent $Journal
+$j = $null
+$work = $null
 $exclusion = $null
 function Acquire-Exclusion {
   if ($script:exclusion) { return $true }
@@ -64,6 +64,17 @@ function Restore {
 }
 $changed = $false
 try {
+  # Bind cmdlets to this Windows PowerShell installation, not an inherited
+  # pwsh module search path or the synthetic/user profile's module directory.
+  $previousModulePath = $env:PSModulePath
+  try {
+    $env:PSModulePath = [IO.Path]::Combine($PSHOME, 'Modules')
+    foreach ($moduleName in @('Microsoft.PowerShell.Management', 'Microsoft.PowerShell.Utility', 'Microsoft.PowerShell.Security')) {
+      Import-Module -Name ([IO.Path]::Combine($PSHOME, 'Modules', $moduleName, ($moduleName + '.psd1'))) -Force -ErrorAction Stop
+    }
+  } finally { $env:PSModulePath = $previousModulePath }
+  $j = [IO.File]::ReadAllText($Journal) | ConvertFrom-Json
+  $work = [IO.Path]::GetDirectoryName($Journal)
   if ($j.schema -ne 1 -or $j.platform -cne 'win32' -or $j.id -cnotmatch '^[a-f0-9]{32}$' -or $j.digest -cnotmatch '^[a-f0-9]{64}$' -or $j.pid -lt 1 -or $j.status -cne 'staged') { throw 'Invalid receipt' }
   $parent = Split-Path -Parent $j.target
   if ($Journal -cne $j.journal -or (Split-Path -Leaf $work) -cne "install-$($j.id)" -or $j.staged -cne (Join-Path $parent ".recruiters-update-$($j.id)") -or $j.backup -cne (Join-Path $parent ".recruiters-backup-$($j.id)") -or $j.installer -cne (Join-Path $work 'installer.exe') -or $j.executable -cne 'Recruiters.rip Companion.exe') { throw 'Invalid update paths' }
@@ -129,6 +140,7 @@ try {
   # The parent retains bounded stderr only as a private diagnostic cause. A
   # closed parent pipe must never prevent rollback or honest receipt handling.
   try { [Console]::Error.WriteLine($failure.Exception.ToString() + [Environment]::NewLine + $failure.InvocationInfo.PositionMessage) } catch {}
+  if ($null -eq $j -or !$work) { exit 1 }
   try {
     if (Confirmed) { Receipt 'confirmed' }
     elseif ($changed -and (Test-Path -LiteralPath $j.backup)) { Restore }

@@ -328,13 +328,19 @@ async function launchHelper(helper, journal, executable, signal, acquireAdmissio
 }
 
 const powershell = () => path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-const encodedCommand = source => ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(source, 'utf16le').toString('base64')];
+const encodePowerShell = source => Buffer.from(source, 'utf16le').toString('base64');
+const encodedCommand = source => ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', encodePowerShell(source)];
+const powerShellString = value => `'${value.replaceAll("'", "''")}'`;
 
 async function launchNativeHelper(helper, journal, signal, acquireAdmission) {
   const work = path.dirname(journal.journal);
   const command = journal.platform === 'win32' ? powershell() : '/bin/sh';
+  // Node's detached Windows PowerShell exits before running any script, while
+  // an attached child dies with the app. Start-Process hands the helper to
+  // Windows; reading the copied file keeps the command under OS length limits.
+  const helperCommand = `& ([ScriptBlock]::Create([IO.File]::ReadAllText(${powerShellString(helper)}))) -Journal ${powerShellString(journal.journal)}`;
   const args = journal.platform === 'win32'
-    ? encodedCommand(`& {\n${await readFile(helper, 'utf8')}\n} -Journal '${journal.journal.replaceAll("'", "''")}'`)
+    ? encodedCommand(`$ErrorActionPreference='Stop'; Start-Process -FilePath ${powerShellString(powershell())} -WindowStyle Hidden -ArgumentList @('-NoLogo','-NoProfile','-NonInteractive','-EncodedCommand',${powerShellString(encodePowerShell(helperCommand))})`)
     : [helper, work, journal.target, journal.staged, journal.backup, String(journal.pid), journal.digest, journal.id, journal.userData, journal.lock.file];
   const lockHandle = journal.platform === 'linux' ? await open(journal.lock.file, constants.O_CREAT | constants.O_RDWR | constants.O_NOFOLLOW, 0o600) : null;
   let child, spawnError, helperStderr = '';
@@ -343,7 +349,7 @@ async function launchNativeHelper(helper, journal, signal, acquireAdmission) {
       const info = await lockHandle.stat();
       if (!info.isFile() || info.nlink !== 1 || await realpath(journal.lock.file) !== journal.lock.file) throw fail('INVALID_TARGET', 'The installation exclusion file is unsafe.');
     }
-    child = spawn(command, args, { detached: true, env: installer.launchEnvironment(), stdio: lockHandle ? ['ignore', 'ignore', 'pipe', lockHandle.fd] : ['ignore', 'ignore', 'pipe'] });
+    child = spawn(command, args, { detached: journal.platform !== 'win32', env: installer.launchEnvironment(), stdio: lockHandle ? ['ignore', 'ignore', 'pipe', lockHandle.fd] : ['ignore', 'ignore', 'pipe'] });
     child.stderr.on('data', bytes => { if (helperStderr.length < 8192) helperStderr += bytes.toString('utf8').slice(0, 8192 - helperStderr.length); });
     child.once('error', error => { spawnError = error; });
   } finally { await lockHandle?.close(); }
@@ -352,7 +358,8 @@ async function launchNativeHelper(helper, journal, signal, acquireAdmission) {
     for (;;) {
       throwIfAborted(signal);
       if (spawnError) throw spawnError;
-      if (child.exitCode !== null || child.signalCode || Date.now() >= deadline) {
+      const launcherFailed = child.exitCode !== null && (journal.platform !== 'win32' || child.exitCode !== 0);
+      if (launcherFailed || child.signalCode || Date.now() >= deadline) {
         const error = fail('HELPER_FAILED', 'The native updater could not prepare this installation. Use the release installer.');
         error.cause = new Error(helperStderr.trim() || `Native helper did not become ready (exit ${child.exitCode}, signal ${child.signalCode}).`);
         throw error;

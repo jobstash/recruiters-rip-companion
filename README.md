@@ -5,33 +5,35 @@ Companion keeps your CVs and applications on your computer. Use Codex or Claude 
 
 ## Start here
 
-You need Companion, a CV, and Codex or Claude. The browser extension is optional.
+You need Companion, a readable CV, and your own Codex or Claude account. Downloads and new recruiters.rip jobs require a membership; any plan required by your AI app is billed separately. The browser extension is optional.
 
 ### 1. Install Companion
 
-Choose your computer at [Downloads](https://recruiters.rip/downloads), then open **Recruiters.rip Companion**.
+Open [Downloads](https://recruiters.rip/downloads) and choose **Mac**, **Windows** or **Linux**. Check availability before paying for a membership, then follow the steps for your computer. Only the validated Mac and Chrome downloads are currently published; Windows, Linux and Firefox support in this source does not mean their downloads are available yet.
 
-| Computer | What to do |
+| Computer | When its download is available |
 | --- | --- |
-| Mac with an M1 chip or newer | Open the download and move **Recruiters.rip Companion** to **Applications**. |
-| Windows 10 or newer | Open the downloaded installer and follow its steps. |
-| Linux | Allow the downloaded file to run as a program, then open it. |
+| Mac with an M1 chip or newer | Open the download, move **Recruiters.rip Companion** to **Applications**, then open it. |
+| Windows 10 or newer | Open the downloaded installer, follow its steps, then open **Recruiters.rip Companion** from Start. |
+| Linux | In the downloaded file’s properties, allow it to run as a program, then open it. |
 
 The Windows and Linux downloads are for 64-bit Intel or AMD computers.
 
 <details>
 <summary>If your computer will not open the app</summary>
 
-- **Mac:** if macOS blocks the official download, open **System Settings → Privacy & Security → Open Anyway**.
-- **Windows:** you may see a warning because the publisher has not been verified. Check that the file came from recruiters.rip or its [official releases](https://github.com/jobstash/recruiters-rip-companion/releases). If your workplace blocks it, ask your IT team.
-- **Linux:** you may need extra software called FUSE 2 to open the download. Ask whoever manages your computer to install it. Keep the app in a permanent folder.
+- **Mac:** Apple has not checked this app. If you trust the download, open **System Settings → Privacy & Security → Open Anyway**. Keep security protections turned on.
+- **Windows:** you may see a warning because the publisher has not been verified. Check that the file came from recruiters.rip or its [official releases](https://github.com/jobstash/recruiters-rip-companion/releases). On a work computer, ask the person who manages it.
+- **Linux:** a desktop with windows and menus is required. Follow your Linux version’s instructions for FUSE 2 and any missing software named in the error, or ask someone who supports your computer. Keep the app in a permanent folder.
 </details>
 
 ### 2. Connect your account
 
-In **Companion**, choose **Connect account**. Sign in on the website, confirm the connection, then return to Companion and approve the named account.
+1. In Companion, choose **Connect account**.
+2. Sign in in the browser, choose **Connect account**, then **Open Companion**.
+3. Back in Companion, check the named account and choose **Allow this action**.
 
-A membership lets you browse new jobs. Your CV, saved work and jobs you add yourself remain available without it.
+Wait for Companion to show that the account is connected. If it stays pending, start **Connect account** again and use the same website account.
 
 ### 3. Import your CV
 
@@ -39,11 +41,16 @@ In **Companion → Me**, choose **Import CV** and select a PDF, Word document or
 
 ### 4. Connect Codex or Claude
 
-In **Companion → Settings → AI apps**, choose **Set up** for Codex or Claude. If you do not have the app, choose **Get Codex** or **Get Claude** first. You only need one.
+1. In **Settings → AI apps**, choose Codex or Claude. You only need one.
+2. If it is missing, choose **Get Codex** or **Get Claude**, install it and sign in. On Linux, these links lead to apps that run in Terminal; follow their official installation guides.
+3. Back in Companion, choose **Set up** and follow the instructions for your installed app.
+4. Enable recruiters.rip in your AI app when asked, then start a new task or conversation. Keep Companion open.
 
-Then open **Jobs** and select **Continue in Codex** or **Continue in Claude**. Send the message in that app. If a terminal window opens instead, press **Enter** there.
+### 5. Review jobs
 
-Your AI will ask which roles and locations you want if you have not saved those preferences yet. You do not need an API key or browser extension to review jobs.
+Open **Jobs** and choose **Continue in Codex** or **Continue in Claude**. Send the prepared message in that app. If a text window opens, press **Enter** there.
+
+Answer any questions about your experience, roles and locations. Your AI saves those preferences and explains which jobs fit. You do not need an extra API key or browser extension for this.
 
 <details>
 <summary>If your AI app cannot find Companion</summary>
@@ -53,11 +60,22 @@ Keep Companion open. In **Settings → AI apps**, follow the instructions for yo
 Choose **Continue in Codex** or **Continue in Claude**, then send the message there. Companion will show **Connected now** when the connection is working.
 </details>
 
+### 6. Prepare your application
+
+Choose a job with your AI and ask: **Create a CV and cover letter for this job using my saved CV and answers. Ask about anything missing, then save both as PDFs.**
+
+Check the saved documents before you use **Open job** to apply.
+
+## Open a generated CV or letter
+
+Open **Jobs**, select a job, then choose **Open CV** or **Open letter** in its **Job and documents** section. **Open job** sits with them. The same actions are available when you select an item under **Applications**. These open saved files; they do not create new documents.
+
+
 ## Add the browser extension — optional
 
 Use it to save job adverts and help fill application forms. You can find and review jobs without it.
 
-Keep Companion open. In **Settings → Browser extensions**, choose **Open folder** for your browser, then:
+Use Chrome 125 or newer, or Firefox 128 or newer. Keep Companion open. If your version includes the extension, open **Settings → Browser extensions** and choose **Open folder** for your browser. Otherwise, check availability on [Downloads](https://recruiters.rip/downloads#extension).
 
 <details>
 <summary>Chrome</summary>
@@ -82,24 +100,22 @@ You will need to load this version again after closing Firefox.
 ### Fill an application
 
 1. On the application page, click **rr**, then **Read page** if needed.
-2. If you want extra help filling forms, open **Companion → Settings → Form filling**. This optional feature uses a separately billed OpenAI API key. It is not needed to find jobs.
+2. If details are missing, enter them in the extension and choose **Save details**.
 3. Click an empty answer box and paste with **⌘V** on Mac or **Ctrl+V** on Windows/Linux. Check the answer before moving on. Existing text is not replaced automatically.
-4. Use **Review answers** to edit or copy an answer. Use the document controls to open your tailored CV or find it for an upload.
+4. Use **Review answers** to edit or copy an answer. Attach your documents and check the form before submitting.
 
-Your AI writes the tailored CV, cover letter and job-specific answers. The extension prepares saved answers for paste; it does not submit applications.
+Your AI writes the tailored CV, cover letter and job-specific answers. The extension prepares saved answers for paste; it does not submit applications. Extra help choosing saved answers is optional in **Settings → Form filling**, using a separately billed OpenAI API key.
 
 ### Apply with Codex or Claude
 
-Ask your connected AI to prepare an application for a specific job. If you also want it submitted, include that in your request. It uses your current CV and preferences and saves the documents in Companion.
-
-Your AI app may be able to fill the form for you. If it cannot, use the saved documents and answers yourself. Complete any security checks on the website. The application is only submitted when the employer confirms it.
+Your AI app may be able to fill a form when you ask. If it cannot, use the saved documents and answers yourself. Complete any website security checks. An application is only submitted when the employer confirms it.
 
 ## Back up or restore your profile
 
 Open **Settings → Backups**.
 
-- **Save backup** saves your profile, CVs, saved documents, jobs and applications to a file. Keep it somewhere private.
-- **Restore backup** lets you choose a backup file. Check the profile name and contents, then choose **Restore profile**.
+- **Save backup** saves your profile, CVs, saved documents, jobs and applications to a file. Choose where to keep it. It is not password-protected, so keep it private.
+- **Restore backup** lets you choose a backup file. Check the profile name, contents and any file warnings, then choose **Restore profile** to replace your current profile.
 - **Open backups** shows the default backup folder, including the copy saved before a restore.
 
 Restoring replaces the current profile in Companion. Your account connection, API keys and CV sharing choice stay unchanged. Companion saves a backup of your current profile before replacing it.
@@ -112,15 +128,11 @@ If the profile changes while you review the backup, select the file again before
 
 ## Delete a CV
 
-In **Me → CVs**, open the CV and choose **Delete CV** at the top.
+In **Me → CVs**, open the CV, choose **Delete CV** at the top and confirm the deletion request.
 
 If it was shared with JobStash, its shared copies are removed before it is deleted from Companion. If JobStash cannot confirm removal, the CV stays in Companion so you can try again. Other CVs, applications and backup files stay unchanged.
 
-Some older uploads have no recorded owner. These need ownership verification before JobStash can remove them. A CV shared through another account must be managed through that account.
-
-## Open a generated CV or letter
-
-Open **Jobs**, select a job, then choose **Open CV** or **Open letter** in its **Job and documents** section. **Open job** sits with them. The same actions are available when you select an item under **Applications**. These open saved files; they do not create new documents.
+Use the account that shared the CV. Older uploads without a recorded owner need ownership verification before JobStash can remove them. **Stop sharing** in **Settings → CV sharing** prevents future uploads; it does not delete a shared copy.
 
 ## Developer setup
 

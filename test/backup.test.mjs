@@ -335,16 +335,19 @@ test('save still aborts if sign-in, session or lock changes during its native pi
 });
 
 test('save aborts before publishing if identity changes while collecting document files', async t => {
-  let target, destination, collecting = false, changed;
+  let target, destination, collecting = false, changed = false;
   target = await fixture(t, {
+    // Change the authoritative read-side identity during collection, not after a racing disk write.
+    store: { get: () => {
+      const state = target.vault.get();
+      return changed ? { ...state, pairing: { account: { id: 'different-account' } } } : state;
+    } },
     selectDestination: async filename => { destination = filename; collecting = true; return filename; },
     assertAvailable: mutation => {
-      if (mutation === false && collecting && !changed) changed = target.vault.update(state => {
-        state.pairing = { account: { id: 'different-account' } };
-      });
+      if (mutation === false && collecting) changed = true;
     },
   });
   await seed(target);
-  await assert.rejects(target.service.save(), { code: 'BACKUP_STALE' }); await changed;
+  await assert.rejects(target.service.save(), { code: 'BACKUP_STALE' });
   await assert.rejects(readFile(destination), { code: 'ENOENT' });
 });

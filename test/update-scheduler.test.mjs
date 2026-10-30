@@ -282,13 +282,18 @@ test('main does not open manual fallback files during an automatic cycle', async
 function attachQuit(fixture) {
   const { context } = fixture;
   let handler, quits = 0, settled = 0;
-  Object.assign(context, { quitReady: false, exiting: false, heartbeatTimer: undefined, pairingReturn: undefined, mcpBridge: undefined, nativeBridge: undefined,
-    sockets: new Set(), browserForms: { cancelAll() {} }, clearInterval() {}, failure: '',
-    app: { on(_event, callback) { handler = callback; }, quit() { quits++; handler({ preventDefault() {} }); } } });
+  const exits = [], events = [], flush = context.vault.flush;
+  context.vault.flush = async () => { await flush(); events.push('flushed'); };
+  Object.assign(context, { exiting: false, heartbeatTimer: undefined,
+    pairingReturn: { close() { events.push('pairing-closed'); } },
+    mcpBridge: { close() { events.push('mcp-closed'); } }, nativeBridge: { close() { events.push('native-closed'); } },
+    sockets: new Set([{ destroy() { events.push('socket-destroyed'); } }]), browserForms: { cancelAll() {} }, clearInterval() {}, failure: '',
+    app: { on(_event, callback) { handler = callback; }, quit() { quits++; handler({ preventDefault() {} }); },
+      exit(code) { events.push('exit'); exits.push(code); } } });
   context.updateScheduler.settled = async () => { settled++; await context.updateInstallTask; };
   const start = mainSource.indexOf("  app.on('before-quit', event => {");
   vm.runInContext(mainSource.slice(start, mainSource.indexOf('  void app.whenReady()', start)), context);
-  return { quits: () => quits, settled: () => settled };
+  return { quits: () => quits, settled: () => settled, exits, events };
 }
 
 test('updater quit handoff never waits on its own scheduler/install promise', async () => {
@@ -301,9 +306,10 @@ test('updater quit handoff never waits on its own scheduler/install promise', as
   };
   await fixture.context.installUpdate({ automatic: true });
   await turn();
-  assert.equal(fixture.context.quitReady, true);
   assert.equal(fixture.context.exiting, true);
-  assert.equal(quit.quits(), 2);
+  assert.equal(quit.quits(), 1);
+  assert.deepEqual(quit.exits, [0]);
+  assert.deepEqual(quit.events.slice(-6), ['flushed', 'pairing-closed', 'mcp-closed', 'native-closed', 'socket-destroyed', 'exit']);
   assert.equal(quit.settled(), 0);
 });
 
@@ -316,11 +322,13 @@ test('ordinary quit saves career work without waiting for a background update', 
   fixture.context.app.quit();
   await turn();
   assert.equal(fixture.view.status, 'cancelled');
-  assert.equal(fixture.context.quitReady, false);
+  assert.deepEqual(quit.exits, []);
   await assert.rejects(fixture.gate.run(() => {}), { code: 'LOCAL_BUSY' });
   waiting.resolve(); await work; await turn();
-  assert.equal(fixture.context.quitReady, true);
-  assert.equal(quit.quits(), 2);
+  assert.equal(fixture.context.exiting, true);
+  assert.equal(quit.quits(), 1);
+  assert.deepEqual(quit.exits, [0]);
+  assert.deepEqual(quit.events, ['flushed', 'pairing-closed', 'mcp-closed', 'native-closed', 'socket-destroyed', 'exit']);
   assert.equal(quit.settled(), 0);
   update.resolve();
 });

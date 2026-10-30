@@ -299,7 +299,16 @@ try {
     if (!${legacyMac}) {
       globalThis.__updateSmokeScheduler = __updateSmokeScheduling.createUpdateScheduler({
         updates: __updateSmoke, preferences: __updateSmokeScheduling.createUpdatePreferences(${JSON.stringify(updates)}),
-        install: options => __updateSmoke.install(options),
+        install: async options => {
+          globalThis.__updateSmokeInstallFailure = null;
+          try { return await __updateSmoke.install(options); }
+          catch (error) {
+            globalThis.__updateSmokeInstallFailure = { name: error?.name, code: error?.code,
+              message: String(error?.message || error).slice(0, 2048), stack: String(error?.stack || '').slice(0, 8192),
+              cause: error?.cause?.message ? String(error.cause.message).slice(0, 2048) : undefined };
+            throw error;
+          }
+        },
         canInstall: () => __updateSmokeIdle && __updateSmokeGate.quiet() && __updateSmokeGate.state().active === 0,
         now: () => __updateSmokeClock,
       });
@@ -361,17 +370,19 @@ try {
     const pending = await evaluate(main, '(async () => { await __updateSmokeScheduler.start(); return { update: __updateSmoke.state(), automation: __updateSmokeScheduler.state(), admissions: __updateSmokeAdmissions }; })()');
     assert.equal(pending.update.status, 'downloaded'); assert.equal(pending.automation.waitingForIdle, true); assert.equal(pending.admissions, 0);
     assert.equal(await readReceipt(), null, 'Scheduler must retain its download without handing off before idle.');
-    const deferred = await evaluate(main, '(async () => { __updateSmokeIdle = true; await __updateSmokeScheduler.resume(); return { update: __updateSmoke.state(), attempts: __updateSmokeAttempts, admissions: __updateSmokeAdmissions, closed: __updateSmokeGate.state().closed, ready: __updateSmokeReady }; })()');
+    const deferred = await evaluate(main, '(async () => { __updateSmokeIdle = true; await __updateSmokeScheduler.resume(); return { update: __updateSmoke.state(), attempts: __updateSmokeAttempts, admissions: __updateSmokeAdmissions, closed: __updateSmokeGate.state().closed, ready: __updateSmokeReady, installFailure: globalThis.__updateSmokeInstallFailure }; })()');
     report.deferredUpdate = deferred.update;
+    report.deferredInstallFailure = deferred.installFailure;
     report.deferredAdmission = { attempts: deferred.attempts, admissions: deferred.admissions, closed: deferred.closed, ready: deferred.ready };
-    assert.equal(deferred.update.status, 'downloaded', JSON.stringify(deferred.update)); assert.equal(deferred.attempts, 1); assert.equal(deferred.admissions, 0); assert.equal(deferred.closed, false);
+    assert.equal(deferred.update.status, 'downloaded', JSON.stringify({ update: deferred.update, installFailure: deferred.installFailure })); assert.equal(deferred.attempts, 1); assert.equal(deferred.admissions, 0); assert.equal(deferred.closed, false);
     assert.equal(await readReceipt(), null, 'Refused final admission must remove the uncommitted native receipt.');
     assert.equal(exit, undefined, 'Refused final admission must not quit the old app.');
     const retained = (await readdir(updates)).filter(name => /^download-/.test(name));
     assert.equal(retained.length, 1); assert.equal(await digest(path.join(updates, retained[0])), candidateDigest);
     report.scenarios.push('native-staging-helper-ready-final-admission-refusal-retains-verified-download-and-running-app');
-    const admitted = await evaluate(main, '(async () => { await __updateSmokeScheduler.resume(); return { update: __updateSmoke.state(), attempts: __updateSmokeAttempts, admissions: __updateSmokeAdmissions, closed: __updateSmokeGate.state().closed, ready: __updateSmokeReady }; })()');
+    const admitted = await evaluate(main, '(async () => { await __updateSmokeScheduler.resume(); return { update: __updateSmoke.state(), attempts: __updateSmokeAttempts, admissions: __updateSmokeAdmissions, closed: __updateSmokeGate.state().closed, ready: __updateSmokeReady, installFailure: globalThis.__updateSmokeInstallFailure }; })()');
     report.admittedUpdate = admitted.update;
+    report.admittedInstallFailure = admitted.installFailure;
     report.admittedAdmission = { attempts: admitted.attempts, admissions: admitted.admissions, closed: admitted.closed, ready: admitted.ready };
     assert.equal(admitted.attempts, 2); assert.equal(new Set(admitted.ready).size, 2);
     assert.equal(admitted.admissions, 1); assert.equal(admitted.closed, true); installing = admitted.update;

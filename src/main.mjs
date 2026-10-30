@@ -66,7 +66,7 @@ let sessionEpoch = 0, careerViewRevision = 0;
 let windowLoaded;
 const sockets = new Set();
 const mutations = new Set(), formRequests = new Map();
-let updateInstalling = false, quitReady = false, quitDraining = false, vaultOpened = false;
+let updateInstalling = false, quitDraining = false, vaultOpened = false;
 let browserForms, updates, updateScheduler, updateInstallTask;
 let coreReady = false, updatesStarted = false, managedSource = null;
 // Retain the installation lease until OS process exit, not merely before-quit.
@@ -968,29 +968,28 @@ else {
   app.on('second-instance', (_event, argv) => { const url = argv.find(value => value.startsWith('recruiters-companion:')); if (url) acceptPairingURL(url); else if (!argv.includes('--bridge') && !argv.includes('--mcp-background')) showSettings(); });
   app.on('activate', showSettings); app.on('window-all-closed', () => {});
   app.on('before-quit', event => {
-    if (!quitReady) {
-      event.preventDefault();
-      if (quitDraining) return;
-      quitDraining = true; workGate.close({ drain: true }); updateScheduler.stop();
-      browserForms.cancelAll(); pendingApproval?.finish(false);
-      void (async () => {
-        const handedOff = ['installing', 'launched'].includes(updates.state().status);
-        // Abort background updates without holding Quit open for network or builds.
-        if (!handedOff) void updates.cancel().catch(() => {});
-        await workGate.drain();
-        await Promise.allSettled([...mutations]);
-        // Queue behind every accepted career write before allowing Electron to exit.
-        if (vaultOpened) await vault.flush();
-        quitReady = true; app.quit();
-      })().catch(() => {
-        if (updateInstalling) return;
-        quitDraining = false; workGate.reopen();
-        failure = 'The companion could not finish saving. Try quitting again.'; emit();
-      });
-      return;
-    }
-    exiting = true; clearInterval(heartbeatTimer); pairingReturn?.close(); mcpBridge?.close(); nativeBridge?.close();
-    for (const socket of sockets) socket.destroy();
+    event.preventDefault();
+    if (quitDraining) return;
+    quitDraining = true; workGate.close({ drain: true }); updateScheduler.stop();
+    browserForms.cancelAll(); pendingApproval?.finish(false);
+    void (async () => {
+      const handedOff = ['installing', 'launched'].includes(updates.state().status);
+      // Abort background updates without holding Quit open for network or builds.
+      if (!handedOff) void updates.cancel().catch(() => {});
+      await workGate.drain();
+      await Promise.allSettled([...mutations]);
+      // Queue behind every accepted career write before allowing Electron to exit.
+      if (vaultOpened) await vault.flush();
+      exiting = true; clearInterval(heartbeatTimer); pairingReturn?.close(); mcpBridge?.close(); nativeBridge?.close();
+      for (const socket of sockets) socket.destroy();
+      // Saving and service teardown are complete. Do not re-enter AppKit's
+      // window-close lifecycle: background windows may keep app.quit() alive.
+      app.exit(0);
+    })().catch(() => {
+      if (updateInstalling) return;
+      quitDraining = false; workGate.reopen();
+      failure = 'The companion could not finish saving. Try quitting again.'; emit();
+    });
   });
   void app.whenReady().then(async () => {
     // Exclude helper replacement/rollback before any profile, UI or service work.

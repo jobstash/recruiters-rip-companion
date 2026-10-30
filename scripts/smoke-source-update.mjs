@@ -26,7 +26,9 @@ const home = path.join(scratch, 'home'), managedRoot = path.join(scratch, 'manag
 const defaultUserData = path.join(home, ...(process.platform === 'darwin' ? ['Library', 'Application Support'] : process.platform === 'win32' ? ['AppData', 'Roaming'] : ['.config']), 'Recruiters Companion');
 const userData = path.join(scratch, 'profiles', 'selected');
 const env = { ...process.env, HOME: home, USERPROFILE: home, APPDATA: path.join(home, 'AppData', 'Roaming'), LOCALAPPDATA: path.join(home, 'AppData', 'Local'), XDG_CONFIG_HOME: path.join(home, '.config'), XDG_DATA_HOME: path.join(home, '.local', 'share'), XDG_CACHE_HOME: path.join(home, '.cache'), XDG_RUNTIME_DIR: path.join(scratch, 'runtime'), TMPDIR: path.join(scratch, 'tmp'), TMP: path.join(scratch, 'tmp'), TEMP: path.join(scratch, 'tmp') };
-for (const key of Object.keys(env)) if (/^(?:ELECTRON_RUN_AS_NODE|NODE_OPTIONS|NODE_PATH|OPENAI_API_KEY|ANTHROPIC_API_KEY|RECRUITERS_COMPANION_DEV|APPIMAGE|APPDIR|APPIMAGE_EXTRACT_AND_RUN)$/i.test(key)) delete env[key];
+// A pwsh -> Node -> powershell.exe chain otherwise passes PS7's incompatible
+// module search path to Windows PowerShell; each child must build its own path.
+for (const key of Object.keys(env)) if (/^(?:ELECTRON_RUN_AS_NODE|NODE_OPTIONS|NODE_PATH|PSMODULEPATH|OPENAI_API_KEY|ANTHROPIC_API_KEY|RECRUITERS_COMPANION_DEV|APPIMAGE|APPDIR|APPIMAGE_EXTRACT_AND_RUN)$/i.test(key)) delete env[key];
 if (process.platform === 'win32') { env.HOMEDRIVE = path.parse(home).root.replace(/[\\/]$/, ''); env.HOMEPATH = home.slice(env.HOMEDRIVE.length); }
 const execute = promisify(execFile), delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const reportFile = path.join(root, 'dist', 'source-update-smoke.json');
@@ -260,7 +262,7 @@ try {
           assert.ok(entries.length <= 1, 'Only this bootstrap may own its temporary directory.');
           return entries[0]?.isDirectory() ? path.join(env.TEMP, entries[0].name) : null;
         }, 60000, 'real shared PowerShell bootstrap private directory');
-        const verifyAcl = `$ErrorActionPreference='Stop';$acl=Get-Acl -LiteralPath ${quote(temporary)};$sid=[Security.Principal.WindowsIdentity]::GetCurrent().User;$allowed=@($sid.Value,'S-1-5-18','S-1-5-32-544');$private=$acl.AreAccessRulesProtected;$own=$false;foreach($rule in $acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])){if($rule.AccessControlType -eq 'Allow'){if($rule.IdentityReference.Value -notin $allowed){$private=$false};if($rule.IdentityReference.Value -eq $sid.Value){$own=$true}}};if($private -and $own){'private'}else{'pending'}`;
+        const verifyAcl = `$ErrorActionPreference='Stop';Import-Module ([IO.Path]::Combine($PSHOME,'Modules','Microsoft.PowerShell.Security','Microsoft.PowerShell.Security.psd1')) -ErrorAction Stop;$acl=Get-Acl -LiteralPath ${quote(temporary)};$sid=[Security.Principal.WindowsIdentity]::GetCurrent().User;$allowed=@($sid.Value,'S-1-5-18','S-1-5-32-544');$private=$acl.AreAccessRulesProtected;$own=$false;foreach($rule in $acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])){if($rule.AccessControlType -eq 'Allow'){if($rule.IdentityReference.Value -notin $allowed){$private=$false};if($rule.IdentityReference.Value -eq $sid.Value){$own=$true}}};if($private -and $own){'private'}else{'pending'}`;
         await until(async () => {
           if (failure) throw failure;
           if (finished) throw new Error('Bootstrap completed before its private ACL could be verified.');
@@ -330,9 +332,13 @@ try {
   const localEdit = path.join(first.sourceRoot, 'synthetic-local-source-edit.txt');
   await writeFile(localEdit, 'Synthetic untracked work must not be discarded.\n', { flag: 'wx', mode: 0o600 });
   const initial = await evaluate(main, `(async () => {
-    const { createSourceUpdateController } = await import(${JSON.stringify(pathToFileURL(path.join(first.sourceRoot, 'src', 'source-updates.mjs')).href)});
+    const vm = process.getBuiltinModule('vm');
+    // Inspector evaluation has no import hook. Use Node's real ESM loader,
+    // including top-level await in the standalone source-installer dependency.
+    const loadModule = vm.compileFunction('return import(specifier)', ['specifier'], { importModuleDynamically: vm.constants.USE_MAIN_CONTEXT_DEFAULT_LOADER });
+    const { createSourceUpdateController } = await loadModule(${JSON.stringify(pathToFileURL(path.join(first.sourceRoot, 'src', 'source-updates.mjs')).href)});
     const electron = process.getBuiltinModule('module').createRequire(process.execPath)('electron');
-    const scheduling = await import(${JSON.stringify(pathToFileURL(path.join(first.sourceRoot, 'src', 'update-scheduler.mjs')).href)});
+    const scheduling = await loadModule(${JSON.stringify(pathToFileURL(path.join(first.sourceRoot, 'src', 'update-scheduler.mjs')).href)});
     globalThis.__sourceIdle = false; globalThis.__sourceClock = 0; globalThis.__sourceAdmissions = 0;
     globalThis.__sourceDenyOnce = true; globalThis.__sourceAttempts = 0;
     globalThis.__sourceGate = scheduling.createUpdateWorkGate({ now: () => __sourceClock });

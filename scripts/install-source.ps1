@@ -6,6 +6,17 @@ param(
   [switch]$NoLaunch
 )
 $ErrorActionPreference = 'Stop'
+# A pwsh -> Node -> Windows PowerShell chain can inherit incompatible module paths.
+# Load the current shell's OS modules explicitly; do not alter the caller's path.
+$previousModulePath = $env:PSModulePath
+try {
+  $env:PSModulePath = [IO.Path]::Combine($PSHOME, 'Modules')
+  foreach ($moduleName in @('Microsoft.PowerShell.Management', 'Microsoft.PowerShell.Security')) {
+    Import-Module -Name ([IO.Path]::Combine($PSHOME, 'Modules', $moduleName, ($moduleName + '.psd1'))) -Force -ErrorAction Stop
+  }
+} finally {
+  $env:PSModulePath = $previousModulePath
+}
 # No elevation, global tool installation, or execution-policy modification.
 foreach ($tool in @('git', 'node', 'npm')) {
   if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) {

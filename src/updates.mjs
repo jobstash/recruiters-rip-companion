@@ -400,7 +400,8 @@ export function createUpdateController({ version, platform = process.platform, a
   async function automaticSupport(signal) {
     let reason = null;
     try {
-      if (!packaged || !appPath) throw new Error('Use the app installer or managed source installer for automatic updates. Ordinary developer checkouts are left unchanged.');
+      if (!packaged) throw new Error('Run the source installer once to enable automatic updates.');
+      if (!appPath) throw new Error('Reinstall the app to enable automatic updates.');
       if (platform !== process.platform || !((platform === 'darwin' && arch === 'arm64') || (['win32', 'linux'].includes(platform) && arch === 'x64'))) throw new Error('Automatic updates are not supported on this platform.');
       const target = path.resolve(appPath), parent = path.dirname(target);
       if (target !== appPath || await realpath(target) !== target || await realpath(parent) !== parent || parent === target ||

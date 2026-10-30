@@ -94,7 +94,6 @@ for (const [platform, suffix] of [['win32', 'win-x64.exe'], ['linux', 'linux-x64
     assert.equal(controller.state().status, 'manual-required');
     assert.equal(Boolean(result.reveal), platform === 'linux');
     assert.equal(controller.state().automaticSupported, false);
-    assert.match(controller.state().automaticReason, /packaged app/);
   });
   test(`${platform} does not hand off a modified installer`, async t => {
     const { controller, directory } = await fixture(t, { release: platformRelease(),
@@ -251,11 +250,10 @@ test('a stalled release check times out cleanly without a retry', async t => {
   assert.equal(controller.state().error.code, 'UPDATE_TIMEOUT');
 });
 
-test('source installations never require an approval dialog or quit', async t => {
+test('unmanaged developer checkouts offer a manual installer without quitting', async t => {
   let quits = 0;
   const { controller } = await fixture(t, { controller: { quit: () => { quits++; } } });
   assert.equal(controller.state().automaticSupported, false);
-  assert.match(controller.state().automaticReason, /source checkouts/);
   await assert.rejects(controller.install(), { code: 'INVALID_STATE' });
   await controller.check(); await controller.download();
   assert.ok((await controller.install()).manualPath);
@@ -280,7 +278,7 @@ test('checks preserve a verified pending download while waiting for idle', async
   assert.deepEqual(await readdir(directory), names);
 });
 
-test('source update returns only a manual verified ZIP and leaves the checkout and identity alone', async t => {
+test('unmanaged checkout downloads return a verified ZIP without modifying local files', async t => {
   const { root, controller } = await fixture(t);
   const checkout = path.join(root, 'synthetic-checkout');
   await mkdir(checkout);

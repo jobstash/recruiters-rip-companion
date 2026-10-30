@@ -252,10 +252,17 @@ test('Windows generated launcher finds replacement Node and preserves literal ar
   await fs.writeFile(path.join(root, 'launch.mjs'), 'console.log(JSON.stringify({ executable: process.execPath, args: process.argv.slice(2) }));');
   await writeSourceLauncher(root, { node: removed });
   await fs.unlink(removed);
+  const foreignModules = path.join(directory, 'incompatible-module-path');
+  for (const name of ['Microsoft.PowerShell.Management', 'Microsoft.PowerShell.Security']) {
+    const module = path.join(foreignModules, name);
+    await fs.mkdir(module, { recursive: true });
+    await fs.writeFile(path.join(module, `${name}.psd1`), "@{ ModuleVersion = '1.0.0'; PowerShellVersion = '99.0'; RootModule = 'unsupported.psm1' }");
+    await fs.writeFile(path.join(module, 'unsupported.psm1'), '');
+  }
   const args = ['literal; $(not-a-command) & keep', "apostrophe ' and spaces", '--bridge'];
   const powershell = path.join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
   const output = await runSourceCommand(powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-File', path.join(root, 'launch.ps1'), ...args], {
-    env: { ...sourceEnvironment(), ProgramFiles: path.join(directory, 'absent-program-files'), PATH: bin },
+    env: { ...sourceEnvironment(), ProgramFiles: path.join(directory, 'absent-program-files'), PATH: bin, PSModulePath: foreignModules },
     timeout: 30000,
   });
   const launched = JSON.parse(output);
@@ -327,7 +334,7 @@ test('macOS extended delete-child ACLs cannot bypass private POSIX mode bits', {
 
 async function windowsFixtureRule(target, rights, { remove = false } = {}) {
   const encoded = Buffer.from(target, 'utf8').toString('base64');
-  const script = `$ErrorActionPreference='Stop';$p=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encoded}'));$a=Get-Acl -LiteralPath $p;$r=[Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.SecurityIdentifier]::new('S-1-1-0'),[Security.AccessControl.FileSystemRights]::${rights},[Security.AccessControl.AccessControlType]::Allow);$a.${remove ? 'RemoveAccessRule' : 'AddAccessRule'}($r);Set-Acl -LiteralPath $p -AclObject $a`;
+  const script = `$ErrorActionPreference='Stop';Import-Module -Name ([IO.Path]::Combine($PSHOME,'Modules','Microsoft.PowerShell.Security','Microsoft.PowerShell.Security.psd1')) -Force -ErrorAction Stop;$p=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encoded}'));$a=Get-Acl -LiteralPath $p;$r=[Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.SecurityIdentifier]::new('S-1-1-0'),[Security.AccessControl.FileSystemRights]::${rights},[Security.AccessControl.AccessControlType]::Allow);$a.${remove ? 'RemoveAccessRule' : 'AddAccessRule'}($r);Set-Acl -LiteralPath $p -AclObject $a`;
   await runSourceCommand(path.join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { timeout: 30000 });
 }
 

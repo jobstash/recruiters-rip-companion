@@ -235,7 +235,11 @@ try {
     await writeFile(legacyConfig, JSON.stringify({ target: appPath, userData, audit: legacyAudit, environment: Object.fromEntries(keys.map(key => [key, env[key]])) }), { mode: 0o600, flag: 'wx' });
   }
   const setup = `async () => {
-    const { createUpdateController } = await import(${JSON.stringify(pathToFileURL(path.join(engineAsar, 'src', 'updates.mjs')).href)});
+    const vm = process.getBuiltinModule('vm');
+    // Inspector evaluation needs an explicit loader, including for the
+    // candidate engine's source-backend dependency with top-level await.
+    const loadModule = vm.compileFunction('return import(specifier)', ['specifier'], { importModuleDynamically: vm.constants.USE_MAIN_CONTEXT_DEFAULT_LOADER });
+    const { createUpdateController } = await loadModule(${JSON.stringify(pathToFileURL(path.join(engineAsar, 'src', 'updates.mjs')).href)});
     const fs = process.getBuiltinModule('fs');
     const { Readable, Transform } = process.getBuiltinModule('stream');
     const electron = process.getBuiltinModule('module').createRequire(process.execPath)('electron');
@@ -268,7 +272,7 @@ try {
       };
       module.syncBuiltinESMExports();
     } else {
-      const scheduling = await import(${JSON.stringify(pathToFileURL(path.join(candidate.asar, 'src', 'update-scheduler.mjs')).href)});
+      const scheduling = await loadModule(${JSON.stringify(pathToFileURL(path.join(candidate.asar, 'src', 'update-scheduler.mjs')).href)});
       globalThis.__updateSmokeIdle = false; globalThis.__updateSmokeClock = 0; globalThis.__updateSmokeAdmissions = 0;
       globalThis.__updateSmokeDenyOnce = true; globalThis.__updateSmokeAttempts = 0; globalThis.__updateSmokeReady = [];
       globalThis.__updateSmokeGate = scheduling.createUpdateWorkGate({ now: () => __updateSmokeClock });

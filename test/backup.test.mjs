@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { mkdtemp, rm, readFile, writeFile, readdir, rename, mkdir, unlink, symlink, truncate } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -46,7 +46,9 @@ async function fixture(t, options = {}) {
     scoped: () => createScopedAccess(vault, { epoch: () => epoch, assertAvailable: () => { assertAvailable(); if (restoring) throw Object.assign(new Error('Restoring'), { code: 'LOCAL_BUSY' }); } }) };
 }
 async function seed(fixture, name) {
-  const career = profile(name), exported = await fixture.files.exportDocument({ bytes: pdf, mediaType: 'application/pdf' });
+  const career = profile(name);
+  await fixture.vault.update(state => { state.career = career; });
+  const exported = await fixture.files.exportDocument({ applicationId: Object.keys(career.applications)[0], kind: 'cover_letter', bytes: pdf, mediaType: 'application/pdf' });
   Object.values(career.applications)[0].exports.push({ ...exported, kind: 'cover_letter', format: 'pdf', documentVersion: 2, textValidation: { passed: true }, createdAt: now });
   await fixture.vault.update(state => { state.career = career; });
   return career;
@@ -83,6 +85,9 @@ test('portable backup round-trips originals, saved files, user history and block
   const application = Object.values(after.career.applications)[0], reference = application.exports[0];
   assert.deepEqual(application.coverLetterHistory, Object.values(original.applications)[0].coverLetterHistory);
   assert.equal(reference.path.startsWith(target.directory), true);
+  assert.equal(path.basename(reference.path), 'Synthetic candidate - COVER LETTER.pdf');
+  assert.ok(reference.path.includes(path.join('Synthetic employer', 'Engineer')));
+  assert.notEqual(reference.uri, Object.values(original.applications)[0].exports[0].uri);
   assert.deepEqual(Buffer.from((await target.files.readResource(reference.uri)).blob, 'base64'), pdf);
   assert.equal(await target.files.resolveExport(reference.uri), reference.path);
   assert.throws(() => assertJobNotBlocked(after.career, application.job.id, application.job), { code: 'JOB_BLOCKED' });
@@ -232,10 +237,11 @@ test('an in-flight scoped writer cannot commit or regain access across replaceme
 
 test('a failed destination document write cannot replace the current profile', async t => {
   const { filename } = await exported(t), target = await fixture(t);
-  const conflict = await target.files.exportDocument({ bytes: pdf, mediaType: 'application/pdf' });
-  await writeFile(conflict.path, '%PDF-damaged-existing-file');
+  const root = target.files.exportDirectory();
+  await mkdir(path.dirname(root), { recursive: true, mode: 0o700 });
+  await writeFile(root, 'Not an export directory', { mode: 0o600 });
   target.choose(filename); const before = target.vault.get(), preview = await target.service.preview();
-  await assert.rejects(target.service.restore(restoreArgs(preview)), { code: 'EXPORT_CORRUPT' });
+  await assert.rejects(target.service.restore(restoreArgs(preview)));
   assert.deepEqual(target.vault.get(), before); assert.equal(target.restored(), 0);
 });
 
@@ -252,11 +258,11 @@ test('known missing files are disclosed for the safety copy without preventing r
 
 test('a failed later document import removes new files but preserves every preexisting export', async t => {
   const from = await fixture(t); await seed(from);
-  const second = await from.files.exportDocument({ bytes: Buffer.from('Second document'), mediaType: 'text/plain' });
+  const second = await from.files.exportDocument({ bytes: Buffer.from('Second document'), mediaType: 'text/csv' });
   await from.vault.update(state => { Object.values(state.career.applications)[0].exports.push(second); });
   const saved = await from.service.save(), target = await fixture(t);
-  const conflict = await target.files.exportDocument({ bytes: Buffer.from('Second document'), mediaType: 'text/plain' });
-  const retained = await target.files.exportDocument({ bytes: Buffer.from('Preexisting user document'), mediaType: 'text/plain' });
+  const conflict = await target.files.exportDocument({ bytes: Buffer.from('Second document'), mediaType: 'text/csv' });
+  const retained = await target.files.exportDocument({ bytes: Buffer.from('Preexisting user document'), mediaType: 'text/csv' });
   await writeFile(conflict.path, 'Corrupt second document');
   const before = await target.files.listResources(), career = target.vault.get();
   target.choose(path.join(from.directory, saved.filename));
@@ -268,10 +274,11 @@ test('a failed later document import removes new files but preserves every preex
 
 test('a late commit guard removes imported files while retaining an existing identical export', async t => {
   const from = await fixture(t); await seed(from);
-  const second = await from.files.exportDocument({ bytes: Buffer.from('Second document'), mediaType: 'text/plain' });
+  const second = await from.files.exportDocument({ bytes: Buffer.from('Second document'), mediaType: 'text/csv' });
   await from.vault.update(state => { Object.values(state.career.applications)[0].exports.push(second); });
   const saved = await from.service.save(), target = await fixture(t);
-  const retained = await target.files.exportDocument({ bytes: pdf, mediaType: 'application/pdf' });
+  const current = await seed(target, 'Existing Candidate');
+  const retained = Object.values(current.applications)[0].exports[0];
   const before = await target.files.listResources(), state = target.vault.get();
   const service = createBackups({ directory: target.directory, selectBackup: async () => path.join(from.directory, saved.filename),
     store: { get: () => target.vault.get(), update: (change, options) => target.vault.update(change, { beforeCommit: () => {
@@ -350,4 +357,82 @@ test('save aborts before publishing if identity changes while collecting documen
   await seed(target);
   await assert.rejects(target.service.save(), { code: 'BACKUP_STALE' });
   await assert.rejects(readFile(destination), { code: 'ENOENT' });
+});
+
+test('legacy backup bytes rebind both document kinds for same-title jobs without old versions overwriting current files', async t => {
+  const from = await fixture(t), career = await seed(from, 'Portable Candidate');
+  const first = Object.values(career.applications)[0], secondId = randomUUID();
+  const second = { ...structuredClone(first), id: secondId, job: { ...first.job, id: 'local:second', url: 'https://example.test/second' }, exports: [] };
+  await from.vault.update(state => { state.career.applications[secondId] = second; });
+  for (const applicationId of [first.id, secondId]) for (const kind of ['cv', 'cover_letter']) {
+    const bytes = Buffer.from(`%PDF-1.7\nCurrent ${applicationId} ${kind}\n%%EOF`);
+    const exported = await from.files.exportDocument({ applicationId, kind, documentVersion: 2, bytes, mediaType: 'application/pdf' });
+    await from.vault.update(state => {
+      state.career.applications[applicationId].exports = state.career.applications[applicationId].exports.filter(item => item.kind !== kind);
+      state.career.applications[applicationId].exports.push(exported);
+    });
+  }
+  const saved = await from.service.save(), payload = JSON.parse(await readFile(path.join(from.directory, saved.filename), 'utf8'));
+  const oldURIs = new Map(payload.files.map(file => [file.uri, `recruiters://exports/${file.sha256}.pdf`]));
+  for (const file of payload.files) file.uri = oldURIs.get(file.uri);
+  for (const app of Object.values(payload.profiles[0].career.applications)) for (const ref of app.exports) {
+    ref.uri = oldURIs.get(ref.uri); ref.path = '/foreign/untrusted.pdf';
+    for (const field of ['resourceId', 'folderNumber', 'companyLimit', 'jobLimit', 'applicationId', 'candidateName', 'company', 'jobTitle']) delete ref[field];
+  }
+  const staleBytes = Buffer.from('%PDF-1.7\nOld letter must never win\n%%EOF');
+  const sha256 = createHash('sha256').update(staleBytes).digest('hex'), staleURI = `recruiters://exports/${sha256}.pdf`;
+  payload.files.push({ uri: staleURI, sha256, mediaType: 'application/pdf', bytes: staleBytes.length, base64: staleBytes.toString('base64') });
+  payload.profiles[0].career.applications[first.id].exports.push({ uri: staleURI, sha256, mediaType: 'application/pdf', bytes: staleBytes.length,
+    kind: 'cover_letter', format: 'pdf', documentVersion: 1 });
+  const target = await fixture(t), selected = path.join(target.directory, 'legacy-documents.json');
+  await writeFile(selected, JSON.stringify(payload)); target.choose(selected);
+  await target.service.restore(restoreArgs(await target.service.preview()));
+  const restored = target.vault.get().career, folders = [];
+  for (const app of Object.values(restored.applications)) {
+    const current = app.exports.filter(ref => ref.uri);
+    assert.equal(current.length, 2);
+    assert.equal(path.dirname(current[0].path), path.dirname(current[1].path));
+    folders.push(path.dirname(current[0].path));
+    for (const ref of current) {
+      assert.equal(path.basename(ref.path), `Portable Candidate - ${ref.kind === 'cv' ? 'CV' : 'COVER LETTER'}.pdf`);
+      assert.match(ref.uri, /^recruiters:\/\/documents\/[a-f0-9-]{36}\.pdf$/);
+      const content = Buffer.from((await target.files.readResource(ref.uri)).blob, 'base64').toString();
+      assert.ok(content.includes(`Current ${app.id} ${ref.kind}`));
+      assert.equal(await target.files.resolveExport(ref.uri), ref.path);
+    }
+  }
+  assert.notEqual(folders[0], folders[1]);
+  assert.equal(path.basename(folders[0]), 'Engineer');
+  assert.equal(path.basename(folders[1]), 'Engineer (2)');
+  assert.equal(restored.applications[first.id].exports.at(-1).unavailable, true);
+  await assert.rejects(target.files.readResource(staleURI), { code: 'NOT_FOUND' });
+  assert.deepEqual(restored.sources, career.sources);
+  assert.equal((await target.files.listResources()).length, 4);
+  const roundtrip = await target.service.save(), next = await fixture(t);
+  next.choose(path.join(target.directory, roundtrip.filename));
+  await next.service.restore(restoreArgs(await next.service.preview()));
+  assert.equal((await next.files.listResources()).length, 4);
+});
+
+test('restoring over the same application rolls back a replaced readable PDF when the vault commit fails', async t => {
+  const from = await fixture(t); await seed(from, 'Rollback Candidate');
+  const saved = await from.service.save(), target = await fixture(t), original = from.vault.get().career;
+  const app = Object.values(original.applications)[0];
+  await target.vault.update(state => {
+    state.career = structuredClone(original);
+    state.career.applications[app.id].exports = [];
+  });
+  const priorBytes = Buffer.from('%PDF-1.7\nExisting local current letter\n%%EOF');
+  const prior = await target.files.exportDocument({ applicationId: app.id, kind: 'cover_letter', bytes: priorBytes, mediaType: 'application/pdf' });
+  await target.vault.update(state => { state.career.applications[app.id].exports.push(prior); });
+  const before = target.vault.get();
+  const service = createBackups({ directory: target.directory, selectBackup: async () => path.join(from.directory, saved.filename),
+    store: { get: () => target.vault.get(), update: (change, options) => target.vault.update(change, { beforeCommit: () => {
+      options.beforeCommit(); throw Object.assign(new Error('Synthetic late commit failure'), { code: 'LOCAL_LOCKED' });
+    } }) } });
+  await assert.rejects(service.restore(restoreArgs(await service.preview())), { code: 'LOCAL_LOCKED' });
+  assert.deepEqual(target.vault.get(), before);
+  assert.deepEqual(await readFile(prior.path), priorBytes);
+  assert.equal(await target.files.resolveExport(prior.uri), prior.path);
+  assert.deepEqual(await readdir(path.dirname(prior.path)), ['Rollback Candidate - COVER LETTER.pdf']);
 });

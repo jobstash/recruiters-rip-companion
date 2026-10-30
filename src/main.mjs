@@ -59,7 +59,7 @@ let browserRegistrations = { chrome: false, firefox: false };
 let sessionEpoch = 0, careerViewRevision = 0;
 let windowLoaded;
 const sockets = new Set();
-const mutations = new Set(), formRequests = new Set();
+const mutations = new Set(), formRequests = new Map();
 let updateInstalling = false, quitReady = false, quitDraining = false, vaultOpened = false, updateApprovalAbort;
 let browserForms, updates;
 let restoringBackup = false;
@@ -134,7 +134,7 @@ updates = createUpdateController({
   authorize: ({ latestVersion, message }) => confirm(`Update to ${latestVersion}?`, message, updateApprovalAbort?.signal),
   quit: () => app.quit(), onChange: () => emit(),
 });
-function paidWorkActive() { return formRequests.size > 0; }
+function paidWorkActive() { for (const useApi of formRequests.values()) if (useApi) return true; return false; }
 async function cancelUpdate() {
   updateApprovalAbort?.abort();
   if (['checking', 'downloading', 'awaiting-approval', 'staging'].includes(updates.state().status)) await updates.cancel();
@@ -175,9 +175,12 @@ function safeFailure(error) {
   return { code: known ? error.code : 'LOCAL_OPERATION_FAILED', message: known ? error.message : 'This action could not be completed. Reopen the companion and try again.' };
 }
 function status() {
-  if (locked) return { installed: true, mode: 'local_mcp', paired: false, hasCv: false, decisionApiConfigured: false, connections: [], execution: { state: 'locked' } };
+  if (locked || screenLocked || sleeping) return { installed: true, mode: 'local_mcp', paired: false, hasCv: false, applicationWorkflowVersion: 2,
+    decisionApiConfigured: false, connections: [], execution: { state: 'locked' } };
   const state = vault.get();
   return { installed: true, mode: 'local_mcp', deviceId: state.deviceId, publicKey: state.publicKey, label: state.label,
+    applicationWorkflowVersion: 2, hostInfo: reviewHostInfo,
+    preferredHost: ['claude', 'codex'].includes(state.browserPreferences?.applicationHost) ? state.browserPreferences.applicationHost : reviewHosts.codex ? 'codex' : 'claude',
     hasCv: Object.values(state.career?.sources ?? {}).some(source => source.purpose === 'cv' && !source.archived && typeof source.text === 'string' && source.text.trim().length > 0),
     paired: Boolean(state.pairing), decisionApiConfigured: decisionCredentialStatus(state).configured, connections: [], execution: { state: state.pairing ? 'ready' : 'needs_connection' } };
 }
@@ -394,7 +397,7 @@ function createSessionServer() {
     ...createProfileTools({ store: scoped.store, interaction, selectSourceFile: async () => {
       scoped.assertAvailable(true); const result = await selectSourceFile(); scoped.assertAvailable(true); return result;
     }, extractFile: documents.extractFile }),
-    ...createApplicationTools({ store: scoped.store, platform: scopedPlatform, documents, exportDocument: localFiles.exportDocument }),
+    ...createApplicationTools({ store: scoped.store, platform: scopedPlatform, documents, exportDocument: localFiles.exportDocument, cleanupExports: localFiles.cleanupExports, withExportTransaction: localFiles.withExportTransaction }),
     ...createApplicationPreparationTools({ workflow: applicationFlow, openInBrowser: async url => {
       scoped.assertAvailable(false); const result = await openInBrowser(url); scoped.assertAvailable(false); return result;
     } }),
@@ -441,10 +444,10 @@ async function installConnections() {
 }
 async function nativeOperation(op, payload, socket = null) {
   const keys = { status: [], open_settings: [], open_decisions_settings: [], pair: ['productOrigin', 'pairing'],
-    capture_jobs: ['requestId', 'sourceUrl', 'jobs'], forms_prepare: ['requestId', 'formId', 'url', 'title', 'fields', 'actions'], forms_cancel: ['requestId'],
+    capture_jobs: ['requestId', 'sourceUrl', 'jobs'], forms_prepare: ['requestId', 'formId', 'url', 'title', 'fields', 'actions', 'useApi'], forms_cancel: ['requestId'],
     forms_validate: ['formId', 'fields'], forms_profile_save: ['requestId', 'formId', 'snapshot', 'values'],
-    application_resolve: ['requestId', 'page', 'jobs', 'context'], application_status: ['bindingId'],
-    application_prepare: ['bindingId', 'host'], application_document: ['bindingId', 'kind', 'action'], application_open_ad: ['bindingId'] };
+    application_resolve: ['requestId', 'page', 'jobs', 'context'], application_status: ['bindingId'], application_host: ['host'],
+    application_prepare: ['bindingId', 'host'], application_document: ['bindingId', 'kind', 'action'], application_open_ad: ['bindingId'], application_copy_intro: ['bindingId'] };
   if (!Object.hasOwn(keys, op)) fail('INVALID_INPUT', 'This browser operation is unavailable.');
   exact(payload, keys[op]);
   if (op === 'status') return status();
@@ -452,6 +455,10 @@ async function nativeOperation(op, payload, socket = null) {
   if (op === 'open_decisions_settings') { await showDecisionsSettings(); return { opened: true }; }
   if (op === 'pair') return pair(payload);
   assertAvailable(false);
+  if (op === 'application_host') return mutation(async () => {
+    const result = await applicationAccess().workflow.setHost(payload);
+    emit(); return result;
+  });
   if (op.startsWith('application_')) {
     const access = applicationAccess();
     if (op === 'application_resolve') return mutation(async () => {
@@ -462,16 +469,20 @@ async function nativeOperation(op, payload, socket = null) {
       return access.view(result);
     });
     const bound = applicationSockets.get(payload.bindingId);
-    if (!bound || bound.socket !== socket || bound.epoch !== sessionEpoch || bound.identity !== identityKey(store.get()))
+    if (!bound || !socket || socket.destroyed || !socket.writable || bound.socket !== socket || bound.epoch !== sessionEpoch || bound.identity !== identityKey(store.get()))
       fail('FORM_CONTEXT_CHANGED', 'Read this application page again before using its documents.');
     if (op === 'application_status') return access.view(await access.workflow.status(payload));
+    if (op === 'application_copy_intro') {
+      assertWorkAllowed();
+      return access.workflow.copyIntroduction(payload, text => clipboard.writeText(text));
+    }
     if (op === 'application_prepare') return mutation(async () => {
       const { preparationId } = await access.workflow.prepare(payload);
       access.assertAvailable(false);
       const opened = await access.launcher.open({ host: payload.host, preparationId });
       access.assertAvailable(false);
       await access.workflow.launched({ preparationId, host: payload.host, mode: opened.mode });
-      await access.store.update(next => { next.browserPreferences ??= {}; next.browserPreferences.applicationHost = payload.host; });
+      await access.workflow.setHost({ host: payload.host });
       careerViewRevision++; emit();
       return { ...await access.view(await access.workflow.status({ bindingId: payload.bindingId })), ...opened, preparationId };
     });
@@ -524,27 +535,27 @@ async function nativeOperation(op, payload, socket = null) {
     const result = await importCapturedJobs({ store: scoped.store, ...payload, revision: scoped.store.get().career?.revision ?? 0 });
     scoped.assertAvailable(false); careerViewRevision++; emit(); return result;
   });
-  assertPaidWorkAllowed();
-  if (!decisionCredentials.publicState().configured) {
-    await showDecisionsSettings();
-    fail('DECISIONS_KEY_REQUIRED', 'Add your OpenAI key in Companion’s Optional Decisions API settings, then choose Read page again.');
-  }
-  const scoped = createScopedAccess(store, { assertAvailable, epoch: () => sessionEpoch });
-  const preparedState = scoped.store.get(), identity = identityKey(preparedState);
-  const evidence = formEvidence(preparedState.career ?? createCareerState()), credentialVersion = preparedState.prescanCredentialVersion ?? 0;
-  if (formRequests.has(payload.requestId)) fail('REQUEST_CONFLICT', 'This form preparation is already pending.');
-  formRequests.add(payload.requestId); emit();
-  try {
-    const result = await browserForms.prepare({ ...payload, useApi: true });
-    const current = scoped.store.get(), draft = currentForm(current.career ?? createCareerState(), result.formId);
-    const previous = preparedState.career?.formDrafts?.[result.formId];
-    const answersHash = hash(previous?.evidence === evidence && previous.evidenceRevision === (preparedState.career?.evidenceRevision ?? 0) ? previous.answers ?? {} : {});
-    if (draft.evidence !== evidence || (current.prescanCredentialVersion ?? 0) !== credentialVersion || hash(draft.answers ?? {}) !== answersHash)
-      fail('FORM_CONTEXT_CHANGED', 'Preparation context changed. Prepare the form again before using its values.');
-    if (socket && !socket.destroyed) browserSessions.set(result.formId, { socket, epoch: sessionEpoch, identity, evidence, credentialVersion, answersHash });
-    careerViewRevision++; emit(); return result;
-  }
-  finally { formRequests.delete(payload.requestId); emit(); }
+  if (payload.useApi !== undefined && typeof payload.useApi !== 'boolean') fail('INVALID_INPUT', 'Choose whether to use the optional Decisions API.');
+  return mutation(async () => {
+    const useApi = decisionCredentials.publicState().configured && payload.useApi !== false;
+    if (useApi) assertPaidWorkAllowed();
+    const scoped = createScopedAccess(store, { assertAvailable, epoch: () => sessionEpoch });
+    const preparedState = scoped.store.get(), identity = identityKey(preparedState);
+    const evidence = formEvidence(preparedState.career ?? createCareerState()), credentialVersion = preparedState.prescanCredentialVersion ?? 0;
+    if (formRequests.has(payload.requestId)) fail('REQUEST_CONFLICT', 'This form preparation is already pending.');
+    formRequests.set(payload.requestId, useApi); emit();
+    try {
+      const result = await browserForms.prepare({ ...payload, useApi });
+      const current = scoped.store.get(), draft = currentForm(current.career ?? createCareerState(), result.formId);
+      const previous = preparedState.career?.formDrafts?.[result.formId];
+      const answersHash = hash(previous?.evidence === evidence && previous.evidenceRevision === (preparedState.career?.evidenceRevision ?? 0) ? previous.answers ?? {} : {});
+      if (draft.evidence !== evidence || (current.prescanCredentialVersion ?? 0) !== credentialVersion || hash(draft.answers ?? {}) !== answersHash)
+        fail('FORM_CONTEXT_CHANGED', 'Preparation context changed. Prepare the form again before using its values.');
+      if (socket && !socket.destroyed) browserSessions.set(result.formId, { socket, epoch: sessionEpoch, identity, evidence, credentialVersion, answersHash });
+      careerViewRevision++; emit(); return result;
+    }
+    finally { formRequests.delete(payload.requestId); emit(); }
+  });
 }
 // The extension that prepared a form keeps its socket for read-only attachment checks.
 const browserSessions = new Map(), browserReplies = new Map(), applicationSockets = new Map();
@@ -784,7 +795,7 @@ async function settingsOperation(op, input, ownMutation) {
       const access = applicationAccess();
       result = await access.launcher.review({ host });
       access.assertAvailable(false);
-      await access.store.update(next => { next.browserPreferences ??= {}; next.browserPreferences.applicationHost = host; });
+      await access.workflow.setHost({ host });
       await refreshReviewHosts();
     }
     else if (op === 'copy-command') clipboard.writeText(setup().command);

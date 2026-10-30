@@ -33,9 +33,10 @@ chrome.runtime.onConnectExternal?.addListener(port => {
 
 // Memory only: a native port keeps the worker alive, and panel reconnection can
 // recover a completed request. No candidate values are persisted to browser disk.
-let state = { buildId: BUILD_ID, busy: null, error: '', notice: '', tabId: null, documentId: null, page: null, jobs: [], form: null, prepared: null, edits: {}, selected: [], paste: null,
+let state = { buildId: BUILD_ID, busy: null, error: '', notice: '', tabId: null, documentId: null, page: null, pageKind: 'unknown', jobs: [], form: null, prepared: null, edits: {}, selected: [], paste: null,
   application: null, applicationHost: 'claude', applicationNotice: '', applicationAnswersPending: false, answersStale: false, companion: null, errorCode: null };
 let generation = 0, preparingRequest = null, pasteSession = null, automaticPreparation = false;
+let inspectedPage = null;
 let pollTimer = null, pollEpoch = 0, pollInFlight = false, pollsRemaining = 0;
 const answerAttempts = new Set();
 const panels = new Set();
@@ -131,46 +132,98 @@ function isApplication(form, bound = false) {
   const careerFields = /\b(resume|résumé|curriculum vitae|cover letter|work experience|employment history|why (?:this|the) (?:role|company)|salary|sponsorship|linkedin)\b/i.test(labels);
   const namedApplication = /\b(job application|apply(?:ing)? (?:for|to)|application (?:form|for))\b/i.test(title) || /^(?:application|apply)\b/i.test(title);
   const contactFields = /\b(name|e-?mail|phone)\b/i.test(labels);
-  return (namedApplication && (careerFields || (contactFields && form.fields.length >= 2))) ||
+  return (namedApplication && (careerFields || contactFields)) ||
     (careerFields && (form.fields.length >= 3 || /\b(job|position|role|apply|careers?)\b/i.test(title)));
 }
+function requireWorkflow() {
+  if (state.companion?.locked) throw Object.assign(new Error('Unlock Companion, then read this page again.'), { code: 'LOCAL_LOCKED' });
+  if (!state.companion) throw Object.assign(new Error('Open Companion, then read this page again.'), { code: 'COMPANION_UNAVAILABLE' });
+  if (state.companion.workflowVersion < 2) throw Object.assign(new Error('Update Companion to prepare this application.'), { code: 'COMPANION_UPDATE_REQUIRED' });
+}
+async function checkCurrentPage(token) {
+  if (!inspectedPage || !state.documentId) throw new Error('Read the current job page first.');
+  try {
+    const { page } = await inject(state.tabId, checkFormBindings, [{ url: inspectedPage.url, fields: inspectedPage.fields, actions: inspectedPage.actions ?? [] }], state.documentId);
+    if (generation !== token) return false;
+    if (page.attached) return true;
+  } catch { /* A detached or replaced document cannot authorize a native action. */ }
+  if (generation === token) await expirePrepared('The page changed. Choose Read page to continue.');
+  return false;
+}
 async function detect(tabId, token) {
-  clearApplication(); clearForm();
+  const reviewed = { tabId: state.tabId, documentId: state.documentId, form: state.form, prepared: state.prepared, edits: state.edits, selected: state.selected, changed: hasReviewedEdits() };
+  clearApplication(); clearForm(); inspectedPage = null; state.pageKind = 'unknown';
   if (tabId !== state.tabId) { state.tabId = tabId; state.documentId = null; state.page = null; state.jobs = []; }
   publish();
   const { page: form, documentId } = await inject(tabId, inspectForm);
   let jobs = [], context = {};
   try { jobs = (await inject(tabId, captureJobs, [], documentId)).page.jobs; } catch { /* Not every application page carries a posting. */ }
-  try { context = (await inject(tabId, captureApplicationContext, [], documentId)).page; } catch { /* The agent can retrieve the exact advert when available. */ }
+  try {
+    const captured = (await inject(tabId, captureApplicationContext, [], documentId)).page;
+    context = { ...(captured.original ? { original: captured.original } : {}), jobLinks: captured.jobLinks ?? [] };
+  } catch { /* The agent can retrieve the exact advert when available. */ }
   if (generation !== token) return;
-  state = { ...state, tabId, documentId, page: { url: form.url, title: form.title }, jobs, form: form.fields.length ? form : null,
-    notice: form.fields.length ? 'This is not a recognized application form. Open the job’s application page, then choose Read page.' : jobs.length ? `${jobs.length} jobs detected.` : 'No job advert or application form found. Open the job page, then choose Read page.' };
+  if (!jobs.length && context.original?.title && context.original.text) {
+    const original = context.original;
+    jobs = [{ title: original.title, url: original.url, description: original.text.slice(0, 60000), complete: original.complete === true && original.text.length <= 60000 }];
+  }
+  if (!jobs.length && context.jobLinks?.length > 1) jobs = context.jobLinks.map(link => ({ title: link.title, url: link.url, complete: false }));
+  const application = isApplication(form);
+  const listing = jobs.length > 1 || context.jobLinks?.length > 1 || (!application && jobs.length === 1 && !context.original?.complete && jobs[0].url !== form.url && context.original?.url !== form.url);
+  const pageKind = listing ? 'listing' : application ? 'application' : jobs.length || context.original || context.jobLinks?.length ? 'job' : 'none';
+  inspectedPage = form;
+  state = { ...state, tabId, documentId, page: { url: form.url, title: form.title }, pageKind, jobs, form: form.fields.length ? form : null,
+    notice: pageKind === 'none' ? 'No job advert or application form found. Open the job page, then choose Read page.' : '' };
+  if (reviewed.changed && reviewed.tabId === tabId && reviewed.documentId === documentId && reviewed.form?.url === form.url &&
+    reviewed.form.fields.length === form.fields.length && form.fields.every(field => reviewed.form.fields.some(old => old.id === field.id && old.signature === field.signature))) {
+    state.prepared = reviewed.prepared; state.edits = reviewed.edits; state.selected = reviewed.selected; state.answersStale = true;
+  }
+  publish();
+  // Non-job reading surfaces must not create an application or demand setup.
+  // A form may still have an exact saved binding even without a recognisable title.
+  if (pageKind === 'none' && !form.fields.length) return;
   const companion = await native.request('status', {});
   if (generation !== token) return;
-  state.companion = { paired: companion?.paired === true, hasCv: typeof companion?.hasCv === 'boolean' ? companion.hasCv : null, locked: companion?.execution?.state === 'locked' };
+  const hosts = applicationView({ bindingId: 'status', state: 'needs_job', hostInfo: companion?.hostInfo }).hostInfo ?? {};
+  state.companion = { paired: companion?.paired === true, hasCv: typeof companion?.hasCv === 'boolean' ? companion.hasCv : null, locked: companion?.execution?.state === 'locked',
+    workflowVersion: Number.isInteger(companion?.applicationWorkflowVersion) ? companion.applicationWorkflowVersion : 0,
+    preferredHost: ['claude', 'codex'].includes(companion?.preferredHost) ? companion.preferredHost : null,
+    hostInfo: hosts, decisionApiConfigured: companion?.decisionApiConfigured === true };
+  state.applicationHost = state.companion.preferredHost || (hosts.codex?.available ? 'codex' : hosts.claude?.available ? 'claude' : state.applicationHost);
+  if (listing) return;
+  requireWorkflow();
   const result = await native.request('application_resolve', { requestId: crypto.randomUUID(), page: form, jobs, context });
   if (generation !== token) return;
-  if (isApplication(form) || jobs.length || context.original || context.jobLinks?.length || result.applicationId) {
-    setApplication(result, true); pollsRemaining = 240; state.notice = ''; publish(); schedulePoll();
+  if (application || jobs.length || context.original || context.jobLinks?.length || result.applicationId) {
+    setApplication(result, !state.companion.preferredHost);
+    if (result.applicationId && !listing) state.pageKind = isApplication(form, true) ? 'application' : 'job';
+    pollsRemaining = 240; state.notice = ''; publish(); schedulePoll();
   }
   if (isApplication(form, !!state.application?.applicationId)) {
     markAnswerAttempt(answerKey());
-    await prepare(token);
+    await prepare(token, false, true, reviewed.documentId === documentId ? reviewed : null);
   }
 }
-async function prepare(token, automatic = false) {
+async function prepare(token, automatic = false, useApi = true, reviewed = null) {
+  requireWorkflow();
   if (!state.form || !isApplication(state.form, !!state.application?.applicationId)) throw new Error('Open a job application form, then choose Read page.');
+  reviewed ??= { form: state.form, prepared: state.prepared, edits: state.edits, selected: state.selected };
   state.busy = 'prepare'; publish();
   await arm(false);
   if (generation !== token || (automatic && !panels.size)) return;
-  const { page: binding } = await inject(state.tabId, checkFormBindings, [{ url: state.form.url, fields: state.form.fields, actions: state.form.actions ?? [] }], state.documentId);
+  if (!await checkCurrentPage(token)) return;
   if (generation !== token || (automatic && !panels.size)) return;
-  if (!binding.attached) { await expirePrepared('The page changed. Choose Read page to find current answers.'); return; }
   preparingRequest = crypto.randomUUID();
-  const result = await native.request('forms_prepare', { requestId: preparingRequest, ...state.form });
+  const result = await native.request('forms_prepare', { requestId: preparingRequest, ...state.form, useApi });
   if (generation !== token || (automatic && !panels.size)) return;
-  state.prepared = result; state.edits = Object.fromEntries(result.fields.map(f => [f.id, f.value ?? ''])); state.selected = []; state.paste = null;
-  state.applicationAnswersPending = false; state.answersStale = false;
+  const previous = new Map((reviewed.prepared?.fields ?? []).map(field => [field.id, field]));
+  state.prepared = result;
+  state.edits = Object.fromEntries(result.fields.map(field => {
+    const old = previous.get(field.id), edit = reviewed.edits[field.id];
+    return [field.id, old?.signature === field.signature && edit !== undefined && edit !== (old.value ?? '') ? edit : field.value ?? ''];
+  }));
+  state.selected = reviewed.selected.filter(id => result.fields.some(field => field.id === id && previous.get(id)?.signature === field.signature));
+  state.paste = null; state.applicationAnswersPending = false; state.answersStale = false;
   await arm(true);
   if (generation === token) state.notice = '';
 }
@@ -179,10 +232,6 @@ async function act(message) {
   if (!message || typeof message.action !== 'string') return;
   const { action, payload = {} } = message;
   if (action === 'ping') return;
-  if (action === 'application-host') {
-    if (!state.busy && ['claude', 'codex'].includes(payload.host)) { state.applicationHost = payload.host; publish(); }
-    return;
-  }
   if (action === 'edit') {
     if (state.busy || !state.prepared) return;
     const fields = new Map(state.prepared.fields.map(f => [f.id, f]));
@@ -204,24 +253,53 @@ async function act(message) {
       await arm(false);
       if (generation !== token) return;
       await detect(payload.tabId, token);
+    } else if (action === 'application-host') {
+      requireWorkflow();
+      if (!['claude', 'codex'].includes(payload.host)) throw new Error('Choose Codex or Claude.');
+      const result = await native.request('application_host', { host: payload.host });
+      if (generation !== token) return;
+      if (result?.host !== payload.host) throw new Error('Companion did not save your AI app choice. Try again.');
+      state.applicationHost = result.host; state.companion.preferredHost = result.host;
+    } else if (action === 'open-job') {
+      if (!state.jobs.some(job => job.url === payload.url)) throw new Error('Choose a job from this page.');
+      if (!await checkCurrentPage(token)) return;
+      await chrome.tabs.create({ url: payload.url });
     } else if (action === 'application-prepare') {
-      if (!state.application || !['claude', 'codex'].includes(payload.host)) throw new Error('Read the application page and choose Claude or Codex.');
+      requireWorkflow();
+      if (state.pageKind === 'none' || state.pageKind === 'listing' || !state.application) throw new Error('Open one job and read its page first.');
+      if (!await checkCurrentPage(token)) return;
+      if (state.application.state === 'ready') {
+        if (state.form && (!state.prepared || state.applicationAnswersPending || state.answersStale)) await prepare(token);
+        return;
+      }
+      const host = payload.host ?? state.applicationHost;
+      if (!['claude', 'codex'].includes(host)) throw new Error('Choose Codex or Claude.');
       const bindingId = state.application.bindingId;
-      const result = await native.request('application_prepare', { bindingId, host: payload.host });
+      const result = await native.request('application_prepare', { bindingId, host });
       if (generation !== token) return;
       if (result.bindingId !== bindingId) throw new Error('The application changed. Choose Read page again.');
       setApplication(result);
-      state.applicationHost = payload.host;
-      state.notice = result.opened === true && result.requiresSend === true
-        ? result.mode === 'cli' ? `In the ${payload.host === 'codex' ? 'Codex' : 'Claude'} window that opened, check the message, then press Enter to start.`
-          : `In ${payload.host === 'codex' ? 'Codex' : 'Claude'}, check the message and click Send to start.`
-        : `Continue in ${payload.host === 'codex' ? 'Codex' : 'Claude'} to review your message.`;
+      state.applicationHost = host;
+      state.notice = result.opened === true && result.requiresSend === true && ['cli', 'desktop'].includes(result.mode)
+        ? result.mode === 'cli' ? `In the ${host === 'codex' ? 'Codex' : 'Claude'} window that opened, check the message, then press Enter to start.`
+          : `In ${host === 'codex' ? 'Codex' : 'Claude'}, check the message and click Send to start.`
+        : `Continue in ${host === 'codex' ? 'Codex' : 'Claude'} to review your message.`;
       pollsRemaining = 240;
+    } else if (action === 'copy-intro') {
+      requireWorkflow();
+      if (!state.application?.introduction?.ready) throw new Error('The introduction is not ready yet.');
+      if (!await checkCurrentPage(token)) return;
+      const result = await native.request('application_copy_intro', { bindingId: state.application.bindingId });
+      if (generation !== token) return;
+      if (result?.copied !== true) throw new Error('Companion did not confirm copying the introduction. Try again.');
+      state.notice = 'Introduction copied.';
+    } else if (action === 'prepare-saved') {
+      await prepare(token, false, false);
     } else if (action === 'application-document') {
       if (!state.application || !['cv', 'cover_letter'].includes(payload.kind) || !['open', 'reveal'].includes(payload.action) ||
         !state.application.documents.some(doc => doc.kind === payload.kind && doc.ready)) throw new Error('That document is not ready. Continue in Codex or Claude to finish it.');
       await native.request('application_document', { bindingId: state.application.bindingId, kind: payload.kind, action: payload.action });
-      if (generation === token) state.notice = payload.action === 'reveal' ? 'Document folder opened. Upload the document on the application page yourself.' : 'Document opened. Upload it on the application page yourself.';
+      if (generation === token) state.notice = `${payload.kind === 'cv' ? 'CV' : 'Letter'}${payload.action === 'reveal' ? ' folder' : ''} opened.`;
     } else if (action === 'application-open-ad') {
       if (!state.application?.jobUrl) throw new Error('No job advert link was found. Open the original advert and click Read page.');
       await native.request('application_open_ad', { bindingId: state.application.bindingId });
@@ -336,11 +414,11 @@ chrome.runtime.onConnect.addListener(port => {
 
 function leavePage(notice) {
   const expired = expirePrepared(notice);
-  state.page = null; state.jobs = []; state.tabId = null; state.documentId = null; state.error = ''; publish();
+  inspectedPage = null; state.pageKind = 'unknown'; state.page = null; state.jobs = []; state.tabId = null; state.documentId = null; state.error = ''; publish();
   return expired;
 }
 chrome.tabs.onActivated.addListener(({ tabId }) => {
-  if (state.tabId !== null && tabId !== state.tabId) void leavePage('Choose Read page to read this tab.');
+  if (state.tabId !== null && tabId !== state.tabId) void leavePage('Click the recruiters.rip icon on this tab.');
 });
 chrome.tabs.onUpdated.addListener((tabId, change) => {
   if (tabId === state.tabId && (change.status === 'loading' || (change.url && change.url !== state.page?.url)))

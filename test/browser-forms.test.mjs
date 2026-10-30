@@ -17,7 +17,7 @@ function fixture({ fetchImpl = async () => { throw new Error('Unexpected fetch')
   state.career.facts.language = { id: 'language', subject: 'French', answer: 'Professional', kind: 'capability' };
   state.career.sources.cv = { purpose: 'cv', text: 'PRIVATE CV NEVER SENT TO DECISIONS', originalBase64: 'PRIVATE ORIGINAL', archived: false };
   let locked = false, key = configured ? 'sk-synthetic-only-never-a-real-key' : null, queue = Promise.resolve();
-  const calls = [];
+  const calls = [], reads = [];
   const assertAvailable = () => { if (locked) throw new CareerError('LOCAL_LOCKED', 'Synthetic lock'); };
   const store = {
     get() { assertAvailable(); return structuredClone(state); },
@@ -27,6 +27,7 @@ function fixture({ fetchImpl = async () => { throw new Error('Unexpected fetch')
     },
   };
   const credentials = { read(provider) {
+    reads.push(provider);
     assert.equal(provider, 'openai'); assertAvailable();
     if (!key) throw new CareerError('DECISIONS_KEY_REQUIRED', 'Synthetic key required');
     return { apiKey: key, credentialVersion: state.prescanCredentialVersion };
@@ -40,7 +41,7 @@ function fixture({ fetchImpl = async () => { throw new Error('Unexpected fetch')
     draft.applicationContext = applicationContextFingerprint(saved.career, app);
     saved.career.revision++;
   });
-  return { store, service, calls, tools, bind, lock() { locked = true; service.cancelAll(); },
+  return { store, service, calls, reads, tools, bind, lock() { locked = true; service.cancelAll(); },
     rotateKey() { key = 'sk-synthetic-replacement-not-a-real-key'; state.prescanCredentialVersion++; },
     alter(change) { change(state); }, state: () => structuredClone(state) };
 }
@@ -62,10 +63,46 @@ test('direct known contact answers need no key and no approval', async () => {
   const f = fixture();
   const result = await f.service.prepare(snapshot([field('name', 'Full name'), field('email', 'Email address', 'email'), field('phone', 'Telephone', 'tel'), field('unknown', 'Why this company?', 'textarea')]));
   assert.equal(f.calls.length, 0);
+  assert.deepEqual(f.reads, []);
   assert.deepEqual(result.fields.map(item => item.value), ['Synthetic Candidate', 'candidate@example.test', '+1 555 0100']);
   assert.equal(result.unresolved[0].id, 'unknown');
   assert.equal(result.usage, undefined);
   assert.ok(!JSON.stringify(result).includes('PRIVATE CV'));
+});
+
+test('saved-only preparation skips configured credentials and API mapping while retaining current application prose', async () => {
+  const f = fixture({ configured: true });
+  const args = snapshot([field('name', 'Full name'), field('motivation', 'Why this role?', 'textarea'), field('french', 'French level')]);
+  const first = await f.service.prepare(args);
+  await f.bind(first.formId);
+  const draft = await f.tools.get('career_form_read').invoke({ formId: first.formId });
+  const prose = 'I want to apply my demonstrated data analysis experience to this role.';
+  await f.tools.get('career_form_answers_save').invoke({ requestId: randomUUID(), revision: draft.revision,
+    formId: draft.formId, snapshot: draft.snapshot, evidenceRevision: draft.evidenceRevision, answers: [{ id: 'motivation', value: prose }] });
+  const result = await f.service.prepare({ ...args, requestId: randomUUID(), formId: first.formId });
+  assert.deepEqual(result.fields.map(({ id, value }) => ({ id, value })), [
+    { id: 'name', value: 'Synthetic Candidate' }, { id: 'motivation', value: prose },
+  ]);
+  assert.deepEqual(result.unresolved.map(({ id }) => id), ['french']);
+  assert.deepEqual(f.reads, [], 'useApi:false never reads even a configured secret');
+  assert.deepEqual(f.calls, []);
+  assert.equal(result.usage, undefined);
+});
+
+for (const change of ['identity', 'evidence', 'credential', 'lock']) test(`saved-only preparation rejects a ${change} change before releasing answers`, async () => {
+  const f = fixture(), started = deferred(), release = deferred(), update = f.store.update;
+  f.store.update = async callback => { started.resolve(); await release.promise; return update(callback); };
+  const pending = f.service.prepare(snapshot([field('name', 'Full name')]));
+  await started.promise;
+  if (change === 'identity') f.alter(state => { state.deviceId = 'another-synthetic-device'; });
+  if (change === 'evidence') f.alter(state => { state.career.evidenceRevision++; });
+  if (change === 'credential') f.rotateKey();
+  if (change === 'lock') f.lock();
+  release.resolve();
+  await assert.rejects(pending, byCode(change === 'lock' ? 'LOCAL_LOCKED' : 'FORM_CONTEXT_CHANGED'));
+  assert.deepEqual(f.calls, []);
+  assert.deepEqual(f.reads, []);
+  assert.equal(f.state().career.formDrafts, undefined);
 });
 
 test('blocked application URLs cannot release prepared contacts or trigger Decisions', async () => {

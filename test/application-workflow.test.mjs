@@ -5,7 +5,8 @@ import { createApplicationWorkflow, createApplicationPreparationTools, applicati
 import { createApplicationTools } from '../src/mcp/application-tools.mjs';
 import { createBrowserForms } from '../src/browser-forms.mjs';
 import { createFormTools, validFormValue, validateFormSnapshot } from '../src/mcp/form-tools.mjs';
-import { createCareerState } from '../src/mcp/state.mjs';
+import { createScopedAccess } from '../src/mcp/scope.mjs';
+import { CareerError, createCareerState } from '../src/mcp/state.mjs';
 
 const role = 'a6bff5dd-1a4e-48ca-9421-f61fb85d1011';
 const advert = `https://example.pinpointhq.com/postings/${role}`;
@@ -13,7 +14,7 @@ const apply = `${advert}/applications/new`;
 const job = { title: 'Platform engineer', company: 'Example', description: 'Build reliable data services.', url: advert };
 const field = (id = 'summary', extra = {}) => ({ id, label: 'Personal summary', type: 'textarea', signature: `sig:${id}`, empty: true, maxLength: 200, ...extra });
 const page = (url = apply, fields = [field()]) => ({ url, title: 'Apply for Platform engineer', fields, actions: [] });
-function fixture({ validateExport = async () => true } = {}) {
+function fixture({ validateExport = async () => true, assertAvailable = () => {} } = {}) {
   let state = { deviceId: 'synthetic-device', career: createCareerState() }, queue = Promise.resolve();
   state.career.profile.name = 'Synthetic Candidate';
   state.career.sources.cv = { purpose: 'cv', text: 'Built reliable services at Example.', archived: false };
@@ -21,7 +22,7 @@ function fixture({ validateExport = async () => true } = {}) {
     const next = queue.then(async () => { const copy = structuredClone(state); await change(copy); state = copy; });
     queue = next.catch(() => {}); return next;
   } };
-  const workflow = createApplicationWorkflow({ store, assertAvailable() {}, validateExport });
+  const workflow = createApplicationWorkflow({ store, assertAvailable, validateExport });
   const tools = new Map([...createApplicationTools({ store }), ...createFormTools({ store }),
     ...createApplicationPreparationTools({ workflow, openInBrowser: async url => opened.push(url) })].map(tool => [tool.name, tool]));
   const opened = [];
@@ -36,7 +37,8 @@ function fixture({ validateExport = async () => true } = {}) {
       const app = saved.career.applications[applicationId], fingerprint = applicationContextFingerprint(saved.career, app);
       for (const kind of ['cv', 'cover_letter']) {
         app[kind === 'cv' ? 'cv' : 'coverLetter'] = { version: 1, contextFingerprint: fingerprint };
-        app.exports.push({ kind, format: 'pdf', uri: `recruiters://exports/${kind === 'cv' ? 'a'.repeat(64) : 'b'.repeat(64)}.pdf`,
+        if (kind === 'cover_letter') app.coverLetter.paragraphs = ['Dear Example team,', 'I build reliable services and would like to contribute to your team.'];
+        app.exports.push({ kind, format: 'pdf', uri: `recruiters://documents/${kind === 'cv' ? 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' : 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'}.pdf`,
           documentVersion: 1, contextFingerprint: fingerprint, textValidation: { passed: true }, ...extra });
       }
     });
@@ -75,7 +77,102 @@ test('agent-led and browser-led entries converge on one application and reuse it
   const recreated = await f.create();
   assert.equal(recreated.applicationId, created.applicationId);
   assert.equal(Object.keys(f.store.get().career.applications).length, 1);
-  assert.equal((await f.workflow.document({ bindingId: view.bindingId, kind: 'cv' })).uri, `recruiters://exports/${'a'.repeat(64)}.pdf`);
+  assert.equal((await f.workflow.document({ bindingId: view.bindingId, kind: 'cv' })).uri, 'recruiters://documents/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.pdf');
+});
+
+test('current introduction copies the exact saved job-specific paragraphs synchronously without exposing prose in metadata', async () => {
+  const f = fixture(), created = await f.create(), view = await f.resolve(), copied = [];
+  const paragraphs = ['Dear Example team,', 'I build reliable services and would like to contribute to your data platform.'];
+  await f.call('career_application_letter_save', f.mutation({ applicationId: created.applicationId, paragraphs }));
+  const before = f.store.get();
+  const status = await f.workflow.status({ bindingId: view.bindingId });
+  assert.deepEqual(status.introduction, { ready: true });
+  assert.equal(status.documents.some(document => document.ready), false, 'copying text does not claim a PDF is exported');
+  assert.ok(!JSON.stringify(status).includes(paragraphs[1]));
+  assert.ok(!JSON.stringify(status).includes('recruiters://'));
+  assert.deepEqual(f.workflow.copyIntroduction({ bindingId: view.bindingId }, text => copied.push(text)), { copied: true });
+  assert.deepEqual(copied, [paragraphs.join('\n\n')], 'clipboard write finishes before its receipt is returned');
+  assert.deepEqual(f.store.get(), before, 'copying never creates a second introduction artifact');
+  assert.throws(() => f.workflow.copyIntroduction({ bindingId: view.bindingId }, () => { throw new Error('Clipboard unavailable'); }), /Clipboard unavailable/);
+});
+
+test('changed career evidence or original advert makes introduction metadata and copying unavailable', async () => {
+  for (const change of [
+    state => { state.career.sources.cv.text += ' Changed evidence.'; },
+    state => { state.career.evidenceRevision++; },
+    (state, id) => { state.career.applications[id].job.description = 'A different current role.'; },
+    (state, id) => { delete state.career.applications[id].coverLetter.contextFingerprint; },
+  ]) {
+    const f = fixture(), created = await f.create(), view = await f.resolve(), copied = [];
+    await f.documents(created.applicationId);
+    await f.store.update(state => change(state, created.applicationId));
+    assert.deepEqual((await f.workflow.status({ bindingId: view.bindingId })).introduction, { ready: false });
+    const before = f.store.get();
+    assert.throws(() => f.workflow.copyIntroduction({ bindingId: view.bindingId }, text => copied.push(text)), { code: 'INTRODUCTION_NOT_CURRENT' });
+    assert.deepEqual(copied, []);
+    assert.deepEqual(f.store.get(), before);
+  }
+});
+
+test('empty or oversized introductions are unavailable, never truncated for copying', async () => {
+  const f = fixture(), created = await f.create(), view = await f.resolve();
+  await f.documents(created.applicationId);
+  for (const paragraphs of [null, [], ['Only one paragraph'], ['Dear team,', '  '], ['Dear team,', 'x'.repeat(1501)], Array(13).fill('Paragraph'), ['Dear team,', 42]]) {
+    await f.store.update(state => { state.career.applications[created.applicationId].coverLetter.paragraphs = paragraphs; });
+    assert.deepEqual((await f.workflow.status({ bindingId: view.bindingId })).introduction, { ready: false });
+    assert.throws(() => f.workflow.copyIntroduction({ bindingId: view.bindingId }, () => assert.fail('Invalid text cannot reach the clipboard')), { code: 'INTRODUCTION_NOT_CURRENT' });
+  }
+});
+
+test('an unknown, unbound or wrong-job binding cannot copy another application’s introduction', async () => {
+  const f = fixture(), first = await f.create(), firstView = await f.resolve();
+  await f.documents(first.applicationId);
+  const unrelated = await f.resolve({ page: page('https://example.pinpointhq.com/apply'), context: {} });
+  assert.deepEqual(unrelated.introduction, { ready: false });
+  assert.throws(() => f.workflow.copyIntroduction({ bindingId: randomUUID() }, () => assert.fail('Unknown binding copied')), { code: 'NOT_FOUND' });
+  assert.throws(() => f.workflow.copyIntroduction({ bindingId: unrelated.bindingId }, () => assert.fail('Unbound application copied')), { code: 'INTRODUCTION_NOT_CURRENT' });
+  const otherJob = { ...job, url: advert.replace(role, '54bab9d0-9c78-4405-8cea-3e1a2ae11b4c') };
+  const second = await f.create(otherJob), paragraphs = ['Dear other team,', 'This introduction is for the other exact application.'];
+  await f.call('career_application_letter_save', f.mutation({ applicationId: second.applicationId, paragraphs }));
+  const secondView = await f.resolve({ page: page(`${otherJob.url}/applications/new`), context: {} });
+  const copied = [];
+  assert.deepEqual(f.workflow.copyIntroduction({ bindingId: secondView.bindingId }, text => copied.push(text)), { copied: true });
+  assert.deepEqual(copied, [paragraphs.join('\n\n')]);
+  await f.store.update(state => { state.career.applicationBindings[firstView.bindingId].applicationId = second.applicationId; });
+  assert.deepEqual((await f.workflow.status({ bindingId: firstView.bindingId })).introduction, { ready: false });
+  assert.throws(() => f.workflow.copyIntroduction({ bindingId: firstView.bindingId }, () => assert.fail('Wrong-job binding copied')), { code: 'INTRODUCTION_NOT_CURRENT' });
+});
+
+test('host preference persists without an account, application binding or host launch', async () => {
+  const f = fixture(), before = f.store.get();
+  assert.deepEqual(await f.workflow.setHost({ host: 'claude' }), { host: 'claude' });
+  assert.equal(f.store.get().browserPreferences.applicationHost, 'claude');
+  assert.deepEqual(f.store.get().career, before.career);
+  assert.equal(f.store.get().pairing, undefined);
+  const reopened = createApplicationWorkflow({ store: f.store });
+  assert.deepEqual(await reopened.setHost({ host: 'codex' }), { host: 'codex' });
+  assert.equal(f.store.get().browserPreferences.applicationHost, 'codex');
+  for (const host of ['other', '', null, undefined]) await assert.rejects(reopened.setHost({ host }), { code: 'INVALID_INPUT' });
+  assert.equal(f.store.get().browserPreferences.applicationHost, 'codex');
+  assert.deepEqual(f.opened, []);
+});
+
+test('locked or changed local sessions cannot save host preferences or copy introductions', async () => {
+  const f = fixture(), created = await f.create(), view = await f.resolve();
+  await f.documents(created.applicationId);
+  let locked = false, epoch = 0;
+  const assertAvailable = () => { if (locked) throw new CareerError('LOCAL_LOCKED', 'Synthetic locked storage'); };
+  const scoped = createScopedAccess(f.store, { assertAvailable, epoch: () => epoch });
+  const workflow = createApplicationWorkflow({ store: scoped.store, assertAvailable: scoped.assertAvailable });
+  await workflow.setHost({ host: 'claude' });
+  const before = f.store.get();
+  locked = true;
+  await assert.rejects(workflow.setHost({ host: 'codex' }), { code: 'LOCAL_LOCKED' });
+  assert.throws(() => workflow.copyIntroduction({ bindingId: view.bindingId }, () => assert.fail('Locked introduction copied')), { code: 'LOCAL_LOCKED' });
+  locked = false; epoch++;
+  await assert.rejects(workflow.setHost({ host: 'codex' }), { code: 'IDENTITY_CHANGED' });
+  assert.throws(() => workflow.copyIntroduction({ bindingId: view.bindingId }, () => assert.fail('Old-session introduction copied')), { code: 'IDENTITY_CHANGED' });
+  assert.deepEqual(f.store.get(), before);
 });
 
 test('web-led complete capture creates once; incomplete capture persists exact context until explicit bind', async () => {
@@ -324,6 +421,7 @@ test('blocked packages reject preparation, open and receipt replay while retaini
     () => f.workflow.resolve(input),
   ]) await assert.rejects(operation, { code: 'JOB_BLOCKED' });
   assert.throws(() => f.workflow.jobUrl({ bindingId: view.bindingId }), { code: 'JOB_BLOCKED' });
+  assert.throws(() => f.workflow.copyIntroduction({ bindingId: view.bindingId }, () => assert.fail('Blocked introduction copied')), { code: 'JOB_BLOCKED' });
   assert.deepEqual(f.opened, []);
   assert.deepEqual(f.store.get(), before);
 });

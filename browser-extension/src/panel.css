@@ -1,42 +1,33 @@
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--color-canvas); color: var(--color-ink); font: var(--text-body-sm); }
-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--spacing-16); border-bottom: 1px solid var(--color-facet); padding: var(--spacing-16); }
-header img { width: 160px; max-width: 100%; height: auto; }
-main { padding: var(--spacing-16); }
-nav { display: flex; gap: var(--spacing-8); flex-wrap: wrap; }
-h1 { font: var(--text-subheading); overflow-wrap: anywhere; margin: var(--spacing-16) 0; }
-h2 { font: var(--text-subheading); margin: var(--spacing-24) 0 var(--spacing-16); }
+header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--spacing-8); border-bottom: 1px solid var(--color-facet); padding: var(--spacing-16); }
+header img { width: 144px; max-width: 100%; height: auto; }
+main { padding: var(--spacing-16); max-width: 640px; }
+h1 { font: var(--text-subheading); overflow-wrap: anywhere; margin: 0 0 var(--spacing-8); }
 p { margin: var(--spacing-8) 0 var(--spacing-16); overflow-wrap: anywhere; }
 .meta, small { color: var(--color-smoke); font: var(--text-meta); overflow-wrap: anywhere; }
 button, input, textarea, select { font: inherit; }
-button { min-height: 44px; padding: var(--spacing-8) var(--spacing-16); background: var(--color-ink); color: var(--color-canvas); border: 1px solid var(--color-ink); border-radius: var(--radius-buttons); cursor: pointer; margin-bottom: var(--spacing-8); font: var(--text-label); letter-spacing: var(--tracking-label); text-transform: uppercase; }
-button.quiet { background: transparent; color: var(--color-ink); border-color: var(--color-ink); }
+button { min-height: 44px; max-width: 100%; padding: var(--spacing-8) var(--spacing-16); background: var(--color-ink); color: var(--color-canvas); border: 1px solid var(--color-ink); border-radius: var(--radius-buttons); cursor: pointer; margin-bottom: var(--spacing-8); font: var(--text-label); letter-spacing: var(--tracking-label); text-transform: uppercase; overflow-wrap: anywhere; }
+button.quiet { background: transparent; color: var(--color-ink); }
+button.text-button { background: transparent; color: var(--color-ink); border-color: transparent; padding-inline: 0; margin: 0; }
 button:disabled { background: transparent; color: var(--color-dust); cursor: not-allowed; }
 :focus-visible { outline: 2px solid var(--color-ink); outline-offset: 3px; }
 input:not([type=checkbox]), textarea, select { display: block; width: 100%; min-height: 44px; padding: var(--spacing-8); margin-top: var(--spacing-8); border: 0; border-bottom: 1px solid var(--color-ink); border-radius: 0; color: var(--color-ink); background: transparent; }
 textarea { min-height: 80px; resize: vertical; }
-.check { display: flex; align-items: flex-start; min-height: 44px; gap: var(--spacing-8); margin: var(--spacing-16) 0; }
-input[type=checkbox] { flex: 0 0 auto; margin-top: 4px; accent-color: var(--color-ink); }
+.check { display: flex; align-items: center; min-height: 44px; gap: var(--spacing-8); margin: 0 0 var(--spacing-8); }
+input[type=checkbox] { flex: 0 0 auto; accent-color: var(--color-ink); }
 .row { padding: var(--spacing-16) 0; border-top: 1px solid var(--color-facet); overflow-wrap: anywhere; }
-.row .check { margin: 0 0 var(--spacing-8); }
 .row small { display: block; margin-top: var(--spacing-8); }
-summary { min-height: 44px; padding-block: var(--spacing-8); cursor: pointer; color: var(--color-ink); font: var(--text-meta); }
+summary { min-height: 44px; padding-block: var(--spacing-8); cursor: pointer; color: var(--color-ink); font: var(--text-meta); overflow-wrap: anywhere; }
 details p { white-space: pre-wrap; }
-#error { color: var(--color-ink); border-top: 1px solid var(--color-facet); padding-top: var(--spacing-16); }
-#recovery { display: flex; flex-wrap: wrap; column-gap: var(--spacing-8); }
-#recovery-message { flex-basis: 100%; }
-#review, #jobs { margin-top: var(--spacing-16); border-top: 1px solid var(--color-facet); }
+#review, #missing-details, #jobs, #options { margin-top: var(--spacing-8); border-top: 1px solid var(--color-facet); }
 #review-actions { border-top: 1px solid var(--color-facet); padding-top: var(--spacing-16); }
 label { display: block; }
 select option { background: var(--color-surface); color: var(--color-ink); }
 #save-details { margin-top: var(--spacing-16); }
 #paste { color: var(--color-smoke); }
-#application { margin-top: var(--spacing-16); border-top: 1px solid var(--color-facet); }
-#application h2 { margin-top: var(--spacing-16); }
-#application-title { overflow-wrap: anywhere; }
 #application-host { margin-bottom: var(--spacing-16); }
-.document-row { padding-block: var(--spacing-8); border-top: 1px solid var(--color-facet); }
-.document-row p { margin-bottom: var(--spacing-8); }
-.document-actions { display: flex; flex-wrap: wrap; gap: var(--spacing-8); }
-button { max-width: 100%; overflow-wrap: anywhere; }
+.document-actions, #primary-actions { display: flex; flex-wrap: wrap; gap: var(--spacing-8); }
+#flow { margin-top: var(--spacing-16); }
+#candidate-list button { text-align: left; width: 100%; }
 [hidden] { display: none !important; }

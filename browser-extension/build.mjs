@@ -18,7 +18,7 @@ const identity = BROWSER_IDENTITIES[mode];
 const manifest = createManifest(identity, version, mode === 'local', browser);
 await rm(out, { recursive: true, force: true });
 await mkdir(out, { recursive: true });
-const sources = ['background.mjs','protocol.mjs','page-access.mjs','page.mjs','panel.html','panel.mjs','panel.css'];
+const sources = ['background.mjs','protocol.mjs','page-access.mjs','page.mjs','panel.html','panel.mjs','panel-flow.mjs','panel.css'];
 const buildHash = createHash('sha256').update(JSON.stringify(manifest));
 for (const file of sources) {
   const source = await readFile(join(root, 'src', file));

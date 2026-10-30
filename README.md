@@ -70,6 +70,12 @@ Check the saved documents before you use **Open job** to apply.
 
 Open **Jobs**, select a job, then choose **Open CV** or **Open letter** in its **Job and documents** section. **Open job** sits with them. The same actions are available when you select an item under **Applications**. These open saved files; they do not create new documents.
 
+Generated PDFs are saved together in private **Company / Job title** folders, with exact readable basenames **Candidate full name - CV.pdf** and **Candidate full name - COVER LETTER.pdf** (TXT uses the same naming). Names come from the saved candidate and application, never a guessed identity. Unsafe filename characters and reserved device names are sanitized. Folder names are bounded against the complete path length, preserving the candidate filename; an excessively long base path fails explicitly. Distinct applications with colliding names receive readable job-folder suffixes such as **Job title (2)**. Regenerating a document atomically replaces that kind's file in the same application folder; versions and opaque IDs are metadata, not visible filenames.
+
+Document resources use `recruiters://documents/<UUID>.pdf` (or `.txt`), with SHA-256 retained only as integrity metadata. Open, attachment and resource consumers resolve the current application record rather than trusting a supplied file path. Replaced versions and legacy hash-only PDF/TXT resource URIs are unavailable. After a successful export or restore, obsolete generated files are removed without touching imported CVs, facts, applications, credentials, backups or ranking CSVs. Ranking CSV resources retain their distinct content-addressed export format.
+
+Portable backups verify document bytes and rebind them to fresh local document identities and readable paths. Older backup-contained PDFs/TXT can be rebound when the application kind, candidate name, company and job title are present; otherwise the saved draft remains and the missing-file warning requests a new export. Foreign stored paths are never opened.
+
 
 ## Add the browser extension — optional
 
@@ -99,12 +105,12 @@ You will need to load this version again after closing Firefox.
 
 ### Fill an application
 
-1. On the application page, click **rr**, then **Read page** if needed.
-2. If details are missing, enter them in the extension and choose **Save details**.
-3. Click an empty answer box and paste with **⌘V** on Mac or **Ctrl+V** on Windows/Linux. Check the answer before moving on. Existing text is not replaced automatically.
-4. Use **Review answers** to edit or copy an answer. Attach your documents and check the form before submitting.
+1. Open a job ad or application and click the **rr** toolbar icon. It reads the page and gets saved answers ready.
+2. Choose **Prepare application**. Codex or Claude opens with the request; click **Send**, or press **Enter** if a text window opens. Change the app under **Options**.
+3. Click an empty answer box and paste with **⌘V** on Mac or **Ctrl+V** on Windows/Linux. If details are missing, enter them and choose **Save details**.
+4. Use **Show CV** to find the file to upload and **Copy intro** for a cover-letter or message box. Check the form and submit it yourself.
 
-Your AI writes the tailored CV, cover letter and job-specific answers. The extension prepares saved answers for paste; it does not submit applications. Extra help choosing saved answers is optional in **Settings → Form filling**, using a separately billed OpenAI API key.
+Saved answers work without an API key. Extra help choosing saved answers is optional in **Settings → Form filling**, using a separately billed OpenAI API key.
 
 ### Apply with Codex or Claude
 
@@ -241,7 +247,7 @@ The companion's **Clear reviews** action and `career_rankings_delete` clear rank
 
 Navigation is **Me / Jobs / Settings / Help**; Me opens by default. Me keeps **Import CV** and **Jobs**, with account/setup guidance when needed, above **CVs / Facts / Preferences / Career**. The CV detail starts with **Delete CV**; a red border distinguishes this destructive action. Generated files belong to their jobs and applications through **Open CV / Open letter**, not to a global file button in Me. Settings has **General / Backups** subtabs: General holds account, app, browser, sharing, form and update controls; Backups holds save, preview, restore and folder actions. Manual connection details stay under **Advanced**. Import and restore use native file pickers, never renderer-supplied paths. Locked storage, account connection, update approval and explicit CV deletion confirmation retain their boundaries.
 
-Backup JSON version 2 contains profile records and content-addressed document bytes, limited to 128 MiB per file, 100 profiles and 2,000 saved documents. Original CV files are limited to 5 MiB and saved documents to 12 MiB each. Current career-schema-2 records in version-1 exports remain importable; unsupported career schemas fail rather than passing through the destructive schema upgrade. Missing historical files are disclosed. Restores retain sign-in, device identity, credentials, other identity archives and current sharing consent, while clearing runtime receipts and invalidating stale operations. Failed restores roll back newly created files without removing preexisting exports. Shared-CV references remain untrusted provenance for server-authorized deletion, not permission or proof of current sharing.
+Backup JSON version 2 contains profile records and SHA-256-verified document bytes, limited to 128 MiB per file, 100 profiles and 2,000 saved documents. Original CV files are limited to 5 MiB and saved documents to 12 MiB each. Current career-schema-2 records in version-1 exports remain importable; unsupported career schemas fail rather than passing through the destructive schema upgrade. Missing historical files are disclosed. Restore materializes only each application's current document version, independent of historical-record ordering. Restores retain sign-in, device identity, credentials, other identity archives and current sharing consent, while clearing runtime receipts and invalidating stale operations. Failed restores roll back replacements and newly created files without removing preexisting exports. Shared-CV references remain untrusted provenance for server-authorized deletion, not permission or proof of current sharing.
 
 CV removal uses signed `POST /device/cv/delete` with an immutable `documentId`. The server establishes ownership; the client retains the CV until all recorded copies confirm erasure. New upload IDs are recorded before sending, and storage-level deletion fences stop delayed writes from restoring deleted bytes. The middleware migration and coordinated writer deployment described in its README are required before the online part is available. Backups cannot confer ownership of another account's shared CV.
 

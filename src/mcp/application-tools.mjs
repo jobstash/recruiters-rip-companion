@@ -167,7 +167,7 @@ function context(career, app) {
     guide: CV_WRITING_GUIDE };
 }
 
-export function createApplicationTools({ store, platform, documents, exportDocument }) {
+export function createApplicationTools({ store, platform, documents, exportDocument, cleanupExports = async () => {}, withExportTransaction = action => action() }) {
   const tools = [];
   const guard = (args, result) => {
     const career = readCareer(store);
@@ -311,16 +311,19 @@ export function createApplicationTools({ store, platform, documents, exportDocum
         if (!textValidation.passed) fail('EXPORT_CORRUPT', `The generated PDF did not preserve its text and reading order. Missing text: ${textValidation.missingTokens.slice(0, 12).join(', ') || 'none; reading order or extra text differs'}.`);
       }
       // A concurrent change bumps the revision, so the rendered draft is still current here.
-      return save('career_application_export', args, async current => {
+      const result = await withExportTransaction(() => save('career_application_export', args, async current => {
         const target = application(current, app.id);
-        const exported = await exportDocument({ applicationId: app.id, kind: args.kind, bytes,
-          filename: `${args.kind}-${app.id}-v${draft.version}.${format}`, mediaType: format === 'pdf' ? 'application/pdf' : 'text/plain' });
+        const exported = await exportDocument({ applicationId: app.id, kind: args.kind, documentVersion: draft.version, bytes,
+          mediaType: format === 'pdf' ? 'application/pdf' : 'text/plain' });
         const record = { ...exported, kind: args.kind, format, documentVersion: draft.version,
           contextFingerprint: draft.contextFingerprint, textValidation, createdAt: now() };
         target.exports.push(record);
         target.updatedAt = now();
         return { applicationId: target.id, export: record };
-      });
+      }));
+      try { await cleanupExports(); }
+      catch { return { ...result, cleanupWarning: 'The current document is saved, but some obsolete generated files could not be removed.' }; }
+      return result;
     });
 
   return tools;

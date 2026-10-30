@@ -248,8 +248,8 @@ test('generated stable launcher survives a removed saved Node entrypoint', { ski
   assert.deepEqual(JSON.parse(result), [argument]);
 });
 
-test('Windows generated launcher finds replacement Node and preserves literal arguments after saved executable removal', { skip: process.platform !== 'win32' || !process.versions.node.startsWith('24.') }, async t => {
-  const directory = await temporary(t), root = path.join(directory, "managed 'quoted'");
+test('Windows CMD starter selects replacement Node and forwards allowed arguments under Restricted policy', { skip: process.platform !== 'win32' || !process.versions.node.startsWith('24.') }, async t => {
+  const directory = await temporary(t), root = path.join(directory, "managed 'quoted' & (safe)");
   const bin = path.join(directory, 'replacement-bin'), removed = path.join(directory, 'removed-keg', 'node.exe');
   await fs.mkdir(root, { mode: 0o700 });
   await fs.mkdir(bin);
@@ -262,17 +262,12 @@ test('Windows generated launcher finds replacement Node and preserves literal ar
   await fs.writeFile(path.join(root, 'launch.mjs'), 'console.log(JSON.stringify({ executable: process.execPath, args: process.argv.slice(2) }));');
   await writeSourceLauncher(root, { node: removed });
   await fs.unlink(removed);
-  const foreignModules = path.join(directory, 'incompatible-module-path');
-  for (const name of ['Microsoft.PowerShell.Management', 'Microsoft.PowerShell.Security']) {
-    const module = path.join(foreignModules, name);
-    await fs.mkdir(module, { recursive: true });
-    await fs.writeFile(path.join(module, `${name}.psd1`), "@{ ModuleVersion = '1.0.0'; PowerShellVersion = '99.0'; RootModule = 'unsupported.psm1' }");
-    await fs.writeFile(path.join(module, 'unsupported.psm1'), '');
-  }
-  const args = ['literal; $(not-a-command) & keep', "apostrophe ' and spaces", '--bridge'];
+  const args = ['--inspect=127.0.0.1:0', '--remote-debugging-port=0', '--bridge'];
   const powershell = path.join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-  const output = await runSourceCommand(powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-File', path.join(root, 'launch.ps1'), ...args], {
-    env: { ...sourceEnvironment(), ProgramFiles: path.join(directory, 'absent-program-files'), PATH: bin, PSModulePath: foreignModules },
+  const quote = value => `'${value.replaceAll("'", "''")}'`;
+  const script = `$ErrorActionPreference='Stop';Import-Module -Name ([IO.Path]::Combine($PSHOME,'Modules','Microsoft.PowerShell.Security','Microsoft.PowerShell.Security.psd1')) -Force -ErrorAction Stop;if((Get-ExecutionPolicy -Scope Process) -ne 'Restricted' -or (Get-ExecutionPolicy) -ne 'Restricted'){throw 'The fixture must remain Restricted'};& ${quote(path.join(root, 'launch.cmd'))} ${args.map(quote).join(' ')};exit $LASTEXITCODE`;
+  const output = await runSourceCommand(powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Restricted', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {
+    env: { ...sourceEnvironment(), ProgramFiles: path.join(directory, 'absent-program-files'), PATH: bin },
     timeout: 30000,
   });
   const launched = JSON.parse(output);
@@ -286,12 +281,8 @@ test('existing-root tool repair changes only recognized launchers and tool metad
   await writeSourceJSON(currentFile, { schema: 1, sourceRoot: receipt.sourceRoot, version: receipt.version, userData: path.join(receipt.root, 'selected-profile') });
   const current = await fs.readFile(currentFile, 'utf8');
   await fs.writeFile(path.join(receipt.sourceRoot, 'my-local-edits.txt'), 'do not discard');
-  const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
-  const launcher = path.join(receipt.root, process.platform === 'win32' ? 'launch.ps1' : 'launch');
-  const legacy = process.platform === 'win32'
-    ? `& '${receipt.tools.node.replaceAll("'", "''")}' '${path.join(receipt.root, 'launch.mjs').replaceAll("'", "''")}'\r\n`
-    : `#!/bin/sh\nexec ${quote(receipt.tools.node)} ${quote(path.join(receipt.root, 'launch.mjs'))}\n`;
-  await fs.writeFile(launcher, legacy, { mode: 0o700 });
+  const launcher = path.join(receipt.root, process.platform === 'win32' ? 'launch.cmd' : 'launch');
+  await writeSourceLauncher(receipt.root, receipt.tools);
   const replacement = { node: process.execPath, git: path.join(receipt.root, 'new-git'), npm: path.join(receipt.root, 'new-npm.js') };
   const result = await repairManagedSourceTools(receipt.root, replacement);
   assert.equal(result.repaired, true);
@@ -304,6 +295,15 @@ test('existing-root tool repair changes only recognized launchers and tool metad
   const edited = await fs.readFile(launcher, 'utf8');
   await assert.rejects(repairManagedSourceTools(receipt.root, { ...replacement, node: path.join(receipt.root, 'another-node') }), { code: 'SOURCE_LAUNCHER_MODIFIED' });
   assert.equal(await fs.readFile(launcher, 'utf8'), edited);
+});
+
+test('Windows unsupported starter paths are rejected before creating installation directories', { skip: process.platform !== 'win32' }, async t => {
+  const directory = await temporary(t);
+  const before = await fs.readdir(directory);
+  for (const name of ['percent%PATH%', 'double"quote']) {
+    await assert.rejects(prepareSourceRoot(path.join(directory, name, 'managed')), { code: 'INVALID_SOURCE_PATH' });
+  }
+  assert.deepEqual(await fs.readdir(directory), before);
 });
 
 test('source roots reject replaceable ancestors before creation or repair without changing shared permissions', { skip: process.platform === 'win32' }, async t => {

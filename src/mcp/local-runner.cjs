@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 const path = require('node:path');
-const { realpathSync } = require('node:fs');
+const { native: realpathSync } = require('node:fs').realpathSync;
 const { spawn } = require('node:child_process');
 const { endpoint, restrictedEnvironment, assertPrivatePath, privateJSON, connectAuthenticated } = require('../platform-runtime.cjs');
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));

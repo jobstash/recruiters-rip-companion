@@ -56,6 +56,7 @@ for (const channel of ['native', 'mcp']) test(`${channel} client withholds its p
   await privateDirectory(directory);
   const selected = await realpath(directory), userData = path.dirname(selected);
   const socketPath = await privateEndpoint(directory, channel, t);
+  assert.equal(socketPath, endpoint(selected, channel), 'Short and canonical profile paths must identify the same endpoint.');
   const stub = path.join(home, 'synthetic-app.cjs'); await writeFile(stub, '');
   if (channel === 'mcp') await writeFile(path.join(directory, 'mcp-launch.json'), JSON.stringify({ executable: process.execPath,
     args: [stub, `--user-data-dir=${userData}`], directory: selected, userData, localOnly: false }), { mode: 0o600 });
@@ -81,7 +82,11 @@ for (const channel of ['native', 'mcp']) test(`${channel} client withholds its p
   await new Promise((resolve, reject) => { fake.once('error', reject); fake.listen(socketPath, resolve); });
   t.after(() => { for (const peer of peers) peer.destroy(); fake.close(); });
   const script = fileURLToPath(new URL(channel === 'mcp' ? '../src/mcp/local-runner.cjs' : '../src/native-host.cjs', import.meta.url));
-  const args = channel === 'mcp' ? [`--directory=${selected}`] : [path.join(directory, 'native-config.json'), `chrome-extension://${BROWSER_IDENTITIES.production.extensionId}/`];
+  // Windows clients may receive case/short-name aliases; generated config uses
+  // the native canonical name. Both must connect to the same protected profile.
+  const selectedAlias = process.platform === 'win32' ? selected.toUpperCase() : selected;
+  const configAlias = path.join(process.platform === 'win32' ? directory.toUpperCase() : directory, 'native-config.json');
+  const args = channel === 'mcp' ? [`--directory=${selectedAlias}`] : [configAlias, `chrome-extension://${BROWSER_IDENTITIES.production.extensionId}/`];
   const child = spawn(process.execPath, [script, ...args], { env, stdio: ['pipe', 'ignore', 'ignore'] });
   const exited = new Promise((resolve, reject) => { child.once('exit', resolve); child.once('error', reject); });
   t.after(() => child.kill());

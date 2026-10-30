@@ -25,7 +25,7 @@ function deviceDirectory({ localOnly = false, platform = process.platform, ...op
 function endpoint(directory, channel, platform = process.platform) {
   if (!['native', 'mcp', 'instance'].includes(channel)) throw new Error('Invalid local transport channel.');
   let canonical;
-  try { canonical = fs.realpathSync(directory); }
+  try { canonical = fs.realpathSync.native(directory); }
   catch (error) {
     if (error.code !== 'ENOENT') throw error;
     canonical = (platform === 'win32' ? path.win32 : path.posix).resolve(directory);

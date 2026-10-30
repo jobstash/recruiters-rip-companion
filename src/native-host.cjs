@@ -1,6 +1,6 @@
 'use strict';
 const path = require('node:path');
-const { realpathSync } = require('node:fs');
+const { native: realpathSync } = require('node:fs').realpathSync;
 const { spawn } = require('node:child_process');
 const { endpoint, restrictedEnvironment, assertPrivatePath, privateJSON, connectAuthenticated } = require('./platform-runtime.cjs');
 const MAX_INPUT = 1024 * 1024 + 65536;

@@ -21,7 +21,10 @@ const [major, minor, patch] = pkg.version.split('.').map(Number);
 assert.ok([major, minor, patch].every(Number.isSafeInteger));
 const baselineVersion = patch > 0 ? `${major}.${minor}.${patch - 1}` : minor > 0 ? `${major}.${minor - 1}.99` : major > 0 ? `${major - 1}.99.99` : null;
 assert.ok(baselineVersion, 'A stable candidate newer than 0.0.0 is required.');
-const scratch = await realpath(await mkdtemp(path.join(process.env.RUNNER_TEMP || tmpdir(), 'recruiters-source-smoke-')));
+// GitHub's Windows RUNNER_TEMP is on a shared work drive; do not weaken the
+// installer's trusted-ancestor checks to accommodate a replaceable CI fixture.
+const scratchBase = process.platform === 'win32' ? tmpdir() : process.env.RUNNER_TEMP || tmpdir();
+const scratch = await realpath(await mkdtemp(path.join(scratchBase, 'recruiters-source-smoke-')));
 const home = path.join(scratch, 'home'), managedRoot = path.join(scratch, 'managed');
 const defaultUserData = path.join(home, ...(process.platform === 'darwin' ? ['Library', 'Application Support'] : process.platform === 'win32' ? ['AppData', 'Roaming'] : ['.config']), 'Recruiters Companion');
 const userData = path.join(scratch, 'profiles', 'selected');
@@ -68,7 +71,12 @@ async function connect(url) {
   });
   socket.addEventListener('close', () => { for (const request of pending.values()) { clearTimeout(request.timer); request.reject(new Error('Source inspector closed.')); } pending.clear(); });
   await new Promise((resolve, reject) => { const timer = setTimeout(() => reject(new Error('Source inspector timed out.')), 10000); socket.addEventListener('open', () => { clearTimeout(timer); resolve(); }, { once: true }); socket.addEventListener('error', () => { clearTimeout(timer); reject(new Error('Source inspector failed.')); }, { once: true }); });
-  const connection = { close: () => socket.close(), send(expression) { return new Promise((resolve, reject) => {
+  const connection = { close: () => new Promise((resolve, reject) => {
+    if (socket.readyState === WebSocket.CLOSED) { resolve(); return; }
+    const timer = setTimeout(() => reject(new Error('Source inspector did not detach.')), 5000);
+    socket.addEventListener('close', () => { clearTimeout(timer); resolve(); }, { once: true });
+    socket.close();
+  }), send(expression) { return new Promise((resolve, reject) => {
     const id = ++sequence, timer = setTimeout(() => { pending.delete(id); reject(new Error('Source operation timed out.')); }, 25 * 60 * 1000);
     pending.set(id, { resolve, reject, timer }); socket.send(JSON.stringify({ id, method: 'Runtime.evaluate', params: { expression, awaitPromise: true, returnByValue: true } }));
   }); } }; connections.push(connection); return connection;
@@ -102,6 +110,12 @@ async function trackSource(sourceRoot) {
   assert.ok(binary.isFile() && binary.size > 0, 'The native Electron executable must exist before launching.');
   sourceExecutables.add(executable); sourceExecutables.add(await realpath(executable));
 }
+async function macSourceProcessDetails() {
+  const { stdout } = await execute('/bin/ps', ['-axo', 'pid=,ppid=,stat=,comm=', '-ww'], { timeout: 10000, maxBuffer: 4 * 1024 * 1024 });
+  return stdout.split('\n').map(line => /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(.+?)\s*$/.exec(line))
+    .filter(match => match && sourceExecutables.has(match[4]))
+    .map(match => ({ pid: Number(match[1]), parentPid: Number(match[2]), state: match[3], executable: match[4] }));
+}
 async function sourceProcesses() {
   if (!sourceExecutables.size) return [];
   if (process.platform === 'win32') {
@@ -119,12 +133,20 @@ async function sourceProcesses() {
     }
     return ids;
   }
-  const { stdout } = await execute('/bin/ps', ['-axo', 'pid=,comm=', '-ww'], { timeout: 10000, maxBuffer: 4 * 1024 * 1024 });
-  return stdout.split('\n').map(line => /^\s*(\d+)\s+(.+?)\s*$/.exec(line)).filter(match => match && sourceExecutables.has(match[2])).map(match => Number(match[1]));
+  // Zombies have exited and cannot hold an installation lease or serve a
+  // profile. Waiting for their unrelated parent to reap them is not app exit.
+  return (await macSourceProcessDetails()).filter(info => !info.state.startsWith('Z')).map(info => info.pid);
 }
 async function closeSelectedApp() {
+  await Promise.all(connections.map(connection => connection.close()));
+  let sample;
+  if (process.platform === 'darwin') {
+    sample = { before: await macSourceProcessDetails() };
+    (report.macSourceShutdowns ??= []).push(sample);
+  }
   for (const pid of await sourceProcesses()) await stop(pid);
-  await until(async () => (await sourceProcesses()).length === 0, 15000, 'owned source processes to exit before background relaunch');
+  try { await until(async () => (await sourceProcesses()).length === 0, 15000, 'owned source processes to exit before background relaunch'); }
+  finally { if (sample) sample.after = await macSourceProcessDetails(); }
 }
 async function bridgeSession(executable, args, native, action) {
   const options = { env, cwd: scratch, stdio: ['pipe', 'pipe', 'pipe'] };
@@ -298,7 +320,20 @@ try {
   assert.equal(JSON.parse(await readFile(path.join(first.sourceRoot, 'package.json'), 'utf8')).version, baselineVersion);
   await trackSource(first.sourceRoot);
   report.scenarios.push('public-wrapper-code-real-clean-clone-frozen-dependency-install-and-build');
-  launcher = spawn(process.execPath, [path.join(managedRoot, 'launch.mjs'), '--remote-debugging-port=0', '--inspect=127.0.0.1:0'], { env, cwd: scratch, stdio: ['ignore', 'pipe', 'pipe'] });
+  const starter = path.join(managedRoot, process.platform === 'win32' ? 'launch.cmd' : 'launch');
+  await realpath(starter);
+  const diagnosticArgs = ['--remote-debugging-port=0', '--inspect=127.0.0.1:0'];
+  if (process.platform === 'win32') {
+    if (/["%!\r\n]/.test(starter)) throw new Error('Unsafe Windows starter fixture path.');
+    const quote = value => `'${value.replaceAll("'", "''")}'`;
+    const argumentsLine = `/d /s /c ""${starter}" ${diagnosticArgs.map(value => `"${value}"`).join(' ')}"`;
+    // Keep the process-only Restricted policy. Start cmd.exe natively with
+    // inherited handles so Electron diagnostics are not rewritten as CLIXML.
+    const script = `$ErrorActionPreference='Stop';if((Get-ExecutionPolicy -Scope Process) -ne 'Restricted' -or (Get-ExecutionPolicy) -ne 'Restricted'){throw 'The starter gate requires Restricted execution policy'};$start=[Diagnostics.ProcessStartInfo]::new();$start.FileName=[IO.Path]::Combine($env:SystemRoot,'System32','cmd.exe');$start.Arguments=${quote(argumentsLine)};$start.UseShellExecute=$false;$child=[Diagnostics.Process]::Start($start);$child.WaitForExit();exit $child.ExitCode`;
+    launcher = spawn(path.join(env.SYSTEMROOT || env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Restricted', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
+      { env, cwd: scratch, stdio: ['ignore', 'pipe', 'pipe'] });
+  } else launcher = spawn(starter, diagnosticArgs, { env, cwd: scratch, stdio: ['ignore', 'pipe', 'pipe'] });
   launcher.stdout.on('data', append); launcher.stderr.on('data', append);
   let launchError; launcher.once('error', error => { launchError = error; });
   await until(() => { if (launchError) throw launchError; return inspectorUrl && browserUrl; }, 120000, 'managed launcher real Electron startup');
@@ -328,6 +363,7 @@ try {
   await assertBrowserProfile(device, 'firefox', saved.deviceId, baselineVersion);
   report.scenarios.push('nondefault-profile-generated-mcp-and-chrome-firefox-native-hosts-while-running');
   report.scenarios.push('generated-managed-launcher-real-source-startup');
+  if (process.platform === 'win32') report.scenarios.push('generated-cmd-starter-under-process-only-restricted-powershell-policy');
   const release = { version: pkg.version, commit: candidateCommit, checkout: candidate, provenance: 'local-candidate', tag: `v${pkg.version}`, releaseUrl: 'https://github.com/jobstash/recruiters-rip-companion/releases' };
   const localEdit = path.join(first.sourceRoot, 'synthetic-local-source-edit.txt');
   await writeFile(localEdit, 'Synthetic untracked work must not be discarded.\n', { flag: 'wx', mode: 0o600 });
@@ -392,7 +428,7 @@ try {
   assert.equal(admitted.update.status, 'installing', 'Manual/source instructions cannot pass a managed transition.');
   assert.equal(admitted.admissions, 1); assert.equal(admitted.attempts, 2); assert.equal(admitted.closed, true);
   report.scenarios.push('real-source-scheduler-build-idle-wait-and-final-work-gate-admission-with-synthetic-idle-input');
-  main.close(); renderer.close();
+  await Promise.all([main.close(), renderer.close()]);
   journal = await until(async () => {
     const value = await transition();
     if (['failed', 'rolled-back', 'unconfirmed'].includes(value?.status)) throw new Error(`Managed source update failed: ${JSON.stringify(value)}`);
@@ -439,7 +475,7 @@ try {
 } catch (error) { report.error = error.message; console.error(logs); throw error; }
 finally {
   await mkdir(path.dirname(reportFile), { recursive: true }); await writeFile(reportFile, JSON.stringify(report, null, 2) + '\n');
-  for (const connection of connections) connection.close();
+  await Promise.allSettled(connections.map(connection => connection.close()));
   journal ||= await transition().catch(() => null);
   await stop(restartedPid || journal?.launchedPid); await stop(initialPid); await stop(launcher?.pid);
   for (const pid of await sourceProcesses()) await stop(pid);

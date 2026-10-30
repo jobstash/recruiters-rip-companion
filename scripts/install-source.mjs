@@ -98,6 +98,10 @@ export async function assertSourceAncestors(directory, { privateLeaf = false } =
   }
 }
 
+function assertSourceStarterPath(directory, platform = process.platform) {
+  if (platform === 'win32' && /[%"]/.test(directory)) throw sourceError('INVALID_SOURCE_PATH', 'Choose another source folder without percent signs or double quotes. Windows cannot safely open the generated starter from that path.');
+}
+
 async function prepareSourceParent(directory) {
   const missing = [];
   let existing = directory;
@@ -106,6 +110,7 @@ async function prepareSourceParent(directory) {
     catch (error) { if (error.code !== 'ENOENT') throw error; missing.unshift(path.basename(existing)); existing = path.dirname(existing); }
   }
   let parent = await fs.realpath(existing);
+  assertSourceStarterPath(path.join(parent, ...missing));
   await assertSourceAncestors(parent);
   for (const name of missing) {
     parent = path.join(parent, name);
@@ -143,6 +148,7 @@ export function defaultSourceRoot() {
 }
 export async function prepareSourceRoot(value = defaultSourceRoot()) {
   if (!path.isAbsolute(value) || path.resolve(value) !== value || /[\0\r\n]/.test(value) || path.dirname(value) === value) throw sourceError('INVALID_SOURCE_PATH', 'Choose a private managed source folder.');
+  assertSourceStarterPath(value);
   const parent = await prepareSourceParent(path.dirname(value));
   const root = path.join(parent, path.basename(value));
   let created = false;
@@ -348,8 +354,44 @@ export function sourceLauncherText(root, node, platform = process.platform) {
   for (const value of [root, node]) if (!path.isAbsolute(value) || /[\0\r\n]/.test(value)) throw sourceError('INVALID_SOURCE_PATH', 'Invalid source launcher path.');
   const launcher = path.join(root, 'launch.mjs');
   if (platform === 'win32') {
-    const quote = value => `'${value.replaceAll("'", "''")}'`;
-    return `${WINDOWS_MODULE_BOOTSTRAP}\r\n$ErrorActionPreference = 'Stop'\r\n$candidates = @(${quote(node)}, (Join-Path $env:ProgramFiles 'nodejs/node.exe'))\r\n$command = Get-Command node.exe -CommandType Application -ErrorAction SilentlyContinue\r\nif ($command) { $candidates += $command.Source }\r\nforeach ($candidate in $candidates) {\r\n  if (-not [IO.Path]::IsPathRooted($candidate) -or -not (Test-Path -LiteralPath $candidate -PathType Leaf)) { continue }\r\n  try { $version = & $candidate --version } catch { continue }\r\n  if ($LASTEXITCODE -eq 0 -and $version -match '^v24\\.\\d+\\.\\d+$') {\r\n    & $candidate ${quote(launcher)} @args\r\n    if ($LASTEXITCODE -ne 0) { throw 'The source launcher failed.' }\r\n    return\r\n  }\r\n}\r\nthrow 'Install Node.js 24 (including npm), then open this launcher again.'\r\n`;
+    assertSourceStarterPath(root, platform);
+    if (node.includes('"')) throw sourceError('INVALID_SOURCE_PATH', 'The Node executable path contains an unsupported quote.');
+    const quote = value => `"${value.replaceAll('%', '%%')}"`;
+    const probe = `-e "process.exit(process.versions.node.startsWith('24.')?0:1)" >nul 2>nul`;
+    return [
+      '@echo off',
+      'setlocal DisableDelayedExpansion',
+      'set "NODE_OPTIONS="',
+      'set "NODE_PATH="',
+      'set "ELECTRON_RUN_AS_NODE="',
+      'pushd "%~dp0" >nul 2>nul',
+      'if errorlevel 1 exit /b 1',
+      `if not exist ${quote(node)} goto source_standard`,
+      `${quote(node)} ${probe}`,
+      'if errorlevel 1 goto source_standard',
+      `${quote(node)} ${quote(launcher)} %*`,
+      'goto source_finish',
+      ':source_standard',
+      'if not exist "%ProgramFiles%\\nodejs\\node.exe" goto source_path',
+      `"%ProgramFiles%\\nodejs\\node.exe" ${probe}`,
+      'if errorlevel 1 goto source_path',
+      `"%ProgramFiles%\\nodejs\\node.exe" ${quote(launcher)} %*`,
+      'goto source_finish',
+      ':source_path',
+      `node.exe ${probe}`,
+      'if errorlevel 1 goto source_missing',
+      `node.exe ${quote(launcher)} %*`,
+      'goto source_finish',
+      ':source_missing',
+      '>&2 echo Install Node.js 24 including npm, then open this launcher again.',
+      'popd',
+      'exit /b 1',
+      ':source_finish',
+      'set "source_exit=%errorlevel%"',
+      'popd',
+      'exit /b %source_exit%',
+      '',
+    ].join('\r\n');
   }
   const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
   const known = [node, '/opt/homebrew/opt/node@24/bin/node', '/usr/local/opt/node@24/bin/node', '/opt/homebrew/bin/node', '/usr/local/bin/node', '/usr/bin/node'];
@@ -357,18 +399,14 @@ export function sourceLauncherText(root, node, platform = process.platform) {
 }
 
 export async function writeSourceLauncher(root, tools, { previousTools } = {}) {
-  const file = path.join(root, process.platform === 'win32' ? 'launch.ps1' : 'launch');
+  const file = path.join(root, process.platform === 'win32' ? 'launch.cmd' : 'launch');
   const text = sourceLauncherText(root, tools.node);
   if (!previousTools) { await fs.writeFile(file, text, { mode: 0o700, flag: 'wx' }); return true; }
   const info = await fs.lstat(file);
   if (!info.isFile() || info.isSymbolicLink() || info.size > 65536) throw sourceError('INVALID_SOURCE_PATH', 'The source launcher is not a regular owned file.');
   const current = await fs.readFile(file, 'utf8');
   if (current === text) return false;
-  const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
-  const old = process.platform === 'win32'
-    ? `& '${previousTools.node.replaceAll("'", "''")}' '${path.join(root, 'launch.mjs').replaceAll("'", "''")}'\r\n`
-    : `#!/bin/sh\nexec ${quote(previousTools.node)} ${quote(path.join(root, 'launch.mjs'))}\n`;
-  if (current !== old && current !== sourceLauncherText(root, previousTools.node)) throw sourceError('SOURCE_LAUNCHER_MODIFIED', 'The managed launcher has local edits. They were preserved; run the launch.mjs file with Node.js 24 or move your launcher edits before repairing it.');
+  if (current !== sourceLauncherText(root, previousTools.node)) throw sourceError('SOURCE_LAUNCHER_MODIFIED', 'The managed launcher has local edits. They were preserved; run the launch.mjs file with Node.js 24 or move your launcher edits before repairing it.');
   const temporary = `${file}.${randomBytes(8).toString('hex')}.tmp`;
   await fs.writeFile(temporary, text, { flag: 'wx', mode: 0o700 });
   await fs.rename(temporary, file);
@@ -408,7 +446,7 @@ export async function installSource({ root: requestedRoot, checkout, commit, pro
       const child = spawn(tools.node, [path.join(root, 'launch.mjs')], { detached: true, env: sourceEnvironment(tools), stdio: 'ignore' });
       await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); }); child.unref();
     }
-    return { root, sourceRoot: receipt.sourceRoot, version: receipt.version, commit: receipt.commit, launcher: path.join(root, 'launch.mjs'), existing: true, repaired };
+    return { root, sourceRoot: receipt.sourceRoot, version: receipt.version, commit: receipt.commit, launcher: path.join(root, process.platform === 'win32' ? 'launch.cmd' : 'launch'), existing: true, repaired };
   }
   const tools = await discoverSourceTools(undefined, signal);
   let release;
@@ -445,7 +483,7 @@ export async function installSource({ root: requestedRoot, checkout, commit, pro
       await new Promise(resolve => setTimeout(resolve, 200));
     }
   }
-  return { root, sourceRoot: receipt.sourceRoot, version: receipt.version, commit: receipt.commit, launcher: path.join(root, 'launch.mjs') };
+  return { root, sourceRoot: receipt.sourceRoot, version: receipt.version, commit: receipt.commit, launcher: path.join(root, process.platform === 'win32' ? 'launch.cmd' : 'launch') };
   } finally { await lock.close(); await fs.unlink(lockFile); }
 }
 

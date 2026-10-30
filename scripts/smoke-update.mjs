@@ -33,7 +33,8 @@ if (process.platform === 'linux' && process.getuid() === 0) throw new Error('App
 const root = fileURLToPath(new URL('..', import.meta.url));
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
 const reportFile = path.join(root, 'dist', legacyMac ? 'update-smoke-legacy-mac.json' : 'update-smoke.json');
-const scratch = await realpath(await mkdtemp(path.join(process.env.RUNNER_TEMP || tmpdir(), 'recruiters-update-smoke-')));
+const scratchBase = process.platform === 'win32' ? tmpdir() : process.env.RUNNER_TEMP || tmpdir();
+const scratch = await realpath(await mkdtemp(path.join(scratchBase, 'recruiters-update-smoke-')));
 const home = path.join(scratch, 'home');
 const userData = path.join(home, ...(process.platform === 'darwin' ? ['Library', 'Application Support'] : process.platform === 'win32' ? ['AppData', 'Roaming'] : ['.config']), 'Recruiters Companion');
 const updates = path.join(userData, 'updates');
@@ -179,7 +180,7 @@ try {
     await execute(candidate.executable, ['--appimage-extract'], { cwd: path.join(scratch, 'candidate'), env, timeout: 180000, maxBuffer: 32 * 1024 * 1024 });
     candidate.asar = path.join(scratch, 'candidate', 'squashfs-root', 'resources', 'app.asar');
   }
-  const baselineFile = path.join(await realpath(process.env.RUNNER_TEMP || tmpdir()), `recruiters-update-baseline-${target.digest}.${target.suffix.split('.').pop()}`);
+  const baselineFile = path.join(await realpath(scratchBase), `recruiters-update-baseline-${target.digest}.${target.suffix.split('.').pop()}`);
   await downloadBaseline(baselineFile);
   report.scenarios.push('official-3.10-artifact-pinned-size-and-sha256');
   ({ executable, appPath } = await install(baselineFile, path.join(scratch, 'installed')));
@@ -312,6 +313,33 @@ try {
   }`;
   const initial = await evaluate(main, `(${setup})()`);
   if (!legacyMac) {
+    if (process.platform === 'darwin' && !initial.native.automaticSupported) {
+      // Failure-only CI evidence. Keep native validation intact; do not expose
+      // these fixture paths or bounded native stderr through product update UI.
+      report.macEligibility = await evaluate(main, `(async () => {
+        const fs = process.getBuiltinModule('fs/promises'), path = process.getBuiltinModule('path');
+        const require = process.getBuiltinModule('module').createRequire(process.execPath);
+        const native = require(${JSON.stringify(path.join(candidate.asar, 'src', 'update-install.cjs'))});
+        const env = native.launchEnvironment();
+        const describe = async file => {
+          try { const info = await fs.lstat(file); return { path: file, realpath: await fs.realpath(file), directory: info.isDirectory(), file: info.isFile(), symlink: info.isSymbolicLink(), mode: info.mode & 511, uid: info.uid }; }
+          catch (error) { return { path: file, code: error.code, message: error.message.slice(0, 1024) }; }
+        };
+        const run = (binary, args) => new Promise(resolve => process.getBuiltinModule('child_process').execFile(binary, args,
+          { env, timeout: 5000, maxBuffer: 8192 }, (error, stdout, stderr) => resolve({ binary, args, code: error?.code ?? 0, signal: error?.signal, stdout: String(stdout).slice(0, 4096), stderr: String(stderr).slice(0, 4096) })));
+        const target = ${JSON.stringify(appPath)}, info = path.join(target, 'Contents', 'Info.plist');
+        const checks = [];
+        for (const key of ['CFBundleIdentifier', 'CFBundleShortVersionString', 'CFBundleExecutable']) checks.push(await run('/usr/bin/plutil', ['-extract', key, 'raw', '-o', '-', info]));
+        checks.push(await run('/usr/bin/lipo', ['-verify_arch', 'arm64', process.execPath]));
+        checks.push(await run('/usr/bin/xcode-select', ['-p']));
+        let header;
+        try { const file = await fs.open(process.execPath, 'r'); try { const bytes = Buffer.alloc(32); const read = await file.read(bytes, 0, bytes.length, 0); header = bytes.subarray(0, read.bytesRead).toString('hex'); } finally { await file.close(); } }
+        catch (error) { header = { code: error.code, message: error.message.slice(0, 1024) }; }
+        return { platform: process.platform, arch: process.arch, packaged: require('electron').app.isPackaged,
+          target: await describe(target), parent: await describe(path.dirname(target)), executable: await describe(process.execPath), plist: await describe(info),
+          environment: { PATH: env.PATH, HOME: env.HOME, TMPDIR: env.TMPDIR, DEVELOPER_DIR: env.DEVELOPER_DIR }, header, checks };
+      })()`).catch(error => ({ diagnosticFailure: error.message.slice(0, 2048) }));
+    }
     assert.equal(initial.native.automaticSupported, true, initial.native.automaticReason || 'Native automatic update must be supported, never a manual fallback pass.');
     assert.equal(initial.source.automaticSupported, false); assert.match(initial.source.automaticReason, /source|packaged/i);
     assert.equal(initial.unsupported.automaticSupported, false); assert.equal(initial.unsupportedError, 'UNSUPPORTED_PLATFORM');

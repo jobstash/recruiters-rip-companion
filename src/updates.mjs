@@ -11,6 +11,7 @@ import { createSourceUpdateController } from './source-updates.mjs';
 const require = createRequire(import.meta.url);
 const installer = require('./update-install.cjs');
 const { protectPrivatePath } = require('./platform-runtime.cjs');
+const { validateMacExecutable } = require('./update-macho.cjs');
 const REPOSITORY = 'https://github.com/jobstash/recruiters-rip-companion';
 const API = 'https://api.github.com/repos/jobstash/recruiters-rip-companion/releases/latest';
 const PRODUCT = 'Recruiters.rip Companion.app';
@@ -290,7 +291,11 @@ async function validateBundle(bundle, version, signal, { signature = true } = {}
   if (!executable || executable === '.' || executable === '..' || /[\/\\:\x00-\x1f]/.test(executable)) throw fail('INVALID_BUNDLE', 'The update app has an invalid executable.');
   const binary = path.join(bundle, 'Contents', 'MacOS', executable);
   if (!(await lstat(binary)).isFile() || !(await realpath(binary)).startsWith(`${bundle}${path.sep}`)) throw fail('INVALID_BUNDLE', 'The update app executable is missing or unsafe.');
-  await system('/usr/bin/lipo', ['-verify_arch', 'arm64', binary], signal);
+  try { await validateMacExecutable(binary, signal); }
+  catch (error) {
+    if (error.code !== 'INVALID_MACHO') throw error;
+    throw fail('INVALID_BUNDLE', 'The app does not contain a valid Apple silicon executable.');
+  }
   if (signature) await system('/usr/bin/codesign', ['--verify', '--deep', '--strict', bundle], signal);
   // A valid ad-hoc signature is allowed. This does not assert Apple notarization.
   return binary;
@@ -428,7 +433,7 @@ export function createUpdateController({ version, platform = process.platform, a
       await access(parent, constants.W_OK | constants.X_OK);
     } catch (error) {
       if (signal.aborted) throw error;
-      reason = ['EACCES', 'EPERM', 'EROFS'].includes(error.code) ? 'The installation is read-only. Move the app to a writable application folder or install the release manually.' : error.code ? 'This installation cannot be updated automatically. Install the packaged release in a writable application folder.' : error.message;
+      reason = ['EACCES', 'EPERM', 'EROFS'].includes(error.code) ? 'The installation is read-only. Move the app to a writable application folder or install the release manually.' : error.publicUpdateError ? error.message : error.code ? 'This installation cannot be updated automatically. Install the packaged release in a writable application folder.' : error.message;
     }
     update({ automaticSupported: !reason, automaticReason: reason });
     return !reason;

@@ -1,9 +1,11 @@
-import { access, cp, mkdir, writeFile, rm, readFile, stat } from 'node:fs/promises';
+import { access, cp, lstat, mkdir, writeFile, rm, readFile, realpath, rename, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
 import { homedir } from 'node:os';
+import { randomUUID } from 'node:crypto';
+import AdmZip from 'adm-zip';
 import { privateDirectory } from './vault.mjs';
 import { fail } from './mcp/state.mjs';
 import platformRuntime from './platform-runtime.cjs';
@@ -140,6 +142,48 @@ async function findHostCommand(name, { platform, env, canExecute }) {
     if (await canExecute(command, platform)) return command;
   }
   return null;
+}
+
+export async function prepareClaudePackage({ template, directory, localOnly, version }) {
+  const profileDirectory = await realpath(directory);
+  platformRuntime.assertPrivatePath(profileDirectory, { directory: true });
+  if (path.basename(profileDirectory) !== (localOnly ? 'local-device' : 'device')) fail('HOST_INSTALL_FAILED', 'Open the selected Companion profile before setting up Claude.');
+  const info = await lstat(template);
+  if (!info.isFile() || info.size > 32 * 1024 * 1024) fail('HOST_INSTALL_FAILED', 'The bundled Claude extension is unavailable. Reinstall the complete companion.');
+  const archive = new AdmZip(await readFile(template));
+  const entries = archive.getEntries(), names = new Set();
+  let unpackedBytes = 0;
+  if (entries.length > 256) fail('HOST_INSTALL_FAILED', 'The bundled Claude extension is invalid.');
+  for (const item of entries) {
+    const name = item.entryName.toLowerCase();
+    unpackedBytes += item.header.size;
+    if (names.has(name) || name.startsWith('/') || name.includes('\\') || name.split('/').some(part => part === '..' || part === '.') ||
+        (item.header.attr >>> 16 & 0o170000) === 0o120000 || unpackedBytes > 64 * 1024 * 1024)
+      fail('HOST_INSTALL_FAILED', 'The bundled Claude extension is invalid.');
+    names.add(name);
+  }
+  for (const filename of ['server/index.cjs', 'platform-runtime.cjs'])
+    if (!archive.getEntry(filename) || archive.getEntry(filename).isDirectory) fail('HOST_INSTALL_FAILED', 'The bundled Claude extension is incomplete.');
+  const entry = archive.getEntry('manifest.json');
+  if (!entry || entry.isDirectory || entry.header.size > 64 * 1024) fail('HOST_INSTALL_FAILED', 'The bundled Claude extension is invalid.');
+  const manifest = JSON.parse(archive.readAsText(entry));
+  const name = localOnly ? 'recruiters-rip-local' : 'recruiters-rip';
+  if (manifest.manifest_version !== '0.3' || manifest.name !== name || manifest.version !== version || manifest.server?.type !== 'node' || manifest.server.entry_point !== 'server/index.cjs')
+    fail('HOST_INSTALL_FAILED', 'The bundled Claude extension does not match this companion.');
+  // Public bundles contain a selector, never a user's path. The installed copy
+  // is private and bound to the profile from which Setup was explicitly chosen.
+  manifest.server.mcp_config = { command: 'node', args: ['${__dirname}/server/index.cjs', `--directory=${profileDirectory}`, ...(localOnly ? ['--local-product'] : [])] };
+  delete manifest.user_config;
+  archive.updateFile('manifest.json', Buffer.from(JSON.stringify(manifest, null, 2) + '\n'));
+  const integration = path.join(profileDirectory, 'host-integration');
+  await privateDirectory(integration);
+  const destination = path.join(integration, `${name}.mcpb`), temporary = `${destination}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporary, archive.toBuffer(), { mode: 0o600, flag: 'wx' });
+    platformRuntime.protectPrivatePath(temporary);
+    await rename(temporary, destination);
+  } finally { await rm(temporary, { force: true }); }
+  return destination;
 }
 
 export async function installChatGptPlugin({ directory, root, localOnly, command, platform = process.platform, env = process.env, findCli = findChatGptCli, runCommand = exec }) {

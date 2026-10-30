@@ -42,7 +42,9 @@ export async function packageMcp() {
         description: 'Complete saved rankings and grounded CareerCup CV preparation. Requires Recruiters.rip Companion.',
         long_description: 'Review jobs and prepare tailored application documents in your subscription app. When the host provides computer-use tools, use its native mouse, keyboard and file picker in your own supported browser; Companion does not provide browser input. An optional OpenAI Decisions key, entered only in local companion settings and separately billed, selects known form values for native paste. Keys are never exposed to chat. No web-job-search fallback.',
         author: { name: 'JobStash' },
-        server: { type: 'node', entry_point: 'server/index.cjs', mcp_config: { command: 'node', args: ['${__dirname}/server/index.cjs', ...(local ? ['--local-product'] : [])] } },
+        server: { type: 'node', entry_point: 'server/index.cjs', mcp_config: { command: 'node', args: ['${__dirname}/server/index.cjs', '--directory=${user_config.companion_directory}', ...(local ? ['--local-product'] : [])] } },
+        user_config: { companion_directory: { type: 'directory', title: 'Companion profile folder',
+          description: 'Select this profile’s device folder, or install the configured extension from Companion Settings → AI apps.', required: true } },
         tools_generated: true, prompts_generated: true,
         compatibility: { platforms: ['darwin', 'win32', 'linux'], runtimes: { node: '>=22.12.0' } },
       };

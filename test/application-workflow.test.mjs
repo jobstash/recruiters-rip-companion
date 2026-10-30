@@ -333,7 +333,7 @@ test('status and document lookup reject concurrent evidence changes during file 
   await assert.rejects(f.workflow.document({ bindingId: view.bindingId, kind: 'cv' }), { code: 'DOCUMENT_NOT_CURRENT' });
 });
 
-test('one generic apply URL cannot merge different exact original adverts or leak the first package', async () => {
+test('a generic destination claiming a different unsaved advert cannot reuse the first package', async () => {
   const f = fixture(), generic = 'https://example.test/apply';
   const firstJob = { ...job, url: 'https://example.test/jobs/first', applyUrl: generic };
   const first = await f.create(firstJob);
@@ -342,10 +342,10 @@ test('one generic apply URL cannot merge different exact original adverts or lea
   const view = await f.resolve({ page: page(generic), jobs: [{ ...secondJob, complete: true }], context: {
     original: { url: secondJob.url, title: job.title, text: job.description, complete: true },
   } });
-  assert.notEqual(view.applicationId, first.applicationId);
-  assert.ok(view.applicationId);
+  assert.equal(view.applicationId, null);
   assert.ok(view.documents.every(document => !document.ready));
-  assert.equal(Object.keys(f.store.get().career.applications).length, 2);
+  assert.equal(Object.keys(f.store.get().career.applications).length, 1);
+  assert.equal(f.store.get().career.applications[first.applicationId].job.applyUrl, generic);
 });
 
 test('equivalent HTML and captured text preserve the saved original, fingerprints and current PDFs', async () => {
@@ -487,4 +487,31 @@ test('an allowed bound application stays usable when a blocked role shares its g
   });
   assert.equal((await f.workflow.status({ bindingId: view.bindingId })).applicationId, allowed.applicationId);
   assert.ok((await f.workflow.prepare({ bindingId: view.bindingId, host: 'claude' })).preparationId);
+});
+
+test('foreign canonical claims cannot bind, release answers or replace an existing destination', async () => {
+  for (const trustedJob of [job, { ...job, url: 'https://employer.example/jobs/123', applyUrl: 'https://authorized-ats.example/apply' }]) {
+    const f = fixture(), created = await f.create(trustedJob);
+    const trustedPage = page(trustedJob.applyUrl ?? apply);
+    const trusted = await f.resolve({ page: trustedPage, context: {} });
+    assert.equal(trusted.applicationId, created.applicationId, 'pre-recorded cross-origin ATS stays authorized');
+    await f.documents(created.applicationId); await f.answer(trusted, 'SYNTHETIC APPLICATION PRIVATE ANSWER');
+    const before = f.store.get().career.applications[created.applicationId];
+    const hostilePage = page('https://attacker.example/apply');
+    const hostile = await f.resolve({ page: hostilePage,
+      jobs: [{ ...trustedJob, complete: true, applyUrl: hostilePage.url }],
+      context: { original: { url: trustedJob.url, title: job.title, text: job.description, complete: true },
+        jobLinks: [{ url: trustedJob.url, title: 'View job description' }] } });
+    assert.equal(hostile.applicationId, null);
+    assert.ok(hostile.documents.every(item => !item.ready));
+    assert.equal(hostile.introduction.ready, false);
+    assert.deepEqual(f.store.get().career.applications[created.applicationId], before);
+    const prepared = await f.forms.prepare({ requestId: randomUUID(), ...hostilePage, useApi: false });
+    assert.deepEqual(prepared.fields, []);
+    assert.throws(() => f.workflow.copyIntroduction({ bindingId: hostile.bindingId }, () => assert.fail('Foreign page copied private prose')), { code: 'INTRODUCTION_NOT_CURRENT' });
+    const request = await f.workflow.prepare({ bindingId: hostile.bindingId, host: 'codex' });
+    await assert.rejects(f.workflow.bindPreparation({ preparationId: request.preparationId, applicationId: created.applicationId }), { code: 'APPLICATION_MISMATCH' });
+    await f.call('career_application_open', { applicationId: created.applicationId });
+    assert.deepEqual(f.opened, [trustedPage.url]);
+  }
 });

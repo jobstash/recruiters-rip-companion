@@ -4,24 +4,32 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
+const { claimInstallation, installationLock } = require('./update-install-lock.cjs');
 
 const ID = /^[a-f0-9]{32}$/;
 const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
-const minimalEnvironment = () => ({ PATH: '/usr/bin:/bin:/usr/sbin:/sbin', TMPDIR: '/tmp', ELECTRON_RUN_AS_NODE: '1' });
+const launchEnvironment = () => Object.fromEntries(['PATH', 'HOME', 'USERPROFILE', 'USERNAME', 'USERDOMAIN', 'COMSPEC', 'PATHEXT', 'ProgramFiles', 'ProgramFiles(x86)', 'ProgramW6432', 'ALLUSERSPROFILE', 'PUBLIC', 'APPDATA', 'LOCALAPPDATA', 'TMP', 'TEMP', 'TMPDIR', 'SystemRoot', 'WINDIR', 'DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY', 'DBUS_SESSION_BUS_ADDRESS', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_RUNTIME_DIR'].filter(key => process.env[key]).map(key => [key, process.env[key]]));
+const minimalEnvironment = () => ({ ...launchEnvironment(), ELECTRON_RUN_AS_NODE: '1' });
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const exists = async file => { try { await fs.lstat(file); return true; } catch (error) { if (error.code === 'ENOENT') return false; throw error; } };
 
 function validateJournal(journal, journalFile) {
   if (!journal || journal.schema !== 1 || !ID.test(journal.id) || !VERSION.test(journal.version) ||
       !Number.isSafeInteger(journal.pid) || journal.pid < 1 || !path.isAbsolute(journal.target) ||
-      !journal.target.endsWith('.app') || path.resolve(journal.target) !== journal.target ||
+      !(journal.platform === 'linux' ? journal.target.endsWith('.AppImage') : journal.platform === 'win32' ? path.dirname(journal.target) !== journal.target : journal.target.endsWith('.app')) || path.resolve(journal.target) !== journal.target ||
       journal.journal !== journalFile || !path.isAbsolute(journalFile) || path.resolve(journalFile) !== journalFile || path.basename(journalFile) !== 'journal.json') {
     throw new Error('Invalid update receipt.');
   }
   const parent = path.dirname(journal.target);
-  if (journal.staged !== path.join(parent, `.recruiters-update-${journal.id}.app`) ||
-      journal.backup !== path.join(parent, `.recruiters-backup-${journal.id}.app`) ||
+  const suffix = journal.platform === 'linux' ? '.AppImage' : journal.platform === 'win32' ? '' : '.app';
+  if (journal.staged !== path.join(parent, `.recruiters-update-${journal.id}${suffix}`) ||
+      journal.backup !== path.join(parent, `.recruiters-backup-${journal.id}${suffix}`) ||
       path.basename(path.dirname(journalFile)) !== `install-${journal.id}`) throw new Error('Invalid update paths.');
+  if (journal.platform && !['darwin', 'linux', 'win32'].includes(journal.platform)) throw new Error('Invalid update platform.');
+  if (journal.platform === 'win32' && (journal.installer !== path.join(path.dirname(journalFile), 'installer.exe') || !/^[a-f0-9]{64}$/.test(journal.digest))) throw new Error('Invalid installer receipt.');
+  if (journal.platform === 'linux' && !/^[a-f0-9]{64}$/.test(journal.digest)) throw new Error('Invalid AppImage receipt.');
+  if (journal.executable && (path.basename(journal.executable) !== journal.executable || /[\\/:]/.test(journal.executable))) throw new Error('Invalid app executable.');
+  if (journal.userData && journal.userData !== path.dirname(path.dirname(path.dirname(journalFile)))) throw new Error('Invalid update profile.');
   return journal;
 }
 
@@ -59,7 +67,7 @@ async function confirmUpdate(journal) {
   const temporary = `${file}.tmp-${process.pid}`;
   await fs.writeFile(temporary, JSON.stringify({ id: journal.id, version: journal.version }), { mode: 0o600 });
   await fs.rename(temporary, file);
-  await writeJournal(journal, 'confirmed');
+  await writeJournal(journal, 'confirmed', { launchedPid: process.pid });
 }
 
 async function realDirectory(directory) {
@@ -70,11 +78,15 @@ async function validatePaths(journal, { recovery = false } = {}) {
   validateJournal(journal, journal.journal);
   await realDirectory(path.dirname(journal.target));
   await realDirectory(path.dirname(journal.journal));
-  if (!recovery || await exists(journal.target)) await realDirectory(journal.target);
-  if (!recovery || await exists(journal.staged)) await realDirectory(journal.staged);
+  const validateTarget = async file => {
+    if (journal.platform !== 'linux') return realDirectory(file);
+    if (await fs.realpath(file) !== file || !(await fs.lstat(file)).isFile()) throw new Error('An AppImage path is not a real file.');
+  };
+  if (!recovery || await exists(journal.target)) await validateTarget(journal.target);
+  if ((journal.platform !== 'win32' && !recovery) || await exists(journal.staged)) await validateTarget(journal.staged);
   if (await exists(journal.backup)) {
     if (!recovery) throw new Error('The update backup already exists.');
-    await realDirectory(journal.backup);
+    await validateTarget(journal.backup);
   }
 }
 
@@ -87,29 +99,34 @@ async function waitForExit(pid, timeout = 120000) {
   }
 }
 
-function launch(target) {
+function launch(target, journal) {
   return new Promise((resolve, reject) => {
-    // open's successful exit means LaunchServices accepted a launch, not that the
-    // new version started. Only its next initialize() can confirm that.
-    const child = spawn('/usr/bin/open', ['-n', target], { env: { PATH: '/usr/bin:/bin:/usr/sbin:/sbin', TMPDIR: '/tmp' }, stdio: 'ignore' });
-    const timer = setTimeout(() => { child.kill(); reject(new Error('The updated app launch timed out.')); }, 15000);
-    child.once('error', error => { clearTimeout(timer); reject(error); });
-    child.once('exit', code => { clearTimeout(timer); code === 0 ? resolve() : reject(new Error('The updated app could not be launched.')); });
+    // Launch the real executable: unlike LaunchServices this preserves the
+    // storage environment and gives us a process whose premature exit is real.
+    const executable = path.join(target, 'Contents', 'MacOS', journal?.executable || 'Recruiters.rip Companion');
+    const child = spawn(executable, journal?.userData ? [`--user-data-dir=${journal.userData}`] : [], { detached: true, env: launchEnvironment(), stdio: 'ignore' });
+    child.once('error', reject);
+    child.once('spawn', () => { child.unref(); resolve(child); });
   });
 }
 
 async function restore(journal, launchApp = launch) {
-  await validatePaths(journal, { recovery: true });
-  if (!await exists(journal.backup)) throw new Error('The previous app is not available for rollback.');
-  // Never delete an app in place: the unconfirmed version returns to its own
-  // controlled staging path, then the previous version takes its original name.
-  if (await exists(journal.target)) {
-    if (await exists(journal.staged)) throw new Error('Rollback staging is occupied.');
-    await fs.rename(journal.target, journal.staged);
-  }
-  await fs.rename(journal.backup, journal.target);
-  await writeJournal(journal, 'rolled-back');
-  try { await launchApp(journal.target); } catch { /* Receipt remains honest: restored, not launched. */ }
+  const exclusion = await claimInstallation(journal.target).catch(() => null);
+  if (!exclusion) { await writeJournal(journal, 'unconfirmed'); return false; }
+  try {
+    await validatePaths(journal, { recovery: true });
+    if (!await exists(journal.backup)) throw new Error('The previous app is not available for rollback.');
+    // Exclusion is also acquired by every ordinary startup before using code or
+    // data. A duplicate helper child exiting never authorizes replacement.
+    if (await exists(journal.target)) {
+      if (await exists(journal.staged)) throw new Error('Rollback staging is occupied.');
+      await fs.rename(journal.target, journal.staged);
+    }
+    await fs.rename(journal.backup, journal.target);
+    await writeJournal(journal, 'rolled-back');
+  } finally { await exclusion(); }
+  try { await launchApp(journal.target, journal); } catch { /* Restored, not necessarily launched. */ }
+  return true;
 }
 
 async function performSwap(journal, { wait = waitForExit, launchApp = launch, renameApp = fs.rename, confirmationTimeout = 120000, pollInterval = 250 } = {}) {
@@ -117,8 +134,11 @@ async function performSwap(journal, { wait = waitForExit, launchApp = launch, re
   await wait(journal.pid);
   // Recheck after the old process exits; a changed target must not be followed.
   await validatePaths(journal);
+  let exclusion = await claimInstallation(journal.target).catch(() => null);
+  if (!exclusion) { await writeJournal(journal, 'unconfirmed'); return journal; }
   let movedOld = false;
   let movedNew = false;
+  let launchedChild;
   try {
     await writeJournal(journal, 'swapping');
     await renameApp(journal.target, journal.backup);
@@ -126,7 +146,10 @@ async function performSwap(journal, { wait = waitForExit, launchApp = launch, re
     await renameApp(journal.staged, journal.target);
     movedNew = true;
     await writeJournal(journal, 'launching');
-    await launchApp(journal.target);
+    await exclusion(); exclusion = null;
+    const child = await launchApp(journal.target, journal);
+    launchedChild = child;
+    if (child?.pid) await writeJournal(journal, 'launching', { launchedPid: child.pid });
     // Confirmation is a separate monotonic proof, not a launch acknowledgement.
     if (!await hasConfirmation(journal)) await writeJournal(journal, 'launched');
     const deadline = Date.now() + confirmationTimeout;
@@ -135,6 +158,7 @@ async function performSwap(journal, { wait = waitForExit, launchApp = launch, re
         await writeJournal(journal, 'confirmed');
         return journal;
       }
+      if (child && (child.exitCode !== null || child.signalCode)) throw new Error('The updated app exited before startup confirmation.');
       if (Date.now() >= deadline) break;
       await delay(pollInterval);
     }
@@ -147,16 +171,25 @@ async function performSwap(journal, { wait = waitForExit, launchApp = launch, re
       await writeJournal(journal, 'confirmed');
       return journal;
     }
+    // A receipt I/O failure is not evidence that the launched app exited.
+    if (launchedChild && launchedChild.exitCode === null && !launchedChild.signalCode) {
+      await writeJournal(journal, 'unconfirmed');
+      throw error;
+    }
     if (movedOld) {
-      if (movedNew) await restore(journal, launchApp);
-      else {
+      if (movedNew) {
+        if (exclusion) { await exclusion(); exclusion = null; }
+        await restore(journal, launchApp);
+      } else {
+        // Still holding the swap exclusion: no ordinary startup can own target.
         await fs.rename(journal.backup, journal.target);
         await writeJournal(journal, 'rolled-back');
-        try { await launchApp(journal.target); } catch { /* Restored even if launch fails. */ }
+        await exclusion(); exclusion = null;
+        try { await launchApp(journal.target, journal); } catch { /* Restored even if launch fails. */ }
       }
     } else await writeJournal(journal, 'failed');
     throw error;
-  }
+  } finally { await exclusion?.(); }
 }
 
 async function run(file) {
@@ -178,5 +211,5 @@ async function run(file) {
   await performSwap(journal);
 }
 
-module.exports = { validateJournal, readJournal, writeJournal, confirmUpdate, validatePaths, performSwap, restore, minimalEnvironment };
+module.exports = { validateJournal, readJournal, writeJournal, confirmUpdate, hasConfirmation, validatePaths, performSwap, restore, minimalEnvironment, launchEnvironment, claimInstallation, installationLock };
 if (require.main === module) run(process.argv[2]).catch(() => { process.exitCode = 1; });

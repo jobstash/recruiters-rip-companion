@@ -30,6 +30,13 @@ export function safeNativeCommand(message) {
   return { op: message.op, payload: p };
 }
 
+// Value-only answer refreshes preserve review; destination, question and career changes do not.
+export function reviewIdentity(state) {
+  return JSON.stringify([state.tabId, state.documentId, state.page?.url, state.prepared?.formId,
+    state.application?.bindingId, state.application?.applicationId, state.application?.contextFingerprint,
+    (state.prepared?.fields ?? []).map(field => [field.id, field.signature])]);
+}
+
 // Keep application metadata separate from approved field values and native files.
 export function applicationView(result) {
   const text = (value, max = 240) => typeof value === 'string' && value.length <= max ? value : null;
@@ -40,6 +47,7 @@ export function applicationView(result) {
   try { const url = new URL(result.jobUrl); if (['https:', 'http:'].includes(url.protocol) && !url.username && !url.password) jobUrl = url.href; } catch { /* No known advert. */ }
   return {
     bindingId: result.bindingId, formId: text(result.formId, 200), applicationId: text(result.applicationId, 200),
+    contextFingerprint: text(result.contextFingerprint, 200),
     title: text(result.title) || 'This application', company: text(result.company), state: result.state,
     documents: ['cv', 'cover_letter'].map(kind => ({ kind, ready: result.documents?.some(doc => doc.kind === kind && doc.ready === true) === true, label: kind === 'cv' ? 'CV' : 'Cover letter' })),
     introduction: { ready: result.introduction?.ready === true },
@@ -61,7 +69,7 @@ export function applicationView(result) {
 // Companion-initiated read-only attachment checks arrive on the same port as
 // `{version, id, op, payload}` and are answered with `{version, id, ok, result|error}`.
 export function createNativeClient({ connect, host, onCommand = null, onDisconnect = null, randomUUID = () => crypto.randomUUID(), timeoutMs = 180000, maxPending = 4 }) {
-  let port; const pending = new Map();
+  let port; const pending = new Map(), inFlightCommands = new Set();
   const unavailable = () => Object.assign(new Error('Companion is unavailable. Open Recruiters.rip Companion, then read this page again.'), { code: 'COMPANION_UNAVAILABLE' });
   const failAll = () => {
     const wasConnected = Boolean(port); port = null;
@@ -88,10 +96,14 @@ export function createNativeClient({ connect, host, onCommand = null, onDisconne
         let command;
         try {
           command = safeNativeCommand(message);
-          insist(onCommand && commands.size < maxPending, 'The browser is busy or unavailable.');
+          insist(onCommand && inFlightCommands.size < maxPending, 'The browser is busy or unavailable.');
           insist(!seenCommands.has(message.id), 'This browser command was already received.');
         } catch (error) { if (uuid(message.id)) send(failed(message.id, error)); return; }
         commands.add(message.id); seenCommands.add(message.id);
+        // A disconnected handler still owns work until it settles. Distinct
+        // connection tokens prevent an old completion clearing a new command.
+        const owner = { port: active, id: message.id };
+        inFlightCommands.add(owner);
         if (seenCommands.size > 256) seenCommands.delete(seenCommands.values().next().value);
         Promise.resolve().then(() => {
           insist(port === active, 'The companion disconnected before the operation.');
@@ -99,7 +111,7 @@ export function createNativeClient({ connect, host, onCommand = null, onDisconne
         }).then(
           result => send({ version: 1, id: message.id, ok: true, result }),
           error => send(failed(message.id, error)),
-        ).finally(() => commands.delete(message.id));
+        ).finally(() => { commands.delete(message.id); inFlightCommands.delete(owner); });
         return;
       }
       const task = pending.get(message?.id); if (!task) return;
@@ -129,5 +141,6 @@ export function createNativeClient({ connect, host, onCommand = null, onDisconne
       }
     });
   }
-  return { request, connected: () => Boolean(port), disconnect() { const active = port; failAll(); try { active?.disconnect(); } catch { /* Already disconnected. */ } } };
+  return { request, connected: () => Boolean(port), idle: () => pending.size === 0 && inFlightCommands.size === 0,
+    disconnect() { const active = port; failAll(); try { active?.disconnect(); } catch { /* Already disconnected. */ } } };
 }

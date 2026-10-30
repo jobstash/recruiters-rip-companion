@@ -14,7 +14,28 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  version:
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.policy.outputs.version }}
+      publish: ${{ steps.policy.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.22.1
+      - name: Require a new version for runtime and packaging changes
+        id: policy
+        env:
+          RELEASE_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: node scripts/release-policy.mjs
+
   package:
+    # Actual source cloning, frozen dependency installation and build are a
+    # separate matrix below; binary packaging never substitutes for those gates.
+    needs: version
     strategy:
       fail-fast: false
       matrix:
@@ -42,17 +63,28 @@ jobs:
           version: 10.28.0
       - uses: actions/setup-node@v4
         with:
-          node-version: 22.12.0
+          node-version: 24.22.1
           architecture: ${{ matrix.arch }}
           cache: pnpm
       - name: Install Linux desktop smoke dependencies
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install --yes xvfb libfuse2 libgtk-3-0 libnss3 libasound2 libgbm1
       - run: pnpm install --frozen-lockfile
+      - name: Materialize the pinned Electron runtime before build and tests
+        run: node node_modules/electron/install.js
       - run: pnpm build
       - run: pnpm check
       - run: pnpm test
       - run: pnpm ${{ matrix.command }}
+      - name: Upgrade verified public 3.10 installation to the candidate package
+        if: runner.os != 'Linux'
+        run: node scripts/smoke-update.mjs
+      - name: Upgrade verified public 3.10 AppImage with the Chromium sandbox
+        if: runner.os == 'Linux'
+        run: xvfb-run --auto-servernum node scripts/smoke-update.mjs
+      - name: Upgrade using published 3.10 Mac updater and legacy receipt
+        if: runner.os == 'macOS'
+        run: node scripts/smoke-update.mjs --legacy-mac
       - name: Launch installed Windows or macOS application with a disposable profile
         if: runner.os != 'Linux'
         run: node scripts/smoke-package.mjs
@@ -60,12 +92,13 @@ jobs:
         if: runner.os == 'Linux'
         run: xvfb-run --auto-servernum node scripts/smoke-package.mjs
       - name: Package unsigned browser upload archives
+        if: runner.os == 'macOS'
         run: |
           node browser-extension/build.mjs production --browser=chrome --zip
           node browser-extension/build.mjs production --browser=firefox --zip
       - uses: actions/upload-artifact@v4
         with:
-          name: companion-${{ matrix.os }}-${{ matrix.arch }}
+          name: companion-release-${{ matrix.os }}-${{ matrix.arch }}
           if-no-files-found: error
           path: |
             dist/${{ matrix.output }}/*.zip
@@ -73,5 +106,90 @@ jobs:
             dist/${{ matrix.output }}/*.exe
             dist/${{ matrix.output }}/*.AppImage
             dist/${{ matrix.output }}/SHA256SUMS.txt
-            browser-extension/dist/*.zip
-            src/generated/*.mcpb
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'macOS'
+        with:
+          name: companion-release-browser-source
+          if-no-files-found: error
+          path: browser-extension/dist/*.zip
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'macOS'
+        with:
+          name: companion-release-source-installers
+          if-no-files-found: error
+          path: |
+            scripts/install-source.sh
+            scripts/install-source.ps1
+            scripts/install-source.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-update-evidence-${{ matrix.os }}-${{ matrix.arch }}
+          if-no-files-found: error
+          path: dist/update-smoke*.json
+
+  source:
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            arch: arm64
+          - os: windows-2022
+            arch: x64
+          - os: ubuntu-22.04
+            arch: x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.22.1
+          architecture: ${{ matrix.arch }}
+      - name: Install Linux graphical source smoke dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install --yes xvfb libgtk-3-0 libnss3 libasound2 libgbm1
+      - name: Bootstrap, build, launch and update managed source
+        if: runner.os != 'Linux'
+        run: node scripts/smoke-source-update.mjs
+      - name: Bootstrap, build, launch and update managed source with Chromium sandbox
+        if: runner.os == 'Linux'
+        run: xvfb-run --auto-servernum node scripts/smoke-source-update.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-source-update-evidence-${{ matrix.os }}-${{ matrix.arch }}
+          if-no-files-found: error
+          path: dist/source-update-smoke.json
+
+  release:
+    needs: [version, package, source]
+    if: >-
+      github.repository == 'jobstash/recruiters-rip-companion' &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+      needs.version.outputs.publish == 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    concurrency:
+      group: companion-publication
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.22.1
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: companion-release-*
+          path: release-artifacts
+      - name: Publish complete immutable version after every native gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/publish-release.mjs release-artifacts

@@ -24,14 +24,18 @@ function deviceDirectory({ localOnly = false, platform = process.platform, ...op
 }
 function endpoint(directory, channel, platform = process.platform) {
   if (!['native', 'mcp', 'instance'].includes(channel)) throw new Error('Invalid local transport channel.');
-  const normalized = platform === 'win32' ? path.win32.resolve(directory).toLowerCase() : path.posix.resolve(directory);
+  let canonical;
+  try { canonical = fs.realpathSync(directory); }
+  catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    canonical = (platform === 'win32' ? path.win32 : path.posix).resolve(directory);
+  }
+  const normalized = platform === 'win32' ? canonical.toLowerCase() : canonical;
   const digest = createHash('sha256').update(normalized).digest('hex').slice(0, 32);
   if (platform === 'win32') return `\\\\.\\pipe\\recruiters-companion-${digest}-${channel}`;
   if (channel === 'instance') return `\0recruiters-companion-${digest}`;
   // sockaddr_un includes the terminating NUL (104 bytes on macOS, 108 on Linux).
   // Electron canonicalizes /tmp to /private/tmp; clients must agree on aliases.
-  let canonical;
-  try { canonical = fs.realpathSync(directory); } catch (error) { if (error.code !== 'ENOENT') throw error; canonical = normalized; }
   const socket = path.posix.join(canonical, `${channel}.sock`);
   if (Buffer.byteLength(socket) < (platform === 'darwin' ? 104 : 108)) return socket;
   const identity = createHash('sha256').update(canonical).digest('hex').slice(0, 32);
@@ -166,9 +170,10 @@ async function prepareBridgeRuntime({ executable, appPath, directory, packaged, 
   }
   return { executable: image, appPath: cached, runtimeRoot: cached };
 }
-async function persistBrowserExtension({ source, directory, browser, packaged, platform = process.platform, env = process.env, rename = fs.promises.rename }) {
-  if (platform !== 'linux' || !packaged || !env.APPIMAGE) return source;
-  if (!['chrome', 'firefox'].includes(browser) || !path.posix.isAbsolute(env.APPIMAGE)) throw new Error('Invalid browser extension installation.');
+async function persistBrowserExtension({ source, directory, browser, packaged, managedSource = false, platform = process.platform, rename = fs.promises.rename }) {
+  // managedSource is supplied only after the caller verifies its installation receipt.
+  if (!packaged && managedSource !== true) return source;
+  if (!['chrome', 'firefox'].includes(browser) || !['darwin', 'win32', 'linux'].includes(platform)) throw new Error('Invalid browser extension installation.');
   const base = path.join(directory, 'browser-extensions'), destination = path.join(base, browser);
   for (const entry of [directory, base]) {
     await fs.promises.mkdir(entry, { recursive: true, mode: 0o700 });
@@ -193,6 +198,9 @@ async function persistBrowserExtension({ source, directory, browser, packaged, p
   let moved = false, installed = false;
   try {
     await copyTree(source, staged);
+    const manifest = JSON.parse(await fs.promises.readFile(path.join(staged, 'manifest.json'), 'utf8'));
+    if (!/^\d+\.\d+\.\d+(?:\.\d+)?$/.test(manifest.version)) throw new Error('Invalid bundled extension version.');
+    await fs.promises.writeFile(path.join(staged, 'managed-update.json'), JSON.stringify({ version: manifest.version }), { flag: 'wx', mode: 0o600 });
     if (existing) { await rename(destination, backup); moved = true; }
     try { await rename(staged, destination); installed = true; }
     catch (error) { if (moved) await rename(backup, destination); throw error; }

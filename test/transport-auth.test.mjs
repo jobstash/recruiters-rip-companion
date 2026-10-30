@@ -54,10 +54,12 @@ for (const channel of ['native', 'mcp']) test(`${channel} client withholds its p
   const env = { ...process.env, HOME: home, USERPROFILE: home, APPDATA: path.join(home, 'Roaming'), XDG_CONFIG_HOME: path.join(home, 'config') };
   const directory = deviceDirectory({ env, home });
   await privateDirectory(directory);
+  const selected = await realpath(directory), userData = path.dirname(selected);
   const socketPath = await privateEndpoint(directory, channel, t);
   const stub = path.join(home, 'synthetic-app.cjs'); await writeFile(stub, '');
-  if (channel === 'mcp') await writeFile(path.join(directory, 'mcp-launch.json'), JSON.stringify({ executable: process.execPath, args: [stub], localOnly: false }), { mode: 0o600 });
-  else await writeFile(path.join(directory, 'native-config.json'), JSON.stringify({ executable: process.execPath, appPath: stub, directory, packaged: false, localOnly: false }), { mode: 0o600 });
+  if (channel === 'mcp') await writeFile(path.join(directory, 'mcp-launch.json'), JSON.stringify({ executable: process.execPath,
+    args: [stub, `--user-data-dir=${userData}`], directory: selected, userData, localOnly: false }), { mode: 0o600 });
+  else await writeFile(path.join(directory, 'native-config.json'), JSON.stringify({ executable: process.execPath, appPath: stub, directory: selected, userData, packaged: false, localOnly: false }), { mode: 0o600 });
   await writeFile(path.join(directory, channel === 'mcp' ? 'mcp-bridge.json' : 'bridge.json'), JSON.stringify({ socket: socketPath, token }), { mode: 0o600 });
   const captured = [];
   let disconnected;
@@ -76,7 +78,7 @@ for (const channel of ['native', 'mcp']) test(`${channel} client withholds its p
   await new Promise((resolve, reject) => { fake.once('error', reject); fake.listen(socketPath, resolve); });
   t.after(() => { for (const peer of peers) peer.destroy(); fake.close(); });
   const script = fileURLToPath(new URL(channel === 'mcp' ? '../src/mcp/local-runner.cjs' : '../src/native-host.cjs', import.meta.url));
-  const args = channel === 'mcp' ? [] : [path.join(directory, 'native-config.json'), `chrome-extension://${BROWSER_IDENTITIES.production.extensionId}/`];
+  const args = channel === 'mcp' ? [`--directory=${selected}`] : [path.join(directory, 'native-config.json'), `chrome-extension://${BROWSER_IDENTITIES.production.extensionId}/`];
   const child = spawn(process.execPath, [script, ...args], { env, stdio: ['pipe', 'ignore', 'ignore'] });
   const exited = new Promise(resolve => child.once('exit', resolve));
   t.after(() => child.kill());

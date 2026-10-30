@@ -198,6 +198,7 @@ export function createApplicationWorkflow({ store, assertAvailable = () => {}, v
     const job = app && currentApplicationJob(career, app);
     const introduction = { ready: currentIntroduction(career, binding, fingerprint) !== null };
     return { bindingId, formId: binding.formId ?? null, applicationId: app?.id ?? null,
+      contextFingerprint: fingerprint ?? null,
       title: job?.title ?? binding.page?.title ?? 'Application', company: job?.company ?? null,
       state: !app ? 'needs_job' : stale ? 'needs_refresh' : documents.every(item => item.ready) && writing.every(item => item.ready) && introduction.ready ? 'ready' : drafts.length ? 'drafts' : 'needs_documents',
       documents, writing, introduction, handoff: preparation?.host ? { host: preparation.host, mode: preparation.mode ?? null, state: preparation.readAt ? 'agent_read' : 'awaiting_agent', requiresSend: !preparation.readAt } : null,
@@ -209,7 +210,10 @@ export function createApplicationWorkflow({ store, assertAvailable = () => {}, v
     const page = validateFormSnapshot(input?.page), context = boundedContext(input.context);
     if (!Array.isArray(input.jobs ?? []) || (input.jobs ?? []).length > 50) fail('INVALID_INPUT', 'Provide at most fifty captured jobs.');
     const fingerprint = formFingerprint(page), formId = `form:${fingerprint}`;
-    const captured = (input.jobs ?? []).map(capturedJob).filter(Boolean);
+    // Page metadata and backlinks are claims, not authority to reuse a saved application.
+    const pageKey = applicationUrlIdentity(page.url);
+    const captured = (input.jobs ?? []).map(capturedJob).filter(job => job && applicationUrlIdentity(job.originalUrl) === pageKey)
+      .map(job => ({ ...job, url: job.originalUrl, aliases: [job.originalUrl] }));
     const result = await mutation('application_resolve', input, career => {
       career.applicationBindings ??= {};
       const previous = Object.values(career.applicationBindings).find(binding => binding.formId === formId);
@@ -219,14 +223,14 @@ export function createApplicationWorkflow({ store, assertAvailable = () => {}, v
         return job ? [{ ...job, id: saved.id }] : [];
       });
       const availableJobs = [...savedJobs, ...captured];
-      const direct = [...apps.map(app => app.job), ...availableJobs].some(job => sameApplicationJob(job, { url: page.url }));
-      const pageKey = applicationUrlIdentity(page.url), roleRoute = pageKey.includes(':role:');
-      const linkedUrls = [context.original?.url, ...context.jobLinks.map(link => link.url)].filter(url => url && applicationUrlIdentity(url) !== pageKey);
-      const linked = [...new Set(linkedUrls.map(applicationUrlIdentity))];
-      const targets = linked.length === 1 ? (roleRoute ? [] : linkedUrls)
-        : linked.length > 1 ? (roleRoute && direct ? [page.url] : []) : direct ? [page.url] : [];
-      const matches = apps.filter(app => targets.some(url => sameApplicationJob(app.job, { url })));
-      const candidates = availableJobs.filter(job => targets.some(url => sameApplicationJob(job, { url })));
+      // Only a saved destination or the same recognized ATS role can authorize reuse.
+      // Pre-recorded cross-origin ATS URLs remain part of the saved job's identity.
+      const claims = [...new Set([context.original?.url, ...context.jobLinks.map(link => link.url)]
+        .filter(url => url && applicationUrlIdentity(url) !== pageKey).map(applicationUrlIdentity))];
+      const eligible = job => sameApplicationJob(job, { url: page.url }) &&
+        (!claims.length || (claims.length === 1 && urlsFor(job).some(url => applicationUrlIdentity(url) === claims[0])));
+      const matches = apps.filter(app => eligible(app.job));
+      const candidates = availableJobs.filter(eligible);
       // A page with several possible jobs is unresolved, never whichever application happened to be first.
       const originals = new Map();
       for (const job of candidates) {
@@ -306,8 +310,8 @@ export function createApplicationWorkflow({ store, assertAvailable = () => {}, v
       const preparation = getPreparation(career, preparationId), binding = getBinding(career, preparation.bindingId);
       const app = career.applications[applicationId] ?? fail('NOT_FOUND', 'Application not found.');
       assertJobNotBlocked(career, app.job.id, app.job);
-      const urls = [binding.page?.url, binding.context?.original?.url, ...(binding.context?.jobLinks ?? []).map(link => link.url)].filter(Boolean);
-      if (!urls.some(url => sameApplicationJob(app.job, { url }))) fail('APPLICATION_MISMATCH', 'The application must contain the exact captured job or application URL, not another job at the same company.');
+      if (!sameApplicationJob(app.job, { url: binding.page?.url }))
+        fail('APPLICATION_MISMATCH', 'This page is not a saved destination for that application. Open its saved application URL.');
       binding.applicationId = app.id;
       if (binding.page?.fields.length) app.job.applyUrl = binding.page.url;
       const draft = career.formDrafts?.[binding.formId];

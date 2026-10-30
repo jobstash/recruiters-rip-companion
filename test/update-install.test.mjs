@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 const require = createRequire(import.meta.url);
-const { validateJournal, readJournal, writeJournal, confirmUpdate, performSwap, minimalEnvironment } = require('../src/update-install.cjs');
+const { validateJournal, readJournal, writeJournal, confirmUpdate, performSwap, minimalEnvironment, launchEnvironment, claimInstallation } = require('../src/update-install.cjs');
 
 async function fixture(t) {
   const root = await realpath(await mkdtemp(path.join(tmpdir(), 'recruiters-update-helper-')));
@@ -131,6 +131,72 @@ test('helper receipt paths and launch environment are narrowly constrained', asy
   for (const patch of [{ backup: path.join(root, 'data') }, { staged: path.join(root, 'source') }, { pid: 0 }, { id: '../escape' }, { target: path.join(root, 'checkout') }]) {
     assert.throws(() => validateJournal({ ...journal, ...patch }, journal.journal));
   }
-  assert.deepEqual(minimalEnvironment(), { PATH: '/usr/bin:/bin:/usr/sbin:/sbin', TMPDIR: '/tmp', ELECTRON_RUN_AS_NODE: '1' });
+  assert.equal(minimalEnvironment().ELECTRON_RUN_AS_NODE, '1');
+  assert.equal(launchEnvironment().HOME, process.env.HOME);
+  for (const key of ['NODE_OPTIONS', 'ELECTRON_RUN_AS_NODE', 'LD_PRELOAD', 'DYLD_INSERT_LIBRARIES']) assert.equal(launchEnvironment()[key], undefined);
   assert.equal((await readdir(path.dirname(journal.journal))).includes('journal.json'), true);
+});
+
+test('a launched process exiting before readiness rolls back instead of claiming success', async t => {
+  const { journal } = await fixture(t);
+  let launches = 0;
+  await assert.rejects(performSwap(journal, {
+    wait: async () => {},
+    launchApp: async () => ++launches === 1 ? { pid: 12345, exitCode: 1, signalCode: null } : undefined,
+    confirmationTimeout: 100, pollInterval: 1,
+  }), /exited before startup confirmation/);
+  assert.equal((await readJournal(journal.journal)).status, 'rolled-back');
+  assert.equal(await versionAt(journal.target), '1.2.3');
+  assert.equal(launches, 2);
+});
+
+test('published 3.10 Mac schema-one receipts receive the exact legacy startup proof', async t => {
+  // The published helper omits platform/executable/digest/userData. Its final
+  // in-memory receipt write can also omit the new launchedPid field.
+  const { journal } = await fixture(t);
+  for (const field of ['platform', 'executable', 'digest', 'userData', 'launchedPid']) assert.equal(journal[field], undefined);
+  const legacyReceipt = { ...journal, status: 'launched' };
+  await writeFile(journal.journal, JSON.stringify(legacyReceipt));
+  const pending = await readJournal(journal.journal);
+  await confirmUpdate(pending);
+  assert.deepEqual(JSON.parse(await readFile(path.join(path.dirname(journal.journal), 'confirmed.json'), 'utf8')), {
+    id: legacyReceipt.id, version: legacyReceipt.version,
+  });
+  // Model the real old helper's concurrent final write. The unchanged monotonic
+  // confirmation proof remains authoritative; no migration or new keys needed.
+  await writeFile(journal.journal, JSON.stringify({ ...legacyReceipt, status: 'unconfirmed' }));
+  assert.equal((await readJournal(journal.journal)).status, 'confirmed');
+});
+
+test('a competing ordinary owner after old exit prevents every installation rename', async t => {
+  const { journal } = await fixture(t);
+  let release;
+  t.after(() => release?.());
+  await performSwap(journal, {
+    wait: async () => { release = await claimInstallation(journal.target); assert.equal(typeof release, 'function'); },
+    launchApp: async () => assert.fail('A competing owner must prevent launch and replacement'),
+  });
+  assert.equal((await readJournal(journal.journal)).status, 'unconfirmed');
+  assert.equal(await versionAt(journal.target), '1.2.3');
+  assert.equal(await versionAt(journal.staged), '1.3.0');
+});
+
+test('a duplicate helper child exit never rolls back over the winning ordinary owner', async t => {
+  const { journal } = await fixture(t);
+  let release;
+  t.after(() => release?.());
+  await assert.rejects(performSwap(journal, {
+    wait: async () => {},
+    launchApp: async () => {
+      // This normal startup wins between swap and helper-child startup, holds
+      // the real kernel claim, and deliberately has not confirmed readiness.
+      release = await claimInstallation(journal.target);
+      assert.equal(typeof release, 'function');
+      return { pid: 12345, exitCode: 0, signalCode: null };
+    },
+    confirmationTimeout: 100, pollInterval: 1,
+  }), /exited before startup confirmation/);
+  assert.equal((await readJournal(journal.journal)).status, 'unconfirmed');
+  assert.equal(await versionAt(journal.target), '1.3.0');
+  assert.equal(await versionAt(journal.backup), '1.2.3');
 });

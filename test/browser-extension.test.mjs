@@ -5,9 +5,10 @@ import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
 import { BROWSER_IDENTITIES } from '../src/browser-identity.mjs';
 import { createManifest } from '../browser-extension/manifest.mjs';
-import { safeDeviceRequest, externalSenderAllowed, deviceResult, createNativeClient, safeNativeCommand, applicationView } from '../browser-extension/src/protocol.mjs';
+import { safeDeviceRequest, externalSenderAllowed, deviceResult, createNativeClient, safeNativeCommand, applicationView, reviewIdentity } from '../browser-extension/src/protocol.mjs';
 import { captureJobs, captureApplicationContext, inspectForm, checkFormBindings, armSmartPaste, disarmSmartPaste } from '../browser-extension/src/page.mjs';
 import { createPageAccess, preparedPageSender } from '../browser-extension/src/page-access.mjs';
+import { installManagedUpdates } from '../browser-extension/src/managed-update.mjs';
 
 const origin = BROWSER_IDENTITIES.production.productOrigin;
 const request = (op, payload = {}) => ({ version: 1, id: randomUUID(), op, payload });
@@ -65,7 +66,7 @@ test('production and local identities derive distinct IDs and minimal user-trigg
     const derived = [...createHash('sha256').update(Buffer.from(identity.key, 'base64')).digest('hex').slice(0, 32)].map(c => String.fromCharCode(97 + parseInt(c, 16))).join('');
     assert.equal(derived, identity.extensionId);
     const manifest = createManifest(identity, '3.8.1', mode === 'local');
-    assert.deepEqual(manifest.permissions, ['nativeMessaging','activeTab','scripting','sidePanel','clipboardWrite']);
+    assert.deepEqual(manifest.permissions, ['nativeMessaging','activeTab','scripting','sidePanel','clipboardWrite','alarms','idle','storage']);
     assert.equal(manifest.host_permissions, undefined);
     assert.equal(manifest.content_scripts, undefined);
     assert.equal(manifest.action.default_popup, undefined);
@@ -85,7 +86,7 @@ test('Firefox builds have isolated Gecko identities and only supported sidebar/b
     assert.equal(manifest.browser_specific_settings.gecko.strict_min_version, '128.0');
     assert.deepEqual(manifest.background, { scripts: ['background.mjs'], type: 'module' });
     assert.equal(manifest.sidebar_action.default_panel, 'panel.html');
-    assert.deepEqual(manifest.permissions, ['nativeMessaging', 'activeTab', 'scripting', 'clipboardWrite']);
+    assert.deepEqual(manifest.permissions, ['nativeMessaging', 'activeTab', 'scripting', 'clipboardWrite', 'alarms', 'idle', 'storage']);
     for (const key of ['key', 'side_panel', 'externally_connectable', 'minimum_chrome_version', 'host_permissions', 'content_scripts'])
       assert.equal(manifest[key], undefined, key);
     assert.equal(manifest.action.default_popup, undefined);
@@ -759,13 +760,14 @@ async function backgroundFixture(page = pastePage(), options = {}) {
     runtime: { id: extensionId, ...(!options.firefox ? { onConnectExternal: event() } : {}), onConnect: event(), onMessage: { addListener(fn) { messageHandler = fn; } }, getURL: path => `${extensionOrigin}/${path}`,
       connectNative(host) { nativeHosts.push(host); return nativePort; } },
     permissions: { contains: async () => permission },
+    alarms: { onAlarm: event(), create: async () => {} },
     tabs: { get: async () => ({ id: 7, url: page.context.location.href, title: 'Application', status: 'complete' }), create: async options => { createdTabs.push(options); }, onActivated: event(), onUpdated: event(), onRemoved: event() },
     ...(options.firefox ? { sidebarAction: {} } : { sidePanel: {} }), scripting: {},
   };
   const context = vm.createContext({
     [options.firefox ? 'browser' : 'chrome']: chrome, crypto: { randomUUID }, URL, PRODUCT_ORIGIN: origin, NATIVE_HOST: 'synthetic', BUILD_ID: 'test-build',
     captureJobs, captureApplicationContext, inspectForm, checkFormBindings, armSmartPaste, disarmSmartPaste,
-    safeDeviceRequest, externalSenderAllowed, deviceResult, applicationView, preparedPageSender,
+    safeDeviceRequest, externalSenderAllowed, deviceResult, applicationView, preparedPageSender, reviewIdentity, installManagedUpdates,
     setTimeout(fn, ms) {
       if (ms === 5000) { const id = ++nextTimer; timers.set(id, fn); return id; }
       return setTimeout(fn, 0);
@@ -784,7 +786,7 @@ async function backgroundFixture(page = pastePage(), options = {}) {
     },
     createNativeClient: options => {
       nativeOptions = options;
-      return { request: async (op, payload) => {
+      return { idle: () => true, request: async (op, payload) => {
         calls.push([op, plain(payload)]);
         if (op === 'status') return readStatus();
         if (op === 'forms_validate') return validate(payload);
@@ -1121,7 +1123,7 @@ test('new ready answer versions trigger one approved refresh and metadata-only c
 });
 
 test('refused automatic refresh retains package readiness and exposes one explicit retry without a paid loop', async () => {
-  const fixture = await backgroundFixture(), panel = fixture.connectPanel();
+  const fixture = await backgroundFixture(pastePage(), { application: { applicationId: 'application:synthetic' } }), panel = fixture.connectPanel();
   fixture.prepare(() => { throw new Error('Approval was cancelled.'); });
   fixture.application(applicationMetadata({ state: 'ready', answerVersion: 'version-1' }));
   await fixture.poll(); await fixture.poll(); await fixture.poll();
@@ -1137,8 +1139,8 @@ test('refused automatic refresh retains package readiness and exposes one explic
 });
 
 test('saved answer updates preserve reviewed edits and require explicit replacement', async () => {
-  const fixture = await backgroundFixture(), panel = fixture.connectPanel(), field = fixture.state().prepared.fields[0];
-  await fixture.act({ action: 'edit', payload: { edits: { [field.id]: 'My unsaved edit' }, selected: [field.id] } });
+  const fixture = await backgroundFixture(pastePage(), { application: { applicationId: 'application:synthetic' } }), panel = fixture.connectPanel(), field = fixture.state().prepared.fields[0];
+  await fixture.act({ action: 'edit', payload: { identity: reviewIdentity(fixture.state()), snapshot: fixture.state().prepared.snapshot, edits: { [field.id]: 'My unsaved edit' }, selected: [field.id] } });
   fixture.application(applicationMetadata({ state: 'ready', answerVersion: 'version-1' }));
   await fixture.poll(); await fixture.poll();
   assert.equal(fixture.calls.filter(([op]) => op === 'forms_prepare').length, 1);
@@ -1478,7 +1480,7 @@ test('late introduction receipts cannot report success after navigation or nativ
 
 test('same-document rereading and saved-answer refresh preserve manual edits and selections', async () => {
   const fixture = await backgroundFixture(), field = fixture.state().prepared.fields[0];
-  await fixture.act({ action: 'edit', payload: { edits: { [field.id]: 'My reviewed answer' }, selected: [field.id] } });
+  await fixture.act({ action: 'edit', payload: { identity: reviewIdentity(fixture.state()), snapshot: fixture.state().prepared.snapshot, edits: { [field.id]: 'My reviewed answer' }, selected: [field.id] } });
   await fixture.toolbar(7);
   assert.equal(fixture.state().edits[field.id], 'My reviewed answer');
   assert.deepEqual(plain(fixture.state().selected), [field.id]);
@@ -1531,7 +1533,7 @@ test('changed controls and documents cannot launch a host or copy an introductio
 
 test('failed refresh keeps reviewed edits visible but never keeps clipboard eligibility', async () => {
   const fixture = await backgroundFixture(), field = fixture.state().prepared.fields[0];
-  await fixture.act({ action: 'edit', payload: { edits: { [field.id]: 'Keep my reviewed answer' }, selected: [field.id] } });
+  await fixture.act({ action: 'edit', payload: { identity: reviewIdentity(fixture.state()), snapshot: fixture.state().prepared.snapshot, edits: { [field.id]: 'Keep my reviewed answer' }, selected: [field.id] } });
   fixture.prepare(async () => { throw new Error('Companion could not refresh these answers.'); });
   await fixture.toolbar(7);
   assert.equal(fixture.state().edits[field.id], 'Keep my reviewed answer');
@@ -1550,5 +1552,30 @@ test('handoff notices use only the confirmed host mode and never imply active ge
     assert.match(fixture.state().notice, expected);
     assert.doesNotMatch(fixture.state().notice, /generating|writing|ready/i);
     if (!mode) assert.doesNotMatch(fixture.state().notice, /click Send|press Enter/);
+  }
+});
+
+test('background rejects edits from a replaced question, snapshot or application context', async () => {
+  for (const change of ['signature', 'snapshot', 'context', 'missing-identity']) {
+    const fixture = await backgroundFixture(), current = fixture.state(), field = current.prepared.fields[0];
+    const payload = { identity: reviewIdentity(current), snapshot: current.prepared.snapshot, edits: { [field.id]: 'Old private edit' }, selected: [field.id] };
+    if (change === 'signature') field.signature += ':replacement';
+    if (change === 'snapshot') current.prepared.snapshot = 'replacement-snapshot';
+    if (change === 'context') current.application.contextFingerprint = 'replacement-context';
+    if (change === 'missing-identity') delete payload.identity;
+    await fixture.act({ action: 'edit', payload });
+    assert.notEqual(fixture.state().edits[field.id], 'Old private edit', change);
+  }
+});
+
+test('foreign JSON-LD canonical URLs remain untrusted claims, not the captured advert location', async () => {
+  for (const metadata of [
+    { url: 'https://employer.example/jobs/private-application' },
+    { mainEntityOfPage: { '@id': 'https://employer.example/jobs/private-application' } },
+  ]) {
+    const captured = await applicationContextFixture({ metadata: [{ '@type': 'JobPosting', title: 'Copied role',
+      description: 'Copied public advert text.', ...metadata }] })();
+    assert.equal(captured.original.url, 'https://example.test/jobs/engineer');
+    assert.deepEqual(plain(captured.jobLinks), []);
   }
 });

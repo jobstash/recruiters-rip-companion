@@ -1,6 +1,6 @@
 import { app, BrowserWindow, ipcMain, powerMonitor, Menu, shell, clipboard, dialog, safeStorage } from 'electron';
 import { randomBytes, randomUUID } from 'node:crypto';
-import { readFile, writeFile, chmod, unlink, mkdir } from 'node:fs/promises';
+import { readFile, realpath, writeFile, chmod, unlink, mkdir } from 'node:fs/promises';
 import { watch, existsSync } from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
@@ -27,7 +27,7 @@ import { createScopedAccess } from './mcp/scope.mjs';
 import { createMatchingTools, deleteRankings } from './mcp/matching-tools.mjs';
 import { matchingProfileVersion } from './mcp/assessment-policy.mjs';
 import { addBlock, removeBlock } from './mcp/blocklist.mjs';
-import { installChatGptPlugin, mcpInvocation } from './host-setup.mjs';
+import { installChatGptPlugin, mcpInvocation, prepareClaudePackage } from './host-setup.mjs';
 import { createCareerBrowser } from './career-browser.mjs';
 import { createDecisionCredentials, decisionCredentialStatus } from './decisions/credentials.mjs';
 import { savedPublicationRange, setPublicationRange } from './mcp/review-queue.mjs';
@@ -36,6 +36,8 @@ import { createJobTools, importCapturedJobs } from './mcp/job-tools.mjs';
 import { createFormTools, currentForm, formEvidence } from './mcp/form-tools.mjs';
 import { createBrowserForms } from './browser-forms.mjs';
 import { createUpdateController } from './updates.mjs';
+import { createUpdatePreferences, createUpdateScheduler, createUpdateWorkGate, updateAppPath } from './update-scheduler.mjs';
+import { inspectManagedSource } from './source-updates.mjs';
 import { createApplicationWorkflow, createApplicationPreparationTools } from './application-workflow.mjs';
 import { createApplicationLauncher, REVIEW_PROMPT } from './application-launcher.mjs';
 
@@ -47,6 +49,9 @@ const productOrigin = browserIdentity.productOrigin;
 app.setName('Recruiters Companion');
 // Keep the storage directory name stable across the visible brand rename.
 const directory = path.join(app.getPath('userData'), localOnly ? 'local-device' : 'device');
+const updateDirectory = path.join(app.getPath('userData'), localOnly ? 'local-updates' : 'updates');
+const binaryInstallationTarget = updateAppPath({ packaged: app.isPackaged, localOnly, platform: process.platform, executable: process.execPath, appImage: process.env.APPIMAGE });
+const { claimInstallation } = createRequire(import.meta.url)('./update-install.cjs');
 // Local data is plain private JSON; keep Chromium from creating an OS keychain item, except to import a 3.4 keychain-encrypted vault once.
 const legacyVault = existsSync(path.join(directory, LEGACY_VAULT));
 if (!legacyVault) app.commandLine.appendSwitch('use-mock-keychain');
@@ -56,12 +61,17 @@ let window, client, nativeBridge, mcpBridge, documents, files, locked = true, fa
 let pendingApproval, confirmation = Promise.resolve(), initializing, exiting = false, screenLocked = false, sleeping = false;
 let heartbeatTimer, heartbeatBusy = false, browserConnection = 'pending', queuedPairing, pairingReturn;
 let browserRegistrations = { chrome: false, firefox: false };
+const browserExtensions = {};
 let sessionEpoch = 0, careerViewRevision = 0;
 let windowLoaded;
 const sockets = new Set();
 const mutations = new Set(), formRequests = new Map();
-let updateInstalling = false, quitReady = false, quitDraining = false, vaultOpened = false, updateApprovalAbort;
-let browserForms, updates;
+let updateInstalling = false, quitReady = false, quitDraining = false, vaultOpened = false;
+let browserForms, updates, updateScheduler, updateInstallTask;
+let coreReady = false, updatesStarted = false, managedSource = null;
+// Retain the installation lease until OS process exit, not merely before-quit.
+let installationAdmitted = false, releaseInstallation;
+const workGate = createUpdateWorkGate();
 let restoringBackup = false;
 const identityKey = state => JSON.stringify([state.deviceId, state.pairing?.origin, state.pairing?.account?.id]);
 const store = {
@@ -84,14 +94,9 @@ function assertWorkAllowed() {
   assertAvailable(false);
   if (updateInstalling || quitDraining) fail('LOCAL_BUSY', 'An update or shutdown is in progress. Wait for the companion to reopen.');
 }
-function assertPaidWorkAllowed() {
-  assertWorkAllowed();
-  if (['checking', 'downloading', 'awaiting-approval', 'staging', 'installing', 'launched'].includes(updates.state().status))
-    fail('LOCAL_BUSY', 'Finish or cancel the update before preparing a form.');
-}
 async function mutation(action) {
   assertWorkAllowed();
-  const pending = Promise.resolve().then(() => action(pending));
+  const pending = workGate.run(() => action(pending));
   mutations.add(pending);
   try { return await pending; } finally { mutations.delete(pending); }
 }
@@ -128,39 +133,115 @@ const backups = createBackups({
 });
 updates = createUpdateController({
   version: packageMetadata.version, platform: process.platform, arch: process.arch,
-  directory: path.join(app.getPath('userData'), localOnly ? 'local-updates' : 'updates'),
-  appPath: app.isPackaged && !localOnly && process.platform === 'darwin' ? path.resolve(process.execPath, '../../..') : null,
+  directory: updateDirectory,
+  sourceRoot: !localOnly && !app.isPackaged ? root : undefined,
+  appPath: binaryInstallationTarget,
   packaged: app.isPackaged && !localOnly, pid: process.pid,
-  authorize: ({ latestVersion, message }) => confirm(`Update to ${latestVersion}?`, message, updateApprovalAbort?.signal),
-  quit: () => app.quit(), onChange: () => emit(),
+  acquireInstallAdmission, quit: () => app.quit(), onChange: () => emit(),
 });
-function paidWorkActive() { for (const useApi of formRequests.values()) if (useApi) return true; return false; }
+updateScheduler = createUpdateScheduler({
+  updates, preferences: createUpdatePreferences(updateDirectory),
+  install: installUpdate, canInstall: () => updateIdle(true),
+  suspended: () => sleeping || quitDraining, onChange: () => emit(),
+});
+function updateState() {
+  return { ...updates.state(), automation: updateScheduler.state(), blocked: !updateIdle(false) };
+}
+function updateIdle(automatic, { admitted = false } = {}) {
+  if ((!admitted && updateInstalling) || quitDraining || sleeping || restoringBackup || pendingApproval || initializing || !vaultOpened || locked ||
+      mutations.size || formRequests.size || browserReplies.size || workGate.state().active) return false;
+  if (!automatic) return true;
+  const automation = updateScheduler.state();
+  if (!automation.enabled || automation.preferencePending) return false;
+  if (window && !window.isDestroyed() && window.isFocused()) return false;
+  if (!workGate.quiet()) return false;
+  return computerIdle();
+}
+function computerIdle() {
+  try {
+    if (powerMonitor.getSystemIdleState?.(5 * 60) === 'unknown') return true;
+    return powerMonitor.getSystemIdleTime() >= 5 * 60;
+  } catch { return true; } // Not every desktop session provides an OS idle counter.
+}
 async function cancelUpdate() {
-  updateApprovalAbort?.abort();
-  if (['checking', 'downloading', 'awaiting-approval', 'staging'].includes(updates.state().status)) await updates.cancel();
-  return updates.state();
+  if (['checking', 'downloading', 'staging'].includes(updates.state().status)) await updates.cancel();
+  return updateState();
+}
+function installUpdate(options) {
+  if (!updateInstallTask) updateInstallTask = performUpdateInstall(options).finally(() => { updateInstallTask = undefined; });
+  return updateInstallTask;
+}
+async function acquireInstallAdmission({ automatic = false } = {}) {
+  if (!updateIdle(automatic) || !workGate.close()) return null;
+  let released = false;
+  updateInstalling = true; emit();
+  const valid = () => !released && workGate.state().closed && updateIdle(automatic, { admitted: true });
+  const release = () => {
+    if (released) return;
+    released = true; updateInstalling = false;
+    if (!quitDraining) workGate.reopen();
+    emit();
+  };
+  try {
+    await workGate.drain();
+    await vault.flush();
+    if (!valid()) { release(); return null; }
+    return { valid, release };
+  } catch (error) { release(); throw error; }
+}
+async function performUpdateInstall({ automatic = false } = {}) {
+  if (!updateIdle(automatic)) {
+    if (automatic) return false;
+    fail('LOCAL_BUSY', 'Finish active work before restarting the companion.');
+  }
+  // Hashing, extracting and building must leave ordinary work available. The
+  // engine requests final admission only after its helper is ready to commit.
+  const result = await updates.install({ automatic });
+  if (result?.manualPath && !automatic) {
+    if (result.reveal) shell.showItemInFolder(result.manualPath);
+    else {
+      const error = await shell.openPath(result.manualPath);
+      if (error) fail('UPDATE_MANUAL_OPEN_FAILED', 'The downloaded update could not be opened. Check the update status and try again.');
+    }
+  }
+  return ['installing', 'launched'].includes(updates.state().status) || Boolean(result?.manualPath);
 }
 async function updateAction(op) {
   assertAvailable(false);
   if (op === 'update-cancel') return cancelUpdate();
-  if (updateInstalling || paidWorkActive()) fail('LOCAL_BUSY', 'Finish or cancel active form preparation before updating.');
-  if (op === 'update-check') return updates.check();
-  if (op === 'update-download') return updates.download();
-  if (op !== 'update-install') fail('INVALID_INPUT', 'This update action is unavailable.');
-  updateInstalling = true; updateApprovalAbort = new AbortController(); emit();
-  try {
-    await Promise.allSettled([...mutations]);
-    assertAvailable(false);
-    const result = await updates.install();
-    if (result?.manualPath) {
-      if (result.reveal) shell.showItemInFolder(result.manualPath);
-      else {
-        const error = await shell.openPath(result.manualPath);
-        if (error) fail('UPDATE_MANUAL_OPEN_FAILED', 'The downloaded update could not be opened. Check the update status and try again.');
-      }
+  if (updateInstalling || quitDraining) fail('LOCAL_BUSY', 'The companion is restarting or closing.');
+  if (op === 'update-check') await updateScheduler.checkNow();
+  else if (op === 'update-download') await updates.download();
+  else if (op === 'update-install') await installUpdate();
+  else if (op === 'update-source-guide') await shell.openExternal('https://recruiters.rip/downloads#source-install');
+  else fail('INVALID_INPUT', 'This update action is unavailable.');
+  return updateState();
+}
+async function admitInstallationStartup() {
+  if (!localOnly && !app.isPackaged) {
+    try { managedSource = await inspectManagedSource(root, { version: packageMetadata.version }); }
+    catch { managedSource = null; } // An invalid receipt never grants managed-install authority.
+  }
+  const target = binaryInstallationTarget || managedSource?.root;
+  if (target) {
+    try {
+      releaseInstallation = await claimInstallation(target);
+      if (!releaseInstallation) return false;
+    } catch (error) {
+      // Read-only installations can run, but cannot be automatically replaced;
+      // their helpers also require this exclusion and a writable target parent.
+      if (!['EACCES', 'EROFS'].includes(error.code)) throw error;
     }
-    return updates.state();
-  } finally { updateApprovalAbort?.abort(); updateApprovalAbort = undefined; updateInstalling = false; emit(); }
+  }
+  if (quitDraining) return false;
+  installationAdmitted = true;
+  return true;
+}
+async function startUpdates() {
+  if (!coreReady || locked || updatesStarted || quitDraining) return;
+  updatesStarted = true;
+  try { await updates.initialize(); } catch { /* The updater retains its actionable error; career access remains available. */ }
+  void updateScheduler.start();
 }
 function assertStorageAvailable() {
   if (locked || screenLocked || sleeping) fail('LOCAL_LOCKED', 'Open the companion and unlock local storage.');
@@ -176,10 +257,12 @@ function safeFailure(error) {
 }
 function status() {
   if (locked || screenLocked || sleeping) return { installed: true, mode: 'local_mcp', paired: false, hasCv: false, applicationWorkflowVersion: 2,
+    companionVersion: packageMetadata.version, browserExtensions: { ...browserExtensions },
     decisionApiConfigured: false, connections: [], execution: { state: 'locked' } };
   const state = vault.get();
   return { installed: true, mode: 'local_mcp', deviceId: state.deviceId, publicKey: state.publicKey, label: state.label,
     applicationWorkflowVersion: 2, hostInfo: reviewHostInfo,
+    companionVersion: packageMetadata.version, browserExtensions: { ...browserExtensions },
     preferredHost: ['claude', 'codex'].includes(state.browserPreferences?.applicationHost) ? state.browserPreferences.applicationHost : reviewHosts.codex ? 'codex' : 'claude',
     hasCv: Object.values(state.career?.sources ?? {}).some(source => source.purpose === 'cv' && !source.archived && typeof source.text === 'string' && source.text.trim().length > 0),
     paired: Boolean(state.pairing), decisionApiConfigured: decisionCredentialStatus(state).configured, connections: [], execution: { state: state.pairing ? 'ready' : 'needs_connection' } };
@@ -207,7 +290,7 @@ function localState() {
     setup: setup(), careerViewVersion: `${state.deviceId}:${sessionEpoch}:${careerViewRevision}`,
     decisions: { credentials: decisionCredentialStatus(state) },
     publicationRange: savedPublicationRange(state.career ?? {}),
-    updates: { ...updates.state(), blocked: paidWorkActive() || updateInstalling },
+    updates: updateState(),
     review: { hosts: reviewHosts, hostInfo: reviewHostInfo, preferredHost: ['claude', 'codex'].includes(state.browserPreferences?.applicationHost) ? state.browserPreferences.applicationHost : reviewHosts.codex ? 'codex' : 'claude' },
     introductions: introductionsStatus(state.career ?? {}),
     approval: pendingApproval ? { id: pendingApproval.id, title: pendingApproval.title, detail: pendingApproval.detail } : null };
@@ -218,6 +301,7 @@ function emit(event = 'status', payload = status()) {
   if (window && !window.isDestroyed()) window.webContents.send('state-changed');
 }
 function showSettings() {
+  if (!installationAdmitted) return;
   if (window && !window.isDestroyed()) { window.show(); window.focus(); window.webContents.send('state-changed'); return windowLoaded; }
   window = new BrowserWindow({ width: 1180, height: 820, minWidth: 420, minHeight: 560, title: 'Recruiters.rip Companion', backgroundColor: '#0a0b0e',
     webPreferences: { preload: path.join(root, 'src', 'preload.cjs'), partition: 'recruiters-settings', nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true, devTools: !app.isPackaged, spellcheck: false } });
@@ -225,6 +309,9 @@ function showSettings() {
   window.webContents.on('will-navigate', event => event.preventDefault());
   window.webContents.on('will-attach-webview', event => event.preventDefault());
   window.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
+  window.on('focus', () => workGate.activity());
+  window.on('blur', () => workGate.activity());
+  window.webContents.on('before-input-event', () => workGate.activity());
   window.webContents.session.setPermissionCheckHandler(() => false);
   // The renderer reaches the network for exactly one thing: employer logos named by the catalogue (`<img>` only, https only,
   // no referrer, in-memory session so no cookies). Scripts, styles, fetches, frames and navigations stay local.
@@ -416,11 +503,14 @@ function createSessionServer() {
       openGithub: async () => { scoped.assertAvailable(false); await shell.openExternal(new URL('/account#github', productOrigin).href); } }),
   ];
   for (const tool of tools) {
-    if (tool.readOnly) continue;
     const invoke = tool.invoke;
-    tool.invoke = (input, context) => mutation(() => invoke(input, context));
+    tool.invoke = (input, context) => tool.readOnly
+      ? workGate.run(() => invoke(input, context))
+      : mutation(() => invoke(input, context));
   }
-  server = createMcpServer({ tools, assertAvailable: scoped.assertAvailable, readResource: localFiles.readResource, listResources: localFiles.listResources,
+  server = createMcpServer({ tools, assertAvailable: scoped.assertAvailable,
+    readResource: uri => workGate.run(() => localFiles.readResource(uri)),
+    listResources: () => workGate.run(() => localFiles.listResources()),
     notifyActivity: name => {
       if (tools.some(tool => tool.name === name && !tool.readOnly)) { careerViewRevision++; emit(); }
     } });
@@ -428,12 +518,15 @@ function createSessionServer() {
 }
 async function installConnections() {
   await privateDirectory(directory);
+  const profileDirectory = await realpath(directory), userData = await realpath(path.dirname(profileDirectory));
   const runtime = await prepareBridgeRuntime({ executable: process.execPath, appPath: app.getAppPath(), directory, packaged: app.isPackaged, version: packageMetadata.version });
-  const launch = { executable: runtime.executable, args: [...(app.isPackaged ? [] : [runtime.appPath]), ...(localOnly ? ['--local-product'] : [])], localOnly };
+  const launch = { executable: runtime.executable, directory: profileDirectory, userData,
+    args: [...(app.isPackaged ? [] : [runtime.appPath]), `--user-data-dir=${userData}`, ...(localOnly ? ['--local-product'] : [])], localOnly };
   await writeFile(path.join(directory, 'mcp-launch.json'), JSON.stringify(launch), { mode: 0o600 });
   protectPrivatePath(path.join(directory, 'mcp-launch.json'));
   const script = path.join(runtime.runtimeRoot, 'src', 'generated', 'mcp-host.cjs');
-  await writeFile(setup().command, launcherScript({ executable: runtime.executable, script, args: localOnly ? ['--local-product'] : [] }), { mode: 0o700 });
+  await writeFile(setup().command, launcherScript({ executable: runtime.executable, script,
+    args: [`--directory=${profileDirectory}`, ...(localOnly ? ['--local-product'] : [])] }), { mode: 0o700 });
   protectPrivatePath(setup().command, { mode: 0o700 });
   try { await unlink(path.join(directory, 'recruiters-mcp')); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   if (app.isPackaged && !localOnly) app.setAsDefaultProtocolClient('recruiters-companion');
@@ -441,6 +534,24 @@ async function installConnections() {
     const result = await installNative({ executable: runtime.executable, appPath: runtime.appPath, directory, packaged: app.isPackaged, localOnly });
     browserRegistrations = result.browsers; browserConnection = result.installed ? 'installed' : 'unavailable';
   } catch { browserConnection = 'unavailable'; }
+  await Promise.all(['chrome', 'firefox'].map(async browser => {
+    try { await refreshBrowserExtension(browser); }
+    catch { delete browserExtensions[browser]; }
+  }));
+}
+async function refreshBrowserExtension(browser) {
+  const firefox = browser === 'firefox';
+  const source = path.join(app.isPackaged ? root.replace(/app\.asar$/, 'app.asar.unpacked') : root,
+    'browser-extension', 'dist', `${firefox ? 'firefox-' : ''}${localOnly ? 'local' : 'production'}`);
+  let manifest;
+  try { manifest = JSON.parse(await readFile(path.join(source, 'manifest.json'), 'utf8')); }
+  catch { fail('HOST_INSTALL_FAILED', app.isPackaged ? 'The bundled browser extension is missing. Reinstall the complete companion.' : 'Build the companion before opening its browser extension folder.'); }
+  if (manifest.version !== packageMetadata.version || (firefox ? manifest.browser_specific_settings?.gecko?.id !== browserIdentity.firefoxExtensionId : manifest.key !== browserIdentity.key))
+    fail('HOST_INSTALL_FAILED', 'The bundled browser extension does not match this companion. Rebuild or reinstall the complete companion.');
+  const managed = app.isPackaged || Boolean(managedSource);
+  const folder = await persistBrowserExtension({ source, directory, browser, packaged: app.isPackaged, managedSource: Boolean(managedSource) });
+  browserExtensions[browser] = { managed, version: manifest.version };
+  return folder;
 }
 async function nativeOperation(op, payload, socket = null) {
   const keys = { status: [], open_settings: [], open_decisions_settings: [], pair: ['productOrigin', 'pairing'],
@@ -538,7 +649,6 @@ async function nativeOperation(op, payload, socket = null) {
   if (payload.useApi !== undefined && typeof payload.useApi !== 'boolean') fail('INVALID_INPUT', 'Choose whether to use the optional Decisions API.');
   return mutation(async () => {
     const useApi = decisionCredentials.publicState().configured && payload.useApi !== false;
-    if (useApi) assertPaidWorkAllowed();
     const scoped = createScopedAccess(store, { assertAvailable, epoch: () => sessionEpoch });
     const preparedState = scoped.store.get(), identity = identityKey(preparedState);
     const evidence = formEvidence(preparedState.career ?? createCareerState()), credentialVersion = preparedState.prescanCredentialVersion ?? 0;
@@ -638,7 +748,10 @@ async function startNativeBridge() {
           continue;
         }
         if (Object.keys(message).some(key => !['version', 'id', 'op', 'payload'].includes(key)) || message.version !== 1 || typeof message.id !== 'string' || message.id.length > 100 || typeof message.op !== 'string' || ++pending > 8) { socket.destroy(); return; }
-        void nativeOperation(message.op, message.payload, socket).then(result => ({ version: 1, id: message.id, ok: true, result }), error => ({ version: 1, id: message.id, ok: false, error: safeFailure(error) }))
+        const execute = () => nativeOperation(message.op, message.payload, socket);
+        const operation = message.op === 'status' ? execute()
+          : workGate.run(execute, { meaningful: message.op !== 'application_status' });
+        void operation.then(result => ({ version: 1, id: message.id, ok: true, result }), error => ({ version: 1, id: message.id, ok: false, error: safeFailure(error) }))
           .then(reply => { if (!socket.destroyed) socket.write(encode(reply)); }).finally(() => { pending--; }).catch(() => socket.destroy());
       }
     });
@@ -692,6 +805,11 @@ async function settingsOperation(op, input, ownMutation) {
       const result = await (op === 'career-list' ? reader.list(input) : op === 'career-read' ? reader.read(input) : reader.openDocument(input));
       scoped.assertAvailable(false);
       return { ok: true, result };
+    }
+    if (op === 'update-preferences') {
+      assertAvailable(false);
+      await updateScheduler.setPreferences(input);
+      return { ok: true, result: updateState() };
     }
     if (op.startsWith('update-')) { exact(input, []); return { ok: true, result: await updateAction(op) }; }
     if (op === 'job-block' || op === 'job-unblock') {
@@ -763,7 +881,7 @@ async function settingsOperation(op, input, ownMutation) {
       emit(); return { ok: true, result: { publicationRange: input.publicationRange } };
     }
     exact(input, op === 'approval' ? ['id', 'allow'] : []);
-    if (op === 'unlock') { await initialize(); if (queuedPairing) { const payload = queuedPairing; queuedPairing = undefined; void pair(payload).catch(error => { failure = safeFailure(error).message; emit(); }); } emit(); return { ok: true, result: localState() }; }
+    if (op === 'unlock') { await initialize(); await startUpdates(); if (queuedPairing) { const payload = queuedPairing; queuedPairing = undefined; void pair(payload).catch(error => { failure = safeFailure(error).message; emit(); }); } emit(); return { ok: true, result: localState() }; }
     assertAvailable(false); let result = { completed: true };
     if (op === 'approval') { if (!pendingApproval || pendingApproval.id !== input.id || typeof input.allow !== 'boolean') fail('INVALID_INPUT', 'This approval expired.'); pendingApproval.finish(input.allow); }
     else if (op === 'delete-rankings') { result = await deleteRankings(store); careerViewRevision++; }
@@ -815,16 +933,15 @@ async function settingsOperation(op, input, ownMutation) {
       const launcher = applicationAccess().launcher, hostInfo = await launcher.info();
       if (!hostInfo.claude.available) fail('HOST_UNAVAILABLE', hostInfo.claude.reason);
       if (hostInfo.claude.mode === 'cli') result = await launcher.connect('claude');
-      else { const error = await shell.openPath(setup().claudePackage); if (error) fail('INVALID_INPUT', 'The Claude extension could not be opened. Use the displayed local MCP configuration instead.'); }
+      else {
+        const filename = await prepareClaudePackage({ template: setup().claudePackage, directory, localOnly, version: packageMetadata.version });
+        const error = await shell.openPath(filename);
+        if (error) fail('INVALID_INPUT', 'The Claude extension could not be opened. Use the displayed local MCP configuration instead.');
+      }
     }
     else if (op === 'open-extension-folder' || op === 'open-firefox-extension-folder') {
       const firefox = op === 'open-firefox-extension-folder', browser = firefox ? 'Firefox' : 'Chrome';
-      let folder = path.join(app.isPackaged ? root.replace(/app\.asar$/, 'app.asar.unpacked') : root, 'browser-extension', 'dist', `${firefox ? 'firefox-' : ''}${localOnly ? 'local' : 'production'}`);
-      let manifest;
-      try { manifest = JSON.parse(await readFile(path.join(folder, 'manifest.json'), 'utf8')); }
-      catch { fail('HOST_INSTALL_FAILED', app.isPackaged ? `The bundled ${browser} extension is missing. Reinstall the complete companion.` : `Build the companion before opening its ${browser} extension folder.`); }
-      if (manifest.version !== packageMetadata.version || (firefox ? manifest.browser_specific_settings?.gecko?.id !== browserIdentity.firefoxExtensionId : manifest.key !== browserIdentity.key)) fail('HOST_INSTALL_FAILED', `The bundled ${browser} extension does not match this companion. Rebuild or reinstall the complete companion.`);
-      folder = await persistBrowserExtension({ source: folder, directory, browser: firefox ? 'firefox' : 'chrome', packaged: app.isPackaged });
+      const folder = await refreshBrowserExtension(firefox ? 'firefox' : 'chrome');
       const error = await shell.openPath(folder);
       if (error) fail('HOST_INSTALL_FAILED', `The ${browser} extension folder could not be opened. Reinstall the complete companion and try again.`);
       result = { opened: true };
@@ -836,9 +953,13 @@ async function settingsOperation(op, input, ownMutation) {
 ipcMain.handle('local-settings', async (event, op, input = {}) => {
   if (event.sender !== window?.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== uiURL) throw new Error('Local settings only.');
   try {
-    if (['decisions-key-save', 'decisions-key-remove', 'publication-range-set', 'import-cv', 'cv-delete', 'delete-rankings', 'connect-account', 'backup', 'backup-preview', 'backup-restore'].includes(op))
-      return await mutation(ownMutation => settingsOperation(op, input, ownMutation));
-    return await settingsOperation(op, input);
+    if (typeof op !== 'string') fail('INVALID_INPUT', 'Choose a local settings action.');
+    if (op === 'state' || op.startsWith('update-')) return await settingsOperation(op, input);
+    return await workGate.run(() => {
+      if (['decisions-key-save', 'decisions-key-remove', 'publication-range-set', 'import-cv', 'cv-delete', 'delete-rankings', 'connect-account', 'backup', 'backup-preview', 'backup-restore'].includes(op))
+        return mutation(ownMutation => settingsOperation(op, input, ownMutation));
+      return settingsOperation(op, input);
+    }, { meaningful: !['career-list', 'career-read', 'account-platform'].includes(op) });
   } catch (error) { return { ok: false, error: safeFailure(error) }; }
 });
 app.on('open-url', (event, url) => { event.preventDefault(); acceptPairingURL(url); });
@@ -850,20 +971,33 @@ else {
     if (!quitReady) {
       event.preventDefault();
       if (quitDraining) return;
-      quitDraining = true; browserForms.cancelAll(); pendingApproval?.finish(false);
+      quitDraining = true; workGate.close({ drain: true }); updateScheduler.stop();
+      browserForms.cancelAll(); pendingApproval?.finish(false);
       void (async () => {
-        await cancelUpdate();
+        const handedOff = ['installing', 'launched'].includes(updates.state().status);
+        if (!handedOff) {
+          await cancelUpdate();
+          await updateInstallTask?.catch(() => {});
+          await updateScheduler.settled();
+        }
+        await workGate.drain();
         await Promise.allSettled([...mutations]);
         // Queue behind every accepted career write before allowing Electron to exit.
         if (vaultOpened) await vault.flush();
         quitReady = true; app.quit();
-      })().catch(() => { quitDraining = false; failure = 'The companion could not finish saving. Try quitting again.'; emit(); });
+      })().catch(() => {
+        if (updateInstalling) return;
+        quitDraining = false; workGate.reopen();
+        failure = 'The companion could not finish saving. Try quitting again.'; emit();
+      });
       return;
     }
     exiting = true; clearInterval(heartbeatTimer); pairingReturn?.close(); mcpBridge?.close(); nativeBridge?.close();
     for (const socket of sockets) socket.destroy();
   });
   void app.whenReady().then(async () => {
+    // Exclude helper replacement/rollback before any profile, UI or service work.
+    if (!await admitInstallationStartup()) { app.exit(0); return; }
     // A second live process would serve a separate in-memory vault and overwrite the first one's saves.
     if (!await claimInstance(directory)) { app.exit(0); return; }
     documents = createRequire(import.meta.url)('./generated/document-engine.cjs');
@@ -872,19 +1006,27 @@ else {
     // The settings page uses an in-memory browser session, never Chromium's
     // persistent cookie key. API credentials are entered only through the local settings IPC.
     await showSettings();
-    try { await updates.initialize(); } catch { /* The updater retains its actionable error; career access must still open. */ }
     await installConnections(); await startNativeBridge();
     mcpBridge = await startMcpBroker({ directory, createServer: createSessionServer, onConnections: clients => { mcpClients = clients; emit(); } });
     try { await initialize(); } catch (error) { failure = error?.code === 'LEGACY_VAULT_LOCKED' ? error.message : 'Local storage is unavailable. Check the companion data folder, then open local storage.'; }
     await refreshReviewHosts();
-    heartbeatTimer = setInterval(() => { if (locked || heartbeatBusy || !vault.get().pairing) return; heartbeatBusy = true; void client.request('POST', '/device/heartbeat', {}).catch(() => {}).finally(() => { heartbeatBusy = false; }); }, 30000);
-    const lock = () => { backups.cancel(); browserForms.cancelAll(); void cancelUpdate().catch(error => { failure = safeFailure(error).message; }); sessionEpoch++; locked = true; pairingReturn?.close(); pendingApproval?.finish(false); mcpBridge.disconnect(); emit(); };
-    const unlock = () => { if (screenLocked || sleeping) return; void initialize().then(() => emit()).catch(() => { failure = 'Local storage could not be reopened. Your saved data has not been replaced.'; }); };
+    heartbeatTimer = setInterval(() => {
+      if (locked || heartbeatBusy || quitDraining || updateInstalling || !vault.get().pairing) return;
+      heartbeatBusy = true;
+      void workGate.run(() => client.request('POST', '/device/heartbeat', {}), { meaningful: false })
+        .catch(() => {}).finally(() => { heartbeatBusy = false; });
+    }, 30000);
+    const lock = () => { backups.cancel(); browserForms.cancelAll(); sessionEpoch++; locked = true; pairingReturn?.close(); pendingApproval?.finish(false); mcpBridge.disconnect(); emit(); };
+    const unlock = () => { if (screenLocked || sleeping) return; workGate.activity(); void initialize().then(startUpdates).then(() => emit()).catch(() => { failure = 'Local storage could not be reopened. Your saved data has not been replaced.'; }); };
     powerMonitor.on('lock-screen', () => { screenLocked = true; lock(); }); powerMonitor.on('suspend', () => { sleeping = true; lock(); });
-    powerMonitor.on('unlock-screen', () => { screenLocked = false; unlock(); }); powerMonitor.on('resume', () => { sleeping = false; unlock(); });
+    powerMonitor.on('unlock-screen', () => { screenLocked = false; unlock(); });
+    powerMonitor.on('resume', () => { sleeping = false; unlock(); void updateScheduler.resume(); });
     const link = process.argv.find(value => value.startsWith('recruiters-companion:')); if (link) acceptPairingURL(link);
     if (queuedPairing && !locked) { const payload = queuedPairing; queuedPairing = undefined; void pair(payload).catch(error => { failure = safeFailure(error).message; emit(); }); }
     if ((process.argv.includes('--bridge') || process.argv.includes('--mcp-background')) && !locked && !pendingApproval) window.hide();
     else showSettings();
+    // Confirm an installed update only after the window and local services work.
+    coreReady = true;
+    await startUpdates();
   }).catch(() => { console.error('Recruiters.rip Companion could not initialize its local MCP service. Reinstall the complete application.'); app.exit(1); });
 }

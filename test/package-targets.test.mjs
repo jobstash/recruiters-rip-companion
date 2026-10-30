@@ -35,7 +35,10 @@ for (const local of [false, true]) test(`${local ? 'local' : 'production'} MCPB 
   assert.deepEqual(manifest.compatibility.platforms, ['darwin', 'win32', 'linux']);
   assert.equal(manifest.compatibility.runtimes.node, '>=22.12.0');
   assert.equal(manifest.server.entry_point, 'server/index.cjs');
-  assert.deepEqual(manifest.server.mcp_config.args, ['${__dirname}/server/index.cjs', ...(local ? ['--local-product'] : [])]);
+  assert.deepEqual(manifest.server.mcp_config.args, ['${__dirname}/server/index.cjs', '--directory=${user_config.companion_directory}', ...(local ? ['--local-product'] : [])]);
+  assert.equal(manifest.user_config.companion_directory.type, 'directory');
+  assert.equal(manifest.user_config.companion_directory.required, true);
+  assert.equal(manifest.user_config.companion_directory.default, undefined);
   assert.equal(archive.readAsText('server/index.cjs'), await readFile(new URL('../src/mcp/local-runner.cjs', import.meta.url), 'utf8'));
   assert.equal(archive.readAsText('platform-runtime.cjs'), await readFile(new URL('../src/platform-runtime.cjs', import.meta.url), 'utf8'));
   assert.ok(archive.getEntry('skills/recruiters-rip/SKILL.md'));

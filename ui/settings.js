@@ -252,18 +252,23 @@ function renderSharing(introductions) {
 let github = { paired: false, state: 'unknown', login: null };
 let githubRequest = 0, githubPollUntil = 0;
 function renderGithub() {
-  const row = $('github-row'), button = $('connect-github'), status = $('github-status');
-  row.hidden = !github.paired;
-  if (!github.paired) return;
+  const button = $('connect-github'), status = $('github-status');
+  $('github-ask').hidden = github.state !== 'linked';
+  if (!github.paired) {
+    status.textContent = 'Connect your account first, then link GitHub.';
+    button.hidden = true;
+    return;
+  }
   const text = {
     loading: 'Checking your GitHub link…',
-    linked: `Linked as @${github.login}. Your AI app can help find people you know at companies that are hiring.`,
-    unlinked: 'Not linked. If you use GitHub, connect it to help your AI app find people you know at companies that are hiring.',
-    offline: 'Could not check your GitHub connection. Check your internet connection and try again.',
+    linked: `Linked as @${github.login}.`,
+    unlinked: 'GitHub is not linked.',
+    offline: 'Could not check your GitHub link. Check your internet connection and try again.',
     reconnect: 'Reconnect your account to check your GitHub link.',
     unknown: '',
   };
   status.textContent = text[github.state];
+  button.hidden = false;
   button.textContent = github.state === 'linked' ? 'Manage on recruiters.rip' : 'Link GitHub';
   button.disabled = github.state === 'loading' || github.state === 'reconnect';
 }

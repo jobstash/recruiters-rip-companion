@@ -136,11 +136,16 @@
 <div id="settings-general" role="tabpanel" aria-labelledby="settings-tab-general">
 <section id="account-settings" class="setup-section account" aria-labelledby="account-title">
 <h2 id="account-title">Account</h2>
-<div class="settings-content"><p id="account-hint">Not connected.</p><button id="connect-account" type="button">Connect account</button>
-<details id="github-row" hidden><summary>GitHub · optional</summary><div class="settings-content">
-<button id="connect-github" class="ghost" type="button" disabled>Link GitHub</button>
+<div class="settings-content"><p id="account-hint">Not connected.</p><button id="connect-account" type="button">Connect account</button></div>
+</section>
+<section id="introduction-settings" class="setup-section" aria-labelledby="introductions-title">
+<h2 id="introductions-title">Introductions</h2>
+<div class="settings-content">
+<p>Your AI app can find people who could introduce you to a company that’s hiring: people you’ve worked with on GitHub, and the people they’ve worked with.</p>
+<p>It uses public GitHub activity only. Link your GitHub account so recruiters.rip knows which work is yours.</p>
 <p id="github-status" role="status" aria-live="polite"></p>
-</div></details>
+<button id="connect-github" class="ghost" type="button" disabled>Link GitHub</button>
+<p id="github-ask" class="caption" hidden>Ask your AI app: “Who could introduce me to this company?”</p>
 </div>
 </section>
 <section id="chat-app-settings" class="setup-section" aria-labelledby="chat-app-title">

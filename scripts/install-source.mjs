@@ -176,7 +176,7 @@ async function findTool(name, candidates, signal, accepts) {
       if (!(await fs.stat(await fs.realpath(candidate))).isFile()) continue;
       const result = (await runSourceCommand(candidate, ['--version'], { signal, timeout: 15000 })).trim();
       if (accepts(result)) return candidate;
-    } catch (error) { if (signal?.aborted) throw error; /* Missing, obsolete or unusable tool: try the next installation. */ }
+    } catch (error) { abort(signal); /* Missing, obsolete or unusable tool: try the next installation. */ }
   }
   throw sourceError('MISSING_PREREQUISITE', `Install ${name === 'node' ? 'Node.js 24 (including npm)' : 'Git'} and run the source installer again.`);
 }

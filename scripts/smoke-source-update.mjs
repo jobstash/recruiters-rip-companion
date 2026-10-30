@@ -11,6 +11,7 @@ import { promisify } from 'node:util';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createVault } from '../src/vault.mjs';
 import { BROWSER_IDENTITIES } from '../src/browser-identity.mjs';
+import { connectAuthenticated, endpoint } from '../src/platform-runtime.cjs';
 
 if (process.env.GITHUB_ACTIONS !== 'true' || process.env.CI !== 'true' || process.env.RUNNER_ENVIRONMENT !== 'github-hosted') throw new Error('Source smoke requires a disposable GitHub-hosted runner.');
 if (!((process.platform === 'darwin' && process.arch === 'arm64') || (['win32', 'linux'].includes(process.platform) && process.arch === 'x64'))) throw new Error('Unsupported source-smoke platform; not a passing or skipped gate.');
@@ -168,6 +169,50 @@ async function requestMacQuit(pid) {
   assert.equal(result, 'quit-requested', 'The owned Mac application refused its ordinary Quit request.');
   return result;
 }
+async function captureQuitAdmission() {
+  // Failure-only read of the existing authenticated service. Never invoke a
+  // launcher here: doing so could restart the app and destroy shutdown evidence.
+  let socket;
+  const pending = new Map();
+  try {
+    const device = path.join(userData, 'device');
+    const config = JSON.parse(await readFile(path.join(device, 'mcp-bridge.json'), 'utf8'));
+    assert.equal(config.socket, endpoint(device, 'mcp'));
+    socket = await connectAuthenticated(config.socket, config.token, 'mcp', { timeout: 2000 });
+    let input = '';
+    const fail = error => { for (const request of pending.values()) { clearTimeout(request.timer); request.reject(error); } pending.clear(); };
+    socket.on('error', fail); socket.on('close', () => fail(new Error('Existing MCP service closed.')));
+    socket.on('data', chunk => {
+      try {
+        input += chunk.toString('utf8');
+        if (Buffer.byteLength(input) > 128 * 1024) throw new Error('Quit probe response exceeded its bound.');
+        for (;;) {
+          const end = input.indexOf('\n'); if (end < 0) break;
+          const reply = JSON.parse(input.slice(0, end)); input = input.slice(end + 1);
+          const request = pending.get(reply.id);
+          if (request) { pending.delete(reply.id); clearTimeout(request.timer); request.resolve(reply); }
+        }
+      } catch (error) { fail(error); }
+    });
+    socket.resume();
+    const request = (id, method, params) => new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { pending.delete(id); reject(new Error('Existing MCP service did not answer the quit probe.')); }, 2000);
+      pending.set(id, { resolve, reject, timer });
+      socket.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
+    });
+    const initialized = await request(1, 'initialize', { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'source-quit-diagnostic', version: '1.0.0' } });
+    if (initialized.error) return { authenticated: true, initializationError: initialized.error };
+    socket.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
+    const reply = await request(2, 'tools/call', { name: 'career_profile_read', arguments: {} });
+    if (reply.error) return { authenticated: true, protocolError: reply.error };
+    const detail = JSON.parse(reply.result?.content?.find(item => item.type === 'text')?.text);
+    if (reply.result.isError) return { authenticated: true, profileRead: 'rejected', error: detail.error };
+    if (!detail?.profile) return { authenticated: true, profileRead: 'invalid-response' };
+    return { authenticated: true, profileRead: 'succeeded', version: initialized.result?.serverInfo?.version };
+  } catch (error) { return { probeError: error.code || error.message.slice(0, 512) }; }
+  finally { socket?.destroy(); for (const request of pending.values()) clearTimeout(request.timer); }
+}
+
 async function closeSelectedApp() {
   for (const connection of connections) connection.close();
   let sample;
@@ -181,6 +226,10 @@ async function closeSelectedApp() {
       else await stop(pid);
     }
     await until(async () => (await sourceProcesses()).length === 0, 15000, 'owned source processes to exit before background relaunch');
+  }
+  catch (error) {
+    if (sample) sample.existingServiceAfterQuit = await captureQuitAdmission();
+    throw error;
   }
   finally { if (sample) sample.after = await macSourceProcessDetails(); }
 }

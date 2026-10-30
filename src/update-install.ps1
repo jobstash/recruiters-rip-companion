@@ -75,11 +75,12 @@ try {
   if ((Test-Path -LiteralPath $j.backup) -or (Test-Path -LiteralPath $j.staged)) { throw 'Recovery paths occupied' }
   # electron-builder puts InstallLocation in its private install key, not the
   # standard uninstall key. The quoted registered uninstaller binds this target.
-  $registrations = @(Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -eq 'Recruiters.rip Companion' -and $_.UninstallString -match '^"([^"]+)"' -and [IO.Path]::GetDirectoryName($Matches[1]) -eq $j.target })
+  # NSIS's default display name includes the registered version.
+  $registrations = @(Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -eq ('Recruiters.rip Companion ' + $_.DisplayVersion) -and $_.UninstallString -match '^"([^"]+)"' -and [IO.Path]::GetDirectoryName($Matches[1]) -eq $j.target })
   if ($registrations.Count -ne 1) { throw 'Not the registered per-user installation' }
   $registration = $registrations[0]
   Assert-Real ([regex]::Match($registration.UninstallString, '^"([^"]+)"').Groups[1].Value) $false
-  $machine = @(Get-ItemProperty 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -eq 'Recruiters.rip Companion' })
+  $machine = @(Get-ItemProperty 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -eq ('Recruiters.rip Companion ' + $_.DisplayVersion) })
   if ($machine.Count) { throw 'Machine installation requires an administrator' }
   if ((Get-FileHash -LiteralPath $j.installer -Algorithm SHA256).Hash.ToLowerInvariant() -cne $j.digest) { throw 'Installer checksum mismatch' }
   [IO.File]::WriteAllText((Join-Path $work 'ready'), $j.id)

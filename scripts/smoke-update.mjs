@@ -185,7 +185,9 @@ try {
   main = await connect(inspectorUrl);
   const browserAddress = new URL(browserUrl);
   const page = await until(async () => {
-    const response = await fetch(`http://127.0.0.1:${browserAddress.port}/json/list`, { signal: AbortSignal.timeout(5000) });
+    let response;
+    try { response = await fetch(`http://127.0.0.1:${browserAddress.port}/json/list`, { signal: AbortSignal.timeout(5000) }); }
+    catch (error) { if (error instanceof TypeError || error.name === 'TimeoutError') return null; throw error; }
     if (!response.ok) return null;
     return (await response.json()).find(item => item.type === 'page' && item.url.startsWith('file:') && item.webSocketDebuggerUrl);
   }, 30000, 'old settings renderer', true);

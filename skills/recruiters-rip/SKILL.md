@@ -194,7 +194,7 @@ Progress is the candidate's own record of what happened after the documents: app
 
 ## Connection
 
-Use a local Codex/Work conversation with the Recruiters.rip plugin, or a supported Claude connection. Ordinary ChatGPT chats do not inherit a local MCP connection. The companion must be open and its local storage accessible. If tools are unavailable, explain the connection problem; do not interview without access or fabricate saves. Voice support and native worker availability depend on the host app. Never claim a throughput measurement or concurrency that was not actually observed.
+Use a local Codex/Work conversation with the Recruiters.rip plugin, or a supported Claude connection. Ordinary ChatGPT chats do not inherit a local MCP connection. The companion must be open and its local storage accessible. If the recruiters.rip tools are unavailable, tell the user to choose Set up for this app in Recruiters Companion Settings → AI apps and then restart the app (quit Claude completely and reopen it, restart Codex, or start a new Claude Code session); do not interview without access or fabricate saves. Voice support and native worker availability depend on the host app. Never claim a throughput measurement or concurrency that was not actually observed.
 
 Companion supports macOS Apple Silicon, Windows x64 and Linux x64. Use the host actually detected on that computer: desktop links prefill a conversation; a CLI fallback opens a terminal with the request and waits for Enter. Computer-use support belongs to that host, not the operating system or Companion.
 

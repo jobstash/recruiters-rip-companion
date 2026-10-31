@@ -1,20 +1,26 @@
-import { access, writeFile, rename, unlink } from 'node:fs/promises';
-import { constants } from 'node:fs';
+import { rm, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { privateDirectory } from './vault.mjs';
 import { fail } from './mcp/state.mjs';
-import { discoverHost, hostEnvironment, mcpInvocation, mcpServerToml } from './host-setup.mjs';
+import { discoverHost, hostEnvironment, mcpServerName } from './host-setup.mjs';
 import platformRuntime from './platform-runtime.cjs';
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const hosts = ['claude', 'codex'];
 const labels = { claude: 'Claude Desktop', codex: 'ChatGPT desktop (Codex)' };
 export const REVIEW_PROMPT = 'Use the recruiters.rip skill to review the jobs queued for you and show me the best matches.';
-// Keep application tools distinct from an existing user-scoped registration,
-// which may point to another Companion identity and override the project name.
-const applicationConnection = 'recruiters-rip-applications';
+// What the user does when the host session has no recruiters.rip tools: the same restart Settings asks for after Set up.
+const restartAfterSetup = (host, mode) => host === 'codex' ? 'restart Codex'
+  : mode === 'cli' ? 'start a new Claude Code session' : 'quit Claude completely and reopen it';
+
+/** The handoff uses the connection Set up installed for this host: the Codex plugin bundles recruiters-rip and Claude gets the
+ *  user-level entry. Both load in every folder, so the request needs no workspace approval. */
+export function preparationPrompt({ host, mode, preparationId, localOnly = false }) {
+  const server = host === 'codex' ? 'recruiters-rip' : mcpServerName(localOnly);
+  return `Use the recruiters.rip tools (MCP server ${server}) to call career_application_preparation_read with {"preparationId":"${preparationId}"}, then follow its instructions to prepare and save this application's tailored CV, concise job-specific introduction as its cover letter, both PDFs and an answer for every form question my saved evidence supports, written answers and Yes/No choices alike. Use the original job description and saved career evidence; do not invent facts. Leave submission to me. If no recruiters.rip tools are available here, tell me to choose Set up for ${host === 'codex' ? 'Codex' : 'Claude'} in Recruiters Companion Settings → AI apps, then ${restartAfterSetup(host, mode)} and send this request again; do not substitute guessed content.`;
+}
 const validPath = (value, platform) => typeof value === 'string' && (platform === 'win32' ? path.win32 : path).isAbsolute(value) && !/[\x00-\x1f\x7f]/.test(value);
 const quoteSh = value => `'${String(value).replaceAll("'", "'\\''")}'`;
 const quotePowerShell = value => `'${String(value).replaceAll("'", "''")}'`;
@@ -44,50 +50,33 @@ export function terminalLaunch({ host, descriptor, workspace, prompt, platform }
   return { command: descriptor.terminal.command, args: descriptor.terminal.args, source };
 }
 
-async function replaceConfig(filename, content) {
-  const temporary = `${filename}.${randomUUID()}.tmp`;
-  try {
-    await writeFile(temporary, content, { mode: 0o600, flag: 'wx' });
-    platformRuntime.protectPrivatePath(temporary);
-    // Replace only our generated file; never follow an existing file symlink.
-    await rename(temporary, filename);
-  } finally {
-    await unlink(temporary).catch(error => { if (error.code !== 'ENOENT') throw error; });
-  }
-}
+// Companion 3.12.14 and earlier wrote a workspace-scoped MCP server here. Claude asks the user to approve such a project server
+// before loading it, so the leftover would only add an approval prompt beside the installed connection.
+const legacyWorkspaceConfig = ['.mcp.json', '.codex'];
 
 // Both documented desktop links prefill only; normal host trust/send prompts
 // remain in charge. CLI arguments: Codex --cd PATH [PROMPT], Claude [PROMPT].
 // https://developers.openai.com/codex/app/commands
 // https://code.claude.com/docs/en/cli-reference
-export function createApplicationLauncher({ directory, command, openExternal, hostAvailable,
+export function createApplicationLauncher({ directory, localOnly = false, openExternal, hostAvailable,
   platform = process.platform, env = process.env, discover = discoverHost, launchTerminal = startTerminal, protocolAvailable }) {
-  if (!validPath(directory, platform) || !validPath(command, platform) || typeof openExternal !== 'function'
+  if (!validPath(directory, platform) || typeof openExternal !== 'function'
     || (hostAvailable !== undefined && typeof hostAvailable !== 'function') || typeof discover !== 'function' || typeof launchTerminal !== 'function')
-    fail('INVALID_INPUT', 'Application launching needs a local workspace, Companion tool command and native link opener.');
+    fail('INVALID_INPUT', 'Application launching needs a local workspace and native link opener.');
   const p = platform === 'win32' ? path.win32 : path;
   const workspace = p.join(directory, 'application-workspace');
   const describe = async host => hostAvailable
     ? { available: await hostAvailable(host) === true, mode: 'desktop', label: labels[host], reason: null }
     : discover(host, { platform, env, protocolAvailable });
 
-  async function configure(host) {
-    try { await access(command, platform === 'win32' ? constants.F_OK : constants.X_OK); }
-    catch { fail('HOST_SETUP_REQUIRED', 'The Companion tool launcher is unavailable. Restart Companion and try preparing this application again.'); }
+  // The host session opens in this private, empty folder; its tools come from the host's own Set up.
+  async function prepareWorkspace() {
     try {
       await privateDirectory(directory);
       await privateDirectory(workspace);
-      if (host === 'claude') {
-        await replaceConfig(path.join(workspace, '.mcp.json'), JSON.stringify({
-          mcpServers: { [applicationConnection]: mcpInvocation(command, { platform, env }) },
-        }, null, 2) + '\n');
-      } else {
-        await privateDirectory(p.join(workspace, '.codex'));
-        // Generated workspace only: no user-level host config is overwritten.
-        await replaceConfig(p.join(workspace, '.codex', 'config.toml'), applicationMcpToml(command, { platform, env }));
-      }
+      for (const name of legacyWorkspaceConfig) await rm(p.join(workspace, name), { recursive: true, force: true });
     } catch {
-      fail('HOST_SETUP_FAILED', 'Companion could not configure its application workspace. Check local storage permissions and try again.');
+      fail('HOST_SETUP_FAILED', 'Companion could not prepare its application workspace. Check local storage permissions and try again.');
     }
   }
 
@@ -103,14 +92,6 @@ export function createApplicationLauncher({ directory, command, openExternal, ho
       }));
       return Object.fromEntries(values);
     },
-    async connect(host) {
-      if (!hosts.includes(host)) fail('INVALID_INPUT', 'Choose Claude or Codex.');
-      const descriptor = await describe(host);
-      if (!descriptor.available) fail('HOST_UNAVAILABLE', descriptor.reason || `Install ${labels[host]} or its official CLI.`);
-      await configure(host);
-      return { installed: true, surface: descriptor.label,
-        conversationRequired: `Use Continue in ${host === 'claude' ? 'Claude' : 'Codex'} in Companion to open its connected workspace.` };
-    },
     async open(input) {
       if (!input || typeof input !== 'object' || Array.isArray(input)
         || Object.keys(input).some(key => key !== 'host' && key !== 'preparationId')
@@ -120,8 +101,8 @@ export function createApplicationLauncher({ directory, command, openExternal, ho
       const descriptor = await describe(host);
       if (!descriptor.available)
         fail('HOST_UNAVAILABLE', `Install ${labels[host]} or its official CLI and an interactive terminal, sign in, then try again. ${descriptor.reason || ''}`.trim());
-      await configure(host);
-      const prompt = `Call career_application_preparation_read with {"preparationId":"${preparationId}"} using only the ${applicationConnection} MCP connection for this workspace. Follow its instructions to prepare and save this application's tailored CV, concise job-specific introduction as its cover letter, both PDFs and an answer for every form question my saved evidence supports, written answers and Yes/No choices alike. Use the original job description and saved career evidence; do not invent facts. Leave submission to me. If that connection or its tools are unavailable, ask me to approve the workspace and enable ${applicationConnection}; do not use another Companion connection or substitute guessed content.`;
+      await prepareWorkspace();
+      const prompt = preparationPrompt({ host, mode: descriptor.mode, preparationId, localOnly });
       try { await launch(host, descriptor, prompt); }
       catch { fail('HOST_LAUNCH_FAILED', `Could not open ${descriptor.label}. Open it once and sign in, then try again. Your preparation request is saved; no prompt was sent by Companion.`); }
       return { opened: true, host, requiresSend: true, mode: descriptor.mode };
@@ -134,7 +115,7 @@ export function createApplicationLauncher({ directory, command, openExternal, ho
       const descriptor = await describe(host);
       if (!descriptor.available)
         fail('HOST_UNAVAILABLE', `Install ${labels[host]} or its official CLI and an interactive terminal, sign in, then try again, or copy the prompt instead.`);
-      await configure(host);
+      await prepareWorkspace();
       const prompt = `${REVIEW_PROMPT} If the skill is unavailable, use the recruiters.rip MCP tools, starting with career_match_jobs.`;
       try { await launch(host, descriptor, prompt); }
       catch { fail('HOST_LAUNCH_FAILED', `Could not open ${descriptor.label}. Open it once and sign in, then try again, or copy the prompt instead.`); }
@@ -162,8 +143,4 @@ export function createApplicationLauncher({ directory, command, openExternal, ho
     if (host === 'codex') url.searchParams.set('mode', 'codex');
     return url;
   }
-}
-
-export function applicationMcpToml(command, options) {
-  return mcpServerToml(applicationConnection, command, options);
 }

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, writeFile, mkdir, rm, stat, symlink, readdir, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { createApplicationLauncher, terminalLaunch, applicationMcpToml } from '../src/application-launcher.mjs';
+import { createApplicationLauncher, terminalLaunch, preparationPrompt } from '../src/application-launcher.mjs';
 import { spawn } from 'node:child_process';
 
 const preparationId = '019a057a-9da1-7c39-8db7-173951f9eb20';
@@ -13,17 +13,15 @@ async function harness(t, overrides = {}) {
   const root = await mkdtemp(path.join(tmpdir(), 'recruiters-launcher-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const directory = path.join(root, 'Companion & tools #1 + résumé');
-  const command = path.join(root, process.platform === 'win32' ? 'MCP launcher & +.command' : 'MCP "launcher" & +.command');
-  await writeFile(command, '#!/bin/sh\nexit 1\n', { mode: 0o700 });
   const opened = [], checked = [];
-  const launcher = createApplicationLauncher({ directory, command,
+  const launcher = createApplicationLauncher({ directory,
     openExternal: async url => { opened.push(url); },
     hostAvailable: async host => { checked.push(host); return true; }, ...overrides });
-  return { launcher, directory, command, root, opened, checked, workspace: path.join(directory, 'application-workspace') };
+  return { launcher, directory, root, opened, checked, workspace: path.join(directory, 'application-workspace') };
 }
 
-for (const host of ['claude', 'codex']) test(`${host} opens only an encoded, request-specific composer with scoped Companion tools`, async t => {
-  const { launcher, opened, workspace, command, directory } = await harness(t);
+for (const host of ['claude', 'codex']) test(`${host} opens only an encoded, request-specific composer that uses the installed recruiters-rip connection`, async t => {
+  const { launcher, opened, workspace, directory } = await harness(t);
   assert.deepEqual(await launcher.open({ host, preparationId }), { opened: true, host, requiresSend: true, mode: 'desktop' });
   assert.equal(opened.length, 1);
   const link = new URL(opened[0]);
@@ -32,24 +30,17 @@ for (const host of ['claude', 'codex']) test(`${host} opens only an encoded, req
   assert.equal(link.pathname, '/new');
   assert.equal(link.searchParams.get(host === 'claude' ? 'folder' : 'path'), workspace);
   const prompt = link.searchParams.get(host === 'claude' ? 'q' : 'prompt');
-  assert.match(prompt, /career_application_preparation_read/);
-  assert.match(prompt, /using only the recruiters-rip-applications MCP connection for this workspace/);
-  assert.match(prompt, /do not use another Companion connection/);
-  assert.ok(prompt.includes(`{"preparationId":"${preparationId}"}`));
-  assert.equal(prompt.includes(command), false);
+  assert.equal(prompt, preparationPrompt({ host, mode: 'desktop', preparationId }));
+  assert.ok(prompt.startsWith(`Use the recruiters.rip tools (MCP server recruiters-rip) to call career_application_preparation_read with {"preparationId":"${preparationId}"}`));
+  assert.match(prompt, host === 'claude' ? /Set up for Claude in Recruiters Companion Settings → AI apps, then quit Claude completely and reopen it/
+    : /Set up for Codex in Recruiters Companion Settings → AI apps, then restart Codex/);
+  assert.doesNotMatch(prompt, /recruiters-rip-applications|using only|approve|another Companion connection/);
   assert.equal(prompt.includes(directory), false);
   assert.equal(link.hash, '');
   assert.deepEqual([...link.searchParams.keys()].sort(), host === 'claude' ? ['folder', 'q'] : ['mode', 'path', 'prompt']);
   assert.equal(link.searchParams.get('mode'), host === 'codex' ? 'codex' : null);
-  if (host === 'claude') {
-    const config = JSON.parse(await readFile(path.join(workspace, '.mcp.json'), 'utf8'));
-    assert.deepEqual(config, { mcpServers: { 'recruiters-rip-applications': { command, args: [] } } });
-    if (process.platform !== 'win32') assert.equal((await stat(path.join(workspace, '.mcp.json'))).mode & 0o777, 0o600);
-  } else {
-    const config = await readFile(path.join(workspace, '.codex', 'config.toml'), 'utf8');
-    assert.equal(config, `[mcp_servers.recruiters-rip-applications]\ncommand = ${JSON.stringify(command)}\nargs = []\n`);
-    if (process.platform !== 'win32') assert.equal((await stat(path.join(workspace, '.codex', 'config.toml'))).mode & 0o777, 0o600);
-  }
+  // The session's tools come from the host's own Set up: the workspace carries no project MCP server to approve.
+  assert.deepEqual(await readdir(workspace), []);
   if (process.platform !== 'win32') assert.equal((await stat(workspace)).mode & 0o777, 0o700);
   await launcher.open({ host, preparationId: anotherId });
   assert.equal(opened.length, 2);
@@ -83,9 +74,8 @@ test('invalid host, UUID and extra private context are rejected before native ac
 });
 
 test('launcher configuration requires absolute local paths and native dependencies', () => {
-  const options = { directory: '/tmp/application-test', command: '/tmp/mcp-test', openExternal: async () => {} };
-  for (const change of [{ directory: '../outside' }, { command: 'mcp --send' }, { command: '/tmp/mcp\nextra' },
-    { directory: '/tmp/hidden\0dir' }, { openExternal: undefined }, { hostAvailable: null }])
+  const options = { directory: '/tmp/application-test', openExternal: async () => {} };
+  for (const change of [{ directory: '../outside' }, { directory: '/tmp/hidden\0dir' }, { openExternal: undefined }, { hostAvailable: null }])
     assert.throws(() => createApplicationLauncher({ ...options, ...change }), { code: 'INVALID_INPUT' });
 });
 
@@ -98,11 +88,10 @@ test('missing hosts fail actionably without creating configs or opening another 
   await assert.rejects(stat(directory), { code: 'ENOENT' });
 });
 
-test('a missing MCP executable cannot produce an opened result', async t => {
-  const { launcher, command, opened } = await harness(t);
-  await rm(command);
-  await assert.rejects(launcher.open({ host: 'claude', preparationId }), { code: 'HOST_SETUP_REQUIRED' });
-  assert.deepEqual(opened, []);
+test('local-product Claude names its own server; Codex keeps the plugin name; CLI restart guidance matches Settings', () => {
+  assert.match(preparationPrompt({ host: 'claude', mode: 'desktop', preparationId, localOnly: true }), /\(MCP server recruiters-rip-local\)/);
+  assert.match(preparationPrompt({ host: 'codex', mode: 'desktop', preparationId, localOnly: true }), /\(MCP server recruiters-rip\)/);
+  assert.match(preparationPrompt({ host: 'claude', mode: 'cli', preparationId }), /then start a new Claude Code session and send this request again/);
 });
 
 test('native link rejection does not return opened or send a fallback prompt', async t => {
@@ -113,29 +102,35 @@ test('native link rejection does not return opened or send a fallback prompt', a
   assert.equal(attempts, 1);
 });
 
-test('scoped config never follows file symlinks or modifies unrelated host settings', { skip: process.platform === 'win32' }, async t => {
-  const { launcher, workspace, root } = await harness(t);
-  const userConfig = path.join(root, 'unrelated-config.json');
+test('a workspace MCP server left by an older Companion is removed without following symlinks', { skip: process.platform === 'win32' }, async t => {
+  const { launcher, workspace, root, opened } = await harness(t);
+  const userConfig = path.join(root, 'unrelated-config.json'), outside = path.join(root, 'unrelated');
   await writeFile(userConfig, '{"keep":"user settings"}\n');
+  await mkdir(path.join(outside, 'nested'), { recursive: true });
   await mkdir(workspace, { recursive: true });
   await symlink(userConfig, path.join(workspace, '.mcp.json'));
+  await symlink(outside, path.join(workspace, '.codex'), 'dir');
   await launcher.open({ host: 'claude', preparationId });
+  assert.equal(opened.length, 1);
   assert.equal(await readFile(userConfig, 'utf8'), '{"keep":"user settings"}\n');
-  assert.deepEqual(await readdir(workspace), ['.mcp.json']);
+  assert.deepEqual(await readdir(outside), ['nested']);
+  assert.deepEqual(await readdir(workspace), []);
+  await mkdir(path.join(workspace, '.codex'));
+  await writeFile(path.join(workspace, '.codex', 'config.toml'), '[mcp_servers.recruiters-rip-applications]\ncommand = "/x"\n');
+  await writeFile(path.join(workspace, '.mcp.json'), '{"mcpServers":{"recruiters-rip-applications":{"command":"/x"}}}\n');
+  await launcher.open({ host: 'codex', preparationId });
+  assert.deepEqual(await readdir(workspace), []);
 });
 
-test('symlinked workspace and Codex config directories fail before opening', async t => {
-  for (const target of ['workspace', 'codex']) {
-    const { launcher, workspace, directory, root, opened } = await harness(t);
-    const outside = path.join(root, 'unrelated');
-    await mkdir(outside);
-    await mkdir(directory, { recursive: true });
-    if (target === 'workspace') await symlink(outside, workspace, process.platform === 'win32' ? 'junction' : 'dir');
-    else { await mkdir(workspace); await symlink(outside, path.join(workspace, '.codex'), process.platform === 'win32' ? 'junction' : 'dir'); }
-    await assert.rejects(launcher.open({ host: 'codex', preparationId }), { code: 'HOST_SETUP_FAILED' });
-    assert.deepEqual(opened, []);
-    assert.deepEqual(await readdir(outside), []);
-  }
+test('a symlinked workspace fails before opening', async t => {
+  const { launcher, workspace, directory, root, opened } = await harness(t);
+  const outside = path.join(root, 'unrelated');
+  await mkdir(outside);
+  await mkdir(directory, { recursive: true });
+  await symlink(outside, workspace, process.platform === 'win32' ? 'junction' : 'dir');
+  await assert.rejects(launcher.open({ host: 'codex', preparationId }), { code: 'HOST_SETUP_FAILED' });
+  assert.deepEqual(opened, []);
+  assert.deepEqual(await readdir(outside), []);
 });
 
 for (const host of ['claude', 'codex']) test(`${host} CLI opens a visible terminal without submitting or trying another host`, async t => {
@@ -169,15 +164,6 @@ test('terminal failure never invokes another terminal, link or model', async t =
   assert.deepEqual(opened, []);
 });
 
-test('CLI setup configures only the connected workspace without launching', async t => {
-  const { launcher, opened, workspace } = await harness(t);
-  const result = await launcher.connect('claude');
-  assert.equal(result.installed, true);
-  assert.match(result.conversationRequired, /connected workspace/);
-  assert.ok(JSON.parse(await readFile(path.join(workspace, '.mcp.json'), 'utf8')).mcpServers['recruiters-rip-applications']);
-  assert.deepEqual(opened, []);
-});
-
 test('Windows terminal uses encoded PowerShell literals and exact workspace and prompt', () => {
   const workspace = "C:\\Users\\A & B\\résumé's $home";
   const prompt = 'Prepare "this" & $(not-code) %PATH% !value!\nDo not submit.';
@@ -192,14 +178,6 @@ test('Windows terminal uses encoded PowerShell literals and exact workspace and 
   assert.ok(script.includes('$start.UseShellExecute = $false'));
   assert.ok(script.indexOf('Read-Host') < script.indexOf('[System.Diagnostics.Process]::Start'));
   assert.equal(script.includes('-ExecutionPolicy'), false);
-});
-
-test('Windows TOML preserves literal batch path in an env value, not shell code', () => {
-  const command = "C:\\Users\\A & B\\résumé 100% !\\mcp.cmd";
-  const toml = applicationMcpToml(command, { platform: 'win32', env: { SystemRoot: 'C:\\Windows' } });
-  assert.ok(toml.includes('command = "C:\\\\Windows\\\\System32\\\\cmd.exe"'));
-  assert.ok(toml.includes('[mcp_servers.recruiters-rip-applications.env]'));
-  assert.ok(toml.includes(`RECRUITERS_RIP_MCP_COMMAND = ${JSON.stringify(`"${command}"`)}\n`));
 });
 
 test('POSIX terminal waits for confirmation and preserves prompt/workspace as literal arguments', { skip: process.platform === 'win32' }, async t => {

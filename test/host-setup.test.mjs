@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { addClaudeDesktopServer, addedHosts, agentSetupPrompt, claudeExtensionInstalled, discoverHost, findHostCli, findChatGptCli, hostEnvironment,
-  installChatGptPlugin, installClaudeSkill, liveSessions, mcpInvocation, settleRestartNotices } from '../src/host-setup.mjs';
+import { addClaudeCodeServer, addClaudeDesktopServer, addedHosts, agentSetupPrompt, claudeExtensionInstalled, discoverHost, findHostCli, findChatGptCli, hostEnvironment,
+  installChatGptPlugin, installClaudeSkill, liveSessions, mcpInvocation, mcpServerToml, settleRestartNotices } from '../src/host-setup.mjs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
@@ -96,9 +96,35 @@ test('MCP batch invocation keeps Unicode, shell metacharacters and percent signs
   assert.deepEqual(mcpInvocation('/home/Zoë & Team/mcp', { platform: 'linux' }), { command: '/home/Zoë & Team/mcp', args: [] });
 });
 
+test('Windows TOML preserves literal batch path in an env value, not shell code', () => {
+  const command = "C:\\Users\\A & B\\résumé 100% !\\mcp.cmd";
+  const toml = mcpServerToml('recruiters-rip', command, { platform: 'win32', env: { SystemRoot: 'C:\\Windows' } });
+  assert.ok(toml.includes('command = "C:\\\\Windows\\\\System32\\\\cmd.exe"'));
+  assert.ok(toml.includes('[mcp_servers.recruiters-rip.env]'));
+  assert.ok(toml.includes(`RECRUITERS_RIP_MCP_COMMAND = ${JSON.stringify(`"${command}"`)}\n`));
+});
+
+test('Claude Code Set up replaces only its own user-scoped entry through the official CLI', async () => {
+  const calls = [];
+  const cli = { command: '/synthetic/node', args: ['/synthetic/claude/cli.js'] };
+  const runCommand = async (command, args, options) => {
+    calls.push([command, args, options.env.OPENAI_API_KEY]);
+    if (args.includes('remove')) throw new Error('No user-scoped MCP server named recruiters-rip');
+    return { stdout: '' };
+  };
+  assert.deepEqual(await addClaudeCodeServer({ cli, command: '/profile/recruiters mcp', platform: 'linux', env: { PATH: '/usr/bin', OPENAI_API_KEY: 'secret' }, runCommand }), { changed: true });
+  assert.deepEqual(calls, [
+    ['/synthetic/node', ['/synthetic/claude/cli.js', 'mcp', 'remove', '--scope', 'user', 'recruiters-rip'], undefined],
+    ['/synthetic/node', ['/synthetic/claude/cli.js', 'mcp', 'add-json', '--scope', 'user', 'recruiters-rip', JSON.stringify({ type: 'stdio', command: '/profile/recruiters mcp', args: [] })], undefined],
+  ]);
+  await assert.rejects(addClaudeCodeServer({ cli, command: '/x', localOnly: true, platform: 'linux', env: {}, runCommand: async (_c, args) => { calls.push(args); throw new Error('old CLI'); } }),
+    { code: 'HOST_INSTALL_FAILED' });
+  assert.equal(calls.at(-1).at(-2), 'recruiters-rip-local');
+});
+
 test('an app counts as added only when its own config names an enabled recruiters.rip entry', async () => {
-  const home = '/home/synthetic', workspace = '/profile/host-integration/application-workspace';
-  const check = (files, options = {}) => addedHosts({ workspace, home, platform: 'darwin', env: {}, ...options,
+  const home = '/home/synthetic';
+  const check = (files, options = {}) => addedHosts({ home, platform: 'darwin', env: {}, ...options,
     read: async file => { if (!Object.hasOwn(files, file)) throw Object.assign(new Error('missing'), { code: 'ENOENT' }); return files[file]; },
     list: async directory => { const prefix = `${directory}/`; const entries = Object.keys(files).filter(file => file.startsWith(prefix)).map(file => file.slice(prefix.length).split('/')[0]); if (!entries.length) throw new Error('missing'); return entries; } });
   const codexConfig = `${home}/.codex/config.toml`, desktopConfig = `${home}/Library/Application Support/Claude/claude_desktop_config.json`;
@@ -107,10 +133,11 @@ test('an app counts as added only when its own config names an enabled recruiter
   assert.deepEqual(await check({ [codexConfig]: '[plugins."recruiters-rip@recruiters-rip"]\nenabled = false\n' }), { codex: false, claude: false });
   assert.deepEqual(await check({ [codexConfig]: '[mcp_servers.recruiters-rip]\ncommand = "/x"\n' }), { codex: true, claude: false });
   assert.deepEqual(await check({ '/codex-home/config.toml': '[mcp_servers.recruiters-rip]\ncommand = "/x"\n' }, { env: { CODEX_HOME: '/codex-home' } }), { codex: true, claude: false });
-  assert.deepEqual(await check({ [`${workspace}/.codex/config.toml`]: '[mcp_servers.recruiters-rip-applications]\ncommand = "/x"\n' }), { codex: true, claude: false });
+  // A workspace-scoped server (written by Companion 3.12.14 and earlier) is not loaded without approval, so it never counts.
+  assert.deepEqual(await check({ '/profile/host-integration/application-workspace/.codex/config.toml': '[mcp_servers.recruiters-rip-applications]\ncommand = "/x"\n',
+    '/profile/host-integration/application-workspace/.mcp.json': JSON.stringify({ mcpServers: { 'recruiters-rip-applications': { command: '/x' } } }) }), { codex: false, claude: false });
   assert.deepEqual(await check({ [desktopConfig]: JSON.stringify({ mcpServers: { 'recruiters-rip': { command: '/x' } } }) }), { codex: false, claude: true });
   assert.deepEqual(await check({ [`${home}/.claude.json`]: JSON.stringify({ mcpServers: { 'recruiters-rip': { command: '/x' } } }) }), { codex: false, claude: true });
-  assert.deepEqual(await check({ [`${workspace}/.mcp.json`]: JSON.stringify({ mcpServers: { 'recruiters-rip-applications': { command: '/x' } } }) }), { codex: false, claude: true });
   // A Claude Desktop extension serves only Claude's Chat, not the Code tab that Continue in Claude opens.
   const extension = `${home}/Library/Application Support/Claude/Claude Extensions/local.mcpb.recruiters.recruiters-rip/manifest.json`;
   assert.deepEqual(await check({ [extension]: '{}' }), { codex: false, claude: false });
@@ -120,7 +147,7 @@ test('an app counts as added only when its own config names an enabled recruiter
   assert.deepEqual(await check({ [desktopConfig]: '{not json', [`${home}/.claude.json`]: JSON.stringify({ mcpServers: { other: {} }, projects: {} }) }), { codex: false, claude: false });
   // Windows and Linux read each app's documented config location.
   assert.deepEqual(await check({ 'C:\\Users\\Zoë\\AppData\\Roaming\\Claude\\claude_desktop_config.json': JSON.stringify({ mcpServers: { 'recruiters-rip': {} } }) },
-    { platform: 'win32', home: 'C:\\Users\\Zoë', workspace: 'C:\\profile\\workspace', env: { APPDATA: 'C:\\Users\\Zoë\\AppData\\Roaming' } }), { codex: false, claude: true });
+    { platform: 'win32', home: 'C:\\Users\\Zoë', env: { APPDATA: 'C:\\Users\\Zoë\\AppData\\Roaming' } }), { codex: false, claude: true });
   assert.deepEqual(await check({ [`${home}/.config/Claude/claude_desktop_config.json`]: JSON.stringify({ mcpServers: { 'recruiters-rip': {} } }) }, { platform: 'linux' }), { codex: false, claude: true });
   // The local product only counts its own entries.
   const production = { [codexConfig]: '[plugins."recruiters-rip@recruiters-rip"]\n', [desktopConfig]: JSON.stringify({ mcpServers: { 'recruiters-rip': {} } }) };

@@ -28,7 +28,7 @@ import { createScopedAccess } from './mcp/scope.mjs';
 import { createMatchingTools, deleteRankings } from './mcp/matching-tools.mjs';
 import { matchingProfileVersion } from './mcp/assessment-policy.mjs';
 import { addBlock, removeBlock } from './mcp/blocklist.mjs';
-import { addClaudeDesktopServer, addedHosts, agentSetupPrompt, claudeExtensionInstalled, installChatGptPlugin, installClaudeSkill, liveSessions, settleRestartNotices } from './host-setup.mjs';
+import { addClaudeCodeServer, addClaudeDesktopServer, addedHosts, agentSetupPrompt, claudeExtensionInstalled, findHostCli, installChatGptPlugin, installClaudeSkill, liveSessions, settleRestartNotices } from './host-setup.mjs';
 import { createCareerBrowser } from './career-browser.mjs';
 import { createDecisionCredentials, decisionCredentialStatus } from './decisions/credentials.mjs';
 import { savedPublicationRange, setPublicationRange } from './mcp/review-queue.mjs';
@@ -298,7 +298,7 @@ async function refreshReviewHosts() {
 let hostsAdded = { codex: false, claude: false, claudeExtension: false };
 async function refreshAddedHosts() {
   try {
-    const next = { ...await addedHosts({ workspace: path.join(directory, 'host-integration', 'application-workspace'), localOnly }),
+    const next = { ...await addedHosts({ localOnly }),
       claudeExtension: await claudeExtensionInstalled({ localOnly }) };
     if (JSON.stringify(next) !== JSON.stringify(hostsAdded)) { hostsAdded = next; emit(); }
   } catch { /* keeps the last known value */ }
@@ -478,7 +478,7 @@ function applicationAccess() {
       try { await localFiles.resolveExport(record.uri); return true; } catch { return false; }
     },
   });
-  const launcher = createApplicationLauncher({ directory: path.join(directory, 'host-integration'), command: setup().command,
+  const launcher = createApplicationLauncher({ directory: path.join(directory, 'host-integration'), localOnly,
     protocolAvailable: process.platform === 'linux' ? undefined : async scheme => {
       try { return Boolean((await app.getApplicationInfoForProtocol(`${scheme}://`)).path); } catch { return false; }
     },
@@ -993,8 +993,8 @@ async function settingsOperation(op, input, ownMutation) {
       const launcher = applicationAccess().launcher, hostInfo = await launcher.info();
       if (!hostInfo.claude.available) fail('HOST_UNAVAILABLE', hostInfo.claude.reason);
       // Desktop's Chat and its Code tab (where Continue in Claude opens) both load claude_desktop_config.json; Claude Code in a
-      // terminal uses the application workspace. Both load the skill from ~/.claude/skills.
-      if (hostInfo.claude.mode === 'cli') await launcher.connect('claude');
+      // terminal loads its user-scoped servers. Both load them in every folder and the skill from ~/.claude/skills.
+      if (hostInfo.claude.mode === 'cli') await addClaudeCodeServer({ cli: await findHostCli('claude'), command: setup().command, localOnly });
       else await addClaudeDesktopServer({ command: setup().command, localOnly });
       await installClaudeSkill({ source: claudeSkillSource() });
       result = { mode: hostInfo.claude.mode };

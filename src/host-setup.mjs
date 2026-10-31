@@ -38,14 +38,15 @@ export function mcpServerToml(name, command, options) {
     + (invocation.env ? `\n[mcp_servers.${name}.env]\n${Object.entries(invocation.env).map(([key, value]) => `${key} = ${JSON.stringify(value)}\n`).join('')}` : '');
 }
 
-const serverName = localOnly => localOnly ? 'recruiters-rip-local' : 'recruiters-rip';
+/** The MCP server name Set up registers for Claude (Desktop config or Claude Code user scope). The Codex plugin always bundles it as recruiters-rip. */
+export const mcpServerName = localOnly => localOnly ? 'recruiters-rip-local' : 'recruiters-rip';
 const quoteSh = value => `'${String(value).replaceAll("'", "'\\''")}'`;
 
 // Pasted into any coding agent. Commands follow https://developers.openai.com/codex/mcp,
 // https://code.claude.com/docs/en/mcp and https://modelcontextprotocol.io/docs/develop/connect-local-servers.
 // Windows gets config-file entries only: its launcher runs through cmd.exe, which shell one-liners would re-quote.
 export function agentSetupPrompt(command, { localOnly = false, platform = process.platform, env = process.env } = {}) {
-  const name = serverName(localOnly), invocation = mcpInvocation(command, { platform, env }), windows = platform === 'win32';
+  const name = mcpServerName(localOnly), invocation = mcpInvocation(command, { platform, env }), windows = platform === 'win32';
   const entry = `"${name}": ${JSON.stringify(invocation)}`;
   const desktopConfig = platform === 'darwin' ? '~/Library/Application Support/Claude/claude_desktop_config.json'
     : windows ? '%APPDATA%\\Claude\\claude_desktop_config.json' : '~/.config/Claude/claude_desktop_config.json';
@@ -90,23 +91,21 @@ const claudeDesktopDirectory = (platform, env, home) => {
 
 /** Whether Codex / Claude have a recruiters.rip MCP entry that Continue in Codex / Claude can use, read from their own config
  *  files. Unreadable means not found. A Claude Desktop extension serves only Claude's Chat, not the Code tab Continue opens. */
-export async function addedHosts({ workspace, localOnly = false, platform = process.platform, env = process.env, home = homedir(),
+export async function addedHosts({ localOnly = false, platform = process.platform, env = process.env, home = homedir(),
   read = filename => readFile(filename, 'utf8') } = {}) {
-  const p = paths(platform), name = serverName(localOnly), workspaceName = 'recruiters-rip-applications';
+  const p = paths(platform), name = mcpServerName(localOnly);
   const text = async filename => { try { return await read(filename); } catch { return ''; } };
   const servers = async filename => { try { const value = JSON.parse(await read(filename))?.mcpServers; return value && typeof value === 'object' ? value : {}; } catch { return {}; } };
   const codexConfig = await text(p.join(env.CODEX_HOME || p.join(home, '.codex'), 'config.toml'));
-  const codex = [`plugins."recruiters-rip@${name}"`, `mcp_servers.${name}`, `mcp_servers."${name}"`].some(table => tableEnabled(codexConfig, table))
-    || tableEnabled(await text(p.join(workspace, '.codex', 'config.toml')), `mcp_servers.${workspaceName}`);
+  const codex = [`plugins."recruiters-rip@${name}"`, `mcp_servers.${name}`, `mcp_servers."${name}"`].some(table => tableEnabled(codexConfig, table));
   const claudeFiles = [p.join(claudeDesktopDirectory(platform, env, home), 'claude_desktop_config.json'), p.join(home, '.claude.json'), ...(env.CLAUDE_CONFIG_DIR ? [p.join(env.CLAUDE_CONFIG_DIR, '.claude.json')] : [])];
-  const claude = (await Promise.all(claudeFiles.map(servers))).some(value => Object.hasOwn(value, name))
-    || Object.hasOwn(await servers(p.join(workspace, '.mcp.json')), workspaceName);
+  const claude = (await Promise.all(claudeFiles.map(servers))).some(value => Object.hasOwn(value, name));
   return { codex, claude };
 }
 
 /** An older Companion installed recruiters.rip as a Claude Desktop extension; it now duplicates the config entry in Chat. */
 export async function claudeExtensionInstalled({ localOnly = false, platform = process.platform, env = process.env, home = homedir(), list = readdir } = {}) {
-  const name = serverName(localOnly);
+  const name = mcpServerName(localOnly);
   try { return (await list(paths(platform).join(claudeDesktopDirectory(platform, env, home), 'Claude Extensions'))).some(entry => entry === name || entry.endsWith(`.${name}`)); }
   catch { return false; }
 }
@@ -124,7 +123,7 @@ export async function addClaudeDesktopServer({ command, localOnly = false, platf
         (config.mcpServers !== undefined && (!config.mcpServers || typeof config.mcpServers !== 'object' || Array.isArray(config.mcpServers))))
       fail('HOST_INSTALL_FAILED', 'Claude’s settings file (claude_desktop_config.json) isn’t valid JSON, so Companion left it unchanged. Fix that file, then choose Set up again.');
   }
-  const next = JSON.stringify({ ...config, mcpServers: { ...config.mcpServers, [serverName(localOnly)]: mcpInvocation(command, { platform, env }) } }, null, 2) + '\n';
+  const next = JSON.stringify({ ...config, mcpServers: { ...config.mcpServers, [mcpServerName(localOnly)]: mcpInvocation(command, { platform, env }) } }, null, 2) + '\n';
   if (previous !== null && JSON.stringify(JSON.parse(next)) === JSON.stringify(config)) return { changed: false };
   await mkdir(directory, { recursive: true });
   // The previous file stays beside it, so a user can always get back what Claude had before.
@@ -132,6 +131,17 @@ export async function addClaudeDesktopServer({ command, localOnly = false, platf
   const temporary = `${filename}.${randomUUID()}.tmp`;
   try { await writeFile(temporary, next, { flag: 'wx' }); await rename(temporary, filename); }
   finally { await rm(temporary, { force: true }); }
+  return { changed: true };
+}
+
+/** Claude Code in a terminal (no Claude Desktop) loads user-scoped servers in every folder, with no project approval. Its own CLI
+ *  writes ~/.claude.json, which the running app also rewrites; recruiters.rip replaces only its own named entry. */
+export async function addClaudeCodeServer({ cli, command, localOnly = false, platform = process.platform, env = process.env, runCommand = exec }) {
+  const name = mcpServerName(localOnly);
+  const run = args => runCommand(cli.command, [...cli.args, 'mcp', ...args], { env: hostEnvironment(env), timeout: 60000, maxBuffer: 1024 * 1024 });
+  try { await run(['remove', '--scope', 'user', name]); } catch { /* absent */ }
+  try { await run(['add-json', '--scope', 'user', name, JSON.stringify({ type: 'stdio', ...mcpInvocation(command, { platform, env }) })]); }
+  catch { fail('HOST_INSTALL_FAILED', 'Claude Code could not add recruiters.rip. Update Claude Code, or use Copy prompt below instead.'); }
   return { changed: true };
 }
 

@@ -518,6 +518,36 @@ function pastePage() {
   return { ...page, buttons, listeners, messages, clipboard, alerts, frames, busy, focus, respond: fn => { responder = fn; } };
 }
 
+// Ashby renders Yes/No as `<label>` then `<div><button aria-pressed="false">Yes</button><button aria-pressed="false">No</button><input type="checkbox" hidden></div>`.
+function yesNoPage(question = 'Do you have at least 1+ years of experience in leadership?') {
+  const page = pastePage(), Input = page.context.HTMLInputElement;
+  const label = { tagName: 'LABEL', textContent: question, cloneNode() { return { textContent: question, querySelectorAll: () => [] }; } };
+  const box = { tagName: 'DIV', children: [], previousElementSibling: label, parentElement: null, getAttribute: () => null, closest: () => null };
+  const options = ['Yes', 'No'].map(text => {
+    const button = new Input('', 'submit');
+    Object.assign(button, { tagName: 'BUTTON', textContent: text, parentElement: box, attrs: { 'aria-pressed': 'false' } });
+    box.children.push(button);
+    return button;
+  });
+  page.controls.push(...options); page.buttons.push(...options);
+  return { ...page, options };
+}
+
+test('labelled Yes/No button groups are one choice field, never submit controls, and inspection presses nothing', () => {
+  const page = yesNoPage(), snapshot = page.invoke(inspectForm);
+  const choice = snapshot.fields.find(field => field.type === 'radio');
+  assert.equal(choice.label, 'Do you have at least 1+ years of experience in leadership?');
+  assert.deepEqual(plain(choice.options), [{ value: 'Yes', label: 'Yes' }, { value: 'No', label: 'No' }]);
+  assert.equal(choice.empty, true); assert.equal(choice.manualOnly, false);
+  assert.deepEqual(Array.from(snapshot.actions, action => action.label), ['Submit application', 'Next step']);
+  assert.deepEqual(page.options.map(option => option.attrs['aria-pressed']), ['false', 'false']);
+  page.options[0].attrs['aria-pressed'] = 'true';
+  assert.equal(page.invoke(checkFormBindings, snapshot).attached, true, 'the user clicking an option keeps the page bound');
+  const answered = page.invoke(inspectForm).fields.find(field => field.type === 'radio');
+  assert.equal(answered.empty, false); assert.equal(answered.manualOnly, true);
+  assert.equal(yesNoPage('What is your gender?').invoke(inspectForm).fields.some(field => field.type === 'radio'), false);
+});
+
 test('Firefox Promise messaging prepares the native clipboard only while the inspected field retains focus', async () => {
   for (const outcome of ['success', 'blur', 'permission', 'disconnected']) {
     const page = pastePage(), snapshot = page.invoke(inspectForm), messages = [];
@@ -1170,6 +1200,17 @@ test('new ready answer versions trigger one approved refresh and metadata-only c
   assert.equal(fixture.calls.filter(([op]) => op === 'forms_prepare').length, 2);
   fixture.application({ ...ready, answerVersion: 'version-2' }); await fixture.poll();
   assert.equal(fixture.calls.filter(([op]) => op === 'forms_prepare').length, 3);
+  panel.disconnect();
+});
+
+test('agent answers saved while a question or document is still missing refresh once; a changed context waits for the agent', async () => {
+  const fixture = await backgroundFixture(), panel = fixture.connectPanel();
+  const drafts = applicationMetadata({ state: 'drafts', answerVersion: 'version-1' });
+  fixture.application(drafts); await fixture.poll(); await fixture.poll();
+  assert.equal(fixture.calls.filter(([op]) => op === 'forms_prepare').length, 2);
+  assert.equal(fixture.state().answersStale, false);
+  fixture.application({ ...drafts, state: 'needs_refresh', answerVersion: 'version-2' }); await fixture.poll();
+  assert.equal(fixture.calls.filter(([op]) => op === 'forms_prepare').length, 2);
   panel.disconnect();
 });
 

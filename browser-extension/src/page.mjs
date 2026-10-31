@@ -141,15 +141,25 @@ export function inspectForm(_request, expectedDocument) {
     return [...live].filter(node => node.type === 'radio' && node.name === el.name && node.form === el.form);
   };
   const sameMembers = (live, group) => live && live.length === group.length && live.every((node, index) => node === group[index]);
-  const controls = [...document.querySelectorAll('input,textarea,select')].slice(0, 2000);
-  const schema = [], nodes = new Map(), radioSeen = new Set(); let schemaBytes = 0;
+  // Mutually exclusive buttons (Ashby's Yes/No uses aria-pressed) and ARIA radios are one choice field the user clicks.
+  const choiceButton = el => el.tagName !== 'INPUT' && (el.getAttribute('role') === 'radio' || (el.tagName === 'BUTTON' && el.getAttribute('aria-pressed') !== null));
+  const choiceGroup = el => [...(el.parentElement?.children ?? [])].filter(choiceButton);
+  const groupLabel = box => clean(box.getAttribute('aria-label') || (box.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean).map(id => document.getElementById(id)?.textContent || '').join(' ') ||
+    box.closest('fieldset')?.querySelector('legend')?.textContent || precedingQuestion(box));
+  const controls = [...document.querySelectorAll('input,textarea,select,button[aria-pressed],[role="radio"]')].slice(0, 2000);
+  const schema = [], nodes = new Map(), radioSeen = new Set(), choiceSeen = new Set(); let schemaBytes = 0;
   for (let index = 0; index < controls.length && schema.length < 64; index++) {
-    const el = controls[index], nativeType = el.tagName === 'TEXTAREA' ? 'textarea' : el.tagName === 'SELECT' ? 'select' : el.type;
-    if (!['text','email','tel','url','textarea','select','radio','number','date'].includes(nativeType) || !visible(el)) continue;
-    const label = labelFor(el);
-    if (!label || protectedControl(el)) continue;
+    const el = controls[index], choice = choiceButton(el), nativeType = choice ? 'radio' : el.tagName === 'TEXTAREA' ? 'textarea' : el.tagName === 'SELECT' ? 'select' : el.type;
+    if (!['text','email','tel','url','textarea','select','radio','number','date'].includes(nativeType) || !visible(el) || choiceSeen.has(el)) continue;
+    const label = choice ? el.parentElement && groupLabel(el.parentElement) : labelFor(el);
+    if (!label || protectedControl(el) || (choice && sensitive.test(label))) continue;
     let group = [el], options;
-    if (nativeType === 'radio') {
+    if (choice) {
+      group = choiceGroup(el);
+      group.forEach(node => choiceSeen.add(node));
+      if (group.length < 2 || group.length > 20 || group.some(n => !visible(n) || protectedControl(n))) continue;
+      options = group.map(n => { const text = clean(n.textContent) || clean(n.getAttribute('aria-label')); return { value: text, label: text }; });
+    } else if (nativeType === 'radio') {
       if (!el.name || radioSeen.has(el.name + ':' + [...document.forms].indexOf(el.form))) continue;
       radioSeen.add(el.name + ':' + [...document.forms].indexOf(el.form));
       group = radioGroup(el);
@@ -161,9 +171,9 @@ export function inspectForm(_request, expectedDocument) {
     }
     if (options) options = options.filter(option => option.label && option.value !== '');
     if (options && (!options.length || new Set(options.map(option => option.value)).size !== options.length)) continue;
-    const empty = nativeType === 'radio' ? group.every(n => !n.checked) : el.value === '';
+    const empty = choice ? group.every(n => n.getAttribute('aria-pressed') !== 'true' && n.getAttribute('aria-checked') !== 'true') : nativeType === 'radio' ? group.every(n => !n.checked) : el.value === '';
     const customChoice = nativeType !== 'select' && (el.getAttribute('role') === 'combobox' || ['list', 'both'].includes(el.getAttribute('aria-autocomplete')));
-    const field = { id: `control-${index}`, label: nativeType === 'radio' ? clean(el.closest('fieldset')?.querySelector('legend')?.textContent || label) : label, type: nativeType, signature: '', empty, required: group.some(n => n.required), manualOnly: !empty || customChoice || group.some(disabled) };
+    const field = { id: `control-${index}`, label: nativeType === 'radio' && !choice ? clean(el.closest('fieldset')?.querySelector('legend')?.textContent || label) : label, type: nativeType, signature: '', empty, required: group.some(n => n.required), manualOnly: !empty || customChoice || group.some(disabled) };
     if (el.autocomplete) field.autocomplete = clean(el.autocomplete);
     if (el.getAttribute('maxlength') !== null && Number.isInteger(el.maxLength) && el.maxLength >= 0)
       field.maxLength = Math.min(el.maxLength, 10000);
@@ -172,7 +182,7 @@ export function inspectForm(_request, expectedDocument) {
     if (schemaBytes + fieldBytes > 200000) continue;
     schemaBytes += fieldBytes;
     const signatures = group.map(controlSignature);
-    schema.push(field); nodes.set(field.id, { el, group, signatures, check: () => group.every((node, i) => node.isConnected && visible(node) && controlSignature(node) === signatures[i]) && (nativeType !== 'radio' || sameMembers(radioGroup(el), group)) });
+    schema.push(field); nodes.set(field.id, { el, group, signatures, check: () => group.every((node, i) => node.isConnected && visible(node) && controlSignature(node) === signatures[i]) && (nativeType !== 'radio' || sameMembers(choice ? choiceGroup(el) : radioGroup(el), group)) });
   }
   // Submit and next controls are read-only context for the host's computer-use tools.
   const actions = [], actionNodes = new Map();
@@ -184,7 +194,7 @@ export function inspectForm(_request, expectedDocument) {
   const candidates = [...document.querySelectorAll('button,input[type="submit"],input[type="button"]')].slice(0, 500);
   for (let index = 0; index < candidates.length && actions.length < 10; index++) {
     const el = candidates[index];
-    if (!(el.tagName === 'BUTTON' || el.tagName === 'INPUT') || !['submit', 'button'].includes(el.type) || !visible(el) || disabled(el)) continue;
+    if (!(el.tagName === 'BUTTON' || el.tagName === 'INPUT') || !['submit', 'button'].includes(el.type) || choiceButton(el) || !visible(el) || disabled(el)) continue;
     const label = actionLabel(el);
     if (!label || label.length > 120) continue;
     const kind = el.type === 'submit' || /\b(?:submit|apply|send)\b/i.test(label) ? 'submit' : /\b(?:next|continue|proceed)\b/i.test(label) ? 'next' : null;

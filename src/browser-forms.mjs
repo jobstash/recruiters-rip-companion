@@ -55,7 +55,7 @@ function contactKey(field) {
   const auto = AUTOCOMPLETE[field.autocomplete?.trim().toLowerCase()];
   return otherPersonContact(field) || (auto && auto !== key) ? null : key;
 }
-const ELIGIBILITY = /\b(?:sponsor|sponsorship|visa|work authori[sz]ation|eligible to work)\b/i;
+const ELIGIBILITY = /\b(?:sponsor|sponsorship|visa|work authori[sz]ation|(?:eligible|authori[sz]ed|right) to work)\b/i;
 // Never stored from a form, even for this application: salary history, criminal history and references.
 const NEVER_STORED = /\b(?:current|previous|past|last|present) (?:annual |yearly |base |total |gross )*(?:salary|compensation|pay|remuneration|rate)\b|\bsalary history\b|\bcriminal\b|\bconvict|\bfelon|\breferences?\b|\breferees?\b/;
 // Generic answers reused on later applications, matched deterministically on the normalized label.
@@ -111,6 +111,13 @@ function keepBindings(career, change) {
       if (item?.contextFingerprint === before) item.contextFingerprint = after;
     for (const draft of drafts) if (draft.applicationId === app.id && draft.applicationContext === before) draft.applicationContext = after;
   });
+}
+/** An agent's answer to a generic question becomes the same reusable fact as the user's own answer, unless one is saved. */
+export function keepGenericAnswer(career, field, value) {
+  const target = answerTarget(field), topic = target?.topic;
+  if (!topic || topic.preference || Object.values(career.facts ?? {}).some(fact => !fact.employer && !fact.applicationId && factKey(fact) === factKey({ subject: topic.subject }))) return;
+  const plan = answerPlan(target, value);
+  if (plan.fact) keepBindings(career, () => upsertFacts(career, [{ fields: plan.fact }]));
 }
 function profileValue(profile, key) {
   if (key === 'requiresSponsorship') return typeof profile.preferences?.requiresSponsorship === 'boolean' ? (profile.preferences.requiresSponsorship ? 'Yes' : 'No') : null;

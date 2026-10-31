@@ -46,7 +46,7 @@ async function panelFixture(initialState = {}, { platform = 'MacIntel', firefox 
 const application = (overrides = {}) => ({
   bindingId: 'binding:private-internal', title: 'Engineer', company: 'Example', state: 'needs_documents',
   documents: [{ kind: 'cv', ready: false }, { kind: 'cover_letter', ready: false }], introduction: { ready: false },
-  writing: [], handoff: null, jobUrl: 'https://jobs.example.test/role', ...overrides,
+  writing: [], handoff: null, answerVersion: 'version-1', jobUrl: 'https://jobs.example.test/role', ...overrides,
 });
 
 test('Chrome and Firefox offer the native clipboard shortcut on every supported desktop OS', async () => {
@@ -164,6 +164,14 @@ test('page-typed answers read Filled; only reusable ones offer Undo; choices use
   select.value = 'm3'; select.onchange();
   panel.descendants(panel.nodes.get('answer-list')).find(node => node.tagName === 'FORM').onsubmit({ preventDefault() {} });
   assert.deepEqual(panel.sent.at(-1), { action: 'answer-save', payload: { fieldId: 'notice', value: 'm3' } });
+});
+
+test('a prepared choice names the option to click on the page', async () => {
+  const panel = await panelFixture();
+  const lead = { id: 'lead', label: 'Do you have at least 1+ years of experience in leadership?', type: 'radio', options: [{ value: 'Yes', label: 'Yes' }, { value: 'No', label: 'No' }], empty: true };
+  panel.update({ form: { fields: [...panel.state.form.fields, lead] },
+    prepared: { ...panel.state.prepared, fields: [...panel.state.prepared.fields, { ...lead, value: 'Yes', source: 'agent' }] } });
+  assert.equal(panel.rows().at(-1), `${lead.label}: Choose Yes`);
 });
 
 test('inspected webpage values never become answer controls before successful preparation', async () => {

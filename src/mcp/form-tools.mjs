@@ -1,6 +1,7 @@
 import { createCareerState, fail, hash, mutateCareer, mutationSchema, readCareer } from './state.mjs';
 import { applicationContextFingerprint, applicationQuestionKey, isApplicationWritingField } from '../application-workflow.mjs';
 import { assertJobNotBlocked } from './blocklist.mjs';
+import { keepGenericAnswer } from '../browser-forms.mjs';
 
 const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const text = (value, max) => typeof value === 'string' && value.length <= max && Boolean(value.trim());
@@ -108,7 +109,7 @@ export function createFormTools({ store, browser = null }) {
     },
   }, {
     name: 'career_form_answers_save', readOnly: false,
-    description: 'Stage agent-authored answers for a captured form with its snapshot and evidenceRevision. Use only known candidate evidence; unknowns stay unanswered. Protected, populated or unsupported controls cannot be staged. No profile/fact changes, page fill or submission.',
+    description: 'Stage agent-authored answers for a captured form with its snapshot and evidenceRevision: written answers and, for choice fields, an option\'s exact value. Use only known candidate evidence; unknowns stay unanswered. Protected, populated or unsupported controls cannot be staged. A generic answer (notice period, languages, GitHub, portfolio, compensation) is also kept as the reusable fact the user\'s own answer would be, unless one is saved; no other profile/fact changes, page fill or submission.',
     inputSchema: object({ ...mutationSchema, formId: string(100), snapshot: string(64), evidenceRevision: { type: 'integer', minimum: 0 },
       answers: { type: 'array', minItems: 1, maxItems: 64, items: object({ id: string(200), value: string(10000) }) } }),
     async invoke(args) {
@@ -127,6 +128,8 @@ export function createFormTools({ store, browser = null }) {
           if (!field || !validFormValue(field, answer.value)) fail('INVALID_INPUT', 'An answer targets an unavailable field or is not one of its actual options.');
           if (isApplicationWritingField(field) && !draft.applicationId) fail('APPLICATION_REQUIRED', 'Create and bind the exact application before saving job-specific writing.');
         }
+        // Before binding answers: a new generic fact rebinds the current application context.
+        for (const answer of args.answers) keepGenericAnswer(career, draft.fields.find(field => field.id === answer.id), answer.value);
         for (const answer of args.answers) {
           Object.defineProperty(draft.answers, answer.id, { value: { value: answer.value, source: 'agent' }, writable: true, enumerable: true, configurable: true });
           const app = career.applications?.[draft.applicationId];

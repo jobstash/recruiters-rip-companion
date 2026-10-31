@@ -30,7 +30,7 @@ export function derivePanelFlow(state = {}) {
   if (state.errorCode && /^(DECISIONS_|OPENAI_|API_)/.test(state.errorCode)) return result('extra-help-error', 'Extra form help is unavailable. You can still use saved answers.', action('prepare-saved', 'Use saved answers'));
   if (state.error) return result('error', state.error, action('detect', 'Read again'));
   if (state.companion?.hasCv === false && app?.state !== 'ready') return result('missing-cv', 'Import your CV in Companion → Me → Import CV, then read the page again.', action('settings', 'Open Companion'), { recovery: true });
-  if (state.answersStale || app?.state === 'needs_refresh') return result('stale', 'The job or your saved details changed. Refresh this application before using its answers.', app?.state === 'ready' ? action('application-answers', 'Refresh answers') : app ? action('application-prepare', 'Update application') : action('prepare-saved', 'Refresh answers'));
+  if (state.answersStale || app?.state === 'needs_refresh') return result('stale', 'The job or your saved details changed. Refresh this application before using its answers.', app?.answerVersion && app.state !== 'needs_refresh' ? action('application-answers', 'Refresh answers') : app ? action('application-prepare', 'Update application') : action('prepare-saved', 'Refresh answers'));
   if (app?.state === 'ready') return result('ready', answerCount ? `${answerCount} ${answerCount === 1 ? 'answer' : 'answers'} ready` : 'Your application is ready.', state.applicationAnswersPending ? action('application-answers', 'Use saved answers') : null);
   if (app?.handoff?.state === 'agent_read') {
     const name = app.handoff.host === 'codex' ? 'Codex' : 'Claude';

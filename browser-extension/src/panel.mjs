@@ -95,7 +95,11 @@ function answerStatus(field) {
   if (state.answersStale) return ['Changed', false];
   if (!field.empty) return ['Filled', true];
   if (field.manualOnly) return ['By you', false];
-  if (!String(state.edits[field.id] ?? field.value ?? '').trim()) return ['Missing', false];
+  const value = String(state.edits[field.id] ?? field.value ?? '');
+  if (!value.trim()) return ['Missing', false];
+  // A choice is clicked on the page, never pasted: name the option to click.
+  const choice = field.options?.find(option => option.value === value)?.label;
+  if (choice) return [choice.length <= 24 ? `Choose ${choice}` : 'Ready', true];
   return [state.paste?.ok === true && state.paste.label === field.label ? 'Copied' : 'Ready', true];
 }
 // Every prepared field in page order: ready answers, then what is still missing and whether it can be added here.

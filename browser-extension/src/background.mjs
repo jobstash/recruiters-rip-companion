@@ -60,7 +60,8 @@ function setApplication(result, restoreHost = false) {
   state.application = view;
   if (restoreHost) state.applicationHost = view.preferredHost || view.handoff?.host || state.applicationHost;
 }
-const answerKey = () => state.application?.state === 'ready' && state.application.answerVersion
+// Agent answers show as soon as they are saved, even while a question stays unanswered or documents are pending.
+const answerKey = () => state.application?.applicationId && state.application.answerVersion && state.application.state !== 'needs_refresh'
   ? `${state.application.bindingId}:${state.application.answerVersion}` : null;
 function markAnswerAttempt(key) {
   if (!key) return;

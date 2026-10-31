@@ -203,6 +203,57 @@ test('web-led complete capture creates once; incomplete capture persists exact c
   assert.equal(Object.keys(other.store.get().career.applications).length, 1);
 });
 
+test('a prepared application binds agent-written essays and Yes/No choices, so keyless preparation shows them ready', async () => {
+  const f = fixture(), created = await f.create();
+  const yesNo = label => ({ label, type: 'radio', options: [{ value: 'Yes', label: 'Yes' }, { value: 'No', label: 'No' }] });
+  const fields = [
+    field('project', { label: 'Share a data project you built end-to-end that changed a business decision. Briefly cover the question, your approach (tools, data), and the outcome.' }),
+    field('lead', yesNo('Do you have at least 1+ years of experience in leadership?')),
+    field('crypto', { label: 'Briefly describe your experience and knowledge of web3/crypto. What areas have you worked in or explored (e.g. DeFi, bridges, DEXs, wallets, on-chain data), and in what capacity?' }),
+    field('web3', yesNo('Do you have professional working experience at a web3/crypto company?')),
+    field('game', { label: 'Tell us about a mobile game you shipped.' }),
+    field('authorized', yesNo('Are you legally authorized to work in the location for which you are applying?')),
+  ];
+  const view = await f.resolve({ page: page(apply, fields) });
+  assert.equal(view.applicationId, created.applicationId);
+  assert.deepEqual(view.writing.map(item => item.fieldId), ['project', 'crypto', 'game'], 'choices are not routed as writing');
+  const { preparationId } = await f.workflow.prepare({ bindingId: view.bindingId, host: 'codex' });
+  const read = await f.call('career_application_preparation_read', { preparationId });
+  assert.deepEqual(read.form.fields.map(item => item.id), fields.map(item => item.id));
+  assert.match(read.instructions, /answer every empty captured field/);
+  assert.match(read.instructions, /Yes\/No/);
+  await f.call('career_form_answers_save', f.mutation({ formId: read.form.formId, snapshot: read.form.snapshot, evidenceRevision: read.form.evidenceRevision, answers: [
+    { id: 'project', value: 'Built a churn model that moved retention budget.' }, { id: 'lead', value: 'Yes' },
+    { id: 'crypto', value: 'Analysed on-chain bridge volumes at Example.' }, { id: 'web3', value: 'Yes' }] }));
+  const prepared = await f.forms.prepare({ requestId: randomUUID(), ...page(apply, fields), useApi: false });
+  assert.deepEqual(prepared.fields.map(item => [item.id, item.value, item.source]), [
+    ['project', 'Built a churn model that moved retention budget.', 'agent'], ['lead', 'Yes', 'agent'],
+    ['crypto', 'Analysed on-chain bridge volumes at Example.', 'agent'], ['web3', 'Yes', 'agent']]);
+  assert.deepEqual(prepared.unresolved.map(item => [item.id, item.reason]), [
+    ['game', 'Ask your connected agent to write this answer for this application.'],
+    ['authorized', 'Confirm eligibility for this application with your connected agent or complete manually.']]);
+  const status = await f.workflow.status({ bindingId: view.bindingId });
+  assert.deepEqual(status.writing.map(item => [item.fieldId, item.ready]), [['project', true], ['crypto', true], ['game', false]]);
+});
+
+test('an agent answer to a generic question is kept like the user’s own, without staling documents or assessments', async () => {
+  const f = fixture(), created = await f.create();
+  const notice = field('notice', { label: 'What is your current notice period?', type: 'text' });
+  const view = await f.resolve({ page: page(apply, [notice]) });
+  await f.documents(created.applicationId);
+  const read = await f.call('career_form_read', { formId: view.formId }), evidenceRevision = f.store.get().career.evidenceRevision;
+  const save = value => f.call('career_form_answers_save', f.mutation({ formId: read.formId, snapshot: read.snapshot, evidenceRevision: read.evidenceRevision, answers: [{ id: 'notice', value }] }));
+  await save('One month');
+  await save('Three months');
+  const career = f.store.get().career;
+  assert.deepEqual(Object.values(career.facts).map(fact => [fact.subject, fact.answer]), [['Notice period', 'One month']], 'an existing generic fact is never overwritten by the agent');
+  assert.equal(career.evidenceRevision, evidenceRevision, 'saved assessments stay current');
+  assert.equal((await f.workflow.status({ bindingId: view.bindingId })).state, 'ready');
+  const elsewhere = await f.forms.prepare({ requestId: randomUUID(), ...page('https://jobs.example.test/other/apply', [notice]), useApi: false });
+  assert.equal(elsewhere.fields[0].value, 'One month');
+  assert.match(elsewhere.fields[0].source, /^fact:/);
+});
+
 test('ambiguous saved URLs and same-host titles cannot select another application package', async () => {
   const f = fixture(), created = await f.create();
   await f.documents(created.applicationId);

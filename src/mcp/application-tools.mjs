@@ -155,7 +155,7 @@ function context(career, app) {
     .map(draft => ({ formId: draft.formId, snapshot: draft.snapshot, evidenceRevision: draft.evidenceRevision,
       url: draft.url, title: draft.title, fields: draft.fields, writingFields: draft.fields.filter(isApplicationWritingField), actions: draft.actions ?? [],
       contextCurrent: draft.applicationContext === fingerprint && draft.evidence === evidence,
-      instructions: 'Read career_form_read with formId to check Chrome attachment and current answers before staging. If contextCurrent is false, read/prepare the page again in Chrome first. Only empty supported writing fields need prose; do not overwrite populated fields.' }));
+      instructions: 'Read career_form_read with formId to check Chrome attachment and current answers before staging. If contextCurrent is false, read/prepare the page again in Chrome first. Answer every empty field the evidence supports: prose for writingFields, an exact option value for choices; leave the rest unanswered and never overwrite populated fields.' }));
   return { revision: career.revision, application: app, job: currentApplicationJob(career, app),
     contextFingerprint: fingerprint, forms,
     profile: { name, email, phone, location, links, headline, seniority, roleCapabilities, skills }, preferences,

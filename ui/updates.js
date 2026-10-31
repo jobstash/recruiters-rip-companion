@@ -34,13 +34,13 @@
     element('automatic').checked = automatic;
     element('automatic').disabled = !current || preferencePending || restarting;
     element('reason').textContent = current?.automaticReason || (automatic
-      ? `Updates ${source ? 'build' : 'download'} in the background. The app restarts when you’re away and no work is running.`
+      ? `Updates ${source ? 'build' : 'download'} in the background. The app restarts after 5 minutes with no recruiters.rip activity.`
       : 'Automatic updates are off. You can still check and install updates here.');
     const waiting = supported && automatic && status === 'downloaded';
     const statusLabel = localSource && status === 'current' ? 'This local build has the same version number as the latest published release.'
       : source && status === 'downloading' ? 'Building update from source…'
       : source && status === 'downloaded' ? 'Built and ready to install.' : labels[status];
-    element('status').textContent = current ? (waiting ? `Update ${source ? 'built' : 'downloaded'}. Waiting until you’re away to restart.` : statusLabel ?? 'Update status unavailable.') : '';
+    element('status').textContent = current ? (waiting ? `Update ${source ? 'built' : 'downloaded'}. Restarting after 5 minutes with no recruiters.rip activity.` : statusLabel ?? 'Update status unavailable.') : '';
     element('check').disabled = !current || pending || active.has(status) || status === 'downloaded';
     element('download').hidden = (source && !supported) || !newerVersion() || !['available', 'cancelled', 'error'].includes(status) || (automatic && supported && status === 'available');
     element('download').textContent = source ? 'Build update' : 'Download update';

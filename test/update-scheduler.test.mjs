@@ -238,7 +238,7 @@ function mainFixture({ stage = async () => {} } = {}) {
     focus: value => { focused = value; }, idle: value => { idleSeconds = value; }, advance: value => { time += value; } };
 }
 
-test('main install guard rejects active form, mutation, dialog, restore, focus and recent input', async () => {
+test('main install guard rejects active form, mutation, dialog, restore and recent activity, not focus or OS input', async () => {
   const fixture = mainFixture(), { context } = fixture;
   for (const field of ['pendingApproval', 'restoringBackup', 'initializing']) {
     context[field] = true;
@@ -250,12 +250,11 @@ test('main install guard rejects active form, mutation, dialog, restore, focus a
     assert.equal(await context.installUpdate({ automatic: true }), false);
     context[collection].clear();
   }
-  fixture.focus(true); assert.equal(await context.installUpdate({ automatic: true }), false); fixture.focus(false);
-  fixture.idle(0); assert.equal(await context.installUpdate({ automatic: true }), false); fixture.idle(300);
+  fixture.focus(true); fixture.idle(0);
   fixture.gate.activity(); assert.equal(await context.installUpdate({ automatic: true }), false);
   assert.equal(fixture.installs(), 0);
   fixture.advance(UPDATE_QUIET_WINDOW);
-  assert.equal(await context.installUpdate({ automatic: true }), true);
+  assert.equal(await context.installUpdate({ automatic: true }), true, 'a focused window and recent typing elsewhere do not block a quiet restart');
   assert.equal(fixture.installs(), 1);
   assert.equal(fixture.gate.state().closed, true, 'the gate stays closed after handoff');
 });
@@ -266,7 +265,7 @@ test('main closes admission before flush and rechecks activity before handoff', 
   const installing = fixture.context.installUpdate({ automatic: true });
   await began.promise;
   await assert.rejects(fixture.gate.run(() => {}), { code: 'LOCAL_BUSY' });
-  fixture.focus(true); waiting.resolve();
+  fixture.gate.activity(); waiting.resolve();
   assert.equal(await installing, false);
   assert.equal(fixture.installs(), 0);
   assert.equal(fixture.gate.state().closed, false);
@@ -376,13 +375,10 @@ test('update confirmation waits for core readiness and successful local initiali
   assert.deepEqual(calls, ['confirm-ready', 'schedule']);
 });
 
-test('unknown OS idle capability falls back to meaningful quiet time, never to focused restart', async () => {
+test('a focused window and a computer in use never hold back a quiet restart', async () => {
   const fixture = mainFixture();
-  fixture.context.powerMonitor.getSystemIdleState = () => 'unknown';
-  fixture.idle(0);
   fixture.focus(true);
-  assert.equal(await fixture.context.installUpdate({ automatic: true }), false);
-  fixture.focus(false);
+  fixture.idle(0);
   assert.equal(await fixture.context.installUpdate({ automatic: true }), true);
 });
 
@@ -408,7 +404,7 @@ test('enabling automatic updates downloads an already discovered release without
 });
 
 test('staging admits ordinary work and rechecks every final automatic-restart condition', async () => {
-  for (const changed of ['focus', 'activity', 'preference', 'lock', 'suspend', 'os-idle']) {
+  for (const changed of ['activity', 'preference', 'lock', 'suspend']) {
     const staged = deferred(), ready = deferred();
     const fixture = mainFixture({ stage: () => { staged.resolve(); return ready.promise; } });
     const installing = fixture.context.installUpdate({ automatic: true });
@@ -416,12 +412,10 @@ test('staging admits ordinary work and rechecks every final automatic-restart co
     assert.equal(fixture.gate.state().closed, false, changed);
     assert.equal(fixture.context.updateInstalling, false, changed);
     await fixture.gate.run(() => {}, { meaningful: false });
-    if (changed === 'focus') fixture.focus(true);
     if (changed === 'activity') fixture.gate.activity();
     if (changed === 'preference') fixture.context.updateScheduler.state = () => ({ enabled: false });
     if (changed === 'lock') fixture.context.locked = true;
     if (changed === 'suspend') fixture.context.sleeping = true;
-    if (changed === 'os-idle') fixture.idle(0);
     ready.resolve();
     assert.equal(await installing, false, changed);
     assert.equal(fixture.installs(), 0, changed);
@@ -449,7 +443,7 @@ test('final admission remains synchronously revocable until helper commit', asyn
   const fixture = mainFixture();
   const admission = await fixture.context.acquireInstallAdmission({ automatic: true });
   assert.equal(admission.valid(), true);
-  fixture.focus(true);
+  fixture.gate.activity();
   assert.equal(admission.valid(), false);
   admission.release(); admission.release();
   assert.equal(fixture.gate.state().closed, false);

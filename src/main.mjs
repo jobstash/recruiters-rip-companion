@@ -161,15 +161,8 @@ function updateIdle(automatic, { admitted = false } = {}) {
   if (!automatic) return true;
   const automation = updateScheduler.state();
   if (!automation.enabled || automation.preferencePending) return false;
-  if (window && !window.isDestroyed() && window.isFocused()) return false;
-  if (!workGate.quiet()) return false;
-  return computerIdle();
-}
-function computerIdle() {
-  try {
-    if (powerMonitor.getSystemIdleState?.(5 * 60) === 'unknown') return true;
-    return powerMonitor.getSystemIdleTime() >= 5 * 60;
-  } catch { return true; } // Not every desktop session provides an OS idle counter.
+  // Away means no recruiters.rip requests or work for UPDATE_QUIET_WINDOW; window focus and OS input don't matter.
+  return workGate.quiet();
 }
 async function cancelUpdate() {
   if (['checking', 'downloading', 'staging'].includes(updates.state().status)) await updates.cancel();

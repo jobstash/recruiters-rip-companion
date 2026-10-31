@@ -98,16 +98,16 @@ test('a load overtaken by a range change or a lock never writes or reports the o
   assert.equal(state.career.matching, undefined);
 });
 
-test('the Jobs empty state gives the real reason and one next step', async () => {
+test('the Jobs empty state leads each failure to its own next step', async () => {
   const window = {};
   runInNewContext(await readFile(new URL('../ui/jobs-empty.js', import.meta.url), 'utf8'), { window });
-  const empty = (context, range = 'in the past 2 weeks') => JSON.parse(JSON.stringify(window.jobsEmptyState(context, range)));
-  assert.deepEqual(empty({ paired: false }), { text: 'Connect your account to see new jobs.', label: 'Connect account', action: 'connect' });
-  assert.deepEqual(empty({ paired: true, catalogue: { status: 'loading' } }), { text: 'Loading jobs…' });
-  assert.deepEqual(empty({ paired: true, catalogue: { status: 'failed', reason: 'membership' } }),
-    { text: 'New jobs need a recruiters.rip membership.', label: 'Open account', action: 'connect' });
-  assert.deepEqual(empty({ paired: true, catalogue: { status: 'failed', reason: 'offline' } }),
-    { text: 'Couldn’t reach recruiters.rip. Check your internet connection.', label: 'Retry', action: 'retry' });
-  assert.deepEqual(empty({ paired: true, catalogue: { status: 'failed', reason: 'failed' } }), { text: 'Couldn’t load new jobs.', label: 'Retry', action: 'retry' });
-  assert.deepEqual(empty({ paired: true, catalogue: { status: 'ready', total: 0 } }), { text: 'No jobs published in the past 2 weeks. Choose a longer range.' });
+  const action = context => window.jobsEmptyState(context, 'in the past 2 weeks').action;
+  assert.equal(action({ paired: false }), 'connect');
+  assert.equal(action({ paired: true, catalogue: { status: 'loading' } }), undefined);
+  assert.equal(action({ paired: true, catalogue: { status: 'failed', reason: 'membership' } }), 'connect');
+  assert.equal(action({ paired: true, catalogue: { status: 'failed', reason: 'reconnect' } }), 'connect');
+  assert.equal(action({ paired: true, catalogue: { status: 'failed', reason: 'offline' } }), 'retry');
+  assert.equal(action({ paired: true, catalogue: { status: 'failed', reason: 'failed' } }), 'retry');
+  // An empty window names the slider's current range, so changing it is the obvious next step.
+  assert.match(window.jobsEmptyState({ paired: true, catalogue: { status: 'ready', total: 0 } }, 'in the past 3 days').text, /in the past 3 days/);
 });

@@ -4,7 +4,7 @@ import path from 'node:path';
 import { assertPrivatePath, protectPrivatePath } from './platform-runtime.cjs';
 import { fail } from './mcp/state.mjs';
 
-export const UPDATE_INTERVAL = 6 * 60 * 60 * 1000;
+export const UPDATE_INTERVAL = 30 * 60 * 1000;
 export const UPDATE_QUIET_WINDOW = 5 * 60 * 1000;
 const BUSY = new Set(['checking', 'downloading', 'staging', 'installing', 'launched']);
 

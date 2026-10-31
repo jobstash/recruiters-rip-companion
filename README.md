@@ -183,7 +183,7 @@ Job capture uses `career_job_import` and `career_jobs`. Complete local originals
 
 ## Public releases and updates
 
-**Settings → Updates → Keep the app up to date** is on by default. Companion checks after startup, on resume when due, and every six hours. It verifies the download, then waits for active work to finish and a quiet, unfocused computer before restarting. **Check now** checks immediately; you can turn automatic updates off.
+**Settings → Updates → Keep the app up to date** is on by default. Companion checks after startup, on resume when due, and every 30 minutes. It verifies the download, then waits for active work to finish and a quiet, unfocused computer before restarting. **Check now** checks immediately; you can turn automatic updates off.
 
 Quitting saves your career data without waiting for background update checks or builds.
 

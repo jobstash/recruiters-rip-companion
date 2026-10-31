@@ -28,7 +28,7 @@ function schedulerFixture({ automatic = true, supported = true, releaseStatus = 
     async fire() { assert.ok(timer); timer.callback(); await scheduler.settled(); } };
 }
 
-test('automatic checks run at startup, every six hours and after missed resume intervals', async () => {
+test('automatic checks run at startup, every interval and after missed resume intervals', async () => {
   const fixture = schedulerFixture();
   await fixture.scheduler.start();
   assert.deepEqual(fixture.calls, ['check']);

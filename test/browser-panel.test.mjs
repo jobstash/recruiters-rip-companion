@@ -150,6 +150,20 @@ test('a missing row adds its answer inline with native validation and closes onc
   assert.deepEqual(panel.rows().slice(-2), ['Why this role?: Ready', 'caption: Saved for this application']);
 });
 
+test('default referral answers offer Change; custom location pickers show the value to type', async () => {
+  const panel = await panelFixture();
+  panel.update({ form: { fields: [...panel.state.form.fields, { id: 'heard', label: 'How did you hear about this job?', type: 'text' }, { id: 'loc', label: 'Where are you currently located?', type: 'text', manualOnly: true }] },
+    prepared: { ...panel.state.prepared, unresolved: [], fields: [...panel.state.prepared.fields,
+      { id: 'heard', label: 'How did you hear about this job?', type: 'text', value: 'Recruiters.rip', source: 'default', empty: true },
+      { id: 'loc', label: 'Where are you currently located?', type: 'text', value: 'Lisbon, Portugal', source: 'user', empty: true, manualOnly: true }] } });
+  assert.deepEqual(panel.rows(), ['Full name: Ready', 'How did you hear about this job?: Ready +', 'Where are you currently located?: Ready', 'caption: Type Lisbon, Portugal']);
+  assert.equal(panel.button('Change How did you hear about this job?').textContent, 'Change');
+  panel.button('Change How did you hear about this job?').onclick();
+  const input = panel.inputs('answer-list')[0]; input.value = 'A friend'; input.oninput();
+  panel.descendants(panel.nodes.get('answer-list')).find(node => node.tagName === 'FORM').onsubmit({ preventDefault() {} });
+  assert.deepEqual(panel.sent.at(-1), { action: 'answer-save', payload: { fieldId: 'heard', value: 'A friend' } });
+});
+
 test('page-typed answers read Filled; only reusable ones offer Undo; choices use the page options', async () => {
   const panel = await panelFixture();
   panel.update({ saved: { why: { scope: 'none', source: 'page' }, phone: { scope: 'future', source: 'page' } } });

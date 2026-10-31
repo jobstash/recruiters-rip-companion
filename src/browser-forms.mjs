@@ -46,11 +46,14 @@ function otherPersonContact(field) {
       Boolean(AUTOCOMPLETE[field.autocomplete?.trim().toLowerCase()]));
 }
 // Distinctive concepts may appear inside a longer question ("Share a link to your LinkedIn profile").
-const CONTAINS = { linkedinUrl: [/\blinkedin\b/], email: [/\b(?:email|e mail)\b/, 'email'], phone: [/\b(?:phone|telephone|mobile)\b/, 'tel'] };
+// Current location only: preferred or relocation locations are job-specific choices.
+const CURRENT_LOCATION = /\bwhere (?:are|do) you (?:currently )?(?:located|based|living|live|reside|residing)\b|\bcurrent(?:ly)? (?:location|located|city|place of residence)\b|\bcity of residence\b|^(?:your )?(?:current )?location$/;
+const CONTAINS = { linkedinUrl: [/\blinkedin\b/], email: [/\b(?:email|e mail)\b/, 'email'], phone: [/\b(?:phone|telephone|mobile)\b/, 'tel'], location: [CURRENT_LOCATION] };
 function contactKey(field) {
   const label = normalized(field.label);
   const exact = Object.keys(CONTACTS).find(key => CONTACTS[key].includes(label));
-  const contains = Object.keys(CONTAINS).filter(key => CONTAINS[key][0].test(label) && (!CONTAINS[key][1] || CONTAINS[key][1] === field.type));
+  const contains = Object.keys(CONTAINS).filter(key => CONTAINS[key][0].test(label) && (!CONTAINS[key][1] || CONTAINS[key][1] === field.type) &&
+    (key !== 'location' || !/\b(?:prefer|preferred|desired|willing|relocat|office|work location)\w*/.test(label)));
   const key = exact ?? (contains.length === 1 ? contains[0] : null);
   const auto = AUTOCOMPLETE[field.autocomplete?.trim().toLowerCase()];
   return otherPersonContact(field) || (auto && auto !== key) ? null : key;
@@ -65,14 +68,25 @@ export const ANSWER_TOPICS = Object.freeze([
   { subject: 'GitHub profile', pattern: /\bgithub\b/ },
   { subject: 'Portfolio or website', pattern: /\bportfolio\b|\bpersonal (?:website|site|web site|homepage)\b|^(?:your )?(?:website|web site|homepage)(?: url)?$/ },
   { subject: 'Spoken languages', pattern: /\blanguages? (?:do )?you speak\b|\bspoken languages?\b|\blanguages? spoken\b/ },
+  // Always answered: the user's own saved answer, else "Recruiters.rip" or the closest choice.
+  { subject: 'How you heard about the job', referral: true, pattern: /\bhow did you (?:hear|find out|learn|come across|find|discover)\b|\bwhere did you (?:hear|see|find|learn|come across)\b|\b(?:referral|application|candidate) source\b|^(?:source|how you heard about us)$/ },
   { subject: 'Willing to relocate', preference: 'willingToRelocate', pattern: /^(?:are you )?(?:willing|open|able|prepared) to relocate(?: for (?:this|the) (?:role|position|job))?$|^(?:willing(?:ness)? to relocate|relocation)$/ },
 ]);
 const yesNo = text => { const value = normalized(text); return /^(?:yes|y)\b/.test(value) ? true : /^(?:no|n)\b/.test(value) ? false : null; };
 /** Server-side classification. null: never stored; key: profile/preference; topic: generic fact; otherwise this application only. */
+// A custom country or location picker is still typed into; its explicitly named value is reusable and shown to type.
+const collectibleField = field => ['country', 'location'].includes(contactKey(field)) && field.manualOnly && field.empty ? { ...field, manualOnly: false } : field;
+const PLACEHOLDER = /^(?:select|choose|pick|please)\b|^[-–—\s.]*$/i;
+const REFERRAL_CHOICES = [/recruiters\s*\.?\s*rip/i, /job (?:board|site|posting)/i, /\bonline\b/i, /website|web site/i, /internet/i, /\bother\b/i];
+/** The answer to "How did you hear about this job?" when the user has not saved their own. */
+function referralDefault(field) {
+  if (!['select', 'radio'].includes(field.type)) return 'Recruiters.rip';
+  const options = field.options.filter(option => option.value && !PLACEHOLDER.test(option.label.trim()));
+  for (const pattern of REFERRAL_CHOICES) { const match = options.find(option => pattern.test(option.label)); if (match) return match.value; }
+  return options[0]?.value ?? null;
+}
 function answerTarget(field) {
-  const label = normalized(field.label), key = contactKey(field);
-  // A custom country picker cannot be filled, but its explicitly named country is still reusable.
-  const collectible = key === 'country' ? { ...field, manualOnly: false } : field;
+  const label = normalized(field.label), key = contactKey(field), collectible = collectibleField(field);
   if (unavailableField(collectible) || otherPersonContact(field) || NEVER_STORED.test(label) || (key !== 'requiresSponsorship' && ELIGIBILITY.test(label))) return null;
   if (key) return { field: collectible, key };
   const topic = ANSWER_TOPICS.find(topic => topic.pattern.test(label));
@@ -115,7 +129,7 @@ function keepBindings(career, change) {
 /** An agent's answer to a generic question becomes the same reusable fact as the user's own answer, unless one is saved. */
 export function keepGenericAnswer(career, field, value) {
   const target = answerTarget(field), topic = target?.topic;
-  if (!topic || topic.preference || Object.values(career.facts ?? {}).some(fact => !fact.employer && !fact.applicationId && factKey(fact) === factKey({ subject: topic.subject }))) return;
+  if (!topic || topic.preference || topic.referral || Object.values(career.facts ?? {}).some(fact => !fact.employer && !fact.applicationId && factKey(fact) === factKey({ subject: topic.subject }))) return;
   const plan = answerPlan(target, value);
   if (plan.fact) keepBindings(career, () => upsertFacts(career, [{ fields: plan.fact }]));
 }
@@ -147,7 +161,10 @@ function topicValue(field, career) {
     return typeof saved === 'boolean' ? chosen(field, saved ? 'Yes' : 'No', `profile.preferences.${topic.preference}`) : null;
   }
   const fact = Object.values(career.facts ?? {}).find(fact => !fact.employer && !fact.applicationId && factKey(fact) === factKey({ subject: topic.subject }));
-  return fact ? chosen(field, fact.answer, `fact:${fact.id}`) : null;
+  const saved = fact && chosen(field, fact.answer, `fact:${fact.id}`);
+  if (saved || !topic.referral) return saved;
+  const value = referralDefault(field);
+  return value && validFormValue(field, value) ? { value, source: 'default' } : null;
 }
 function knownBank(career) {
   const bank = [];
@@ -234,8 +251,8 @@ export function createBrowserForms({ store, credentials, assertAvailable, fetchI
       const staged = previous?.evidence === evidence && previous.evidenceRevision === (career.evidenceRevision ?? 0) &&
         (!previous.applicationId || previous.applicationContext === applicationContext) ? previous.answers : {};
       const bank = knownBank(career), values = new Map(), reasons = new Map(), pending = [];
-      for (const field of snapshot.fields) {
-        const reason = unavailableField(field);
+      for (const original of snapshot.fields) {
+        const field = collectibleField(original), reason = unavailableField(field);
         if (reason) { reasons.set(field.id, reason); continue; }
         const saved = staged?.[field.id], user = saved?.source === 'user';
         const answer = reusableApplicationAnswer(career, app?.id, field, applicationContext) ?? (app || user || !isApplicationWritingField(field) ? saved : null);
@@ -249,7 +266,7 @@ export function createBrowserForms({ store, credentials, assertAvailable, fetchI
         }
         const direct = directValue(field, career.profile ?? {});
         if (direct) values.set(field.id, direct);
-        else if (candidatesFor(field, bank, career.profile ?? {}).length) pending.push(field);
+        else if (!original.manualOnly && candidatesFor(field, bank, career.profile ?? {}).length) pending.push(field);
       }
       if (args.useApi) {
         try {
@@ -305,7 +322,8 @@ export function createBrowserForms({ store, credentials, assertAvailable, fetchI
       for (const field of nameFields) if (reasons.get(field.id) === 'The name parts are ambiguous. Enter them explicitly.') values.delete(field.id);
       for (const answer of values.values()) delete answer.candidateKind;
       current(run);
-      const missing = snapshot.fields.filter(field => !values.has(field.id) && answerTarget(field)).map(field => field.id);
+      // A default referral answer stays replaceable by the user's own answer.
+      const missing = snapshot.fields.filter(field => (!values.has(field.id) || values.get(field.id).source === 'default') && answerTarget(field)).map(field => field.id);
       const collectionSnapshot = hash({ fingerprint, evidence, identity: run.identity, requestId: args.requestId, answers: run.answersHash });
       await store.update(saved => {
         check(run, saved);
@@ -339,8 +357,9 @@ export function createBrowserForms({ store, credentials, assertAvailable, fetchI
       return { draft, plan: answerPlan(target, args.value) };
     };
     const { plan } = bound(readCareer(store), store.get());
-    // Job-specific text typed on the employer's page stays there.
-    if (args.source === 'page' && !plan.key && !plan.preference && !plan.fact && !(args.value === null && plan.topic)) return { fieldId: args.fieldId, scope: 'none' };
+    // Job-specific text typed on the employer's page stays there; so does a pasted default referral answer.
+    if (args.source === 'page' && ((!plan.key && !plan.preference && !plan.fact && !(args.value === null && plan.topic)) ||
+        (plan.topic?.referral && args.value === referralDefault(plan.field)))) return { fieldId: args.fieldId, scope: 'none' };
     return mutateCareer(store, { requestId: args.requestId, revision: readCareer(store).revision }, 'forms_answer_save', args, (career, state) => {
       const { draft, plan } = bound(career, state), value = args.value;
       if (!plan.key && !plan.preference && !plan.topic) {

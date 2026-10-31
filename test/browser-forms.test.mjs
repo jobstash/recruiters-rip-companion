@@ -752,21 +752,23 @@ const ownerFields = () => [
 ];
 test('generic topics are saved for future applications; job-specific answers stay with this form; sensitive ones never save', async () => {
   const f = fixture(), prepared = await f.service.prepare(snapshot(ownerFields()));
-  assert.deepEqual(addable(prepared), ['linkedin', 'heard', 'project', 'notice', 'compensation']);
+  assert.deepEqual(addable(prepared), ['linkedin', 'project', 'notice', 'compensation']);
+  assert.deepEqual(prepared.fields.map(({ id, value, source }) => [id, value, source]), [['heard', 'Recruiters.rip', 'default']]);
   const before = f.state().career;
   assert.equal((await answer(f, prepared, 'notice', 'One month')).scope, 'future');
   assert.equal((await answer(f, prepared, 'compensation', '£85,000')).scope, 'future');
   assert.equal((await answer(f, prepared, 'linkedin', 'https://www.linkedin.com/in/synthetic-candidate')).scope, 'future');
-  assert.equal((await answer(f, prepared, 'heard', 'A friend')).scope, 'application');
+  assert.equal((await answer(f, prepared, 'heard', 'A friend')).scope, 'future', 'the user\'s own referral answer replaces the default everywhere');
   assert.equal((await answer(f, prepared, 'project', 'A churn model for a synthetic shop.')).scope, 'application');
   for (const fieldId of ['gender', 'salary']) await assert.rejects(answer(f, prepared, fieldId, fieldId === 'gender' ? 'f' : '90000'), byCode('INVALID_INPUT'));
   const career = f.state().career, facts = Object.values(career.facts).filter(fact => !before.facts[fact.id]);
   assert.deepEqual(facts.map(({ kind, subject, answer, question, employer, applicationId }) => ({ kind, subject, answer, question, employer, applicationId })), [
     { kind: 'note', subject: 'Notice period', answer: 'One month', question: 'What is your current notice period?', employer: undefined, applicationId: undefined },
     { kind: 'note', subject: 'Expected compensation', answer: '£85,000', question: 'What is your expected annual compensation?', employer: undefined, applicationId: undefined },
+    { kind: 'note', subject: 'How you heard about the job', answer: 'A friend', question: 'How did you hear about this job?', employer: undefined, applicationId: undefined },
   ]);
   assert.equal(career.profile.linkedinUrl, 'https://www.linkedin.com/in/synthetic-candidate');
-  assert.deepEqual(career.formDrafts[prepared.formId].answers, { heard: { value: 'A friend', source: 'user' }, project: { value: 'A churn model for a synthetic shop.', source: 'user' } });
+  assert.deepEqual(career.formDrafts[prepared.formId].answers, { project: { value: 'A churn model for a synthetic shop.', source: 'user' } });
   assert.ok(!JSON.stringify(career).includes('90000'));
   await answer(f, prepared, 'notice', 'Two months');
   const notice = Object.values(f.state().career.facts).filter(fact => fact.subject === 'Notice period');
@@ -774,7 +776,7 @@ test('generic topics are saved for future applications; job-specific answers sta
   const again = await f.service.prepare({ ...snapshot(ownerFields()), requestId: randomUUID() });
   assert.deepEqual(again.fields.map(({ id, value, source }) => ({ id, value, source })), [
     { id: 'linkedin', value: 'https://www.linkedin.com/in/synthetic-candidate', source: 'profile.linkedinUrl' },
-    { id: 'heard', value: 'A friend', source: 'user' },
+    { id: 'heard', value: 'A friend', source: `fact:${facts[2].id}` },
     { id: 'project', value: 'A churn model for a synthetic shop.', source: 'user' },
     { id: 'notice', value: 'Two months', source: `fact:${facts[0].id}` },
     { id: 'compensation', value: '£85,000', source: `fact:${facts[1].id}` },
@@ -783,7 +785,7 @@ test('generic topics are saved for future applications; job-specific answers sta
 
 test('page typing stores only generic answers, and undo removes the saved fact or profile value', async () => {
   const f = fixture(), prepared = await f.service.prepare(snapshot(ownerFields())), before = f.state();
-  assert.deepEqual(await answer(f, prepared, 'heard', 'A friend', 'page'), { fieldId: 'heard', scope: 'none' });
+  assert.deepEqual(await answer(f, prepared, 'project', 'A churn model.', 'page'), { fieldId: 'project', scope: 'none' });
   assert.deepEqual(f.state(), before, 'job-specific text typed on the page is never stored');
   assert.equal((await answer(f, prepared, 'compensation', '£85,000', 'page')).scope, 'future');
   assert.equal((await answer(f, prepared, 'linkedin', 'https://www.linkedin.com/in/synthetic-candidate', 'page')).scope, 'future');
@@ -805,13 +807,42 @@ test('saved topics fill a second form without an API key, choosing only an exact
     field('pay', 'Salary expectations', 'select', { options: [{ value: 'low', label: '£60,000' }, { value: 'mid', label: '£85,000' }] }),
     field('heard', 'How did you hear about this job?'),
   ]), url: 'https://second.synthetic.example/apply' });
-  assert.deepEqual(second.fields.map(({ id, value }) => [id, value]), [['start', 'One month'], ['pay', 'mid']]);
-  assert.deepEqual(addable(second), ['heard']);
+  assert.deepEqual(second.fields.map(({ id, value }) => [id, value]), [['start', 'One month'], ['pay', 'mid'], ['heard', 'Recruiters.rip']]);
+  assert.deepEqual(addable(second), []);
   assert.deepEqual(f.calls, []);
   assert.deepEqual(f.reads, []);
   const mismatch = await f.service.prepare({ ...snapshot([field('pay', 'Desired salary', 'select', { options: [{ value: 'a', label: '£60,000' }, { value: 'b', label: '£70,000' }] })]),
     url: 'https://third.synthetic.example/apply' });
   assert.deepEqual(mismatch.fields, []);
+});
+
+test('referral questions are always answered keylessly, and only the user\'s own answer is kept', async () => {
+  const f = fixture(), options = labels => labels.map((label, index) => ({ value: `o${index}`, label }));
+  const prepared = await f.service.prepare(snapshot([
+    field('heard', 'How did you hear about this role?', 'textarea'), field('source', 'Referral source', 'select', { options: options(['Select one', 'LinkedIn', 'Job board', 'Other']) }),
+    field('where', 'Where did you see this job?', 'radio', { options: options(['A friend', 'Conference']) }), field('who', 'Who referred you?'),
+  ]));
+  assert.deepEqual(prepared.fields.map(({ id, value, source }) => [id, value, source]), [['heard', 'Recruiters.rip', 'default'], ['source', 'o2', 'default'], ['where', 'o0', 'default']]);
+  assert.deepEqual(f.calls, []);
+  const before = f.state();
+  assert.equal((await answer(f, prepared, 'heard', 'Recruiters.rip', 'page')).scope, 'none', 'pasting the default stores nothing');
+  assert.deepEqual(f.state(), before);
+  assert.equal((await answer(f, prepared, 'source', 'o1', 'page')).scope, 'future');
+  const next = await f.service.prepare({ ...snapshot([field('heard', 'How did you find out about us?'), field('source', 'Source', 'select', { options: options(['Job board', 'LinkedIn']) })]), url: 'https://next.synthetic.example/apply' });
+  assert.deepEqual(next.fields.map(({ id, value }) => [id, value]), [['heard', 'LinkedIn'], ['source', 'o1']]);
+});
+
+test('current-location questions use the saved location, including custom location pickers', async () => {
+  const f = fixture();
+  f.alter(state => { state.career.profile.location = null; });
+  const picker = { manualOnly: true };
+  const prepared = await f.service.prepare(snapshot([field('loc', 'Where are you currently located?', 'text', picker), field('pref', 'Preferred work location'), field('city', 'Current city')]));
+  assert.deepEqual(addable(prepared), ['loc', 'pref', 'city'], 'a preferred location is addable for this application only');
+  assert.equal((await answer(f, prepared, 'pref', 'Remote')).scope, 'application');
+  assert.equal((await answer(f, prepared, 'loc', 'Lisbon, Portugal')).scope, 'future');
+  assert.equal(f.state().career.profile.location, 'Lisbon, Portugal');
+  const next = await f.service.prepare({ ...snapshot([field('loc', 'Where are you based?', 'text', picker), field('living', 'Where do you live?'), field('pref', 'Preferred work location')]), url: 'https://next.synthetic.example/apply' });
+  assert.deepEqual(next.fields.map(({ id, value, manualOnly }) => [id, value, manualOnly]), [['loc', 'Lisbon, Portugal', true], ['living', 'Lisbon, Portugal', undefined]]);
 });
 
 test('a saved answer keeps staged answers, application answers and documents current', async () => {

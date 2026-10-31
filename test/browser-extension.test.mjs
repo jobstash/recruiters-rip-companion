@@ -1015,6 +1015,21 @@ test('a panel answer binds the prepared snapshot, becomes ready to paste and kee
   assert.deepEqual(fixture.page.clipboard, ['One month']);
 });
 
+test('a default referral answer is replaceable from the panel and reported from the page', async () => {
+  const fixture = await backgroundFixture(missingPage(), { prepare: payload => {
+    const heard = payload.fields.find(field => field.label === 'How did you hear about this job?');
+    return { formId: 'form:synthetic', snapshot: 'snapshot:synthetic', fields: [{ ...heard, value: 'Recruiters.rip', source: 'default' }], unresolved: [] };
+  } });
+  const heard = missingIds(fixture)['How did you hear about this job?'];
+  const control = fixture.page.controls.find(item => item.name === 'How did you hear about this job?');
+  control.value = 'A friend'; fixture.page.listeners.change({ target: control, isTrusted: true });
+  await tick(); await tick();
+  assert.deepEqual(fixture.calls.filter(([op]) => op === 'forms_answer_save').map(([, p]) => [p.fieldId, p.value, p.source]), [[heard, 'A friend', 'page']]);
+  await fixture.act({ action: 'answer-save', payload: { fieldId: heard, value: 'A colleague' } });
+  assert.equal(fixture.state().error, '');
+  assert.deepEqual(plain(fixture.state().prepared.fields.map(field => [field.id, field.value, field.source])), [[heard, 'A colleague', 'user']]);
+});
+
 test('failed and false-success answer saves keep the answer missing', async () => {
   for (const save of [async () => { throw new Error('Storage is locked. Unlock Companion and try again.'); }, async () => ({ ok: true }), async payload => ({ fieldId: payload.fieldId, scope: 'everywhere' })]) {
     const fixture = await backgroundFixture(missingPage()); fixture.answerSave(save);

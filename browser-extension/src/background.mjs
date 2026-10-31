@@ -113,11 +113,8 @@ async function arm(active) {
   if (!Number.isInteger(state.tabId) || !state.documentId) return;
   if (active && !await chrome.permissions.contains({ permissions: ['clipboardWrite'] })) throw new Error('In your browser’s extension settings, allow recruiters.rip to copy text so you can paste answers.');
   const session = active ? crypto.randomUUID() : null;
-  // Only fields still missing in this prepared snapshot may report what the user enters on the page.
-  const capture = active ? (state.prepared?.unresolved ?? []).flatMap(item => {
-    const field = item.add && state.form?.fields.find(field => field.id === item.id);
-    return field ? [{ id: field.id, signature: field.signature }] : [];
-  }) : [];
+  // Only fields still missing (or holding a default answer) in this prepared snapshot may report what the user enters on the page.
+  const capture = active ? (state.form?.fields ?? []).filter(field => replaceable(field.id)).map(({ id, signature }) => ({ id, signature })) : [];
   try {
     await inject(state.tabId, active ? armSmartPaste : disarmSmartPaste, active ? [{ session, capture }] : [], state.documentId);
     pasteSession = session;
@@ -126,7 +123,10 @@ async function arm(active) {
 // Answer saves run one at a time; clipboard validation waits for them so it never sees a half-applied save.
 let saving = Promise.resolve();
 function queued(task) { const run = saving.then(task); saving = run.catch(() => {}); return run; }
-const addable = id => state.prepared?.unresolved?.some(item => item.id === id && item.add) ? state.form?.fields.find(field => field.id === id) : null;
+function replaceable(id) {
+  return !!(state.prepared?.unresolved?.some(item => item.id === id && item.add) || state.prepared?.fields?.some(field => field.id === id && field.source === 'default'));
+}
+const addable = id => replaceable(id) ? state.form?.fields.find(field => field.id === id) : null;
 async function saveAnswer(fieldId, value, source) {
   const prepared = state.prepared, field = addable(fieldId);
   if (!field) throw new Error('Read page before adding this answer.');
@@ -141,7 +141,7 @@ async function saveAnswer(fieldId, value, source) {
     if (source === 'panel') {
       // A panel answer becomes ready to paste in the page's own field order.
       const order = id => state.form.fields.findIndex(item => item.id === id);
-      prepared.fields = [...prepared.fields, { ...field, value, source: 'user' }].sort((a, b) => order(a.id) - order(b.id));
+      prepared.fields = [...prepared.fields.filter(item => item.id !== fieldId), { ...field, value, source: 'user' }].sort((a, b) => order(a.id) - order(b.id));
       prepared.unresolved = prepared.unresolved.filter(item => item.id !== fieldId);
       state.edits = { ...state.edits, [fieldId]: value };
     }

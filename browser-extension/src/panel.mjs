@@ -94,7 +94,8 @@ function listRow(label, status, done, action = null) {
 function answerStatus(field) {
   if (state.answersStale) return ['Changed', false];
   if (!field.empty) return ['Filled', true];
-  if (field.manualOnly) return ['By you', false];
+  // A custom picker is typed into by the user; a known value is shown to type.
+  if (field.manualOnly) return String(field.value ?? '').trim() ? ['Ready', true] : ['By you', false];
   const value = String(state.edits[field.id] ?? field.value ?? '');
   if (!value.trim()) return ['Missing', false];
   // A choice is clicked on the page, never pasted: name the option to click.
@@ -110,8 +111,11 @@ function answerRows(prepared) {
     .sort((a, b) => (order.get(a.item.id) ?? order.size) - (order.get(b.item.id) ?? order.size)).map(({ item, ready }) => {
       const saved = state.saved?.[item.id], typed = saved?.source === 'page';
       const [status, done] = typed ? ['Filled', true] : ready ? answerStatus(item) : ['Missing', false];
-      return { id: item.id, label: item.label, status, done, add: !ready && item.add === true && !typed && !state.answersStale,
-        caption: SAVED[saved?.scope] ?? '', undo: typed && saved.scope === 'future' };
+      // A default answer ("Recruiters.rip") can be changed to the user's own, kept for future applications.
+      const change = ready && item.source === 'default';
+      const type = ready && !typed && item.manualOnly && item.value ? `Type ${item.value}` : '';
+      return { id: item.id, label: item.label, status, done, add: (change || (!ready && item.add === true)) && !typed && !state.answersStale, change,
+        caption: [type, SAVED[saved?.scope]].filter(Boolean).join(' · '), undo: typed && saved.scope === 'future' };
     });
 }
 function openEditor(id) { editing = { id, value: '' }; editorNode = null; focusAfter = `new-${id}`; render(); }
@@ -139,7 +143,7 @@ function editorRow(row, busy) {
 function renderAnswerList(rows, busy, prepared) {
   if (editing && prepared && !rows.some(row => row.id === editing.id && row.add)) {
     // Saved (or no longer addable): close the editor and continue with the next missing answer.
-    const index = rows.findIndex(row => row.id === editing.id), next = rows.slice(index + 1).find(row => row.add) || rows.find(row => row.add);
+    const index = rows.findIndex(row => row.id === editing.id), missing = row => row.add && !row.change, next = rows.slice(index + 1).find(missing) || rows.find(missing);
     editing = null; focusAfter = next ? `add-${next.id}` : null;
   }
   // Status refreshes rebuild the rows but keep the open editor's node, value and focus.
@@ -150,7 +154,8 @@ function renderAnswerList(rows, busy, prepared) {
     $('answer-list').replaceChildren(...rows.flatMap(row => {
       let action = null;
       if (row.add && editing?.id !== row.id) {
-        action = el('button', 'Add', 'text'); action.id = `add-${row.id}`; action.setAttribute('aria-label', `Add ${row.label}`);
+        const verb = row.change ? 'Change' : 'Add';
+        action = el('button', verb, 'text'); action.id = `add-${row.id}`; action.setAttribute('aria-label', `${verb} ${row.label}`);
         action.onclick = () => openEditor(row.id);
       }
       const nodes = [listRow(row.label, row.status, row.done, action)];

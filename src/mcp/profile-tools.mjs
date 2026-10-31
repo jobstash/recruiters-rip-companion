@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { createCareerState, fail, hash, mutateCareer, mutationSchema, readCareer, replayCareer } from './state.mjs';
-import { ESSENTIAL_PREFERENCES, matchingProfileVersion, missingPreferences } from './assessment-policy.mjs';
+import { CAREER_PATHS_GUIDE, ESSENTIAL_PREFERENCES, matchingProfileVersion, missingPreferences } from './assessment-policy.mjs';
 import { introductionsStatus } from './introduction-tools.mjs';
 import { FACT_KINDS, compareFacts, factInputSchema, factKey, needsDetail, normalizeFact } from './facts.mjs';
 import { chatText, formAnswers, formRequest, parseReply, prepareQuestions, questionSchema } from './interview.mjs';
@@ -16,8 +16,11 @@ const object = (properties, required = []) => ({ type: 'object', additionalPrope
 const list = (items, maxItems = 50, minItems = 0) => ({ type: 'array', items, maxItems, minItems, uniqueItems: true });
 const paging = { offset: { type: 'integer', minimum: 0, maximum: 100000 }, limit: { type: 'integer', minimum: 1, maximum: 100 } };
 const sourcePurpose = { enum: ['cv', 'supporting', 'interview'] };
+const text = maxLength => ({ ...string(maxLength), pattern: '\\S' });
+// One path = one direction the candidate will take: concrete titles (seniority variants, synonyms) and the evidence-backed reason.
+const careerPath = object({ name: text(120), titles: list(text(200), 20, 1), why: text(500) }, ['name', 'titles', 'why']);
 const preferenceFields = {
-  roles: nullable(list(string(200), 30)), acceptedAlternatives: nullable(list(string(300), 30)),
+  careerPaths: nullable(list(careerPath, 10)),
   excludedRoles: nullable(list(string(300), 30)), locations: nullable(list(string(200), 30)),
   workModes: nullable(list({ enum: ['remote', 'hybrid', 'onsite'] }, 3)),
   employmentTypes: nullable(list({ enum: ['permanent', 'contract', 'temporary', 'internship', 'part_time', 'other'] }, 6)),
@@ -136,7 +139,18 @@ function pendingResult(interview) {
     ...(interview.questions.length ? { interviewId: interview.id, text: chatText(interview.title, interview.questions),
       followUps: interview.questions.filter(question => question.stage === 'detail') } : {}) };
 }
+const caseless = value => value.trim().toLocaleLowerCase();
+/** Career paths are the single list of target directions: distinct names, and distinct titles within each path. */
+function validateCareerPaths(paths) {
+  const names = new Set();
+  for (const { name, titles } of paths ?? []) {
+    if (names.has(caseless(name))) fail('INVALID_INPUT', `Career path "${name.trim()}" is listed twice; merge it into one path.`);
+    names.add(caseless(name));
+    if (new Set(titles.map(caseless)).size !== titles.length) fail('INVALID_INPUT', `Career path "${name.trim()}" repeats a title.`);
+  }
+}
 function patchPreferences(career, patch) {
+  if (Object.hasOwn(patch, 'careerPaths')) validateCareerPaths(patch.careerPaths);
   career.profile.preferences ??= {};
   for (const [field, value] of Object.entries(patch)) career.profile.preferences[field] = structuredClone(value);
   return Object.keys(patch).map(field => `preferences.${field}`);
@@ -146,7 +160,7 @@ function onboarding(career, pairing) {
   const factCount = Object.keys(career.facts).length;
   const hasBackground = cvs.length > 0 || factCount > 0 || filled(career.profile.headline) || filled(career.profile.roleCapabilities);
   const mode = career.profile.onboarding?.mode ?? (cvs.length ? 'cv' : hasBackground ? 'interview' : null);
-  const hasRole = filled(career.profile.headline) || filled(career.profile.roleCapabilities) || filled(career.profile.preferences?.roles);
+  const hasRole = filled(career.profile.headline) || filled(career.profile.roleCapabilities) || filled(career.profile.preferences?.careerPaths);
   const actions = [], questions = [], missing = [];
   const action = (field, tool, args, instruction) => { const item = { field, tool, args, instruction }; actions.push(item); missing.push(item); };
   const question = (field, tool, text) => { const item = { field, tool, question: text }; questions.push(item); missing.push(item); };
@@ -177,7 +191,7 @@ function onboarding(career, pairing) {
     pairing: { paired: Boolean(pairing), account: pairing?.account ? { id: pairing.account.id, label: pairing.account.label } : null },
     catalogRequiresPairing: !pairing, sourceCount: currentSources(career).length, factCount, missing, actions, questions,
     introductions: { ...introductions, nextSteps: locallyReady ? sharingSteps : [] },
-    nextSteps: locallyReady ? ['Match jobs using the CV/profile, saved preferences and any existing facts once paired. Collect new facts only while reviewing an individual matched listing for submission; reuse them in subsequent matching.'] : [...actions.map(item => item.instruction), ...questions.map(item => item.question), ...(hasBackground && unansweredPreferences.length ? ['Ask these preference questions together in one message, save every answer with career_preferences_update, then read career_profile_read before any job review.'] : [])],
+    nextSteps: locallyReady ? ['Match jobs using the CV/profile, saved preferences and any existing facts once paired. Collect new facts only while reviewing an individual matched listing for submission; reuse them in subsequent matching.'] : [...actions.map(item => item.instruction), ...questions.map(item => item.question), ...(hasBackground && unansweredPreferences.includes('careerPaths') ? [CAREER_PATHS_GUIDE] : []), ...(hasBackground && unansweredPreferences.length ? ['Ask these preference questions together in one message, save every answer with career_preferences_update, then read career_profile_read before any job review.'] : [])],
   };
 }
 
@@ -240,7 +254,7 @@ export function createProfileTools({ store, selectSourceFile, extractFile, inter
     return { profile: profileView(career.profile), saved };
   }));
 
-  tool('career_preferences_update', 'Save explicit future preferences using {requestId,revision,patch}. Obtain a UUID from request_id and the current integer revision from career_profile_read; requestId is not a descriptive label. Use roles for the intended direction, acceptedAlternatives for directions the candidate would also take, excludedRoles for role families they do not want, and notes only for nuance without a dedicated field. Put supported preference fields inside patch; omitted values stay unchanged. Save actual candidate intent, not CV-inferred preferences. Read career_profile_read afterward to confirm persistence; never report a rejected mutation as saved.', mutation({ patch: preferencePatch }, ['patch']), false, async args => edit('career_preferences_update', args, career => {
+  tool('career_preferences_update', 'Save explicit future preferences using {requestId,revision,patch}. Obtain a UUID from request_id and the current integer revision from career_profile_read; requestId is not a descriptive label. careerPaths is the one complete list of directions to search, usually 3–10: each {name, titles, why} with concrete titles including seniority variants and common synonyms, and a one-sentence why citing CV or fact evidence. Propose paths from the whole CV and saved facts, save every path the candidate confirmed, and send the full list on each change. Use excludedRoles for role families they do not want and notes only for nuance without a dedicated field. Put supported preference fields inside patch; omitted values stay unchanged. Save only what the candidate stated or confirmed, never unconfirmed CV inferences. Save improvements immediately: re-assessing jobs under the new profile is never a reason to delay. Read career_profile_read afterward to confirm persistence; never report a rejected mutation as saved.', mutation({ patch: preferencePatch }, ['patch']), false, async args => edit('career_preferences_update', args, career => {
     const saved = patchPreferences(career, args.patch);
     career.evidenceRevision++;
     return { preferences: career.profile.preferences, saved };

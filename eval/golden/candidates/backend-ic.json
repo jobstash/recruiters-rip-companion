@@ -19,9 +19,15 @@
       "Terraform"
     ],
     "preferences": {
-      "roles": [
-        "Senior backend engineer",
-        "Staff backend engineer"
+      "careerPaths": [
+        {
+          "name": "Hands-on backend engineering",
+          "titles": [
+            "Senior backend engineer",
+            "Staff backend engineer"
+          ],
+          "why": "Eight years building Go, Python and PostgreSQL services, currently routing 40,000 shipments a day at Northwind Logistics."
+        }
       ],
       "locations": [
         "Berlin"

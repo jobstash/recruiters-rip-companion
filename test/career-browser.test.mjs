@@ -38,10 +38,13 @@ const sectionFields = (item, heading) => item.sections.find(section => section.h
 // What read({ kind: 'jobs' }) returns for a listed item: the reader projection without card, block or id.
 const readerOf = ({ title, heading, header, verdict, sections }) => ({ title, heading, header, verdict, sections });
 
-test('Preferences exposes saved direction, accepted alternatives, exclusions and practical constraints in Me', async () => {
+test('Preferences exposes saved career paths, exclusions and practical constraints in Me', async () => {
   const { state, browser } = fixture();
   state.career.profile.preferences = {
-    roles: ['Engineering leadership'], acceptedAlternatives: ['Hands-on engineering + product'],
+    careerPaths: [
+      { name: 'Engineering leadership', titles: ['Head of Engineering', 'VP Engineering'], why: 'Ran a 50-person engineering budget.' },
+      { name: 'Forward-deployed engineering', titles: ['Director of Forward-Deployed Engineering'], why: 'Client-facing technical director at an agency.' },
+    ],
     excludedRoles: ['Frontend engineer'], notes: 'Assess actual responsibilities, not titles.',
     locations: ['Amsterdam'], workModes: ['remote', 'hybrid'], willingToRelocate: false, travel: 'any',
     salaryMinimum: 120000, salaryCurrency: 'EUR', salaryPeriod: 'year',
@@ -49,13 +52,18 @@ test('Preferences exposes saved direction, accepted alternatives, exclusions and
   };
   const page = await browser.list({ kind: 'preferences' });
   assert.deepEqual(page.items.map(item => item.title), ['Direction', 'Location', 'Employment', 'Work']);
+  assert.equal(page.items[0].summary, 'Engineering leadership · Forward-deployed engineering');
   assert.equal(page.total, 4);
   const direction = await browser.read({ kind: 'preferences', id: 'direction' });
-  assert.deepEqual(sectionFields(direction, 'Direction'), [
-    { label: 'Target roles', value: 'Engineering leadership' },
-    { label: 'Accepted alternatives', value: 'Hands-on engineering + product' },
-    { label: 'Avoid', value: 'Frontend engineer' },
+  assert.deepEqual(sectionFields(direction, 'Engineering leadership'), [
+    { label: 'Titles', value: 'Head of Engineering · VP Engineering' },
+    { label: 'Why', value: 'Ran a 50-person engineering budget.' },
   ]);
+  assert.deepEqual(sectionFields(direction, 'Forward-deployed engineering'), [
+    { label: 'Titles', value: 'Director of Forward-Deployed Engineering' },
+    { label: 'Why', value: 'Client-facing technical director at an agency.' },
+  ]);
+  assert.deepEqual(sectionFields(direction, 'Avoid'), [{ label: 'Roles', value: 'Frontend engineer' }]);
   assert.equal(direction.sections.find(section => section.heading === 'Direction notes').text,
     'Assess actual responsibilities, not titles.');
   const location = await browser.read({ kind: 'preferences', id: 'location' });

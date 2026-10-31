@@ -18,10 +18,22 @@
       "Prototyping"
     ],
     "preferences": {
-      "roles": [
-        "Product manager",
-        "Senior product manager",
-        "Senior product designer with product ownership"
+      "careerPaths": [
+        {
+          "name": "Product management",
+          "titles": [
+            "Product manager",
+            "Senior product manager"
+          ],
+          "why": "Co-owned the Tidewater Travel booking roadmap, ran weekly customer interviews and defined checkout success metrics."
+        },
+        {
+          "name": "Product design with product ownership",
+          "titles": [
+            "Senior product designer"
+          ],
+          "why": "Owned end-to-end booking design at Tidewater Travel and co-owned its roadmap; design roles count only with product ownership."
+        }
       ],
       "locations": [
         "London"

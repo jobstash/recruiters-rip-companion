@@ -1,7 +1,7 @@
 import Ajv from 'ajv';
 import addFormats from 'ajv-formats';
 import { createCareerState, fail, readCareer } from './state.mjs';
-import { ESSENTIAL_PREFERENCES, missingPreferences, salaryEligibility, matchingProfileVersion } from './assessment-policy.mjs';
+import { CAREER_PATHS_GUIDE, ESSENTIAL_PREFERENCES, missingPreferences, salaryEligibility, matchingProfileVersion } from './assessment-policy.mjs';
 import {
   ASSESSMENT_POLICY_ID, BANDS, DIMENSION_WEIGHTS, MATCHING_PROTOCOL, MATCHING_TOOL_DESCRIPTIONS, RECOMMEND_MINIMUM,
   RERANK_POLICY, RERANK_SIZE, assessmentSchema, comparisonSchema, deriveDecision, idSchema,
@@ -22,7 +22,7 @@ addFormats(ajv);
 const validAssessments = ajv.compile({ type: 'array', items: assessmentSchema, minItems: 1, maxItems: 10 });
 const validComparisons = ajv.compile({ type: 'array', items: comparisonSchema, minItems: 1, maxItems: 15 });
 const profileFields = ['headline', 'location', 'roleCapabilities', 'seniority', 'skills'];
-const preferenceFields = ['roles', 'acceptedAlternatives', 'excludedRoles', 'locations', 'workModes', 'employmentTypes',
+const preferenceFields = ['careerPaths', 'excludedRoles', 'locations', 'workModes', 'employmentTypes',
   'salaryMinimum', 'salaryCurrency', 'salaryPeriod', 'requiresSponsorship', 'willingToRelocate', 'companySizes', 'companyStages',
   'responsibilityModes', 'directReports', 'travel', 'availability', 'emphasis', 'technologies', 'domains', 'notes'];
 const compareText = (a, b) => a < b ? -1 : a > b ? 1 : 0;
@@ -124,6 +124,7 @@ function compact(value, maximum = 600) {
   if (typeof value === 'string') return value.replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, '[contact omitted]')
     .replace(/https?:\/\/\S+/gi, '[link omitted]').trim().slice(0, maximum);
   if (Array.isArray(value)) return value.map(item => compact(item, maximum));
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, compact(item, maximum)]));
   return value;
 }
 /** The CV exactly as assessment workers see it, so their quotes can be checked against it. */
@@ -154,7 +155,7 @@ export function candidateContext(career) {
   if (!(professional.headline?.trim() || professional.roleCapabilities?.length) || (!cv && !facts.length))
     fail('PROFILE_INCOMPLETE', 'Save a professional headline or roleCapabilities, and import a CV with career_source_import or save career facts with career_facts_save, before matching.');
   const missing = missingPreferences(career);
-  if (missing.length) fail('PREFERENCES_REQUIRED', `Before any review, ask the candidate: ${missing.map(field => ESSENTIAL_PREFERENCES[field]).join(' ')} Save every answer with career_preferences_update (fields: ${missing.join(', ')}), read career_profile_read to confirm, then continue.`);
+  if (missing.length) fail('PREFERENCES_REQUIRED', `Before any review, ask the candidate: ${missing.map(field => ESSENTIAL_PREFERENCES[field]).join(' ')} ${missing.includes('careerPaths') ? `${CAREER_PATHS_GUIDE} ` : ''}Save every answer with career_preferences_update (fields: ${missing.join(', ')}), read career_profile_read to confirm, then continue.`);
   return { ...professional, ...(cv ? { cv } : {}), facts, preferences };
 }
 

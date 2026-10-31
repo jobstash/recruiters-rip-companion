@@ -23,6 +23,8 @@ export function createCareerState() {
 export function upgradeCareer(old) {
   // Application prose is no longer a reusable profile fact.
   if (old?.profile && Object.hasOwn(old.profile, 'personalSummary')) delete old.profile.personalSummary;
+  // Target roles live only in careerPaths; the old flat lists go and the candidate confirms paths once before the next search.
+  if (old?.profile?.preferences) for (const field of ['roles', 'acceptedAlternatives']) delete old.profile.preferences[field];
   if (old?.version === CAREER_SCHEMA) return old;
   const fresh = createCareerState();
   return { ...fresh, profile: old?.profile ?? fresh.profile, sources: old?.sources ?? {},

@@ -45,7 +45,7 @@ function fixture({ jobs = [job('a'), job('b'), job('c')], batch, emptyProfile = 
     Object.assign(career.profile, { headline: 'Software engineer', skills: ['JavaScript'], location: 'Dublin',
       name: 'PRIVATE NAME', email: 'private@example.test', phone: '+353 123 456 789', links: ['https://private.test'],
       preferences: { willingToRelocate: false, salaryMinimum: 0, locations: ['Dublin'], notes: 'Prefer hands-on work',
-        roles: ['Software engineer'], workModes: ['hybrid', 'onsite'], travel: 'occasional' } });
+        careerPaths: [{ name: 'Software engineering', titles: ['Software engineer'], why: 'Built reporting services at Acme.' }], workModes: ['hybrid', 'onsite'], travel: 'occasional' } });
     career.facts = { recent: fact('Reporting services', 'Hands-on', 'capability'), early: fact('Internal tooling', 'Led it', 'capability') };
     career.sources = { cv: { purpose: 'cv', text: 'Software engineer at Acme, 2019–2023. Built reporting services.', originalBase64: 'PRIVATE PDF', archived: false } };
   }
@@ -1243,6 +1243,19 @@ test('discovery and batches refuse to start until the basic preferences are answ
   assert.deepEqual(f.calls, []);
   await f.store.update(state => { Object.assign(state.career.profile.preferences, { travel: 'any', workModes: ['remote'] }); });
   assert.equal((await f.call('career_match_jobs')).jobIds.length, 3);
+});
+
+test('existing profiles without career paths are asked for them once, after a full read of the record', async () => {
+  const f = fixture();
+  await f.store.update(state => { state.career.profile.preferences.careerPaths = []; });
+  await assert.rejects(f.call('career_match_jobs'), error => error.code === 'PREFERENCES_REQUIRED' &&
+    error.message.includes('Which of these career paths should I search?') && error.message.includes('read every current CV end to end') &&
+    error.message.includes('(fields: careerPaths)'));
+  assert.deepEqual(f.calls, []);
+  const paths = [{ name: 'Software engineering', titles: ['Software engineer', 'Senior software engineer'], why: 'Built reporting services.' },
+    { name: 'Engineering leadership', titles: ['Engineering manager'], why: 'Led internal tooling.' }];
+  await f.store.update(state => { state.career.profile.preferences.careerPaths = paths; });
+  assert.deepEqual((await f.call('career_match_jobs')).candidate.preferences.careerPaths, paths);
 });
 
 test('slug company blocks survive display-name refresh across recommendations, archive, rerank and CSV', async () => {

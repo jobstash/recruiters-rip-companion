@@ -16,7 +16,7 @@ const now = '2026-10-29T10:00:00.000Z';
 const pdf = Buffer.from('%PDF-1.7\nSynthetic portable document bytes\n%%EOF');
 function profile(name = 'Synthetic candidate') {
   const career = createCareerState(), sourceId = randomUUID(), factId = randomUUID(), applicationId = randomUUID();
-  career.profile.name = name; career.profile.preferences = { roles: ['Engineer'], salaryMinimum: 100000, willingToRelocate: false };
+  career.profile.name = name; career.profile.preferences = { careerPaths: [{ name: 'Platform engineering', titles: ['Engineer', 'Staff engineer'], why: 'Led a team of eight.' }], salaryMinimum: 100000, willingToRelocate: false };
   career.sources[sourceId] = { id: sourceId, purpose: 'cv', name: 'Original.pdf', text: 'Synthetic CV text', contentHash: hash('Synthetic CV text'), mediaType: 'application/pdf', originalBase64: pdf.toString('base64'), provenance: { kind: 'native_file' }, createdAt: now };
   career.facts[factId] = { id: factId, kind: 'note', subject: 'Team size', answer: 'Eight', detail: 'Led a team of eight.', followUps: [{ question: 'Which team?', answer: 'Platform', context: 'Prior role' }] };
   career.jobs = { 'local:synthetic': { id: 'local:synthetic', title: 'Engineer', company: 'Synthetic employer', url: 'https://example.test/job', description: 'Build synthetic tools.', complete: true, createdAt: now, updatedAt: now } };
@@ -134,7 +134,11 @@ test('invalid versions, nested containers, prototype keys and corrupted file has
     value => { value.profiles[0].career.version = 3; },
     value => { value.profiles[0].career.sources = []; },
     value => { value.profiles[0].career.facts = { bad: null }; },
-    value => { value.profiles[0].career.profile.preferences.roles = {}; },
+    value => { value.profiles[0].career.profile.preferences.careerPaths = {}; },
+    value => { value.profiles[0].career.profile.preferences.careerPaths = ['Engineer']; },
+    value => { value.profiles[0].career.profile.preferences.careerPaths[0].titles = 'Engineer'; },
+    value => { value.profiles[0].career.profile.preferences.careerPaths[0].why = 8; },
+    value => { value.profiles[0].career.profile.preferences.locations = [{ city: 'Berlin' }]; },
     value => { Object.values(value.profiles[0].career.applications)[0].coverLetter.paragraphs = {}; },
     value => { value.profiles[0].career.blocklist = { bad: { kind: 'none', value: 'Employer' } }; },
     value => { value.profiles[0].career.privateKey = 'foreign-key'; },
@@ -171,6 +175,16 @@ test('foreign paths in valid portable JSON are discarded and files bind only to 
   const selected = path.join(target.directory, 'foreign-path.json'); await writeFile(selected, JSON.stringify(payload)); target.choose(selected);
   await target.service.restore(restoreArgs(await target.service.preview()));
   const file = Object.values(target.vault.get().career.applications)[0].exports[0]; assert.equal(file.path.startsWith(target.directory), true); assert.equal(await target.files.resolveExport(file.uri), file.path);
+});
+
+test('a backup with the former flat role lists restores with its career paths and without those lists', async t => {
+  const { filename } = await exported(t), payload = JSON.parse(await readFile(filename, 'utf8')), target = await fixture(t);
+  const preferences = payload.profiles[0].career.profile.preferences;
+  Object.assign(preferences, { roles: ['Engineer'], acceptedAlternatives: ['Technical lead'] });
+  const selected = path.join(target.directory, 'legacy-roles.json'); await writeFile(selected, JSON.stringify(payload)); target.choose(selected);
+  await target.service.restore(restoreArgs(await target.service.preview()));
+  const { roles, acceptedAlternatives, ...current } = preferences;
+  assert.deepEqual(target.vault.get().career.profile.preferences, current);
 });
 
 test('cancellation, direct unrevisioned changes, session changes and sign-in changes invalidate preview', async t => {

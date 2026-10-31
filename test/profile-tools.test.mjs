@@ -42,6 +42,7 @@ function fixture(dependencies = {}, initial = {}) {
 }
 const fact = (kind, subject, answer, extra = {}) => ({ kind, subject, answer, ...extra });
 const teamSize = (extra = {}) => fact('note', 'Team size', 'Managed up to 15 engineers', { employer: 'Nethermind', ...extra });
+const path = (name, titles = [name], why = 'Led the platform team at Acme.') => ({ name, titles, why });
 const importText = (f, text = 'Senior Engineer at Acme since 2019. Built the reporting platform.') =>
   f.edit('career_source_import', { method: 'text', purpose: 'cv', name: 'Original CV', text });
 
@@ -169,7 +170,7 @@ test('profile and preference updates set and clear values; preferences survive d
   const profile = await f.edit('career_profile_update', { patch: { name: 'Alex', headline: 'Platform engineer', links: ['https://example.test'], roleCapabilities: ['Backend engineering'] } });
   assert.deepEqual(profile.saved, ['name', 'headline', 'links', 'roleCapabilities']);
   await f.edit('career_profile_update', { patch: { headline: null, links: [] } });
-  await f.edit('career_preferences_update', { patch: { salaryMinimum: 0, requiresSponsorship: false, roles: [], locations: null } });
+  await f.edit('career_preferences_update', { patch: { salaryMinimum: 0, requiresSponsorship: false, careerPaths: [], locations: null } });
   await f.edit('career_preferences_update', { patch: { notes: 'Remote only' } });
   await f.edit('career_facts_delete', { factIds: facts.map(item => item.id) });
 
@@ -179,7 +180,7 @@ test('profile and preference updates set and clear values; preferences survive d
   assert.deepEqual(read.profile.links, []);
   assert.deepEqual(read.profile.roleCapabilities, ['Backend engineering']);
   assert.equal('preferences' in read.profile, false);
-  assert.deepEqual(read.preferences, { salaryMinimum: 0, requiresSponsorship: false, roles: [], locations: null, notes: 'Remote only' });
+  assert.deepEqual(read.preferences, { salaryMinimum: 0, requiresSponsorship: false, careerPaths: [], locations: null, notes: 'Remote only' });
   assert.equal(read.factCount, 0);
   assert.equal(read.sourceCount, 0);
   assert.equal(typeof read.matchingProfileVersion, 'string');
@@ -197,7 +198,7 @@ test('strict schemas reject unknown fields, paths, attribution and oversized bat
     ['career_source_import', { method: 'text', name: 'Too large', text: 'x'.repeat(100_001) }],
     ['career_profile_update', { patch: { apiKey: 'not-accepted' } }],
     ['career_profile_update', { mode: 'explicit', patch: { name: 'Alex' } }],
-    ['career_preferences_update', { patch: { roles: ['Engineer'] }, source: { kind: 'conversation', quote: 'Engineer' } }],
+    ['career_preferences_update', { patch: { careerPaths: [path('Engineer')] }, source: { kind: 'conversation', quote: 'Engineer' } }],
     ['career_facts_save', { facts: Array.from({ length: 51 }, (_, index) => fact('note', `Point ${index}`, 'Value')) }],
     ['career_facts_save', { facts: [teamSize({ answer: '   ' })] }],
     ['career_facts_delete', { factIds: [] }],
@@ -215,7 +216,7 @@ test('no-CV onboarding reaches local readiness without pairing or provider crede
   status = await f.call('onboarding_status');
   assert.equal(status.questions.find(item => item.field === 'background').tool, 'career_profile_update');
   await f.edit('career_profile_update', { patch: { headline: 'Engineering manager', roleCapabilities: ['Managed engineering delivery'] } });
-  await f.edit('career_preferences_update', { patch: { roles: ['Engineer'] } });
+  await f.edit('career_preferences_update', { patch: { careerPaths: [path('Engineering management', ['Engineering manager'])] } });
   status = await f.call('onboarding_status');
   // A profile alone is not enough to scan: the remaining basics are asked as questions, saved in the companion.
   assert.equal(status.locallyReady, false);
@@ -259,9 +260,11 @@ test('CV onboarding asks to import, then read, and is ready once the profile is 
   status = await f.call('onboarding_status');
   assert.equal(status.locallyReady, false);
   assert.deepEqual((await f.call('career_profile_read')).missingPreferences.map(item => item.field),
-    ['roles', 'locations', 'workModes', 'willingToRelocate', 'travel']);
+    ['careerPaths', 'locations', 'workModes', 'willingToRelocate', 'travel']);
+  // The whole record is read before paths are proposed.
+  assert.ok(status.nextSteps.some(step => step.startsWith('Before asking about careerPaths, read every current CV end to end')));
   // An empty list is not an answer.
-  await f.edit('career_preferences_update', { patch: { roles: ['Platform engineer'], locations: ['Berlin'], workModes: [], willingToRelocate: true, travel: 'none' } });
+  await f.edit('career_preferences_update', { patch: { careerPaths: [path('Platform engineering', ['Senior platform engineer', 'Staff platform engineer'])], locations: ['Berlin'], workModes: [], willingToRelocate: true, travel: 'none' } });
   assert.deepEqual((await f.call('career_profile_read')).missingPreferences, [{ field: 'workModes', question: 'Which work modes suit you: remote, hybrid, onsite?' }]);
   await f.edit('career_preferences_update', { patch: { workModes: ['hybrid'] } });
   status = await f.call('onboarding_status');
@@ -318,7 +321,7 @@ test('native picker and extraction are not repeated on replay; changed request r
   const args = { ...f.mutation(), method: 'file', purpose: 'cv' };
   const first = await f.call('career_source_import', args);
   assert.equal(first.source.originalRetained, true);
-  await f.edit('career_preferences_update', { patch: { roles: [] } });
+  await f.edit('career_preferences_update', { patch: { careerPaths: [] } });
   assert.deepEqual(await f.call('career_source_import', args), first);
   assert.equal(picks, 1);
   assert.equal(extracts, 1);
@@ -327,6 +330,33 @@ test('native picker and extraction are not repeated on replay; changed request r
   const [stored] = Object.values(f.store.get().career.sources);
   assert.equal(stored.originalBase64, bytes.toString('base64'));
   assert.equal(JSON.stringify(stored).includes('not-retained'), false);
+});
+
+test('careerPaths are validated for shape, limits and duplicates before anything is saved', async () => {
+  const f = fixture();
+  const ten = Array.from({ length: 10 }, (_, index) => path(`Path ${index}`, Array.from({ length: 20 }, (_, title) => `Title ${title}`)));
+  const saved = await f.edit('career_preferences_update', { patch: { careerPaths: ten } });
+  assert.deepEqual(saved.saved, ['preferences.careerPaths']);
+  assert.deepEqual(f.store.get().career.profile.preferences.careerPaths, ten);
+  const before = f.store.get();
+  for (const careerPaths of [
+    [...ten, path('Path 10')],
+    [path('Too many titles', Array.from({ length: 21 }, (_, title) => `Title ${title}`))],
+    [path('No titles', [])],
+    [path(' ')], [path('Blank title', [' '])], [path('Blank why', ['Engineer'], '  ')],
+    [path('x'.repeat(121))], [path('Long title', ['x'.repeat(201)])], [path('Long why', ['Engineer'], 'x'.repeat(501))],
+    [{ name: 'Missing why', titles: ['Engineer'] }], [{ ...path('Extra field'), source: 'CV' }], ['Engineer'],
+    [path('Engineering leadership', ['Head of Engineering']), path(' engineering LEADERSHIP ', ['VP Engineering'])],
+    [path('Engineering leadership', ['Head of Engineering', ' head of engineering'])],
+  ]) {
+    await assert.rejects(f.edit('career_preferences_update', { patch: { careerPaths } }), { code: 'INVALID_INPUT' }, JSON.stringify(careerPaths).slice(0, 120));
+    await assert.rejects(f.edit('onboarding_commit', { mode: 'cv', preferences: { careerPaths } }), { code: 'INVALID_INPUT' });
+  }
+  assert.deepEqual(f.store.get(), before);
+  // The same title may serve two distinct paths; null clears the list, which asks for paths again.
+  await f.edit('career_preferences_update', { patch: { careerPaths: [path('Agency leadership', ['Technical Director', 'Head of Engineering']), path('Product engineering leadership', ['Head of Engineering'])] } });
+  await f.edit('career_preferences_update', { patch: { careerPaths: null } });
+  assert.equal((await f.call('career_profile_read')).missingPreferences[0].field, 'careerPaths');
 });
 
 test('picker cancellation is truthful and replayable without a second native prompt', async () => {

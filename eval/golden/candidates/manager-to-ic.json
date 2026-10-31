@@ -17,10 +17,16 @@
       "End-to-end testing"
     ],
     "preferences": {
-      "roles": [
-        "Senior full-stack engineer",
-        "Senior software engineer",
-        "Staff engineer"
+      "careerPaths": [
+        {
+          "name": "Hands-on full-stack engineering",
+          "titles": [
+            "Senior full-stack engineer",
+            "Senior software engineer",
+            "Staff engineer"
+          ],
+          "why": "Built React and Node.js course authoring for 300 schools and still pairs on Node.js services weekly as a manager."
+        }
       ],
       "locations": [
         "Lisbon",

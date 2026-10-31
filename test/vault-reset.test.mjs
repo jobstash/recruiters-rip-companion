@@ -76,6 +76,14 @@ test('a v1 career opens as v2 keeping only CV sources and profile', async t => {
   assert.equal(upgradeCareer(career), career);
 });
 
+test('opening a current career drops the former flat role lists so career paths are asked for once', () => {
+  const career = createCareerState();
+  const careerPaths = [{ name: 'Platform engineering', titles: ['Staff platform engineer'], why: 'Built the platform.' }];
+  career.profile.preferences = { roles: ['Engineer'], acceptedAlternatives: ['Technical lead'], excludedRoles: ['Sales engineer'], careerPaths };
+  assert.equal(upgradeCareer(career), career);
+  assert.deepEqual(career.profile.preferences, { excludedRoles: ['Sales engineer'], careerPaths });
+});
+
 test('failed commit preserves previous career revision and identity after reopen', async t => {
   const { vault, reopen, directory } = await fixture(t); const before = vault.get();
   const filename = path.join(directory, 'vault.json'), retained = path.join(directory, 'retained.json');

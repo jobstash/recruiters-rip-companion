@@ -5,7 +5,7 @@ import path from 'node:path';
 import { privateDirectory } from './vault.mjs';
 import { assertPrivatePath, protectPrivatePath } from './platform-runtime.cjs';
 import { createDocumentFiles, validExport, exportTypes, documentURI, documentName } from './mcp/files.mjs';
-import { CAREER_SCHEMA, fail, hash } from './mcp/state.mjs';
+import { CAREER_SCHEMA, fail, hash, upgradeCareer } from './mcp/state.mjs';
 import { BLOCK_KINDS } from './mcp/blocklist.mjs';
 import { FACT_KINDS } from './mcp/facts.mjs';
 import { applicationContextFingerprint } from './application-workflow.mjs';
@@ -100,8 +100,12 @@ export function validateBackupCareer(career) {
     else if (value !== null) text(value, key);
   }
   if (profile.preferences) for (const [key, value] of Object.entries(profile.preferences)) {
-    if (['roles', 'acceptedAlternatives', 'excludedRoles', 'locations', 'workModes', 'employmentTypes', 'companySizes', 'companyStages', 'responsibilityModes', 'technologies', 'domains'].includes(key)) { if (value !== null) strings(value, key); }
-    else if (value !== null && !['string', 'number', 'boolean'].includes(typeof value)) invalid('preferences contain an invalid value');
+    if (value === null) continue;
+    if (key === 'careerPaths') for (const item of array(value, 'career paths')) {
+      object(item, 'a career path'); text(item.name, 'a career path name'); strings(item.titles, 'career path titles'); text(item.why, 'a career path reason');
+    }
+    else if (Array.isArray(value)) strings(value, key);
+    else if (!['string', 'number', 'boolean'].includes(typeof value)) invalid('preferences contain an invalid value');
   }
   entries(career.sources, 'CV sources', (source, id) => {
     if (source.id !== id) invalid('a CV source ID does not match its record');
@@ -473,7 +477,7 @@ export function createBackups({ directory, store, selectBackup, selectDestinatio
             check(selected.context);
             invalidateRuntime(career, state.career.introductions?.consent);
             career.revision = revision;
-            state.career = career;
+            state.career = upgradeCareer(career);
           }, { beforeCommit: () => check(selected.context) }));
         } catch (error) {
           // The exclusive gate remains closed through rollback; only files opened with wx by this attempt are removed.

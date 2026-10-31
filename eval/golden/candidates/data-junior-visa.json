@@ -17,10 +17,16 @@
       "Excel"
     ],
     "preferences": {
-      "roles": [
-        "Data analyst",
-        "Junior data analyst",
-        "Business intelligence analyst"
+      "careerPaths": [
+        {
+          "name": "Data and BI analysis",
+          "titles": [
+            "Data analyst",
+            "Junior data analyst",
+            "Business intelligence analyst"
+          ],
+          "why": "Graduate data analyst writing SQL and building Tableau dashboards for 40 regional managers at Maplewood Retail."
+        }
       ],
       "locations": [
         "Toronto",

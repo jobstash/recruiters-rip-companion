@@ -23,7 +23,7 @@ const row = id => ({ id, status: 'assessed', requirements: [{ requirement: 'Buil
 function fixture(platformImpl) {
   const career = createCareerState();
   career.profile.headline = 'Reporting engineer';
-  Object.assign(career.profile.preferences, { willingToRelocate: false, roles: ['Reporting engineer'], locations: ['Dublin'], workModes: ['remote'], travel: 'none' });
+  Object.assign(career.profile.preferences, { willingToRelocate: false, careerPaths: [{ name: 'Reporting engineering', titles: ['Reporting engineer'], why: 'Built reporting services.' }], locations: ['Dublin'], workModes: ['remote'], travel: 'none' });
   career.sources.cv = { purpose: 'cv', archived: false, text: 'Built reporting services.' };
   let state = { career }, queue = Promise.resolve();
   const calls = [];

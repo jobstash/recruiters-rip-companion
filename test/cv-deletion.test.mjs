@@ -13,7 +13,7 @@ function fixture() {
   let state = { deviceId: 'synthetic-delete-device', pairing: { origin: 'https://synthetic.invalid', account: { id: '123' } }, career: createCareerState() };
   for (const id of ['cv', 'other']) state.career.sources[id] = { id, name: `${id}.txt`, purpose: 'cv', mediaType: 'text/plain', text: `${id} synthetic evidence`, contentHash: hash(`${id} synthetic evidence`) };
   state.career.facts.independent = { id: 'independent', kind: 'note', subject: 'Language', answer: 'Fluent' };
-  state.career.profile.preferences.roles = ['Engineer'];
+  state.career.profile.preferences.careerPaths = [{ name: 'Engineering', titles: ['Engineer'], why: 'Synthetic evidence.' }];
   state.career.introductions = { consent: { granted: false }, documents: {} };
   const store = { get: () => structuredClone(state), async update(change) { const next = structuredClone(state); await change(next); state = next; } };
   const remove = options => deleteCv({ store, sourceId: 'cv', contentHash: state.career.sources.cv.contentHash, ...options });

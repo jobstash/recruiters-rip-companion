@@ -5,12 +5,14 @@ export const matchingProfileVersion = career => `${career.evidenceRevision ?? 0}
 // Without these the agent cannot judge role direction, location or work-mode fit, so every scan and
 // review would be spent on guesses. Onboarding asks for each one before any catalogue work; answers live in the vault.
 export const ESSENTIAL_PREFERENCES = Object.freeze({
-  roles: 'Which roles or job titles are you looking for?',
+  careerPaths: 'Which of these career paths should I search? Confirm, drop or add any.',
   locations: 'Where are you based, and which countries or cities can you work from?',
   workModes: 'Which work modes suit you: remote, hybrid, onsite?',
   willingToRelocate: 'Would you relocate for the right role?',
   travel: 'How much work travel is acceptable: none, occasional, frequent or any?',
 });
+// Career paths are proposed from the whole record, never asked open-ended or narrowed to one named title.
+export const CAREER_PATHS_GUIDE = 'Before asking about careerPaths, read every current CV end to end (career_source_read, following nextOffset) and every saved fact (career_facts_list): each role, employer size and type, industry, client-facing and commercial work, budgets, team sizes, languages, founder and freelance history. Then propose every career path with good success chances the evidence supports: current trajectory, step-up, adjacent functions, agency, consultancy and enterprise variants, supported sector pivots, and fractional, interim or founder-style roles. Give each a name, concrete titles including seniority variants and common synonyms, and a one-sentence why citing the evidence. Never narrow to the one title the candidate named or misstate the profile. Ask the candidate to confirm, drop or add paths in the same message as any other missing question, then save every confirmed path with career_preferences_update and start the search.';
 const unanswered = value => value === null || value === undefined || (Array.isArray(value) && !value.length) || (typeof value === 'string' && !value.trim());
 export const missingPreferences = career => Object.keys(ESSENTIAL_PREFERENCES).filter(field => unanswered(career.profile?.preferences?.[field]));
 

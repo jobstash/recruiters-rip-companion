@@ -47,18 +47,23 @@ const summary = values => {
   return known.length ? known.join(' · ') : UNKNOWN;
 };
 
+// Path names and titles are shown as saved; only humanized enum values change case.
+const plain = value => typeof value === 'string' && value.trim() ? value.trim() : null;
+const careerPaths = value => (Array.isArray(value.careerPaths) ? value.careerPaths : []).filter(path => plain(path?.name));
+
 /** Projects explicit candidate preferences into the generic career browser's read-only records. */
 export function preferenceItems(career) {
   const value = preferences(career);
+  const paths = careerPaths(value);
   return [
     {
-      id: 'direction', title: 'Direction', summary: summary([value.roles, value.acceptedAlternatives, value.excludedRoles]),
+      id: 'direction', title: 'Direction', summary: paths.map(path => plain(path.name)).join(' · ') || UNKNOWN,
       sections: [
-        fields('Direction', [
-          ['Target roles', display(value.roles)],
-          ['Accepted alternatives', display(value.acceptedAlternatives)],
-          ['Avoid', display(value.excludedRoles)],
-        ]),
+        ...(paths.length ? paths.map(path => fields(plain(path.name), [
+          ['Titles', (Array.isArray(path.titles) ? path.titles.map(plain).filter(Boolean) : []).join(' · ') || UNKNOWN],
+          ['Why', plain(path.why) ?? UNKNOWN],
+        ])) : [fields('Career paths', [['Career paths', UNKNOWN]])]),
+        fields('Avoid', [['Roles', display(value.excludedRoles)]]),
         { heading: 'Direction notes', text: typeof value.notes === 'string' && value.notes.trim() ? value.notes : 'No direction notes saved.' },
       ],
     },

@@ -10,6 +10,7 @@ import { blockedIds, listBlocks } from './mcp/blocklist.mjs';
 import { employmentHistory } from './employment-browser.mjs';
 import { preferenceItems } from './preferences-browser.mjs';
 import { currentApplicationJob, sameApplicationJob } from './application-workflow.mjs';
+import { PROGRESS_STAGES, applicationProgress, changeProgress, replayProgress } from './application-progress.mjs';
 
 const kinds = ['sources', 'facts', 'preferences', 'career', 'jobs', 'applications', 'blocks'];
 const forbidden = new Set(['__proto__', 'prototype', 'constructor']);
@@ -90,8 +91,51 @@ function applicationTitle(app) {
   return [text(app.job?.title, ''), text(app.job?.company, '')].filter(Boolean).join(' — ') || 'Untitled application';
 }
 const savedJobPage = job => [job?.applyUrl, job?.url].find(value => typeof value === 'string' && /^https?:\/\//.test(value));
+// Progress is what the user reports about an application; the list and reader only put it into plain words.
+const readProgress = app => { try { return replayProgress(applicationProgress(app).history); } catch { return replayProgress([]); } };
+const progressDate = (value, now = new Date()) => {
+  const date = new Date(`${value}T00:00:00Z`);
+  return new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC',
+    ...(date.getUTCFullYear() === now.getUTCFullYear() ? {} : { year: 'numeric' }) }).format(date);
+};
+function stageLabel({ stage, round, atStage }) {
+  if (stage === 'interviewing') return `Interview round ${round}`;
+  const after = atStage === 'interviewing' ? `after round ${round}` : 'after applying';
+  if (stage === 'rejected') return `Rejected ${after}`;
+  if (stage === 'withdrawn') return atStage === 'offer' ? 'Declined offer' : `Withdrew ${after}`;
+  return { prepared: 'Prepared', applied: 'Applied', offer: 'Offer', hired: 'Hired' }[stage];
+}
+// Only the next sensible steps; Withdrew is the quiet one.
+const progressActions = {
+  prepared: [['applied', 'Mark applied']],
+  applied: [['interviewing', 'Interview invite'], ['rejected', 'Rejected'], ['withdrawn', 'Withdrew', true]],
+  interviewing: [['interviewing', 'Next round'], ['offer', 'Offer'], ['rejected', 'Rejected'], ['withdrawn', 'Withdrew', true]],
+  offer: [['hired', 'Accepted'], ['withdrawn', 'Declined']],
+};
+function progressDetail(app) {
+  const progress = readProgress(app), last = progress.history.at(-1);
+  // Each step reads from the one before it ("Rejected after round 1").
+  const history = progress.history.map((step, index) => ({ date: progressDate(step.at),
+    label: stageLabel(replayProgress(progress.history.slice(0, index + 1))) })).reverse();
+  return { headline: last ? `${stageLabel(progress)} · ${progressDate(last.at)}` : 'Not applied yet', steps: progress.history.length,
+    at: last?.at ?? null, actions: (progressActions[progress.stage] ?? []).map(([stage, label, quiet]) => ({ stage, label, ...(quiet ? { quiet } : {}) })),
+    history };
+}
+const documentLine = app => app.cv && app.coverLetter ? 'CV and cover letter saved' : app.cv ? 'CV saved' : app.coverLetter ? 'Cover letter saved' : 'No documents saved';
+function applicationSummary(app, progress) {
+  return progress.stage === 'prepared' ? `${app.cv ? 'CV draft saved' : 'No CV draft'} · ${app.coverLetter ? 'Cover letter saved' : 'No cover letter draft'}`
+    : `${stageLabel(progress)} · ${documentLine(app)}`;
+}
+// Furthest-along live applications first; hired, then rejected and withdrawn last. The latest step, then the latest change, breaks ties.
+const progressRank = { offer: 0, interviewing: 1, applied: 2, prepared: 3, hired: 4, rejected: 5, withdrawn: 5 };
+const latestStep = row => row.progress.history.at(-1)?.at ?? '';
+const byProgress = (a, b) => progressRank[a.progress.stage] - progressRank[b.progress.stage] ||
+  (a.progress.stage === 'interviewing' ? b.progress.round - a.progress.round : 0) ||
+  latestStep(b).localeCompare(latestStep(a)) || text(b.app.updatedAt, '').localeCompare(text(a.app.updatedAt, '')) ||
+  (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 function applicationDetail(app, career) {
-  return { title: applicationTitle(app), jobPage: Boolean(record(app.job) && savedJobPage(currentApplicationJob(career, app))), sections: [
+  return { title: applicationTitle(app), jobPage: Boolean(record(app.job) && savedJobPage(currentApplicationJob(career, app))),
+    progress: progressDetail(app), sections: [
     fields('Application', [
       ['Company', app.job?.company], ['Location', app.job?.location],
       ['Created', displayDate(app.createdAt)], ['Updated', displayDate(app.updatedAt)],
@@ -403,10 +447,13 @@ export function createCareerBrowser({ store, files, openPath }) {
       return { opened: true };
     },
     async list(args = {}) {
-      validate(args, ['kind', 'offset', 'limit', 'view']);
-      const { kind, offset = 0, limit = 25, view = 'jobs' } = args;
+      validate(args, ['kind', 'offset', 'limit', 'view', 'stage']);
+      const { kind, offset = 0, limit = 25, view = 'jobs', stage } = args;
       if ((own(args, 'view') && (kind !== 'jobs' || !jobViews.includes(args.view)))) {
         fail('INVALID_INPUT', 'Use view jobs or reviewed for Jobs only.');
+      }
+      if (own(args, 'stage') && (kind !== 'applications' || !PROGRESS_STAGES.includes(stage))) {
+        fail('INVALID_INPUT', `Use stage ${PROGRESS_STAGES.join(', ')} for Applications only.`);
       }
       if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isInteger(limit) || limit < 1 || limit > 100) {
         fail('INVALID_INPUT', 'Use limit 1–100 and a nonnegative safe integer offset.');
@@ -443,11 +490,18 @@ export function createCareerBrowser({ store, files, openPath }) {
           summary: `${blockKinds[entry.kind]} · ${plural(entry.matches, 'saved job')}`, block: { kind: entry.kind } }));
         return { items, total: blocks.length, nextOffset: offset + items.length < blocks.length ? offset + items.length : null };
       }
+      if (kind === 'applications') {
+        const apps = entries(career.applications).map(([id, app]) => ({ id, app, progress: readProgress(app) }));
+        // Counts always describe every application, whichever stage is selected.
+        const stages = { all: apps.length, ...Object.fromEntries(PROGRESS_STAGES.map(name => [name, apps.filter(row => row.progress.stage === name).length])) };
+        const sorted = apps.filter(row => !stage || row.progress.stage === stage).sort(byProgress);
+        const items = sorted.slice(offset, offset + limit).map(({ id, app, progress }) => ({ id, title: applicationTitle(app), summary: applicationSummary(app, progress) }));
+        return { items, total: sorted.length, nextOffset: offset + items.length < sorted.length ? offset + items.length : null, stages };
+      }
       const records = entries(career[kind]);
       const items = records.slice(offset, offset + limit).map(([id, item]) => {
         if (kind === 'sources') return { id, title: text(item.name, 'Untitled source'), summary: [item.purpose === 'cv' ? '' : readable(item.purpose), item.archived ? 'Archived' : ''].filter(Boolean).join(' · ') };
-        if (kind === 'facts') return { id, title: text(item.subject, 'Untitled fact'), summary: item.detail?.trim() ? item.detail : text(item.answer, '') };
-        return { id, title: applicationTitle(item), summary: `${item.cv ? 'CV draft saved' : 'No CV draft'} · ${item.coverLetter ? 'Cover letter saved' : 'No cover letter draft'}` };
+        return { id, title: text(item.subject, 'Untitled fact'), summary: item.detail?.trim() ? item.detail : text(item.answer, '') };
       });
       return { items, total: records.length, nextOffset: offset + items.length < records.length ? offset + items.length : null };
     },
@@ -532,4 +586,21 @@ export async function openJobPage({ store, openExternal }, args) {
   if (!url) fail('NOT_FOUND', 'This job has no saved job page.');
   await openExternal(url);
   return { opened: true, url };
+}
+
+/** The reader's progress buttons: one step on the application the user is looking at. `steps` is the history length the
+ *  reader showed, so a change made meanwhile (by the AI app or another click) is reported rather than stacked on top. */
+export async function setApplicationProgress({ store }, args) {
+  if (!record(args) || Reflect.ownKeys(args).some(key => !['id', 'steps', 'stage', 'at', 'undo'].includes(key)) ||
+      typeof args.id !== 'string' || !args.id.trim() || args.id.length > 500 || forbidden.has(args.id) ||
+      !Number.isSafeInteger(args.steps) || args.steps < 0) fail('INVALID_INPUT', 'Choose a saved application and one progress step.');
+  let progress;
+  await store.update(state => {
+    const career = state.career, app = lookup(career?.applications, args.id);
+    if (!app) fail('NOT_FOUND', 'This application is no longer saved. Refresh the list.');
+    if (readProgress(app).history.length !== args.steps) fail('PROGRESS_CHANGED', 'This application’s progress changed. Check it again.');
+    progress = changeProgress(app, { stage: args.stage, at: args.at, undo: args.undo });
+    career.revision++;
+  });
+  return { progress };
 }

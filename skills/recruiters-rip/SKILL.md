@@ -180,6 +180,10 @@ The user opens the extension on the application tab and chooses **Read page**. T
 
 `JOB_BLOCKED` means the job, company or category is excluded by the candidate. Stop work on that application, retain any existing draft and continue with allowed jobs; do not unblock it, use a different ID, or fall back to another browser/tool to evade the block.
 
+### Application progress
+
+Progress is the candidate's own record of what happened after the documents: applied, interview rounds, offer, hired, rejected or withdrawn. When the user explicitly tells you (“I got an interview at tangem”, “they rejected me after round 2”), record it with `career_application_progress_set` on that application, found with `career_applications_list` (ask which one only if several match), dated today unless they give a date. Never infer progress from silence, elapsed time or prepared documents. An interview reported on an application still marked prepared means it was sent: record applied, then interviewing. Use `undo` or `date` to correct a step the user says was wrong.
+
 
 ## Connection
 

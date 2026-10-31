@@ -68,6 +68,12 @@ Choose a job with your AI and ask: **Use recruiters.rip to apply for this job. U
 
 Your AI handles the application. Find its saved documents again under the job in Companion.
 
+## Track your applications
+
+Open **Jobs → Applications** and select an application. **Progress** at the top says where it stands, such as **Interview round 2 · 30 Oct**, and offers only the next steps: **Mark applied**; then **Interview invite** or **Rejected**; then **Next round**, **Offer** or **Rejected**; then **Accepted** or **Declined**. **Withdrew** appears where it applies. A step is dated today: set **Date** first, or fix it afterwards with **Change date**; **Undo last step** removes a step recorded by mistake. The history below lists each step with its date.
+
+The line above the list counts applications by stage (**All · Prepared · Applied · Interviewing · Offer · Hired · Rejected · Withdrawn**, stages with none left out); select one to see only those. The furthest along come first: offers, then interviews by round, then applied, then prepared, with finished ones last. **Save as applied** in the browser extension marks the job applied. You can also tell Codex or Claude, for example “I got an interview at tangem”; it records only what you tell it (`career_application_progress_set`). Progress stays on this computer and is part of your backups; it is never sent to recruiters.rip.
+
 ## Open a generated CV or letter
 
 Open **Jobs**, select a job, then choose **Open CV** or **Open letter** in its **Job and documents** section. **Open job** sits with them. The same actions are available when you select an item under **Applications**. These open saved files; they do not create new documents.
@@ -109,7 +115,7 @@ Your connected AI fills the employer’s form, attaches your documents and submi
 
 Open **Settings → Backups**.
 
-- **Save backup** saves your profile, CVs, saved documents, jobs and applications to a file. Choose where to keep it. It is not password-protected, so keep it private.
+- **Save backup** saves your profile, CVs, saved documents, jobs and applications, including their progress, to a file. Choose where to keep it. It is not password-protected, so keep it private.
 - **Restore backup** lets you choose a backup file. Check the profile name, contents and any file warnings, then choose **Restore profile** to replace your current profile.
 - **Open backups** shows the default backup folder, including the copy saved before a restore.
 

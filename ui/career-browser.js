@@ -84,7 +84,7 @@
 
   /** One list + reader pair. `persistentReader` keeps the reader column rendered on wide screens.
    *  `stagePanels` show the active jobs view's controls; the pre-qualification switch and Clear reviews are disabled on other tabs. */
-  function createBrowser({ root, prefix, kind: initialKind, persistentReader = false, deleteRankings = null, stagePanels = [], publication = null, reviewLaunch = null }) {
+  function createBrowser({ root, prefix, kind: initialKind, persistentReader = false, deleteRankings = null, stagePanels = [], publication = null, reviewLaunch = null, stageFilter = null }) {
     const element = name => document.getElementById(`${prefix}-${name}`);
     const categoryButtons = [...root.querySelectorAll('[data-career-kind]')];
     const records = element('records');
@@ -108,7 +108,8 @@
     // Only the Jobs view's empty state has a next step (ui/jobs-empty.js); every other empty list is plain text.
     function renderEmpty() {
       const empty = kind === 'jobs' && view === 'jobs' ? window.jobsEmptyState(jobsContext, publication?.label.textContent) : null;
-      listStatus.textContent = empty ? empty.text : kind === 'jobs' ? viewEmpty[view] : categories[kind].empty;
+      listStatus.textContent = empty ? empty.text : kind === 'jobs' ? viewEmpty[view]
+        : kind === 'applications' && progressStage ? 'No applications at this stage.' : categories[kind].empty;
       if (!listAction) return;
       listAction.hidden = !empty?.action;
       listAction.textContent = empty?.label ?? '';
@@ -299,6 +300,99 @@
       if (typeof verdict.reason === 'string' && verdict.reason) block.append(node('p', 'career-verdict-reason', verdict.reason));
       return block;
     }
+    // Progress is the user's own record of what happened off-platform: the current step in words, only the next sensible
+    // steps, a date for the step (today unless changed) and the ruled history.
+    const localToday = () => {
+      const today = new Date();
+      return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    };
+    function renderProgress(detail, item) {
+      const progress = detail?.progress;
+      if (kind !== 'applications' || !progress || typeof progress !== 'object' || typeof progress.headline !== 'string') return null;
+      const section = node('section', 'career-progress');
+      section.append(node('h3', '', 'Progress'), node('p', 'career-progress-current', progress.headline));
+      const steps = Number.isSafeInteger(progress.steps) ? progress.steps : 0;
+      const date = node('input', 'career-progress-date');
+      date.type = 'date';
+      date.id = `${prefix}-progress-date`;
+      date.value = date.max = localToday();
+      const field = node('div', 'career-progress-field');
+      const label = node('label', '', 'Date');
+      label.htmlFor = date.id;
+      field.append(label, date);
+      const actions = node('div', 'actions career-progress-actions');
+      const recordKind = kind;
+      function step(text, actionKey, change, className) {
+        const button = blockButton(text, null, async () => {
+          if (!enabled || button.disabled || kind !== recordKind || selected?.id !== item.id) return;
+          const input = change();
+          if (!input) { window.showCompanionNotice('Choose a date first.', 'error', true); return; }
+          const controls = section.querySelectorAll('button');
+          controls.forEach(control => { control.disabled = true; });
+          try { await request('application-progress', { id: item.id, steps, ...input }); }
+          catch (error) { if (enabled && kind === recordKind && selected?.id === item.id) window.showCompanionNotice(error.message, 'error', true); }
+          finally { controls.forEach(control => { control.disabled = false; }); }
+        }, className);
+        button.dataset.careerAction = `progress-${actionKey}`;
+        return button;
+      }
+      const dated = () => date.value ? { at: date.value } : null;
+      for (const action of Array.isArray(progress.actions) ? progress.actions : []) {
+        if (typeof action?.stage !== 'string' || typeof action?.label !== 'string') continue;
+        actions.append(step(action.label, action.stage, () => { const at = dated(); return at && { stage: action.stage, ...at }; }, action.quiet ? 'text' : 'ghost'));
+      }
+      // Corrections to the current step sit with its date; the row below holds only the next steps.
+      if (steps) field.append(step('Change date', 'date', dated, 'text'), step('Undo last step', 'undo', () => ({ undo: true }), 'text'));
+      section.append(field);
+      if (actions.childElementCount) section.append(actions);
+      const history = (Array.isArray(progress.history) ? progress.history : []).filter(entry => typeof entry?.date === 'string' && typeof entry?.label === 'string');
+      if (history.length) {
+        const list = node('ol', 'career-progress-history');
+        list.setAttribute('aria-label', 'Progress history');
+        for (const entry of history) {
+          const row = node('li', '');
+          row.append(node('span', 'career-progress-when', entry.date), node('span', '', entry.label));
+          list.append(row);
+        }
+        section.append(list);
+      }
+      return section;
+    }
+    // Applications: one line of stage counts above the list that filters it; the counts always cover every application.
+    let progressStage = null;
+    const stageNames = [['all', 'All'], ['prepared', 'Prepared'], ['applied', 'Applied'], ['interviewing', 'Interviewing'],
+      ['offer', 'Offer'], ['hired', 'Hired'], ['rejected', 'Rejected'], ['withdrawn', 'Withdrawn']];
+    function renderStageFilter(stages) {
+      if (!stageFilter) return;
+      const show = kind === 'applications' && stages && Number.isSafeInteger(stages.all) && stages.all > 0;
+      stageFilter.hidden = !show;
+      if (!show) { stageFilter.replaceChildren(); stageFilter.dataset.signature = ''; return; }
+      const current = progressStage ?? 'all', signature = JSON.stringify([stages, current]);
+      if (stageFilter.dataset.signature === signature) return;
+      stageFilter.dataset.signature = signature;
+      const focusedStage = [...stageFilter.querySelectorAll('button')].includes(document.activeElement) ? document.activeElement.dataset.stage : null;
+      const buttons = stageNames.filter(([name]) => name === 'all' || name === current || stages[name] > 0).map(([name, label]) => {
+        const button = node('button', 'career-stage-filter-item', `${label} ${Number.isSafeInteger(stages[name]) ? stages[name].toLocaleString('en-GB') : 0}`);
+        button.type = 'button';
+        button.dataset.stage = name;
+        button.setAttribute('aria-pressed', String(name === current));
+        button.onclick = () => {
+          const next = name === 'all' ? null : name;
+          if (!enabled || loading || next === progressStage) return;
+          progressStage = next;
+          resetPlace();
+          void loadPage();
+        };
+        return button;
+      });
+      stageFilter.replaceChildren(...buttons.flatMap((button, index) => {
+        if (!index) return [button];
+        const dot = node('span', 'career-stage-filter-dot', '·');
+        dot.setAttribute('aria-hidden', 'true');
+        return [dot, button];
+      }));
+      buttons.find(button => button.dataset.stage === focusedStage)?.focus();
+    }
     // Keep company, publication and role facts together before the detail action group.
     function renderHeader(detail) {
       const header = detail?.header;
@@ -359,6 +453,8 @@
       readerTitle.textContent = typeof detail?.heading === 'string' ? detail.heading : typeof detail?.title === 'string' ? detail.title : selected.title;
       const sections = Array.isArray(detail?.sections) ? detail.sections : [];
       content.replaceChildren();
+      const progress = renderProgress(detail, item);
+      if (progress) content.append(progress);
       const cvDeletion = renderCvDeletion(detail, item);
       if (cvDeletion) content.append(cvDeletion);
       const header = renderHeader(detail);
@@ -536,9 +632,11 @@
       let firstRecord = null;
       let reopen = null;
       try {
-        const result = await request('career-list', { kind, offset, limit: 25, ...(kind === 'jobs' ? { view } : {}) });
+        const result = await request('career-list', { kind, offset, limit: 25, ...(kind === 'jobs' ? { view } : {}),
+          ...(kind === 'applications' && progressStage ? { stage: progressStage } : {}) });
         if (!enabled || currentGeneration !== generation) return;
         if (kind === 'jobs') renderCounts(result.counts);
+        renderStageFilter(kind === 'applications' ? result.stages : null);
         const existing = new Map([...records.children].map(row => [row.dataset.id, row]));
         const rows = result.items.map(item => {
           const previousRow = existing.get(item.id);
@@ -597,8 +695,10 @@
       }
       if (!enabled || currentGeneration !== generation) return;
       // A refresh keeps the record the user had open, re-reading it quietly; a navigation opens the first record on wide
-      // layouts. A record that left this page keeps its reader as it was rather than replacing what the user was reading.
+      // layouts. A record that left this page (say, a stage filter no longer matches it) keeps its reader, still re-read
+      // quietly, rather than being replaced by another record.
       if (reopen) void (silent && selected?.id === reopen.item.id ? refreshRecord(reopen.item, reopen.button) : openRecord(reopen.item, reopen.button, false));
+      else if (silent && selected && selectedButton) void refreshRecord(selected, selectedButton);
       else if (!place?.selectedId && sideBySide.matches && firstRecord) void openRecord(firstRecord.item, firstRecord.button, false);
     }
     // Re-read the open record without the loading state; the reader is rewritten only when its content changed.
@@ -637,7 +737,8 @@
     categoryButtons.forEach(button => button.addEventListener('click', () => {
       const nextView = button.dataset.careerView ?? 'jobs';
       if (!enabled || (button.dataset.careerKind === kind && (kind !== 'jobs' || nextView === view))) return;
-      kind = button.dataset.careerKind; view = nextView;
+      kind = button.dataset.careerKind; view = nextView; progressStage = null;
+      renderStageFilter(null);
       categoryButtons.forEach(candidate => candidate.setAttribute('aria-selected', String(candidate === button)));
       resetPlace();
       showJobActions();
@@ -721,6 +822,8 @@
         if (listAction) listAction.hidden = true;
         records.removeAttribute('aria-busy');
         listStatus.textContent = categories[kind].locked;
+        progressStage = null;
+        renderStageFilter(null);
         listRetry.hidden = true;
         pagination.hidden = true;
         previous.disabled = true;
@@ -738,6 +841,7 @@
     stagePanels: [...document.querySelectorAll('#stage-panels [data-stage-panel]')],
     publication: { input: document.getElementById('publication-range'), label: document.getElementById('publication-range-label') },
     reviewLaunch: document.getElementById('review-launch'),
+    stageFilter: document.getElementById('career-stage-filter'),
   });
   window.careerBrowser = {
     refresh() { return Promise.all([me.refresh(), jobs.refresh()]); },

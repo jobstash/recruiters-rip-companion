@@ -1,3 +1,4 @@
+import { PROGRESS_STAGES, applicationProgress, changeProgress } from '../application-progress.mjs';
 import { applicationContextFingerprint, currentApplicationJob, isApplicationWritingField, upsertApplication } from '../application-workflow.mjs';
 import { readCareer, mutateCareer, replayCareer, mutationSchema, fail } from './state.mjs';
 import { assertCleanStatement } from './facts.mjs';
@@ -139,7 +140,7 @@ function capturedApplicationJob(career, jobId) {
 function summary(app) {
   return { id: app.id, job: { ...(app.job.id ? { id: app.job.id } : {}), title: app.job.title, company: app.job.company, ...(app.job.url ? { url: app.job.url } : {}) },
     cvVersion: app.cv?.version ?? null, coverLetterVersion: app.coverLetter?.version ?? null,
-    exports: app.exports.length, createdAt: app.createdAt, updatedAt: app.updatedAt };
+    exports: app.exports.length, createdAt: app.createdAt, updatedAt: app.updatedAt, progress: applicationProgress(app) };
 }
 function context(career, app) {
   const { name, email, phone, location, links, headline, seniority, roleCapabilities, skills, preferences = {} } = career.profile;
@@ -214,17 +215,23 @@ export function createApplicationTools({ store, platform, documents, exportDocum
         return { applicationId: app.id, job: app.job };
       });
     });
-  add('career_applications_list', 'List saved applications, most recently updated first.', object(pagination, []), true, args => {
+  add('career_applications_list', 'List saved applications with their progress (prepared, applied, interviewing with round, offer, hired, rejected or withdrawn), most recently updated first.', object(pagination, []), true, args => {
     const career = readCareer(store), offset = args.offset ?? 0, limit = args.limit ?? 20;
     const blocked = blockFilter(career);
     const apps = Object.values(career.applications).filter(app => !blocked(app.job)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
     return { revision: career.revision, applications: apps.slice(offset, offset + limit).map(summary), total: apps.length,
       nextOffset: offset + limit < apps.length ? offset + limit : null };
   });
-  add('career_application_read', 'Read a saved application with its current and earlier CV and cover-letter drafts and exports.', object({ applicationId: uuid }), true, args => {
-    const career = readCareer(store);
-    return { revision: career.revision, application: application(career, args.applicationId) };
+  add('career_application_read', 'Read a saved application with its progress, current and earlier CV and cover-letter drafts and exports.', object({ applicationId: uuid }), true, args => {
+    const career = readCareer(store), app = application(career, args.applicationId);
+    return { revision: career.revision, application: { ...app, progress: applicationProgress(app) } };
   });
+  mutate('career_application_progress_set', 'Record how an application went, only from what the user explicitly tells you (never infer it from time passing, documents or silence). stage is the next step: applied; interviewing (an invite; again from interviewing adds a round); offer; hired (offer accepted); rejected; withdrawn (the user pulled out or declined the offer). Steps run prepared → applied → interviewing → offer → hired; rejected or withdrawn end it. date is when it happened (YYYY-MM-DD, default today). Only date: correct the current step’s date. undo: remove the last step.',
+    { applicationId: uuid, stage: { enum: PROGRESS_STAGES.slice(1) }, date: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' }, undo: { const: true } },
+    ['applicationId'], (career, args) => {
+      const app = application(career, args.applicationId);
+      return { applicationId: app.id, progress: changeProgress(app, { stage: args.stage, at: args.date, undo: args.undo }) };
+    });
   mutate('career_applications_delete', 'Delete saved applications and their drafts. Exported files stay on disk.',
     { applicationIds: { type: 'array', items: uuid, minItems: 1, maxItems: 500, uniqueItems: true } }, ['applicationIds'], (career, args) => {
       const missing = args.applicationIds.filter(id => !career.applications[id]);

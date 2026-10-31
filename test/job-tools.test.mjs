@@ -63,15 +63,22 @@ test('native capture validates jobs and URLs atomically, without relying on MCP 
   await rejects(f.capture([full()], { requestId: 'not-a-uuid' }), 'INVALID_INPUT');
 });
 
-test('Save as applied records each saved job as one application and re-saving reuses it', async () => {
+test('Save as applied records each saved job as one applied application and re-saving reuses it', async () => {
   const f = fixture();
   const save = jobs => saveAppliedJobs({ store: f.store, ...f.mutation(), sourceUrl, jobs });
   const first = await save([full('a'), full('b', { complete: false, description: undefined })]);
   assert.equal(first.added, 2); assert.equal(first.revision, f.store.get().career.revision);
   const apps = () => Object.values(f.store.get().career.applications);
   assert.deepEqual(apps().map(app => app.job.id).sort(), first.jobs.map(job => job.id).sort());
-  await save([full('a')]);
+  const today = new Date().toISOString().slice(0, 10);
+  for (const app of apps()) assert.deepEqual(app.progress, { stage: 'applied', history: [{ stage: 'applied', at: today }] });
+  // A later step the user recorded is never reset by saving the same job again.
+  const interviewing = { stage: 'interviewing', round: 1, history: [{ stage: 'applied', at: today }, { stage: 'interviewing', round: 1, at: today }] };
+  const id = apps().find(app => app.job.id === first.jobs[0].id).id;
+  await f.store.update(state => { state.career.applications[id].progress = structuredClone(interviewing); });
+  await save([full('a'), full('b', { complete: false, description: undefined })]);
   assert.equal(apps().length, 2);
+  assert.deepEqual(f.store.get().career.applications[id].progress, interviewing);
 });
 
 test('batch capture receipts replay exact requests and reject changed retries', async () => {

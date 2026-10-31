@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { readFile, mkdtemp, rm, writeFile, unlink, symlink } from 'node:fs/promises';
 import { runInNewContext } from 'node:vm';
 import { createCareerState } from '../src/mcp/state.mjs';
-import { createCareerBrowser, openJobPage, requirementContextPrompt } from '../src/career-browser.mjs';
+import { createCareerBrowser, openJobPage, requirementContextPrompt, setApplicationProgress } from '../src/career-browser.mjs';
+import { replayProgress } from '../src/application-progress.mjs';
 import { addBlock, removeBlock } from '../src/mcp/blocklist.mjs';
 import { ASSESSMENT_POLICY_ID, deriveDecision } from '../src/mcp/matching-contract.mjs';
 import { createMatchingTools } from '../src/mcp/matching-tools.mjs';
@@ -624,7 +625,8 @@ async function rendererFixture(browser, wide, operations = {}) {
   const names = ['records', 'list-status', 'list-retry', 'list-action', 'pagination', 'previous', 'next', 'reader', 'reader-title',
     'reader-status', 'reader-retry', 'reader-content', 'close'];
   const ids = [...names.flatMap(name => [`career-${name}`, `me-${name}`]), 'career-browser', 'me-browser', 'delete-rankings',
-    'stage-jobs', 'publication-range', 'publication-range-label', 'review-launch', 'review-codex', 'review-claude', 'copy-review-prompt'];
+    'stage-jobs', 'publication-range', 'publication-range-label', 'review-launch', 'review-codex', 'review-claude', 'copy-review-prompt',
+    'career-stage-filter'];
   const nodes = Object.fromEntries(ids.map(id => [id, new Node()]));
   for (const id of ids) nodes[id].id = id;
   nodes['stage-jobs'].dataset.stagePanel = 'jobs';
@@ -1409,7 +1411,8 @@ test('selected detail groups exact job and document actions once, preserves coun
   assert.equal(ui.nodes['career-records'].querySelectorAll('button').length, ui.rows('career').length);
   ui.rows('career')[0].fire('click'); await ui.settle();
   const appFiles = ui.byClass(content, 'career-files');
-  assert.equal(content.children[1], appFiles);
+  // Progress leads, then the Application metadata, then Job and documents.
+  assert.deepEqual(content.children.slice(0, 3).map(child => child.className || child.children[0]?.textContent), ['career-progress', 'Application', 'career-files']);
   const appActions = appFiles.querySelectorAll('button');
   appActions[0].fire('click'); await opening; await ui.settle();
   assert.deepEqual(urls, [f.job.applyUrl, f.state.career.applications.exact.job.applyUrl]);
@@ -1472,4 +1475,130 @@ test('list refresh never validates PDFs; only the selected detail resolves its s
   assert.deepEqual(resolved, [f.pdf.uri]);
   await unlink(f.pdf.path);
   assert.equal((await browser.read({ kind: 'jobs', id: f.job.id })).documents[0].status, 'unavailable');
+});
+
+// Applications with recorded progress; dates are in 2025 so short dates always carry the year.
+function progressFixture() {
+  const state = { career: createCareerState() };
+  const store = { get: () => structuredClone(state), update: async change => { const next = structuredClone(state); await change(next); Object.assign(state, next); } };
+  const steps = (...entries) => replayProgress(entries.map(([stage, at]) => ({ stage, at })));
+  const app = (id, progress, documents = {}) => {
+    state.career.applications[id] = { id, job: { title: id, company: 'Example' }, cv: null, coverLetter: null, cvHistory: [], coverLetterHistory: [], exports: [],
+      createdAt: '2025-10-01T10:00:00Z', updatedAt: '2025-10-01T10:00:00Z', ...(progress ? { progress } : {}), ...documents };
+  };
+  const both = { cv: { version: 1 }, coverLetter: { version: 1, paragraphs: ['Dear team,', 'Hello.'] } };
+  return { state, store, steps, app, both, browser: createCareerBrowser({ store }) };
+}
+
+test('Applications lead with progress, count every stage, filter by one and put the furthest along first', async () => {
+  const { state, store, steps, app, both, browser } = progressFixture();
+  app('prepared', null, both);
+  app('applied', steps(['applied', '2025-10-21']));
+  app('round 1', steps(['applied', '2025-10-20'], ['interviewing', '2025-10-25']), both);
+  app('round 2', steps(['applied', '2025-10-21'], ['interviewing', '2025-10-24'], ['interviewing', '2025-10-30']), { cv: { version: 1 } });
+  app('offer', steps(['applied', '2025-10-01'], ['interviewing', '2025-10-02'], ['offer', '2025-11-05']));
+  app('hired', steps(['applied', '2025-09-01'], ['interviewing', '2025-09-02'], ['offer', '2025-09-03'], ['hired', '2025-09-04']));
+  app('rejected', steps(['applied', '2025-10-21'], ['interviewing', '2025-10-24'], ['rejected', '2025-11-02']), both);
+  app('declined', steps(['applied', '2025-10-01'], ['interviewing', '2025-10-02'], ['offer', '2025-10-03'], ['withdrawn', '2025-10-04']));
+  const all = await browser.list({ kind: 'applications' });
+  assert.deepEqual(all.stages, { all: 8, prepared: 1, applied: 1, interviewing: 2, offer: 1, hired: 1, rejected: 1, withdrawn: 1 });
+  assert.deepEqual(all.items.map(({ title, summary }) => [title, summary]), [
+    ['offer — Example', 'Offer · No documents saved'],
+    ['round 2 — Example', 'Interview round 2 · CV saved'],
+    ['round 1 — Example', 'Interview round 1 · CV and cover letter saved'],
+    ['applied — Example', 'Applied · No documents saved'],
+    ['prepared — Example', 'CV draft saved · Cover letter saved'],
+    ['hired — Example', 'Hired · No documents saved'],
+    ['rejected — Example', 'Rejected after round 1 · CV and cover letter saved'],
+    ['declined — Example', 'Declined offer · No documents saved'],
+  ]);
+  const interviewing = await browser.list({ kind: 'applications', stage: 'interviewing', limit: 1 });
+  assert.deepEqual([interviewing.items.map(item => item.id), interviewing.total, interviewing.nextOffset, interviewing.stages], [['round 2'], 2, 1, all.stages]);
+  for (const args of [{ kind: 'applications', stage: 'all' }, { kind: 'applications', stage: null }, { kind: 'jobs', stage: 'applied' }, { kind: 'facts', stage: 'applied' }])
+    await assert.rejects(browser.list(args), { code: 'INVALID_INPUT' });
+
+  const progress = async id => (await browser.read({ kind: 'applications', id })).progress;
+  assert.deepEqual(await progress('round 2'), { headline: 'Interview round 2 · 30 Oct 2025', steps: 3, at: '2025-10-30',
+    actions: [{ stage: 'interviewing', label: 'Next round' }, { stage: 'offer', label: 'Offer' }, { stage: 'rejected', label: 'Rejected' },
+      { stage: 'withdrawn', label: 'Withdrew', quiet: true }],
+    history: [{ date: '30 Oct 2025', label: 'Interview round 2' }, { date: '24 Oct 2025', label: 'Interview round 1' }, { date: '21 Oct 2025', label: 'Applied' }] });
+  assert.deepEqual(await progress('prepared'), { headline: 'Not applied yet', steps: 0, at: null, actions: [{ stage: 'applied', label: 'Mark applied' }], history: [] });
+  assert.deepEqual((await progress('applied')).actions.map(action => action.label), ['Interview invite', 'Rejected', 'Withdrew']);
+  assert.deepEqual((await progress('offer')).actions.map(action => action.label), ['Accepted', 'Declined']);
+  assert.deepEqual(await progress('rejected'), { headline: 'Rejected after round 1 · 2 Nov 2025', steps: 3, at: '2025-11-02', actions: [],
+    history: [{ date: '2 Nov 2025', label: 'Rejected after round 1' }, { date: '24 Oct 2025', label: 'Interview round 1' }, { date: '21 Oct 2025', label: 'Applied' }] });
+  assert.equal((await progress('declined')).headline, 'Declined offer · 4 Oct 2025');
+
+  // The reader's buttons change one step on the application it showed, and only if nothing changed meanwhile.
+  const revision = state.career.revision;
+  assert.equal((await setApplicationProgress({ store }, { id: 'round 2', steps: 3, stage: 'interviewing', at: '2025-11-01' })).progress.round, 3);
+  assert.equal(state.career.revision, revision + 1);
+  await assert.rejects(setApplicationProgress({ store }, { id: 'round 2', steps: 3, undo: true }), { code: 'PROGRESS_CHANGED' });
+  await assert.rejects(setApplicationProgress({ store }, { id: 'round 2', steps: 4, stage: 'hired' }), { code: 'INVALID_PROGRESS' });
+  await assert.rejects(setApplicationProgress({ store }, { id: 'missing', steps: 0, stage: 'applied' }), { code: 'NOT_FOUND' });
+  for (const args of [{ id: 'round 2', stage: 'offer' }, { id: 'round 2', steps: -1, undo: true }, { id: 'round 2', steps: 4, undo: true, url: 'x' }, { id: '__proto__', steps: 0, undo: true }])
+    await assert.rejects(setApplicationProgress({ store }, args), { code: 'INVALID_INPUT' });
+  assert.equal((await setApplicationProgress({ store }, { id: 'round 2', steps: 4, undo: true })).progress.round, 2);
+  assert.equal((await setApplicationProgress({ store }, { id: 'prepared', steps: 0, stage: 'applied', at: '2025-10-21' })).progress.stage, 'applied');
+});
+
+test('the Applications reader records progress and the stage line filters the list', async () => {
+  const { store, steps, app, browser } = progressFixture();
+  app('tangem', steps(['applied', '2025-10-21'], ['interviewing', '2025-10-24']));
+  app('example', steps(['applied', '2025-10-22']));
+  app('draft', null);
+  const ui = await rendererFixture(browser, true, { 'application-progress': input => setApplicationProgress({ store }, input) });
+  const filter = ui.nodes['career-stage-filter'];
+  const filterButtons = () => filter.children.filter(child => child.tagName === 'BUTTON');
+  await ui.window.careerBrowser.refresh();
+  await ui.settle();
+  assert.equal(filter.hidden, true);
+  ui.jobCategories.applications.fire('click');
+  await ui.settle();
+  assert.equal(filter.hidden, false);
+  assert.deepEqual(filterButtons().map(button => [button.textContent, button.attributes.get('aria-pressed')]),
+    [['All 3', 'true'], ['Prepared 1', 'false'], ['Applied 1', 'false'], ['Interviewing 1', 'false']]);
+  assert.deepEqual(ui.titles(), ['tangem — Example', 'example — Example', 'draft — Example']);
+
+  // The first record opens beside the list: the Progress block leads the reader.
+  const progress = () => ui.byClass(ui.nodes['career-reader-content'], 'career-progress');
+  assert.equal(ui.nodes['career-reader-content'].children[0], progress());
+  assert.equal(ui.byClass(progress(), 'career-progress-current').textContent, 'Interview round 1 · 24 Oct 2025');
+  const buttons = () => progress().querySelectorAll('button').map(button => button.textContent);
+  assert.deepEqual(buttons(), ['Change date', 'Undo last step', 'Next round', 'Offer', 'Rejected', 'Withdrew']);
+  const date = ui.byClass(progress(), 'career-progress-date');
+  assert.equal(date.type, 'date');
+  date.value = '2025-10-30';
+  progress().querySelectorAll('button').find(button => button.textContent === 'Next round').fire('click');
+  await ui.settle();
+  assert.deepEqual(ui.calls.findLast(call => call.operation === 'application-progress').args,
+    { id: 'tangem', steps: 2, stage: 'interviewing', at: '2025-10-30' });
+  await ui.window.careerBrowser.refresh();
+  await ui.settle();
+  assert.equal(ui.byClass(progress(), 'career-progress-current').textContent, 'Interview round 2 · 30 Oct 2025');
+  assert.deepEqual(ui.byClass(progress(), 'career-progress-history').children.map(row => row.children.map(cell => cell.textContent)),
+    [['30 Oct 2025', 'Interview round 2'], ['24 Oct 2025', 'Interview round 1'], ['21 Oct 2025', 'Applied']]);
+  progress().querySelectorAll('button').find(button => button.textContent === 'Undo last step').fire('click');
+  await ui.settle();
+  assert.deepEqual(ui.calls.findLast(call => call.operation === 'application-progress').args, { id: 'tangem', steps: 3, undo: true });
+  await ui.window.careerBrowser.refresh();
+  await ui.settle();
+
+  filterButtons().find(button => button.textContent === 'Applied 1').fire('click');
+  await ui.settle();
+  assert.equal(ui.calls.findLast(call => call.operation === 'career-list').args.stage, 'applied');
+  assert.deepEqual(ui.titles(), ['example — Example']);
+  assert.deepEqual(filterButtons().map(button => button.attributes.get('aria-pressed')), ['false', 'false', 'true', 'false']);
+  assert.equal(ui.byClass(progress(), 'career-progress-current').textContent, 'Applied · 22 Oct 2025');
+  assert.deepEqual(buttons(), ['Change date', 'Undo last step', 'Interview invite', 'Rejected', 'Withdrew']);
+  filterButtons()[0].fire('click');
+  await ui.settle();
+  assert.equal(ui.calls.findLast(call => call.operation === 'career-list').args.stage, undefined);
+  ui.rows('career')[2].fire('click');
+  await ui.settle();
+  assert.equal(ui.byClass(progress(), 'career-progress-current').textContent, 'Not applied yet');
+  assert.deepEqual(buttons(), ['Mark applied']);
+  ui.jobCategories.blocks.fire('click');
+  await ui.settle();
+  assert.equal(filter.hidden, true);
 });

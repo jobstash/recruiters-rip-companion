@@ -312,11 +312,46 @@ test('applications are deleted explicitly and missing IDs are reported', async t
   assert.throws(() => f.call('application_read', { applicationId: first.applicationId }), { code: 'NOT_FOUND' });
 });
 
+test('application progress moves one valid step at a time and is read with the application', async t => {
+  const f = await fixture(t);
+  const { applicationId } = await f.create();
+  const set = args => f.call('application_progress_set', f.mutation({ applicationId, ...args }));
+  assert.deepEqual((await f.call('applications_list')).applications[0].progress, { stage: 'prepared', history: [] });
+  await assert.rejects(set({ stage: 'interviewing' }), { code: 'INVALID_PROGRESS' });
+  await assert.rejects(set({ undo: true }), { code: 'INVALID_PROGRESS' });
+  await assert.rejects(set({ stage: 'applied', undo: true }), { code: 'INVALID_INPUT' });
+  await assert.rejects(f.call('application_progress_set', f.mutation({ applicationId: randomUUID(), stage: 'applied' })), { code: 'NOT_FOUND' });
+  const revision = f.state().revision;
+  assert.deepEqual((await set({ stage: 'applied', date: '2025-10-21' })).progress, { stage: 'applied', history: [{ stage: 'applied', at: '2025-10-21' }] });
+  assert.equal(f.state().revision, revision + 1);
+  assert.equal((await set({ stage: 'interviewing', date: '2025-10-24' })).progress.round, 1);
+  assert.equal((await set({ stage: 'interviewing', date: '2025-10-30' })).progress.round, 2);
+  await assert.rejects(set({ stage: 'hired' }), { code: 'INVALID_PROGRESS' });
+  await assert.rejects(set({ stage: 'offer', date: '2025-10-29' }), { code: 'INVALID_PROGRESS' });
+  const rejected = (await set({ stage: 'rejected', date: '2025-11-02' })).progress;
+  assert.deepEqual([rejected.stage, rejected.atStage, rejected.round], ['rejected', 'interviewing', 2]);
+  assert.deepEqual((await f.call('application_read', { applicationId })).application.progress, rejected);
+  assert.deepEqual((await f.call('applications_list')).applications[0].progress, rejected);
+  assert.deepEqual((await set({ undo: true })).progress.stage, 'interviewing');
+  assert.equal((await set({ date: '2025-10-31' })).progress.history.at(-1).at, '2025-10-31');
+  // Applications saved before progress existed read as prepared.
+  await f.store.update(state => { delete state.career.applications[applicationId].progress; });
+  assert.deepEqual((await f.call('application_read', { applicationId })).application.progress, { stage: 'prepared', history: [] });
+  const ajv = new Ajv({ strict: false });
+  addFormats(ajv);
+  const validate = ajv.compile(f.tools.get('career_application_progress_set').inputSchema);
+  const base = { requestId: randomUUID(), revision: 0, applicationId };
+  for (const args of [{ stage: 'applied' }, { stage: 'interviewing', date: '2025-10-21' }, { undo: true }, { date: '2025-10-21' }])
+    assert.equal(validate({ ...base, ...args }), true, JSON.stringify(validate.errors));
+  for (const args of [{ stage: 'prepared' }, { stage: 'ghosted' }, { stage: 'applied', date: '21 Oct 2025' }, { undo: false }, { stage: 'applied', note: 'x' }])
+    assert.equal(validate({ ...base, ...args }), false, JSON.stringify(args));
+});
+
 test('tool schemas accept a structured CV and reject malformed documents and removed tools', async t => {
   const f = await fixture(t);
   assert.deepEqual([...f.tools.keys()].sort(), ['career_application_context', 'career_application_create', 'career_application_cv_save',
-    'career_application_export', 'career_application_letter_save', 'career_application_read', 'career_applications_delete',
-    'career_applications_list', 'career_job_read']);
+    'career_application_export', 'career_application_letter_save', 'career_application_progress_set', 'career_application_read',
+    'career_applications_delete', 'career_applications_list', 'career_job_read']);
   const ajv = new Ajv({ strict: false });
   addFormats(ajv);
   const validate = ajv.compile(f.tools.get('career_application_cv_save').inputSchema);

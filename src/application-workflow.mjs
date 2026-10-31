@@ -3,6 +3,7 @@ import { fail, hash, mutateCareer, readCareer } from './mcp/state.mjs';
 import { canonicalJobUrl, importCapturedJobs } from './mcp/job-tools.mjs';
 import { formEvidence, formFingerprint, unavailableField, validFormValue, validateFormSnapshot } from './mcp/form-tools.mjs';
 import { assertJobNotBlocked } from './mcp/blocklist.mjs';
+import { applicationProgress, changeProgress } from './application-progress.mjs';
 
 const now = () => new Date().toISOString();
 const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -70,7 +71,7 @@ export function upsertApplication(career, job) {
   }
   if (!app) {
     app = { id: randomUUID(), job: structuredClone(job), jobSourceFingerprint: sourceJobFingerprint(career.jobs?.[job.id]), createdAt: now(), updatedAt: now(), cv: null, coverLetter: null,
-      cvHistory: [], coverLetterHistory: [], exports: [], formAnswers: {} };
+      cvHistory: [], coverLetterHistory: [], exports: [], formAnswers: {}, progress: { stage: 'prepared', history: [] } };
     career.applications[app.id] = app;
   } else if (hash(app.job) !== hash(job)) {
     // Keep history and manifests, but fingerprints make older artifacts unavailable.
@@ -83,14 +84,16 @@ export function upsertApplication(career, job) {
   }
   return app;
 }
-/** Panel "Save as applied": save the captured jobs, then give each one its exact job-bound application (reused, never duplicated). */
+/** Panel "Save as applied": save the captured jobs, then give each one its exact job-bound application (reused, never duplicated),
+ *  marked applied today unless the user already recorded it as sent. */
 export async function saveAppliedJobs({ store, ...capture }) {
   const saved = await importCapturedJobs({ store, ...capture });
   const ids = saved.jobs.map(job => job.id);
   const { revision } = await mutateCareer(store, { requestId: randomUUID(), revision: saved.revision }, 'browser_jobs_applied', { ids }, career => {
     for (const id of ids) {
       const { title, company, description, applyUrl, url, location } = career.jobs[id];
-      upsertApplication(career, { id, title, company, description, url: applyUrl ?? url, originalUrl: url, ...(location ? { location } : {}) });
+      const app = upsertApplication(career, { id, title, company, description, url: applyUrl ?? url, originalUrl: url, ...(location ? { location } : {}) });
+      if (applicationProgress(app).stage === 'prepared') changeProgress(app, { stage: 'applied' });
     }
     return {};
   });

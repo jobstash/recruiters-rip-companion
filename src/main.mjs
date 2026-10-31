@@ -16,7 +16,7 @@ import { endpoint, launcherScript, mcpCommand, protectPrivatePath, privateJSON, 
 import { createIntroductionTools, introductionsStatus, setSharingConsent } from './mcp/introduction-tools.mjs';
 import { deleteCv } from './mcp/cv-deletion.mjs';
 import { openEmploymentProfile } from './employment-browser.mjs';
-import { openJobPage, requirementContextPrompt } from './career-browser.mjs';
+import { openJobPage, requirementContextPrompt, setApplicationProgress } from './career-browser.mjs';
 import { EXTENSIONS_PAGES, openExtensionsPage } from './browser-page.mjs';
 import { CareerError, createCareerState, fail, hash, upgradeCareer } from './mcp/state.mjs';
 import { createMcpServer, createPlatformTools } from './mcp/server.mjs';
@@ -871,6 +871,13 @@ async function settingsOperation(op, input, ownMutation) {
         if (op === 'job-block') { const entry = addBlock(career, input); result = { id: entry.id, kind: entry.kind, label: entry.label }; }
         else { removeBlock(career, input.id); result = { completed: true }; }
       });
+      scoped.assertAvailable(false); careerViewRevision++;
+      emit(); return { ok: true, result };
+    }
+    if (op === 'application-progress') {
+      assertAvailable(false); exact(input, ['id', 'steps', 'stage', 'at', 'undo']);
+      const scoped = createScopedAccess(store, { assertAvailable, epoch: () => sessionEpoch });
+      const result = await setApplicationProgress({ store: scoped.store }, input);
       scoped.assertAvailable(false); careerViewRevision++;
       emit(); return { ok: true, result };
     }

@@ -9,6 +9,7 @@ import { CAREER_SCHEMA, fail, hash } from './mcp/state.mjs';
 import { BLOCK_KINDS } from './mcp/blocklist.mjs';
 import { FACT_KINDS } from './mcp/facts.mjs';
 import { applicationContextFingerprint } from './application-workflow.mjs';
+import { replayProgress } from './application-progress.mjs';
 
 export const BACKUP_VERSION = 2;
 export const MAX_BACKUP_BYTES = 128 * 1024 * 1024;
@@ -134,6 +135,12 @@ export function validateBackupCareer(career) {
       if (item.textValidation != null) { object(item.textValidation, 'document text check'); if (typeof item.textValidation.passed !== 'boolean') invalid('a document text check is invalid'); }
     });
     if (app.formAnswers !== undefined) entries(app.formAnswers, 'saved answers', answer => { text(answer.value, 'saved answer'); });
+    if (app.progress !== undefined) {
+      object(app.progress, 'application progress');
+      let replayed;
+      try { replayed = replayProgress(app.progress.history); } catch { invalid('an application progress step is invalid'); }
+      if (hash(replayed) !== hash(app.progress)) invalid('an application progress does not match its steps');
+    }
   });
   object(career.receipts, 'request receipts');
   for (const key of ['jobs', 'blocklist', 'interviews', 'formDrafts', 'applicationBindings', 'applicationPreparations', 'reviewOverrides']) if (career[key] !== undefined) entries(career[key], key, () => {});

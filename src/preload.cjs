@@ -1,7 +1,7 @@
 'use strict';
 const { contextBridge, ipcRenderer } = require('electron');
 const allowed = new Set(['state', 'unlock', 'connect-account', 'account-platform', 'connect-github', 'get-codex', 'get-claude', 'copy-agent-prompt', 'copy-review-prompt', 'review-codex', 'review-claude', 'copy-requirement-prompt', 'import-cv', 'install-chatgpt', 'install-claude', 'save-extension', 'save-firefox-extension', 'career-list', 'career-read', 'career-open-profile', 'career-open-job', 'career-open-document', 'delete-rankings', 'backup', 'approval', 'decisions-key-save', 'decisions-key-remove', 'publication-range-set', 'job-block', 'job-unblock', 'sharing-allow', 'sharing-stop', 'update-check', 'update-download', 'update-install', 'update-cancel']);
-for (const operation of ['backup-preview', 'backup-restore', 'backup-cancel', 'backup-open-folder', 'cv-delete', 'open-chrome-extensions', 'open-firefox-extensions', 'copy-chrome-extensions', 'copy-firefox-extensions', 'open-jobstash']) allowed.add(operation);
+for (const operation of ['backup-preview', 'backup-restore', 'backup-cancel', 'backup-open-folder', 'cv-delete', 'open-chrome-extensions', 'open-firefox-extensions', 'copy-chrome-extensions', 'copy-firefox-extensions', 'open-jobstash', 'application-progress']) allowed.add(operation);
 allowed.add('update-preferences');
 allowed.add('update-source-guide');
 contextBridge.exposeInMainWorld('companion', Object.freeze({

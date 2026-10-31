@@ -22,7 +22,9 @@ function profile(name = 'Synthetic candidate') {
   career.jobs = { 'local:synthetic': { id: 'local:synthetic', title: 'Engineer', company: 'Synthetic employer', url: 'https://example.test/job', description: 'Build synthetic tools.', complete: true, createdAt: now, updatedAt: now } };
   career.blocklist = { 'company:synthetic employer': { kind: 'company', value: 'Synthetic employer', createdAt: now }, 'category:recruiting': { kind: 'category', value: 'Recruiting', createdAt: now } };
   career.applications[applicationId] = { id: applicationId, job: { id: 'local:synthetic', title: 'Engineer', company: 'Synthetic employer', description: 'Build synthetic tools.', url: 'https://example.test/job' }, createdAt: now, updatedAt: now,
-    cv: null, coverLetter: { version: 2, paragraphs: ['Current letter'], createdAt: now }, cvHistory: [], coverLetterHistory: [{ version: 1, paragraphs: ['Earlier letter'], createdAt: now }], exports: [], formAnswers: { saved: { value: 'Saved answer' } } };
+    cv: null, coverLetter: { version: 2, paragraphs: ['Current letter'], createdAt: now }, cvHistory: [], coverLetterHistory: [{ version: 1, paragraphs: ['Earlier letter'], createdAt: now }], exports: [], formAnswers: { saved: { value: 'Saved answer' } },
+    progress: { stage: 'rejected', atStage: 'interviewing', round: 1, history: [{ stage: 'applied', at: '2025-10-21' },
+      { stage: 'interviewing', round: 1, at: '2025-10-24' }, { stage: 'rejected', at: '2025-10-28' }] } };
   career.receipts.old = { operation: 'old', result: { sentinel: true } };
   career.applicationBindings = { old: { bindingId: 'old' } }; career.applicationPreparations = { old: { preparationId: 'old' } };
   career.formDrafts = { old: { formId: 'old', fields: [], answers: { answer: { value: 'Retained text' } }, evidence: 'old authority' } };
@@ -84,6 +86,7 @@ test('portable backup round-trips originals, saved files, user history and block
   assert.equal(after.career.formDrafts.old.answers.answer.value, 'Retained text'); assert.equal(after.career.formDrafts.old.evidence, '');
   const application = Object.values(after.career.applications)[0], reference = application.exports[0];
   assert.deepEqual(application.coverLetterHistory, Object.values(original.applications)[0].coverLetterHistory);
+  assert.deepEqual(application.progress, Object.values(original.applications)[0].progress);
   assert.equal(reference.path.startsWith(target.directory), true);
   assert.equal(path.basename(reference.path), 'Synthetic candidate - COVER LETTER.pdf');
   assert.ok(reference.path.includes(path.join('Synthetic employer', 'Engineer')));
@@ -148,6 +151,11 @@ test('invalid versions, nested containers, prototype keys and corrupted file has
     value => { value.profiles[0].career.evidenceRevision = Number.MAX_SAFE_INTEGER - 1; },
     value => { value.profiles[0].career.rankingVersion = Number.MAX_SAFE_INTEGER - 1; },
     value => { Object.values(value.profiles[0].career.applications)[0].coverLetter.version = Number.MAX_SAFE_INTEGER - 1; },
+    value => { Object.values(value.profiles[0].career.applications)[0].progress = 'rejected'; },
+    value => { Object.values(value.profiles[0].career.applications)[0].progress.stage = 'offer'; },
+    value => { Object.values(value.profiles[0].career.applications)[0].progress.round = 2; },
+    value => { Object.values(value.profiles[0].career.applications)[0].progress.history.shift(); },
+    value => { Object.values(value.profiles[0].career.applications)[0].progress.history[1].at = '2025-10-01'; },
   ];
   for (const change of variants) {
     const value = structuredClone(original); change(value);

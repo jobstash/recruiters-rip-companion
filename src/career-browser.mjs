@@ -117,16 +117,18 @@ const blockKinds = { job: 'Job', company: 'Company', category: 'Category' };
 // A saved review with one of these verdicts makes the job ineligible: the card shows the verdict, never a number.
 const ineligibleMatches = new Set(['incompatible_location', 'excluded']);
 const ineligibleLabel = reviewed => ineligibleMatches.has(reviewed?.matchStatus) ? assessmentLabel(reviewed.matchStatus) : 'Location incompatible';
-// A card shows where the job stands: reviewed by the agent (fit), ineligible (a saved verdict instead of a number), or
-// open — waiting for the agent's next review. An established incompatibility (any saved gate fail, or relocation required
-// against a refusal to relocate) is never offered again until the profile changes.
+// A card shows where the job stands: reviewed by the agent (fit, or Not recommended without a number when the agent screened
+// it out from its listing row), ineligible (a saved verdict instead of a number), or open — waiting for the agent's next
+// review. An established incompatibility (any saved gate fail, or relocation required against a refusal to relocate) is never
+// offered again until the profile changes.
 function cardStage({ id, reviewed }, inclusion) {
   const reviewCurrent = reviewed?.reviewStatus === 'current';
   const established = !reviewCurrent && inclusion.established(id);
   const ineligible = reviewCurrent ? ineligibleMatches.has(reviewed.matchStatus) : established;
+  const screened = reviewCurrent && reviewed.status === 'screened';
   return {
     stage: ineligible ? 'ineligible' : reviewCurrent ? 'reviewed' : 'open',
-    label: ineligible ? ineligibleLabel(reviewed) : null, established,
+    label: ineligible ? ineligibleLabel(reviewed) : screened ? decisionLabels.skip : null, established,
     score: Number.isInteger(reviewed?.overall) ? reviewed.overall : null,
     stale: reviewed ? !reviewCurrent : false,
   };
@@ -148,9 +150,11 @@ function jobVerdict({ reviewed }, card) {
     ? `Reviewed at ${reviewed.overall} before your profile changed` : null;
   const reason = typeof reviewed?.reason === 'string' && reviewed.reason.trim() ? reviewed.reason : null;
   if (card.stage === 'reviewed') {
-    return { kind: 'reviewed', number: card.score, numberLabel: 'Fit',
+    // A screened job was ruled out from its listing row alone: the agent's reason, never a Fit number.
+    const screened = reviewed.status === 'screened';
+    return { kind: 'reviewed', number: card.score, numberLabel: screened ? null : 'Fit',
       headline: decisionLabels[reviewed.decision] ?? 'No saved decision',
-      detail: joinFacts([bandLabel(reviewed.band) && `${bandLabel(reviewed.band)} fit`,
+      detail: joinFacts([screened ? 'Screened from the listing' : bandLabel(reviewed.band) && `${bandLabel(reviewed.band)} fit`,
         Number.isFinite(reviewed.pairwiseWins) ? `${plural(reviewed.pairwiseWins, 'win')} of ${plural(reviewed.pairwiseCompared, 'comparison')}` : null,
         reviewDate && `Reviewed ${reviewDate}`]),
       reason };
@@ -231,7 +235,7 @@ function jobItem({ id, reviewed, imported, metadata }, inclusion, career) {
   // relocation are not repeated beneath it.
   const ineligible = card.stage === 'ineligible';
   const checks = fields('Checks', [
-    ['Location', ineligible ? undefined : reviewed ? assessmentLabel(reviewed.matchStatus) : undefined],
+    ['Location', ineligible || reviewed?.status === 'screened' ? undefined : reviewed ? assessmentLabel(reviewed.matchStatus) : undefined],
     ['Relocation', ineligible ? undefined : assessmentLabel(reviewed?.relocation)],
     ['Salary', joinFacts([pay, salaryCheck]) || undefined],
     ...(record(reviewed?.gates) ? [['Career direction', gateLabels[reviewed.gates.direction]], ['Mandatory conditions', gateLabels[reviewed.gates.constraints]],

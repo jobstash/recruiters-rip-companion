@@ -503,7 +503,7 @@ test('catalogue replacement keeps current terms and assessments, removes absent 
   f.setPlatformError(undefined);
   f.setCatalogue([]);
   await f.call('career_match_jobs');
-  assert.deepEqual(f.store.get().career.matching, emptyMatching);
+  assert.deepEqual(f.store.get().career.matching, { ...emptyMatching, shortlist: {} });
 });
 
 test('batch terms refresh saved display metadata without storing ads, company graphs or changing assessments', async () => {
@@ -1341,4 +1341,110 @@ test('discovery applies a company block added while the catalogue is loading', a
   const discovered = await pending;
   assert.deepEqual(discovered.jobIds, ['node:allowed']);
   assert.equal(discovered.blocked, 1);
+});
+
+const screenColumns = ['id', 'title', 'company', 'where', 'seniority', 'type', 'category', 'salary', 'published', 'snippet'];
+const screen = (f, profileVersion, verdicts) => f.call('career_screen_save', { profileVersion, verdicts });
+const skip = (id, reason = 'Sales role; the candidate wants engineering.') => ({ id: `node:${id}`, verdict: 'skip', reason });
+const keep = id => ({ id: `node:${id}`, verdict: 'review' });
+
+test('screening pages list every unscreened window job compactly, bounded by rows and bytes, then return the shortlist', async () => {
+  const long = 'Senior Staff Platform Reliability Engineer, Distributed Payments Infrastructure and Developer Experience';
+  const jobs = Array.from({ length: 450 }, (_, index) => ({ ...job(String(index).padStart(3, '0')), ...statedTerms,
+    title: index % 2 ? long : `Engineer ${index}` }));
+  const f = fixture({ jobs });
+  const planned = await f.call('career_match_jobs');
+  assert.equal(planned.unscreened, 450);
+  const platformCalls = f.calls.length;
+  const first = await f.call('career_screen_jobs');
+  assert.deepEqual(first.columns, screenColumns);
+  assert.deepEqual(first.jobs[0], ['node:000', 'Engineer 0', 'Company', 'Dublin · hybrid', 'Senior', 'Full Time', 'Smart Contracts',
+    'EUR 90000–120000/year', publishedAt.slice(0, 10)]);
+  assert.ok(first.jobs.length > 50 && first.jobs.length < 200, `${first.jobs.length} rows`);
+  assert.ok(Buffer.byteLength(JSON.stringify(first.jobs)) <= 24 * 1024 + 1);
+  assert.ok(Buffer.byteLength(JSON.stringify(first)) < 25 * 1024);
+  assert.equal(first.unscreened, 450);
+  assert.equal(first.reviewIds, undefined);
+  assert.deepEqual((await f.call('career_screen_jobs', { limit: 5 })).jobs.map(row => row[0]), first.jobs.slice(0, 5).map(row => row[0]));
+  await assert.rejects(f.tools.get('career_screen_jobs').invoke({ limit: 201 }), { code: 'INVALID_INPUT' });
+
+  const kept = [], seen = [];
+  let page = first, pages = 0;
+  while (page.jobs.length) {
+    pages++;
+    const verdicts = page.jobs.map(([id], index) => index % 10 ? { id, verdict: 'skip', reason: 'Not an engineering role.' } : { id, verdict: 'review' });
+    kept.push(...verdicts.filter(row => row.verdict === 'review').map(row => row.id));
+    seen.push(...page.jobs.map(([id]) => id));
+    const result = await screen(f, page.profileVersion, verdicts);
+    assert.equal(result.unscreened, 450 - seen.length);
+    page = await f.call('career_screen_jobs');
+  }
+  assert.deepEqual(seen, jobs.map(item => item.id));
+  assert.ok(pages <= 6, `${pages} pages`);
+  assert.deepEqual(page, { profileVersion: planned.profileVersion, columns: screenColumns, jobs: [], unscreened: 0, reviewIds: kept });
+  assert.equal(f.calls.length, platformCalls, 'screening reads only the cached catalogue');
+  const shortlist = await f.call('career_match_jobs');
+  assert.deepEqual([shortlist.jobIds, shortlist.unscreened], [kept, 0]);
+
+  const short = fixture({ jobs: Array.from({ length: 250 }, (_, index) => job(`s${index}`)) });
+  await short.call('career_match_jobs');
+  const full = await short.call('career_screen_jobs');
+  assert.equal(full.jobs.length, 200);
+  assert.deepEqual(full.jobs[0], ['node:s0', 'Engineer s0', 'Company', null, null, null, null, null, publishedAt.slice(0, 10)]);
+});
+
+test('screening verdicts save idempotently, reject unknown or blocked IDs whole and never replace a full review', async () => {
+  const f = fixture({ jobs: ['a', 'b', 'c', 'd'].map(id => job(id)) });
+  const { profileVersion } = await f.call('career_match_jobs');
+  await f.save([assessment('d', 80, 'not_required')], profileVersion);
+  await f.store.update(state => { addBlock(state.career, { id: 'node:c', kind: 'job' }); });
+  const before = f.store.get();
+  await assert.rejects(screen(f, profileVersion, [skip('a'), skip('zzz')]), { code: 'UNKNOWN_JOB' });
+  await assert.rejects(screen(f, profileVersion, [skip('a'), keep('c')]), { code: 'JOB_BLOCKED' });
+  await assert.rejects(screen(f, profileVersion, [skip('a'), keep('a')]), { code: 'INVALID_INPUT' });
+  await assert.rejects(screen(f, '9:9', [skip('a')]), { code: 'PROFILE_CHANGED' });
+  const direct = f.tools.get('career_screen_save');
+  for (const verdicts of [[{ id: 'node:a', verdict: 'skip' }], [skip('a', 'Two\nlines')], [{ id: 'node:a', verdict: 'maybe' }]])
+    await assert.rejects(direct.invoke({ profileVersion, verdicts }), { code: 'INVALID_INPUT' });
+  assert.deepEqual(f.store.get(), before);
+
+  const verdicts = [skip('a'), keep('b'), skip('d')];
+  assert.deepEqual(await screen(f, profileVersion, verdicts), { skipped: 1, review: 1, unchanged: 0, alreadyReviewed: 1, unscreened: 0 });
+  const saved = f.store.get();
+  assert.deepEqual(await screen(f, profileVersion, verdicts), { skipped: 0, review: 0, unchanged: 2, alreadyReviewed: 1, unscreened: 0 });
+  assert.deepEqual(f.store.get(), saved);
+  assert.equal(saved.career.matching.scores['node:d'].overall, 80);
+
+  const queue = await f.call('career_match_jobs');
+  assert.deepEqual([queue.jobIds, queue.unscreened, queue.blocked], [['node:b'], 0, 1]);
+  assert.deepEqual(await f.call('career_screen_jobs'), { profileVersion, columns: screenColumns, jobs: [], unscreened: 0, reviewIds: ['node:b'] });
+  const row = (await f.call('career_matches')).matches.find(match => match.id === 'node:a');
+  assert.deepEqual([row.status, row.decision, row.overall, row.band, row.reason, row.matchStatus, row.reviewStatus],
+    ['screened', 'skip', null, null, 'Sales role; the candidate wants engineering.', 'screened', 'current']);
+  assert.deepEqual((await f.call('career_recommendations')).recommendations.map(match => match.id), ['node:d']);
+
+  // A changed mind moves the job between the shortlist and the screened-out reviews.
+  assert.deepEqual(await screen(f, profileVersion, [keep('a'), skip('b', 'Requires relocation to Tokyo.')]),
+    { skipped: 1, review: 1, unchanged: 0, alreadyReviewed: 0, unscreened: 0 });
+  assert.equal(f.store.get().career.matching.scores['node:a'], undefined);
+  assert.deepEqual((await f.call('career_match_jobs')).jobIds, ['node:a']);
+});
+
+test('a profile change returns screened-out and shortlisted jobs to screening, like stale assessments', async () => {
+  const f = fixture();
+  const { profileVersion } = await f.call('career_match_jobs');
+  await screen(f, profileVersion, [skip('a'), keep('b')]);
+  const screened = await f.call('career_match_jobs');
+  assert.deepEqual([screened.jobIds, screened.unscreened], [['node:b', 'node:c'], 1]);
+  await f.store.update(state => { state.career.evidenceRevision = 1; });
+  const changed = await f.call('career_match_jobs');
+  assert.notEqual(changed.profileVersion, profileVersion);
+  assert.deepEqual([changed.jobIds, changed.unscreened], [['node:a', 'node:b', 'node:c'], 3]);
+  assert.deepEqual((await f.call('career_screen_jobs')).jobs.map(([id]) => id), ['node:a', 'node:b', 'node:c']);
+  assert.equal((await f.call('career_matches')).matches.find(row => row.id === 'node:a').reviewStatus, 'needs_review');
+  await assert.rejects(screen(f, profileVersion, [skip('c')]), { code: 'PROFILE_CHANGED' });
+  await screen(f, changed.profileVersion, [keep('a')]);
+  await f.call('career_rankings_delete');
+  const cleared = await f.call('career_match_jobs');
+  assert.deepEqual([cleared.jobIds.length, cleared.unscreened], [3, 3]);
 });

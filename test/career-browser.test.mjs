@@ -502,6 +502,30 @@ test('ineligible reviews sort last with a label instead of a number; established
     ['excluded', 'relocation', 'stale-gate', 'stale-relocation']);
 });
 
+test('a job screened out from its listing is reviewed as Not recommended with the agent reason and no Fit', async () => {
+  const { state, browser } = fixture();
+  const publishedAt = currentDate();
+  const reason = 'Sales role; the candidate wants engineering.';
+  state.career.matching = { jobs: Object.fromEntries(['fit', 'screened', 'open'].map(id => [id, catalogueJob(id, publishedAt)])), scores: {
+    fit: finalAssessment(80),
+    screened: { id: 'screened', status: 'screened', reason, overall: null, band: null, decision: 'skip', profileVersion: '0:0', policyId: ASSESSMENT_POLICY_ID, scoredAt, host: null },
+  } };
+  const page = await browser.list({ kind: 'jobs' });
+  assert.deepEqual(page.counts, { jobs: 3, reviewed: 2, applications: 0, blocks: 0 });
+  assert.deepEqual(page.inclusion, { included: 1, candidates: 1 });
+  const item = page.items.find(entry => entry.id === 'screened');
+  assert.deepEqual(item.card, { ...item.card, stage: 'reviewed', label: 'Not recommended', established: false, score: null, stale: false });
+  assert.deepEqual(item.verdict, { kind: 'reviewed', number: null, numberLabel: null, headline: 'Not recommended',
+    detail: 'Screened from the listing · Reviewed 14 Oct 2026', reason });
+  assert.equal(fieldValue(item, 'Checks', 'Location'), undefined);
+  assert.equal(item.sections.some(section => section.chart || section.requirements), false);
+  assert.deepEqual((await browser.list({ kind: 'jobs', view: 'reviewed' })).items.map(entry => entry.id), ['fit', 'screened']);
+  // After a profile change the screened-out job is open again, with its earlier reason as context.
+  state.career.evidenceRevision = 1;
+  const stale = (await browser.list({ kind: 'jobs' })).items.find(entry => entry.id === 'screened');
+  assert.deepEqual([stale.card.stage, stale.card.label, stale.verdict.headline, stale.verdict.reason], ['open', null, 'Not reviewed yet', reason]);
+});
+
 test('facts lead with explanations and preserve actual interview context; applications show saved drafts', async () => {
   const { state, browser } = fixture();
   Object.assign(state.career.profile, { name: 'Jane Candidate', email: 'jane@example.test', location: 'London' });

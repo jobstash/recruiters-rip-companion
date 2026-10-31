@@ -23,7 +23,7 @@
 
   function cardSpoken(card, date) {
     const stage = card.stage === 'reviewed'
-      ? card.label ? [card.label.toLowerCase()] : [`fit ${card.score === null ? 'not saved' : `${card.score} of 100`}`, card.stale ? 'out of date' : null]
+      ? [`fit ${card.score === null ? 'not saved' : `${card.score} of 100`}`, card.stale ? 'out of date' : null]
       : card.stage === 'ineligible' ? ['not eligible', card.label] : ['not reviewed yet'];
     return [card.title, card.company, ...stage, date ? `published ${date}` : 'publication date not stated'].filter(Boolean).join(', ');
   }
@@ -60,11 +60,6 @@
     button.append(renderLogo(card), body);
     button.setAttribute('aria-label', cardSpoken(card, date));
 
-    // A job screened out from its listing carries the verdict word, never a Fit number.
-    if (card.stage === 'reviewed' && card.label) {
-      side.append(node('span', 'career-card-caption career-card-verdict', card.label));
-      return;
-    }
     if (card.stage === 'reviewed') {
       side.append(node('span', 'career-card-figure', card.score === null ? '—' : String(card.score)),
         node('span', 'career-card-caption', card.stale ? 'Fit · out of date' : 'Fit'));

@@ -21,14 +21,6 @@ const ajv = new Ajv({ strict: false, allErrors: false });
 addFormats(ajv);
 const validAssessments = ajv.compile({ type: 'array', items: assessmentSchema, minItems: 1, maxItems: 10 });
 const validComparisons = ajv.compile({ type: 'array', items: comparisonSchema, minItems: 1, maxItems: 15 });
-// Screening is the agent's own cheap pass over listing rows; only its 'review' picks get a full-advert review.
-const SCREEN_PAGE_ROWS = 200, SCREEN_PAGE_BYTES = 24 * 1024;
-const SCREEN_COLUMNS = ['id', 'title', 'company', 'where', 'seniority', 'type', 'category', 'salary', 'published', 'snippet'];
-const verdictSchema = {
-  ...object({ id: idSchema, verdict: { enum: ['skip', 'review'] }, reason: { type: 'string', maxLength: 200, pattern: '^[^\\r\\n]*\\S[^\\r\\n]*$' } }, ['id', 'verdict']),
-  if: { properties: { verdict: { const: 'skip' } } }, then: { required: ['reason'] },
-};
-const validVerdicts = ajv.compile({ type: 'array', items: verdictSchema, minItems: 1, maxItems: SCREEN_PAGE_ROWS });
 const profileFields = ['headline', 'location', 'roleCapabilities', 'seniority', 'skills'];
 const preferenceFields = ['roles', 'acceptedAlternatives', 'excludedRoles', 'locations', 'workModes', 'employmentTypes',
   'salaryMinimum', 'salaryCurrency', 'salaryPeriod', 'requiresSponsorship', 'willingToRelocate', 'companySizes', 'companyStages',
@@ -37,9 +29,11 @@ const compareText = (a, b) => a < b ? -1 : a > b ? 1 : 0;
 const date = value => Number.isFinite(Date.parse(value)) ? Date.parse(value) : -Infinity;
 const newerFirst = (a, b) => date(a.publishedAt) === date(b.publishedAt) ? 0 : date(a.publishedAt) > date(b.publishedAt) ? -1 : 1;
 const byOverall = (a, b) => (b.overall ?? -1) - (a.overall ?? -1) || newerFirst(a, b) || compareText(a.id, b.id);
+// 3.12.8 saved listing-only 'screened' verdicts as reviews; they never decided a job, so they are dropped wherever scores are read.
+const fullReviews = scores => Object.fromEntries(Object.entries(scores ?? {}).filter(([, row]) => row?.status !== 'screened'));
 const matching = career => {
-  const saved = { jobs: {}, scores: {}, pairs: {}, ...career.matching };
-  return { ...saved, jobs: { ...saved.jobs, ...Object.fromEntries(completeLocalJobs(career).map(job => [job.id, job])) } };
+  const saved = { jobs: {}, pairs: {}, ...career.matching };
+  return { ...saved, scores: fullReviews(saved.scores), jobs: { ...saved.jobs, ...Object.fromEntries(completeLocalJobs(career).map(job => [job.id, job])) } };
 };
 const writableMatching = career => {
   const saved = career.matching ??= { jobs: {}, scores: {} };
@@ -203,7 +197,6 @@ function counts(jobs, scores, profileVersion) {
 
 function matchStatus(assessment, willingToRelocate) {
   if (assessment.status === 'unavailable') return 'unavailable';
-  if (assessment.status === 'screened') return 'screened';
   if (Object.values(assessment.gates ?? {}).includes('fail')) return 'excluded';
   if (assessment.relocation === 'not_required') return 'eligible';
   if (assessment.relocation === 'required') {
@@ -215,7 +208,7 @@ function matchStatus(assessment, willingToRelocate) {
 
 const matchPriority = {
   eligible: 0, requires_relocation: 0, needs_location_confirmation: 1,
-  incompatible_location: 2, excluded: 3, screened: 3, unavailable: 4,
+  incompatible_location: 2, excluded: 3, unavailable: 4,
 };
 
 /** A comparison counts only while both assessments it judged are unchanged and current. */
@@ -273,41 +266,6 @@ function rerankSet(career, window) {
   const open = pairs.filter(({ a, b }) => !judged.has(`${a}|${b}`));
   return { profileVersion, candidates, pairs: open, judged: pairs.length - open.length, total: pairs.length };
 }
-
-const shortlisted = (saved, id, profileVersion) => saved.shortlist?.[id]?.profileVersion === profileVersion &&
-  saved.shortlist[id].policyId === ASSESSMENT_POLICY_ID;
-
-/** The window's jobs still awaiting the agent (no current review, not blocked, no established incompatibility), in catalogue
- *  order: `unscreened` have no screening verdict yet, `reviewIds` were picked for a full-advert review. */
-function reviewQueue(career, window) {
-  const saved = matching(career), profileVersion = currentProfileVersion(career);
-  const ids = Object.keys(saved.jobs).filter(id => (saved.jobs[id].imported || publicationInWindow(saved.jobs[id].publishedAt, window)) &&
-    !currentAssessment(saved.scores[id], profileVersion));
-  const queued = [...reviewInclusion(career, ids).includedIds];
-  return { saved, profileVersion, unscreened: queued.filter(id => !shortlisted(saved, id, profileVersion)),
-    reviewIds: queued.filter(id => shortlisted(saved, id, profileVersion)) };
-}
-
-function salaryText(salary) {
-  if (!salary) return null;
-  const amount = salary.stated ?? [salary.minimum, salary.maximum].filter(Number.isFinite).join('–');
-  return amount === '' ? null : [salary.currency, amount].filter(Boolean).join(' ') + (salary.period ? `/${salary.period}` : '');
-}
-/** One listing row in SCREEN_COLUMNS order from the saved catalogue projection; trailing empty values are dropped. */
-function screeningRow(job, description) {
-  const place = job.city || job.location, mode = job.workMode;
-  const where = [place, mode && mode.toLowerCase() !== place?.toLowerCase() ? mode : null].filter(Boolean).join(' · ');
-  const row = [job.id, job.title, job.company, where, job.seniority, job.commitment, job.classification, salaryText(job.salary),
-    Number.isFinite(Date.parse(job.publishedAt)) ? new Date(job.publishedAt).toISOString().slice(0, 10) : null,
-    typeof description === 'string' && description.trim() ? compact(description.replace(/\s+/g, ' '), 240) : null]
-    .map(value => value || null);
-  while (row.at(-1) === null) row.pop();
-  return row;
-}
-const clientHost = context => {
-  const client = context?.client;
-  return client && typeof client.name === 'string' ? { name: client.name, version: typeof client.version === 'string' ? client.version : null } : null;
-};
 
 function escapedCSV(value) {
   let text = value == null ? '' : String(value);
@@ -379,7 +337,7 @@ export async function loadMatchingCatalogue(platform, window) {
 /** Companion's own load for the Jobs tab: the selected window's feed replaces the cached feed. Every saved review keeps the
  *  job it reviews, so narrowing the window never discards the agent's work; `window` lets Jobs show only this window. */
 export function replaceFeedCache(career, jobs, window) {
-  const previous = career.matching ?? {}, scores = previous.scores ?? {};
+  const previous = career.matching ?? {}, scores = fullReviews(previous.scores);
   const reviewed = Object.fromEntries(Object.entries(previous.jobs ?? {}).filter(([id]) => own(scores, id)));
   career.matching = { ...previous, jobs: { ...reviewed, ...Object.fromEntries(jobs.map(job => [job.id, job])) },
     scores, pairs: previous.pairs ?? {}, window };
@@ -413,96 +371,24 @@ export function createMatchingTools({ store, platform, exportDocument }) {
             fail('RANKINGS_CHANGED', 'Rankings were deleted while the catalogue was loading. Request the current catalogue; discarded results were not restored.');
           const previous = career.matching;
           const currentJobs = Object.fromEntries([...jobs, ...completeLocalJobs(career)].map(job => [job.id, job]));
-          const currentScores = Object.fromEntries(Object.entries(previous?.scores ?? {}).filter(([id]) => own(currentJobs, id)));
+          const currentScores = Object.fromEntries(Object.entries(fullReviews(previous?.scores)).filter(([id]) => own(currentJobs, id)));
           const keepArchive = args.localOnly;
-          const scores = keepArchive ? previous?.scores ?? {} : currentScores;
+          const scores = keepArchive ? fullReviews(previous?.scores) : currentScores;
           const retainedJobs = keepArchive
             ? Object.fromEntries(Object.entries(previous?.jobs ?? {}).filter(([id]) => own(scores, id) && !own(currentJobs, id)))
             : {};
           const pairs = Object.fromEntries(Object.entries(previous?.pairs ?? {})
             .filter(([, pair]) => own(scores, pair.a) && own(scores, pair.b)));
-          const allJobs = { ...retainedJobs, ...currentJobs };
-          const shortlist = Object.fromEntries(Object.entries(previous?.shortlist ?? {}).filter(([id]) => own(allJobs, id)));
-          const saved = career.matching = { jobs: allJobs, scores, pairs, shortlist };
+          const saved = career.matching = { jobs: { ...retainedJobs, ...currentJobs }, scores, pairs };
           const profileVersion = matchingProfileVersion(career);
           const candidates = Object.keys(currentJobs).filter(id => !currentAssessment(saved.scores[id], profileVersion));
           const inclusion = reviewInclusion(career, candidates);
-          const jobIds = [...inclusion.includedIds];
           result = { candidate, profileVersion, policyId: ASSESSMENT_POLICY_ID, evidenceRevision: career.evidenceRevision ?? 0,
             publicationWindow: window,
             assessmentPolicy: { protocol: MATCHING_PROTOCOL, weights: DIMENSION_WEIGHTS, bands: BANDS, recommendMinimum: RECOMMEND_MINIMUM },
             assessmentSchema,
-            jobIds, unscreened: jobIds.filter(id => !shortlisted(saved, id, profileVersion)).length,
-            excluded: inclusion.candidates - inclusion.includedIds.size, blocked: inclusion.blocked,
+            jobIds: [...inclusion.includedIds], excluded: inclusion.candidates - inclusion.includedIds.size, blocked: inclusion.blocked,
             total: Object.keys(currentJobs).length, ...counts(currentJobs, currentScores, profileVersion), batchSize: 10, workers: 8 };
-        });
-        return result;
-      },
-    },
-    {
-      name: 'career_screen_jobs', description: describe('career_screen_jobs'),
-      inputSchema: object({ limit: { type: 'integer', minimum: 1, maximum: SCREEN_PAGE_ROWS } }), readOnly: true,
-      async invoke(args = {}) {
-        assertObject(args, ['limit']);
-        const { limit = SCREEN_PAGE_ROWS } = args;
-        if (!Number.isInteger(limit) || limit < 1 || limit > SCREEN_PAGE_ROWS) fail('INVALID_INPUT', `Use limit 1–${SCREEN_PAGE_ROWS}.`);
-        const career = readCareer(store);
-        candidateContext(career);
-        const { saved, profileVersion, unscreened, reviewIds } = reviewQueue(career, publicationScope());
-        const jobs = [];
-        let bytes = 0;
-        for (const id of unscreened.slice(0, limit)) {
-          const row = screeningRow(saved.jobs[id], career.jobs?.[id]?.description);
-          const size = Buffer.byteLength(JSON.stringify(row)) + 1;
-          if (jobs.length && bytes + size > SCREEN_PAGE_BYTES) break;
-          jobs.push(row);
-          bytes += size;
-        }
-        return { profileVersion, columns: SCREEN_COLUMNS, jobs, unscreened: unscreened.length, ...(jobs.length ? {} : { reviewIds }) };
-      },
-    },
-    {
-      name: 'career_screen_save', description: describe('career_screen_save'),
-      inputSchema: object({ profileVersion: profileVersionSchema,
-        verdicts: { type: 'array', items: verdictSchema, minItems: 1, maxItems: SCREEN_PAGE_ROWS } }, ['profileVersion', 'verdicts']), readOnly: false,
-      async invoke(args = {}, context = {}) {
-        assertObject(args, ['profileVersion', 'verdicts'], ['profileVersion', 'verdicts']);
-        if (typeof args.profileVersion !== 'string' || !/^[0-9]+:[0-9]+$/.test(args.profileVersion))
-          fail('INVALID_INPUT', 'Use profileVersion from the current career_screen_jobs page.');
-        assertSchema(validVerdicts, args.verdicts, 'verdicts');
-        const ids = args.verdicts.map(row => row.id);
-        if (new Set(ids).size !== ids.length) fail('INVALID_INPUT', 'Give each job exactly one verdict.');
-        const host = clientHost(context), { profileVersion } = args;
-        let result;
-        await store.update(state => {
-          const career = state.career ??= createCareerState();
-          for (const id of ids) assertJobNotBlocked(career, id);
-          assertProfile(career, profileVersion);
-          const window = publicationScope(), allJobs = matching(career).jobs;
-          assertKnown(allJobs, ids);
-          assertCurrentWindow(allJobs, ids, window);
-          const saved = writableMatching(career), shortlist = saved.shortlist ??= {};
-          const scoredAt = new Date().toISOString(), tally = { skipped: 0, review: 0, unchanged: 0, alreadyReviewed: 0 };
-          for (const { id, verdict, reason } of args.verdicts) {
-            const existing = saved.scores[id], current = currentAssessment(existing, profileVersion);
-            const screened = current && existing.status === 'screened';
-            // A full-advert review outranks any listing verdict.
-            if (current && !screened) tally.alreadyReviewed++;
-            else if (verdict === 'skip' ? screened && existing.reason === reason : !screened && shortlisted(saved, id, profileVersion)) tally.unchanged++;
-            else if (verdict === 'skip') {
-              if (id.startsWith('local:')) saved.jobs[id] = localJobMetadata(localJob(career, id));
-              saved.scores[id] = { id, status: 'screened', reason, overall: null, band: null, decision: 'skip',
-                profileVersion, policyId: ASSESSMENT_POLICY_ID, scoredAt, host };
-              delete shortlist[id];
-              for (const [key, pair] of Object.entries(saved.pairs)) if (pair.a === id || pair.b === id) delete saved.pairs[key];
-              tally.skipped++;
-            } else {
-              if (screened) delete saved.scores[id];
-              shortlist[id] = { profileVersion, policyId: ASSESSMENT_POLICY_ID };
-              tally.review++;
-            }
-          }
-          result = { ...tally, unscreened: reviewQueue(career, window).unscreened.length };
         });
         return result;
       },
@@ -562,7 +448,8 @@ export function createMatchingTools({ store, platform, exportDocument }) {
         assertSchema(validAssessments, args.assessments, 'assessments');
         const ids = args.assessments.map(row => row.id);
         assertIds(ids);
-        const host = clientHost(context);
+        const client = context?.client;
+        const host = client && typeof client.name === 'string' ? { name: client.name, version: typeof client.version === 'string' ? client.version : null } : null;
         await store.update(state => {
           const career = state.career ??= createCareerState();
           for (const id of ids) assertJobNotBlocked(career, id);

@@ -108,6 +108,14 @@ async function stopIsolatedLinuxProcesses() {
   while ((await isolatedLinuxProcesses()).length && Date.now() < deadline) await delay(100);
   assert.deepEqual(await isolatedLinuxProcesses(), [], 'Disposable AppImage processes did not exit.');
 }
+// A force-killed AppImage runtime leaves its FUSE mount attached under the scratch tmp, so rmdir fails with EBUSY.
+async function detachScratchMounts() {
+  const mounts = (await readFile('/proc/self/mounts', 'utf8')).split('\n')
+    .map(line => line.split(' ')[1]?.replace(/\\040/g, ' ')).filter(point => point?.startsWith(`${scratch}${path.sep}`));
+  for (const point of mounts) {
+    await promisify(execFile)('fusermount', ['-u', '-z', point]).catch(() => promisify(execFile)('fusermount3', ['-u', '-z', point])).catch(() => {});
+  }
+}
 async function exchange(executable, args, request, native) {
   const options = { env, cwd: scratch, stdio: ['pipe', 'pipe', 'pipe'] };
   let helper;
@@ -274,6 +282,6 @@ try {
       try { process.kill(-child.pid, 'SIGKILL'); } catch (error) { if (error.code !== 'ESRCH') throw error; }
     }
   }
-  if (process.platform === 'linux') await stopIsolatedLinuxProcesses();
+  if (process.platform === 'linux') { await stopIsolatedLinuxProcesses(); await detachScratchMounts(); }
   await rm(scratch, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
 }

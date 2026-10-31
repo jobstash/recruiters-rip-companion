@@ -55,9 +55,6 @@ function openSettings(target) {
   selectSettingsTab('general');
   const section = $(target);
   if (!section) return;
-  if (target === 'decisions') {
-    section.querySelector('details').open = true;
-  }
   section.scrollIntoView({ block: 'start' });
   [...section.querySelectorAll('input:not(:disabled), button:not(:disabled, .link), summary')].find(control => control.getClientRects().length)?.focus({ preventScroll: true });
 }

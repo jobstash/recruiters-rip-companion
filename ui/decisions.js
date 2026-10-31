@@ -33,7 +33,7 @@
     element('key-status').textContent = !available ? 'Unlock your saved work to use help with forms.'
       : !configured ? 'No key saved. Read page can still use your saved details in Chrome and Firefox.'
         : replacing ? `The key …${credentials.keyHint} stays active until you save a new one.`
-          : `Key saved${since ? ` on ${since}` : ''}. OpenAI can help choose answers from your saved details.`;
+          : `Key saved${since ? ` on ${since}` : ''}.`;
   }
 
   async function invoke(op, input) {
@@ -76,7 +76,7 @@
     const input = { provider: 'openai', apiKey: key.value };
     key.value = '';
     replacing = false;
-    void perform('decisions-key-save', input, 'Key saved. OpenAI can help choose answers from your saved details.');
+    void perform('decisions-key-save', input, 'Key saved.');
   });
   element('replace').addEventListener('click', () => {
     if (pending || !credentials?.configured) return;

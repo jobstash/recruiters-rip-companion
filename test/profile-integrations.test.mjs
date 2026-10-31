@@ -6,10 +6,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import vm from 'node:vm';
-import AdmZip from 'adm-zip';
 import { privateDirectory } from '../src/vault.mjs';
 import { installNative } from '../src/install-native.mjs';
-import { installChatGptPlugin, mcpInvocation, prepareClaudePackage } from '../src/host-setup.mjs';
+import { installChatGptPlugin, mcpInvocation } from '../src/host-setup.mjs';
 import { BROWSER_IDENTITIES } from '../src/browser-identity.mjs';
 import { deviceDirectory, endpoint, launcherScript, mcpCommand, prepareBridgeRuntime, protectPrivatePath } from '../src/platform-runtime.cjs';
 
@@ -160,14 +159,6 @@ test('two generated profile integrations stay selected while running and after c
   await writeFile(path.join(appRoot, 'synthetic-companion.cjs'), companionFixture);
   await mkdir(path.join(appRoot, 'src', 'generated', 'recruiters-rip-plugin', '.codex-plugin'), { recursive: true });
   await writeFile(path.join(appRoot, 'src', 'generated', 'recruiters-rip-plugin', '.codex-plugin', 'plugin.json'), JSON.stringify({ name: 'recruiters-rip' }));
-  const template = path.join(appRoot, 'src', 'generated', 'recruiters-rip.mcpb'), archive = new AdmZip();
-  archive.addFile('manifest.json', Buffer.from(JSON.stringify({ manifest_version: '0.3', name: 'recruiters-rip', version: '3.12.0',
-    server: { type: 'node', entry_point: 'server/index.cjs', mcp_config: { command: 'node', args: ['${__dirname}/server/index.cjs', '--directory=${user_config.companion_directory}'] } },
-    user_config: { companion_directory: { type: 'directory', required: true } } })));
-  archive.addFile('server/index.cjs', await readFile(path.join(source, 'mcp', 'local-runner.cjs')));
-  archive.addFile('platform-runtime.cjs', await readFile(path.join(source, 'platform-runtime.cjs')));
-  await writeFile(template, archive.toBuffer());
-  const originalTemplate = await readFile(template);
   const defaultDirectory = deviceDirectory({ home, env }), defaultProfile = path.dirname(defaultDirectory);
   await privateDirectory(defaultDirectory);
   await writeFile(path.join(defaultProfile, 'profile.json'), JSON.stringify({ id: 'not-selected-default' }));
@@ -185,14 +176,6 @@ test('two generated profile integrations stay selected while running and after c
     const launch = JSON.parse(await readFile(path.join(directory, 'mcp-launch.json'), 'utf8'));
     assert.equal(launch.directory, directory); assert.equal(launch.userData, userData);
     assert.ok(launch.args.includes(`--user-data-dir=${userData}`));
-    const configured = await prepareClaudePackage({ template, directory, localOnly: false, version: '3.12.0' });
-    const installed = new AdmZip(configured), manifest = JSON.parse(installed.readAsText('manifest.json'));
-    assert.equal(manifest.user_config, undefined);
-    const extracted = path.join(userData, 'synthetic-claude-bundle');
-    await mkdir(path.join(extracted, 'server'), { recursive: true });
-    // Copy only these two known fixture members; never extract archive paths.
-    await writeFile(path.join(extracted, 'server', 'index.cjs'), installed.readFile('server/index.cjs'));
-    await writeFile(path.join(extracted, 'platform-runtime.cjs'), installed.readFile('platform-runtime.cjs'));
     await installChatGptPlugin({ directory, root: appRoot, localOnly: false, command: mcpCommand(directory), env,
       findCli: async () => ({ command: 'synthetic-codex', args: [] }),
       runCommand: async (_command, args) => ({ stdout: args.includes('--help') ? 'add marketplace' : '{}' }) });
@@ -202,7 +185,6 @@ test('two generated profile integrations stay selected while running and after c
     const invocations = [
       ['private-mcp', 'mcp', mcpInvocation(mcpCommand(directory), { env })],
       ['codex-plugin', 'mcp', codex],
-      ['claude-bundle', 'mcp', { command: process.execPath, args: manifest.server.mcp_config.args.map(value => value.replace('${__dirname}', extracted)) }],
       ['chrome-host', 'native', { command: process.execPath, args: [path.join(appRoot, 'src', 'native-host.cjs'), path.join(directory, 'native-config.json'), `chrome-extension://${BROWSER_IDENTITIES.production.extensionId}/`] }],
       ['firefox-host', 'native', { command: process.execPath, args: [path.join(appRoot, 'src', 'native-host.cjs'), path.join(directory, 'native-config.json'), native.firefoxManifest, BROWSER_IDENTITIES.production.firefoxExtensionId] }],
     ];
@@ -219,7 +201,6 @@ test('two generated profile integrations stay selected while running and after c
   }
   assert.deepEqual(await readdir(defaultDirectory), defaultBefore);
   assert.deepEqual(JSON.parse(await readFile(path.join(defaultProfile, 'profile.json'), 'utf8')), { id: 'not-selected-default' });
-  assert.deepEqual(await readFile(template), originalTemplate, 'private setup must not embed paths into the distributable bundle');
 });
 
 test('missing, unselected and cross-bound profile configurations never fall back to the default profile', { timeout: 30000 }, async t => {
@@ -265,23 +246,4 @@ test('profile aliases resolve to the same transport and process-exclusion identi
   await symlink(profile, alias, process.platform === 'win32' ? 'junction' : 'dir');
   for (const channel of ['native', 'mcp', 'instance'])
     assert.equal(endpoint(path.join(alias, 'device'), channel), endpoint(directory, channel));
-});
-
-test('private Claude packages reject mismatched or oversized bundled manifests', async t => {
-  const home = await realpath(await mkdtemp(path.join(tmpdir(), 'rr-profile-package-')));
-  t.after(() => rm(home, { recursive: true, force: true }));
-  const directory = path.join(home, 'device'); await privateDirectory(directory);
-  const template = path.join(home, 'bundled.mcpb');
-  for (const manifest of [
-    JSON.stringify({ manifest_version: '0.3', name: 'foreign', version: '3.12.0', server: { type: 'node', entry_point: 'server/index.cjs' } }),
-    ' '.repeat(64 * 1024 + 1),
-  ]) {
-    const archive = new AdmZip();
-    archive.addFile('manifest.json', Buffer.from(manifest));
-    archive.addFile('server/index.cjs', Buffer.from('/* synthetic bundle member */'));
-    archive.addFile('platform-runtime.cjs', Buffer.from('/* synthetic bundle member */'));
-    await writeFile(template, archive.toBuffer());
-    await assert.rejects(prepareClaudePackage({ template, directory, localOnly: false, version: '3.12.0' }), { code: 'HOST_INSTALL_FAILED' });
-    assert.deepEqual(await readdir(directory), []);
-  }
 });

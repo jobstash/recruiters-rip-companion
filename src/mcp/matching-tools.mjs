@@ -332,6 +332,15 @@ export async function loadMatchingCatalogue(platform, window) {
   }
 }
 
+/** Companion's own load for the Jobs tab: the selected window's feed replaces the cached feed. Every saved review keeps the
+ *  job it reviews, so narrowing the window never discards the agent's work; `window` lets Jobs show only this window. */
+export function replaceFeedCache(career, jobs, window) {
+  const previous = career.matching ?? {}, scores = previous.scores ?? {};
+  const reviewed = Object.fromEntries(Object.entries(previous.jobs ?? {}).filter(([id]) => own(scores, id)));
+  career.matching = { ...previous, jobs: { ...reviewed, ...Object.fromEntries(jobs.map(job => [job.id, job])) },
+    scores, pairs: previous.pairs ?? {}, window };
+}
+
 export function createMatchingTools({ store, platform, exportDocument }) {
   const describe = name => MATCHING_TOOL_DESCRIPTIONS[name];
   const publicationScope = () => publicationWindowForRange(savedPublicationRange(store.get().career ?? {}));

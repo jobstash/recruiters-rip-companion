@@ -7,6 +7,7 @@
 <title>Recruiters.rip Companion</title>
 <link rel="stylesheet" href="design-tokens.css">
 <link rel="stylesheet" href="settings.css">
+<script src="jobs-empty.js" defer></script>
 <script src="career-browser.js" defer></script>
 <script src="decisions.js" defer></script>
 <script src="updates.js" defer></script>
@@ -44,7 +45,7 @@
 <section id="view-me" class="career-view" aria-label="Me" hidden>
 <div id="me-actions" class="me-actions">
 <section id="me-setup" class="setup-next" aria-labelledby="setup-next-title" hidden>
-<div><h2 id="setup-next-title">Start a job review</h2><p id="setup-next-description"></p><p id="setup-next-status" class="caption" role="status"></p></div>
+<div><h2 id="setup-next-title">Start a job review</h2><p id="setup-next-description"></p><ol id="setup-next-steps" class="setup-progress" aria-label="Setup steps"></ol><p id="setup-next-status" class="caption" role="status"></p></div>
 <button id="setup-next" class="primary" type="button">Connect account</button>
 </section>
 <section id="me-sharing" class="setup-next" aria-labelledby="me-sharing-title" hidden>
@@ -111,6 +112,7 @@
 </div>
 </div>
 <button id="career-list-retry" class="ghost" type="button" hidden>Retry</button>
+<button id="career-list-action" class="primary" type="button" hidden></button>
 <ul id="career-records" class="career-records career-cards" aria-label="Saved jobs" hidden></ul>
 <nav id="career-pagination" class="actions pagination" aria-label="Job pages" hidden>
 <button id="career-previous" class="text" type="button" disabled>Previous</button>
@@ -158,6 +160,7 @@
 <li><span>Add recruiters.rip</span><button id="install-chatgpt" class="ghost" type="button">Set up</button></li>
 <li><span>Start a job search</span><button id="setup-codex" class="ghost" type="button">Continue in Codex</button></li>
 </ol>
+<p id="codex-restart" class="caption" role="status" hidden></p>
 </div>
 <div class="app-block">
 <div class="app-head"><h3 id="claude-host-label" class="app-name">Claude</h3><p id="claude-status" class="caption" aria-live="polite"></p></div>
@@ -166,6 +169,8 @@
 <li><span>Add recruiters.rip</span><button id="install-claude" class="ghost" type="button">Set up</button></li>
 <li><span>Start a job search</span><button id="setup-claude" class="ghost" type="button">Continue in Claude</button></li>
 </ol>
+<p id="claude-restart" class="caption" role="status" hidden></p>
+<p id="claude-extension" class="caption" hidden>Remove the older recruiters.rip extension in Claude → Settings → Extensions.</p>
 </div>
 <p id="other-connections" class="caption" aria-live="polite" hidden></p>
 <div class="app-block">
@@ -268,12 +273,13 @@
 <li>In Settings, choose <strong>Connect account</strong>. Sign in in the browser, choose <strong>Connect account → Open Companion</strong>, then approve the named account back here.</li>
 <li>In Me, choose <strong>Import CV</strong> and select a PDF, Word document (.docx) or text file.</li>
 <li>In Settings → AI apps, choose <strong>Get Codex</strong> or <strong>Get Claude</strong> if you need to install one. Sign in there, then choose <strong>Set up</strong> in Companion.</li>
-<li>Open Jobs and choose <strong>Continue in Codex</strong> or <strong>Continue in Claude</strong>. Send the message in that app, or press <strong>Enter</strong> in the text window that opens.</li>
+<li>Restart that app so it loads recruiters.rip: quit Claude completely and reopen it, restart Codex, or start a new Claude Code session.</li>
+<li>Open Jobs and choose <strong>Continue in Codex</strong> or <strong>Continue in Claude</strong>. Send the message in that app, or press <strong>Enter</strong> in the text window that opens. Its reviews appear under <strong>Reviewed</strong>.</li>
 </ol></div>
 </section>
 <section class="setup-section" aria-labelledby="help-flow-title">
 <h2 id="help-flow-title">In your AI app</h2>
-<div class="settings-content"><p>Keep Companion open. To start from a conversation you already have, send:</p><pre id="help-prompt" class="command" tabindex="0">Use recruiters.rip to find jobs that fit my CV. Ask about any missing preferences and explain which roles fit and why.</pre><p>New recruiters.rip jobs need a membership. Codex or Claude uses your own account and any required plan, billed separately. A browser extension and extra API key are not needed to review jobs.</p><details><summary>My AI app cannot find recruiters.rip</summary><p>Follow Set up in Settings → AI apps, enable recruiters.rip in your AI app when asked, then start a new conversation. If Continue in Codex or Continue in Claude does not open the app, copy the message into it yourself.</p></details></div>
+<div class="settings-content"><p>Keep Companion open. To start from a conversation you already have, send:</p><pre id="help-prompt" class="command" tabindex="0">Use recruiters.rip to find jobs that fit my CV. Ask about any missing preferences and explain which roles fit and why.</pre><p>New recruiters.rip jobs need a membership. Codex or Claude uses your own account and any required plan, billed separately. A browser extension and extra API key are not needed to review jobs.</p><details><summary>My AI app cannot find recruiters.rip</summary><p>Choose Set up in Settings → AI apps, then quit the app completely and reopen it (Claude Code: start a new session). Enable recruiters.rip if the app asks. If Continue in Codex or Continue in Claude does not open the app, copy the message into it yourself.</p></details></div>
 </section>
 <section class="setup-section" aria-labelledby="help-documents-title">
 <h2 id="help-documents-title">Open your CV and letter</h2>

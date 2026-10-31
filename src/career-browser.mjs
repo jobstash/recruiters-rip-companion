@@ -5,6 +5,7 @@ import { createMatchingTools } from './mcp/matching-tools.mjs';
 import { fail, hash, readCareer } from './mcp/state.mjs';
 import { reviewInclusion } from './mcp/review-queue.mjs';
 import { localJobMetadata } from './mcp/job-tools.mjs';
+import { publicationInWindow } from './mcp/publication-range.mjs';
 import { blockedIds, listBlocks } from './mcp/blocklist.mjs';
 import { employmentHistory } from './employment-browser.mjs';
 import { preferenceItems } from './preferences-browser.mjs';
@@ -420,8 +421,12 @@ export function createCareerBrowser({ store, files, openPath }) {
       if (kind === 'jobs') {
         const { rows, inclusion } = await jobUnion(career);
         const staged = [...rows.values()].map(row => ({ row, stage: cardStage(row, inclusion) }));
-        const inView = { jobs: () => true, reviewed: ({ stage }) => stage.stage === 'reviewed' || stage.stage === 'ineligible' };
-        const counts = { jobs: staged.length, reviewed: staged.filter(inView.reviewed).length,
+        // Jobs is the loaded publication window (captures always count); reviews outside it stay under Reviewed.
+        const feedWindow = career.matching?.window;
+        const inWindow = ({ row }) => Boolean(row.imported) || !feedWindow ||
+          publicationInWindow(row.metadata?.publishedAt ?? row.reviewed?.publishedAt, feedWindow);
+        const inView = { jobs: inWindow, reviewed: ({ stage }) => stage.stage === 'reviewed' || stage.stage === 'ineligible' };
+        const counts = { jobs: staged.filter(inWindow).length, reviewed: staged.filter(inView.reviewed).length,
           applications: entries(career.applications).length, blocks: listBlocks(career).length };
         const sorted = sortJobs(staged.filter(inView[view]), view);
         const items = sorted.slice(offset, offset + limit).map(row => jobItem(row, inclusion, career));

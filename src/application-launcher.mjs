@@ -135,7 +135,7 @@ export function createApplicationLauncher({ directory, command, openExternal, ho
       if (!descriptor.available)
         fail('HOST_UNAVAILABLE', `Install ${labels[host]} or its official CLI and an interactive terminal, sign in, then try again, or copy the prompt instead.`);
       await configure(host);
-      const prompt = `${REVIEW_PROMPT} If the skill is unavailable, use the ${applicationConnection} MCP connection for this workspace and its career_match_jobs tool.`;
+      const prompt = `${REVIEW_PROMPT} If the skill is unavailable, use the recruiters.rip MCP tools, starting with career_match_jobs.`;
       try { await launch(host, descriptor, prompt); }
       catch { fail('HOST_LAUNCH_FAILED', `Could not open ${descriptor.label}. Open it once and sign in, then try again, or copy the prompt instead.`); }
       return { opened: true, host, requiresSend: true, mode: descriptor.mode };

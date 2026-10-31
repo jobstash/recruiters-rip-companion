@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { addedHosts, agentSetupPrompt, discoverHost, findHostCli, findChatGptCli, hostEnvironment, installChatGptPlugin, mcpInvocation } from '../src/host-setup.mjs';
+import { addClaudeDesktopServer, addedHosts, agentSetupPrompt, claudeExtensionInstalled, discoverHost, findHostCli, findChatGptCli, hostEnvironment,
+  installChatGptPlugin, installClaudeSkill, liveSessions, mcpInvocation, settleRestartNotices } from '../src/host-setup.mjs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
@@ -110,7 +111,12 @@ test('an app counts as added only when its own config names an enabled recruiter
   assert.deepEqual(await check({ [desktopConfig]: JSON.stringify({ mcpServers: { 'recruiters-rip': { command: '/x' } } }) }), { codex: false, claude: true });
   assert.deepEqual(await check({ [`${home}/.claude.json`]: JSON.stringify({ mcpServers: { 'recruiters-rip': { command: '/x' } } }) }), { codex: false, claude: true });
   assert.deepEqual(await check({ [`${workspace}/.mcp.json`]: JSON.stringify({ mcpServers: { 'recruiters-rip-applications': { command: '/x' } } }) }), { codex: false, claude: true });
-  assert.deepEqual(await check({ [`${home}/Library/Application Support/Claude/Claude Extensions/local.mcpb.recruiters.recruiters-rip/manifest.json`]: '{}' }), { codex: false, claude: true });
+  // A Claude Desktop extension serves only Claude's Chat, not the Code tab that Continue in Claude opens.
+  const extension = `${home}/Library/Application Support/Claude/Claude Extensions/local.mcpb.recruiters.recruiters-rip/manifest.json`;
+  assert.deepEqual(await check({ [extension]: '{}' }), { codex: false, claude: false });
+  const listing = directory => { const prefix = `${directory}/`; const entries = [extension].filter(file => file.startsWith(prefix)).map(file => file.slice(prefix.length).split('/')[0]); if (!entries.length) throw new Error('missing'); return entries; };
+  assert.equal(await claudeExtensionInstalled({ home, platform: 'darwin', env: {}, list: async directory => listing(directory) }), true);
+  assert.equal(await claudeExtensionInstalled({ home, platform: 'darwin', env: {}, list: async () => { throw new Error('missing'); } }), false);
   assert.deepEqual(await check({ [desktopConfig]: '{not json', [`${home}/.claude.json`]: JSON.stringify({ mcpServers: { other: {} }, projects: {} }) }), { codex: false, claude: false });
   // Windows and Linux read each app's documented config location.
   assert.deepEqual(await check({ 'C:\\Users\\Zoë\\AppData\\Roaming\\Claude\\claude_desktop_config.json': JSON.stringify({ mcpServers: { 'recruiters-rip': {} } }) },
@@ -120,6 +126,75 @@ test('an app counts as added only when its own config names an enabled recruiter
   const production = { [codexConfig]: '[plugins."recruiters-rip@recruiters-rip"]\n', [desktopConfig]: JSON.stringify({ mcpServers: { 'recruiters-rip': {} } }) };
   assert.deepEqual(await check(production, { localOnly: true }), { codex: false, claude: false });
   assert.deepEqual(await check({ [codexConfig]: '[plugins."recruiters-rip@recruiters-rip-local"]\n', [desktopConfig]: JSON.stringify({ mcpServers: { 'recruiters-rip-local': {} } }) }, { localOnly: true }), { codex: true, claude: true });
+});
+
+test('Claude Desktop Set up merges recruiters.rip into its config, keeps everything else and never rewrites an unreadable file', async t => {
+  const home = await temporary(t), env = { APPDATA: path.join(home, 'Roaming'), XDG_CONFIG_HOME: path.join(home, 'config') };
+  const directory = process.platform === 'darwin' ? path.join(home, 'Library', 'Application Support', 'Claude')
+    : process.platform === 'win32' ? path.join(env.APPDATA, 'Claude') : path.join(env.XDG_CONFIG_HOME, 'Claude');
+  const config = path.join(directory, 'claude_desktop_config.json'), command = path.join(home, 'device', 'recruiters-rip-mcp');
+  const add = () => addClaudeDesktopServer({ command, home, env });
+  // No file yet: Companion creates one with only its entry.
+  assert.deepEqual(await add(), { changed: true });
+  assert.deepEqual(JSON.parse(await readFile(config, 'utf8')), { mcpServers: { 'recruiters-rip': { command, args: [] } } });
+  // Other settings and servers stay; the previous file is kept beside it; a repeat Set up changes nothing.
+  const previous = JSON.stringify({ globalShortcut: 'Alt+Space', mcpServers: { other: { command: '/other', args: ['-x'] } } });
+  await writeFile(config, previous);
+  assert.deepEqual(await add(), { changed: true });
+  assert.deepEqual(JSON.parse(await readFile(config, 'utf8')),
+    { globalShortcut: 'Alt+Space', mcpServers: { other: { command: '/other', args: ['-x'] }, 'recruiters-rip': { command, args: [] } } });
+  assert.equal(await readFile(path.join(directory, 'claude_desktop_config.before-recruiters-rip.json'), 'utf8'), previous);
+  assert.deepEqual(await add(), { changed: false });
+  // A file that does not parse, or whose servers are not an object, is left byte-for-byte unchanged.
+  for (const broken of ['{"mcpServers": {', JSON.stringify({ mcpServers: [] }), '[]']) {
+    await writeFile(config, broken);
+    await assert.rejects(add(), { code: 'HOST_INSTALL_FAILED', message: /isn’t valid JSON, so Companion left it unchanged/ });
+    assert.equal(await readFile(config, 'utf8'), broken);
+  }
+});
+
+test('the Claude skill installs into ~/.claude/skills and refreshes only an installed copy', async t => {
+  const root = await temporary(t), source = path.join(root, 'plugin', 'skills', 'recruiters-rip'), home = path.join(root, 'home');
+  await mkdir(path.join(source, 'agents'), { recursive: true });
+  await writeFile(path.join(source, 'SKILL.md'), '---\nname: recruiters-rip\n---\nv1\n');
+  await writeFile(path.join(source, 'agents', 'openai.yaml'), 'v1\n');
+  const target = path.join(home, '.claude', 'skills', 'recruiters-rip');
+  assert.equal(await installClaudeSkill({ source, home, env: {}, onlyIfPresent: true }), false);
+  await assert.rejects(stat(target), { code: 'ENOENT' });
+  assert.equal(await installClaudeSkill({ source, home, env: {} }), true);
+  assert.equal(await readFile(path.join(target, 'SKILL.md'), 'utf8'), '---\nname: recruiters-rip\n---\nv1\n');
+  // A Companion update replaces the whole folder, dropping files the new skill no longer has.
+  await writeFile(path.join(target, 'stale.md'), 'old');
+  await writeFile(path.join(source, 'SKILL.md'), '---\nname: recruiters-rip\n---\nv2\n');
+  assert.equal(await installClaudeSkill({ source, home, env: {}, onlyIfPresent: true }), true);
+  assert.equal(await readFile(path.join(target, 'SKILL.md'), 'utf8'), '---\nname: recruiters-rip\n---\nv2\n');
+  await assert.rejects(stat(path.join(target, 'stale.md')), { code: 'ENOENT' });
+  // CLAUDE_CONFIG_DIR moves Claude Code's personal folder.
+  assert.equal(await installClaudeSkill({ source, home, env: { CLAUDE_CONFIG_DIR: path.join(root, 'claude-config') } }), true);
+  assert.ok((await stat(path.join(root, 'claude-config', 'skills', 'recruiters-rip', 'SKILL.md'))).isFile());
+});
+
+test('only Claude Code sessions make Claude “In use now”; Claude chat and Cowork sessions are named instead', () => {
+  assert.deepEqual(liveSessions(['claude-code', 'codex-mcp-client']), { live: { codex: true, claude: true }, other: [] });
+  assert.deepEqual(liveSessions(['claude-ai', 'local-agent-mode-recruiters-rip', '']), { live: { codex: false, claude: false }, other: ['Claude chat'] });
+  assert.deepEqual(liveSessions(['cursor-vscode']), { live: { codex: false, claude: false }, other: ['cursor-vscode'] });
+});
+
+test('the restart notice after Set up stays until that app opens a new session', () => {
+  // Set up while Claude Code already has a session: that old session does not clear the notice.
+  let state = settleRestartNotices({ codex: false, claude: true }, { codex: 0, claude: 1 }, ['claude-code']);
+  assert.deepEqual(state.pending, { codex: false, claude: true });
+  // Claude's chat reconnecting after a restart is not the Code session Continue opens.
+  state = settleRestartNotices(state.pending, state.counts, ['claude-code', 'claude-ai']);
+  assert.equal(state.pending.claude, true);
+  // The old session ends, then a new one starts: the notice clears.
+  state = settleRestartNotices(state.pending, state.counts, ['claude-ai']);
+  assert.equal(state.pending.claude, true);
+  state = settleRestartNotices(state.pending, state.counts, ['claude-ai', 'claude-code']);
+  assert.deepEqual(state.pending, { codex: false, claude: false });
+  // Codex follows the same rule.
+  state = settleRestartNotices({ codex: true, claude: false }, { codex: 0, claude: 0 }, ['codex-mcp-client']);
+  assert.deepEqual(state.pending, { codex: false, claude: false });
 });
 
 test('the agent setup prompt names exact commands and files with this computer’s launcher', () => {

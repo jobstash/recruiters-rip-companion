@@ -125,13 +125,13 @@ main { flex: 1; min-height: 0; overflow: auto; padding: var(--spacing-32) var(--
    records the `auto` row and push the pagination bar below the clipped column. */
 .career-list { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto minmax(0, 1fr) auto; min-height: 0; overflow: hidden; }
 .career-list .panel-head { grid-row: 2; }
-.career-list > .ghost { grid-row: 3; align-self: start; }
+.career-list > .ghost, .career-list > .primary { grid-row: 3; align-self: start; }
 .career-records { grid-row: 3; }
 .career-list .pagination { grid-row: 4; }
 .career-reader { min-height: 0; overflow: auto; display: flex; flex-direction: column; }
 .career-list .panel-head p, .career-reader-status { font: 400 13px/1.6 var(--font-geist-mono); color: var(--color-smoke); }
 .career-list .panel-head p:empty, .career-reader-status:empty { display: none; }
-.career-list > .ghost, .career-reader > .ghost { margin: var(--spacing-24); }
+.career-list > .ghost, .career-list > .primary, .career-reader > .ghost { margin: var(--spacing-24); }
 .career-records { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; min-height: 0; overflow: auto; overscroll-behavior: contain; }
 .career-row { position: relative; display: flex; align-items: flex-start; border-bottom: 1px solid var(--color-facet); }
 .career-record { display: flex; flex-direction: column; align-items: stretch; gap: var(--spacing-8); width: 100%; padding: var(--spacing-16) var(--spacing-24); border: 0; border-radius: 0; font-weight: 400; letter-spacing: 0; text-transform: none; }
@@ -271,6 +271,11 @@ summary:hover { color: var(--color-ink); }
 .setup-next > div { display: grid; gap: var(--spacing-8); min-width: 0; }
 .setup-next h2 { font-size: 28px; }
 .setup-next > .actions { display: flex; }
+.setup-progress { display: flex; flex-wrap: wrap; gap: var(--spacing-8) var(--spacing-24); margin: 0; padding: 0; list-style: none; counter-reset: step; font: 400 13px/1.6 var(--font-geist-mono); letter-spacing: .02em; color: var(--color-smoke); }
+.setup-progress li { counter-increment: step; }
+.setup-progress li::before { content: counter(step) "  "; }
+.setup-progress li[aria-current="step"] { color: var(--color-ink); }
+#setup-next-status:empty { display: none; }
 .publication-window { display: grid; gap: var(--spacing-8); min-width: 0; }
 #decisions-key-message:empty { display: none; }
 

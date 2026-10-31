@@ -597,7 +597,7 @@ async function rendererFixture(browser, wide, operations = {}) {
       return propagated;
     }
   }
-  const names = ['records', 'list-status', 'list-retry', 'pagination', 'previous', 'next', 'reader', 'reader-title',
+  const names = ['records', 'list-status', 'list-retry', 'list-action', 'pagination', 'previous', 'next', 'reader', 'reader-title',
     'reader-status', 'reader-retry', 'reader-content', 'close'];
   const ids = [...names.flatMap(name => [`career-${name}`, `me-${name}`]), 'career-browser', 'me-browser', 'delete-rankings',
     'stage-jobs', 'publication-range', 'publication-range-label', 'review-launch', 'review-codex', 'review-claude', 'copy-review-prompt'];
@@ -646,7 +646,8 @@ async function rendererFixture(browser, wide, operations = {}) {
   window.showCompanionNotice = (...args) => notices.push(args);
   const document = { getElementById: id => nodes[id], createElement: tag => new Node(tag),
     querySelectorAll: () => [nodes['stage-jobs']], get activeElement() { return focused; } };
-  runInNewContext(await readFile(new URL('../ui/career-browser.js', import.meta.url), 'utf8'), { window, document });
+  for (const script of ['jobs-empty.js', 'career-browser.js'])
+    runInNewContext(await readFile(new URL(`../ui/${script}`, import.meta.url), 'utf8'), { window, document });
   const byClass = (node, className) => node.className.split(' ').includes(className) ? node
     : node.children.map(child => byClass(child, className)).find(Boolean) ?? null;
   const rows = prefix => nodes[`${prefix}-records`].children.map(row => byClass(row, 'career-record'));
@@ -1045,6 +1046,37 @@ test('each Jobs stage preserves its active tab and controls when empty', async (
   }
 });
 
+test('the empty Jobs list names the real reason with one action, and follows account and feed state', async () => {
+  const { browser } = fixture();
+  const ui = await rendererFixture(browser, true);
+  const status = () => ui.nodes['career-list-status'].textContent, action = ui.nodes['career-list-action'];
+  ui.window.careerBrowser.setContext({ paired: false });
+  await ui.window.careerBrowser.refresh();
+  await ui.settle();
+  assert.equal(status(), 'Connect your account to see new jobs.');
+  assert.equal(action.hidden, false);
+  assert.equal(action.textContent, 'Connect account');
+  // State broadcasts update the empty state in place, without reloading the list.
+  const listCalls = () => ui.calls.filter(call => call.operation === 'career-list').length, before = listCalls();
+  ui.window.careerBrowser.setContext({ paired: true, catalogue: { status: 'loading', range: 'past_3_days' } });
+  assert.equal(status(), 'Loading jobs…');
+  assert.equal(action.hidden, true);
+  ui.window.careerBrowser.setContext({ paired: true, catalogue: { status: 'failed', range: 'past_3_days', reason: 'offline' } });
+  assert.equal(action.textContent, 'Retry');
+  action.fire('click');
+  await ui.settle();
+  assert.deepEqual(ui.calls.at(-1), { operation: 'jobs-load', args: {} });
+  ui.window.careerBrowser.setContext({ paired: true, catalogue: { status: 'ready', range: 'past_3_days', total: 0 } });
+  assert.equal(status(), 'No jobs published in the past 3 days. Choose a longer range.');
+  assert.equal(action.hidden, true);
+  assert.equal(listCalls(), before);
+  // Reviewed keeps its own empty state, without the Jobs action.
+  ui.nodes['career-stage-reviewed'].fire('click');
+  await ui.settle();
+  assert.equal(status(), 'Nothing reviewed yet. Continue in Codex or Claude to review the jobs in this window.');
+  assert.equal(action.hidden, true);
+});
+
 test('the Jobs list column keeps Previous/Next on its own last grid row regardless of window height', async () => {
   const html = await readFile(new URL('../ui/index.html', import.meta.url), 'utf8');
   const css = await readFile(new URL('../ui/settings.css', import.meta.url), 'utf8');
@@ -1072,7 +1104,7 @@ test('the Jobs list column keeps Previous/Next on its own last grid row regardle
   assert.match(css, /^#career-browser \{ grid-template-rows: auto auto minmax\(0, 1fr\); \}$/m);
   // Four explicit rows, each child pinned to one, so hidden children never let the records take the `auto` row.
   assert.match(css, /^\.career-list \{[^}]*grid-template-rows: auto auto minmax\(0, 1fr\) auto;[^}]*overflow: hidden; \}$/m);
-  for (const [selector, row] of [['.career-list .panel-head', 2], ['.career-list > .ghost', 3], ['.career-records', 3], ['.career-list .pagination', 4]])
+  for (const [selector, row] of [['.career-list .panel-head', 2], ['.career-list > .ghost, .career-list > .primary', 3], ['.career-records', 3], ['.career-list .pagination', 4]])
     assert.match(css, new RegExp(`^${selector.replaceAll('.', '\\.')} \\{ grid-row: ${row};`, 'm'), selector);
   assert.match(css, /^\.career-records \{[^}]*overflow: auto;/m);
   assert.match(css, /^\.career-card-side \{[^}]*width: 112px;/m);

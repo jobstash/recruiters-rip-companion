@@ -66,6 +66,7 @@ $('setup-next').addEventListener('click', () => {
   if (next === 'account') $('connect-account').click();
   else if (next === 'cv') $('import-cv').click();
   else if (next === 'ai') openSettings('chat-app-settings');
+  else if (next === 'search') $($('setup-next').dataset.target).click();
   else if (next === 'retry') void refresh();
 });
 // Help reads the running package version from the same state snapshot Settings → Updates renders.
@@ -73,39 +74,52 @@ window.helpUI = {
   refresh(current) { $('help-version').textContent = typeof current?.updates?.version === 'string' ? `Version ${current.updates.version}` : ''; },
   clear() { $('help-version').textContent = ''; },
 };
-// "Added" is the app's own config naming recruiters.rip; "In use now" is a live MCP session named by the clientInfo the app declared.
-// Sessions come and go with conversations and Companion restarts, so their absence is never reported as a fault.
-const chatApps = { codex: /chatgpt|codex|openai/i, claude: /claude/i };
+// After Set up an app loads recruiters.rip only once it restarts; the line stays until that app opens a new session.
+const restartLine = (host, mode) => host === 'codex' ? 'Restart Codex, then choose Continue in Codex.'
+  : mode === 'cli' ? 'Start a new Claude Code session.' : 'Quit Claude completely and reopen it, then choose Continue in Claude.';
+// The first-run path, in order. Each step is done from authoritative state; the last ends in the AI app, whose reviews fill Jobs.
+const setupSteps = [['paired', 'Connect account'], ['hasCv', 'Import CV'], ['ai', 'Add Codex or Claude'], ['hasReviews', 'Start a job search']];
 let setupSignature = '';
 function renderSetup(current) {
   const ai = Boolean(current?.review?.added?.codex || current?.review?.added?.claude || current?.mcpClients?.some(Boolean));
-  const signature = JSON.stringify(current ? [current.paired, current.hasCv, ai] : null);
+  const hosts = current?.review?.hosts ?? {}, preferred = current?.review?.preferredHost;
+  const searchHost = hosts[preferred] ? preferred : ['codex', 'claude'].find(host => hosts[host]) ?? null;
+  const done = current ? { paired: current.paired, hasCv: current.hasCv, ai, hasReviews: current.hasReviews } : null;
+  const signature = JSON.stringify(done ? [done, searchHost] : null);
   if (signature === setupSignature) return;
   setupSignature = signature;
-  const next = !current ? 'retry' : !current.paired ? 'account' : !current.hasCv ? 'cv' : !ai ? 'ai' : null;
+  const next = !done ? 'retry' : !done.paired ? 'account' : !done.hasCv ? 'cv' : !ai ? 'ai' : !done.hasReviews ? 'search' : null;
   $('me-setup').hidden = !next;
   $('me-account').hidden = Boolean(current?.paired) || next === 'account';
   if (!next) return;
+  const hostName = searchHost === 'codex' ? 'Codex' : 'Claude';
   const copy = {
     account: ['Connect your account', 'Connect recruiters.rip to see new jobs. You can import your CV now, even without an account.', 'Connect account'],
     cv: ['Import your CV', 'Add your CV so Codex or Claude can find jobs that fit your experience.', 'Import CV'],
     ai: ['Add your AI app', 'Add recruiters.rip to Codex or Claude in Settings → AI apps.', 'AI apps'],
+    search: ['Start a job search', 'Your AI app reviews the new jobs. The ones that fit appear in Jobs → Reviewed.', searchHost ? `Continue in ${hostName}` : 'Copy prompt'],
     retry: ['Companion is unavailable', 'Your saved work is unchanged. Retry, or reopen Companion.', 'Retry'],
   }[next];
   $('setup-next-title').textContent = copy[0];
   $('setup-next-description').textContent = copy[1];
-  $('setup-next-status').textContent = current
-    ? `${current.paired ? 'Account connected' : 'Account not connected'} · ${current.hasCv ? 'CV added' : 'No CV added'} · ${ai ? 'AI app added' : 'No AI app found'}`
-    : 'Could not check your connection';
+  $('setup-next-steps').hidden = !done;
+  $('setup-next-status').textContent = done ? '' : 'Could not check your connection';
+  if (done) $('setup-next-steps').replaceChildren(...setupSteps.map(([key, label]) => {
+    const item = document.createElement('li');
+    item.textContent = done[key] ? `${label} · Done` : label;
+    if (key === { account: 'paired', cv: 'hasCv', ai: 'ai', search: 'hasReviews' }[next]) item.setAttribute('aria-current', 'step');
+    return item;
+  }));
   $('setup-next').textContent = copy[2];
   $('setup-next').dataset.action = next;
+  $('setup-next').dataset.target = searchHost ? `review-${searchHost}` : 'copy-review-prompt';
 }
+// "Added" is the app's own config naming recruiters.rip; "In use now" is a live session that Continue in that app can use, from
+// the clientInfo the session declared (Companion maps the names). Sessions come and go with conversations and Companion restarts,
+// so their absence is never reported as a fault.
 function renderIntegrations(current) {
-  const hosts = current.review?.hostInfo ?? {}, added = current.review?.added ?? {}, live = {}, other = new Set();
-  for (const name of current.mcpClients ?? []) {
-    const app = Object.keys(chatApps).find(key => chatApps[key].test(name));
-    if (app) live[app] = true; else if (name) other.add(name);
-  }
+  const hosts = current.review?.hostInfo ?? {}, added = current.review?.added ?? {}, live = current.review?.live ?? {};
+  const restart = current.review?.restart ?? {}, other = current.review?.other ?? [];
   $('claude-host-label').textContent = hosts.claude?.mode === 'cli' ? 'Claude Code' : 'Claude';
   for (const host of ['codex', 'claude']) {
     const info = hosts[host];
@@ -114,9 +128,12 @@ function renderIntegrations(current) {
     $(`get-${host}`).disabled = busy;
     $(host === 'codex' ? 'install-chatgpt' : 'install-claude').disabled = busy || !info?.available;
     $(`setup-${host}`).disabled = busy || !info?.available;
+    $(`${host}-restart`).hidden = !restart[host];
+    $(`${host}-restart`).textContent = restart[host] ? restartLine(host, info?.mode) : '';
   }
-  $('other-connections').hidden = !other.size;
-  $('other-connections').textContent = other.size ? `Also in use now: ${[...other].join(', ')}` : '';
+  $('claude-extension').hidden = !(added.claude && added.claudeExtension && hosts.claude?.mode !== 'cli');
+  $('other-connections').hidden = !other.length;
+  $('other-connections').textContent = other.length ? `Also in use now: ${other.join(', ')}` : '';
   // Only a live extension connection or a failed browser registration earns a line; otherwise the steps say what to do.
   for (const browser of ['chrome', 'firefox']) {
     const integration = current.browserIntegration;
@@ -165,7 +182,7 @@ async function refresh() {
     $('agent-prompt').textContent = state.setup.agentPrompt;
     renderIntegrations(state);
     window.decisionsUI?.refresh(state.decisions);
-    window.careerBrowser?.setContext({ review: state.review, publicationRange: state.publicationRange, paired: state.paired });
+    window.careerBrowser?.setContext({ review: state.review, publicationRange: state.publicationRange, paired: state.paired, catalogue: state.catalogue });
     window.updatesUI?.refresh(state.updates);
     window.helpUI.refresh(state);
     if (requestedSection) { const section = requestedSection; requestedSection = null; openSettings(section); }
@@ -195,7 +212,7 @@ async function action(op, success) {
       showView('me');
       document.querySelector('[data-career-kind="sources"]').click();
     }
-    notice(typeof success === 'function' ? success(result) : success, op, op === 'connect-account');
+    notice(typeof success === 'function' ? success(result) : success, op, ['connect-account', 'install-chatgpt', 'install-claude'].includes(op));
   }
   catch (error) { notice(error.message, 'error', true); }
   finally { busy = false; controls.forEach((control, index) => { control.disabled = disabled[index]; }); window.backupsUI?.setBusy(false); await refresh(); }
@@ -209,9 +226,9 @@ for (const [id, op, message] of [
   ['connect-account', 'connect-account', result => result.pairingRequired ? 'Complete sign-in in the browser, then choose Open Companion and approve the account on this computer.' : ''],
   ['get-codex', 'get-codex', result => `${result.destination} opened in your browser.`],
   ['get-claude', 'get-claude', result => `${result.destination} opened in your browser.`],
-  ['install-chatgpt', 'install-chatgpt', 'Added to Codex.'],
+  ['install-chatgpt', 'install-chatgpt', `Added to Codex. ${restartLine('codex')}`],
   ['copy-agent-prompt', 'copy-agent-prompt', 'Copied. Paste it into your agent and send.'],
-  ['install-claude', 'install-claude', result => result?.installed ? 'Added to Claude Code.' : 'Finish adding recruiters.rip in the Claude window that opened.'],
+  ['install-claude', 'install-claude', result => `${result?.mode === 'cli' ? 'Added to Claude Code.' : 'Added to Claude.'} ${restartLine('claude', result?.mode)}`],
   ['save-extension', 'save-extension', ''],
   ['save-firefox-extension', 'save-firefox-extension', ''],
   ['open-chrome-extensions', 'open-chrome-extensions', result => extensionsPage('chrome', result)],

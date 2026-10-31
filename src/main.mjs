@@ -28,7 +28,7 @@ import { createScopedAccess } from './mcp/scope.mjs';
 import { createMatchingTools, deleteRankings } from './mcp/matching-tools.mjs';
 import { matchingProfileVersion } from './mcp/assessment-policy.mjs';
 import { addBlock, removeBlock } from './mcp/blocklist.mjs';
-import { addedHosts, agentSetupPrompt, installChatGptPlugin, prepareClaudePackage } from './host-setup.mjs';
+import { addClaudeDesktopServer, addedHosts, agentSetupPrompt, claudeExtensionInstalled, installChatGptPlugin, installClaudeSkill, liveSessions, settleRestartNotices } from './host-setup.mjs';
 import { createCareerBrowser } from './career-browser.mjs';
 import { createDecisionCredentials, decisionCredentialStatus } from './decisions/credentials.mjs';
 import { savedPublicationRange, setPublicationRange } from './mcp/review-queue.mjs';
@@ -41,6 +41,7 @@ import { createUpdatePreferences, createUpdateScheduler, createUpdateWorkGate, u
 import { inspectManagedSource } from './source-updates.mjs';
 import { createApplicationWorkflow, createApplicationPreparationTools, saveAppliedJobs } from './application-workflow.mjs';
 import { createApplicationLauncher, REVIEW_PROMPT } from './application-launcher.mjs';
+import { createJobsCatalogue } from './jobs-catalogue.mjs';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const packageMetadata = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
@@ -103,6 +104,12 @@ async function mutation(action) {
 }
 const decisionCredentials = createDecisionCredentials({ store, onChange: async () => { browserForms?.cancelAll(); emit(); } });
 browserForms = createBrowserForms({ store, credentials: decisionCredentials, assertAvailable });
+// Jobs shows the selected window's real count before any AI review: while an account is connected, Companion loads the feed itself.
+const jobsCatalogue = createJobsCatalogue({ store, platform: (operation, args) => platform(operation, args), onChange: () => { careerViewRevision++; emit(); } });
+function loadJobs(force = false) {
+  if (locked || screenLocked || sleeping || quitDraining || updateInstalling) return;
+  void workGate.run(() => jobsCatalogue.load({ force }), { meaningful: false }).catch(() => {});
+}
 const backups = createBackups({
   directory, store: vault, assertAvailable: assertStorageAvailable, epoch: () => sessionEpoch,
   selectBackup: async () => {
@@ -270,9 +277,10 @@ function status() {
 }
 function setup() {
   const command = mcpCommand(directory);
-  return { command, agentPrompt: agentSetupPrompt(command, { localOnly }),
-    claudePackage: path.join(app.isPackaged ? root.replace(/app\.asar$/, 'app.asar.unpacked') : root, 'src', 'generated', localOnly ? 'recruiters-rip-local.mcpb' : 'recruiters-rip.mcpb') };
+  return { command, agentPrompt: agentSetupPrompt(command, { localOnly }) };
 }
+// The skill Claude Code loads is the one the Codex plugin bundles.
+const claudeSkillSource = () => path.join(app.isPackaged ? root.replace(/app\.asar$/, 'app.asar.unpacked') : root, 'src', 'generated', 'recruiters-rip-plugin', 'skills', 'recruiters-rip');
 // Installed review hosts and their recruiters.rip entries are read at startup, when the window regains focus and after setup/review actions; opening Jobs does not stat the disk every refresh.
 let reviewHosts = { claude: false, codex: false }, reviewHostInfo = {};
 async function refreshReviewHosts() {
@@ -287,12 +295,19 @@ async function refreshReviewHosts() {
   await refreshAddedHosts();
 }
 // "Added" means the app's own config names recruiters.rip; also re-read whenever an app connects.
-let hostsAdded = { codex: false, claude: false };
+let hostsAdded = { codex: false, claude: false, claudeExtension: false };
 async function refreshAddedHosts() {
   try {
-    const next = await addedHosts({ workspace: path.join(directory, 'host-integration', 'application-workspace'), localOnly });
-    if (next.codex !== hostsAdded.codex || next.claude !== hostsAdded.claude) { hostsAdded = next; emit(); }
+    const next = { ...await addedHosts({ workspace: path.join(directory, 'host-integration', 'application-workspace'), localOnly }),
+      claudeExtension: await claudeExtensionInstalled({ localOnly }) };
+    if (JSON.stringify(next) !== JSON.stringify(hostsAdded)) { hostsAdded = next; emit(); }
   } catch { /* keeps the last known value */ }
+}
+// After Set up, the app must restart (Claude Code: start a new session) to load recruiters.rip; the AI apps step says so until
+// that app opens a new recruiters.rip session.
+let restartPending = { codex: false, claude: false }, sessionCounts = { codex: 0, claude: 0 };
+function noteSessions(clients) {
+  ({ pending: restartPending, counts: sessionCounts } = settleRestartNotices(restartPending, sessionCounts, clients));
 }
 function localState() {
   const publicState = status();
@@ -301,10 +316,12 @@ function localState() {
   const state = vault.get();
   return { ...publicState, account: state.pairing?.account ?? null, reconnectAccount: state.reconnectAccount ?? null, origin: state.pairing?.origin ?? null, browserConnection, browserIntegration, mcpClients, failure,
     setup: setup(), careerViewVersion: `${state.deviceId}:${sessionEpoch}:${careerViewRevision}`,
+    catalogue: jobsCatalogue.state(), hasReviews: Object.keys(state.career?.matching?.scores ?? {}).length > 0,
     decisions: { credentials: decisionCredentialStatus(state) },
     publicationRange: savedPublicationRange(state.career ?? {}),
     updates: updateState(),
-    review: { hosts: reviewHosts, hostInfo: reviewHostInfo, added: hostsAdded, preferredHost: ['claude', 'codex'].includes(state.browserPreferences?.applicationHost) ? state.browserPreferences.applicationHost : reviewHosts.codex ? 'codex' : 'claude' },
+    review: { hosts: reviewHosts, hostInfo: reviewHostInfo, added: hostsAdded, ...liveSessions(mcpClients), restart: restartPending,
+      preferredHost: ['claude', 'codex'].includes(state.browserPreferences?.applicationHost) ? state.browserPreferences.applicationHost : reviewHosts.codex ? 'codex' : 'claude' },
     introductions: introductionsStatus(state.career ?? {}),
     approval: pendingApproval ? { id: pendingApproval.id, title: pendingApproval.title, detail: pendingApproval.detail } : null };
 }
@@ -322,7 +339,7 @@ function showSettings() {
   window.webContents.on('will-navigate', event => event.preventDefault());
   window.webContents.on('will-attach-webview', event => event.preventDefault());
   window.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
-  window.on('focus', () => { workGate.activity(); void refreshReviewHosts(); });
+  window.on('focus', () => { workGate.activity(); void refreshReviewHosts(); loadJobs(); });
   window.on('blur', () => workGate.activity());
   window.webContents.on('before-input-event', () => workGate.activity());
   window.webContents.session.setPermissionCheckHandler(() => false);
@@ -394,11 +411,11 @@ async function pair(payload) {
   const activation = await client.request('POST', '/device/activate', { challenge: pairing.challenge, account: pairing.account }, { origin: payload.productOrigin });
   if (activation.deviceId !== pairing.deviceId || activation.account?.id !== pairing.account.id || activation.account?.label !== pairing.account.label) fail('INVALID_INPUT', 'The activated account does not match the local approval.');
   await store.update(state => { if (state.deviceId !== pairing.deviceId) fail('INVALID_INPUT', 'The device identity changed during pairing.'); state.pairing = { origin: payload.productOrigin, account: { ...pairing.account } }; delete state.reconnectAccount; });
-  emit(); return status();
+  emit(); loadJobs(true); return status();
   });
 }
 async function forgetRevokedPairing() {
-  await vault.forgetPairing(); emit();
+  jobsCatalogue.reset(); await vault.forgetPairing(); emit();
 }
 async function connectAccount() {
   assertAvailable(false);
@@ -551,6 +568,8 @@ async function installConnections() {
     try { await refreshBrowserExtension(browser); }
     catch { delete browserExtensions[browser]; }
   }));
+  // An installed Claude skill follows Companion updates, like the saved browser extension folders.
+  try { await installClaudeSkill({ source: claudeSkillSource(), onlyIfPresent: true }); } catch { /* Set up for Claude rewrites it. */ }
 }
 // Save to Downloads creates the managed folder; launches refresh only folders the user saved,
 // so Companion never touches Downloads (or triggers OS folder prompts) uninvited.
@@ -908,13 +927,14 @@ async function settingsOperation(op, input, ownMutation) {
       const scoped = createScopedAccess(store, { assertAvailable, epoch: () => sessionEpoch });
       await scoped.store.update(state => { setPublicationRange(state.career ??= createCareerState(), input.publicationRange); });
       scoped.assertAvailable(false); careerViewRevision++;
-      emit(); return { ok: true, result: { publicationRange: input.publicationRange } };
+      emit(); loadJobs(true); return { ok: true, result: { publicationRange: input.publicationRange } };
     }
     exact(input, op === 'approval' ? ['id', 'allow'] : []);
-    if (op === 'unlock') { await initialize(); await startUpdates(); if (queuedPairing) { const payload = queuedPairing; queuedPairing = undefined; void pair(payload).catch(error => { failure = safeFailure(error).message; emit(); }); } emit(); return { ok: true, result: localState() }; }
+    if (op === 'unlock') { await initialize(); await startUpdates(); if (queuedPairing) { const payload = queuedPairing; queuedPairing = undefined; void pair(payload).catch(error => { failure = safeFailure(error).message; emit(); }); } emit(); loadJobs(); return { ok: true, result: localState() }; }
     assertAvailable(false); let result = { completed: true };
     if (op === 'approval') { if (!pendingApproval || pendingApproval.id !== input.id || typeof input.allow !== 'boolean') fail('INVALID_INPUT', 'This approval expired.'); pendingApproval.finish(input.allow); }
-    else if (op === 'delete-rankings') { result = await deleteRankings(store); careerViewRevision++; }
+    else if (op === 'delete-rankings') { result = await deleteRankings(store); careerViewRevision++; loadJobs(true); }
+    else if (op === 'jobs-load') loadJobs(true);
     else if (op === 'connect-account') result = await connectAccount();
     else if (op === 'import-cv') {
       const scoped = createScopedAccess(store, { assertAvailable, epoch: () => sessionEpoch });
@@ -959,17 +979,19 @@ async function settingsOperation(op, input, ownMutation) {
     }
     else if (op === 'install-chatgpt') {
       result = await installChatGptPlugin({ directory, root: app.isPackaged ? root.replace(/app\.asar$/, 'app.asar.unpacked') : root, localOnly, command: setup().command });
+      restartPending = { ...restartPending, codex: true };
       await refreshAddedHosts();
     }
     else if (op === 'install-claude') {
       const launcher = applicationAccess().launcher, hostInfo = await launcher.info();
       if (!hostInfo.claude.available) fail('HOST_UNAVAILABLE', hostInfo.claude.reason);
-      if (hostInfo.claude.mode === 'cli') result = await launcher.connect('claude');
-      else {
-        const filename = await prepareClaudePackage({ template: setup().claudePackage, directory, localOnly, version: packageMetadata.version });
-        const error = await shell.openPath(filename);
-        if (error) fail('INVALID_INPUT', 'The Claude extension could not be opened. Use Copy setup prompt instead.');
-      }
+      // Desktop's Chat and its Code tab (where Continue in Claude opens) both load claude_desktop_config.json; Claude Code in a
+      // terminal uses the application workspace. Both load the skill from ~/.claude/skills.
+      if (hostInfo.claude.mode === 'cli') await launcher.connect('claude');
+      else await addClaudeDesktopServer({ command: setup().command, localOnly });
+      await installClaudeSkill({ source: claudeSkillSource() });
+      result = { mode: hostInfo.claude.mode };
+      restartPending = { ...restartPending, claude: true };
       await refreshAddedHosts();
     }
     else if (op === 'save-extension' || op === 'save-firefox-extension') {
@@ -1037,17 +1059,18 @@ else {
     // persistent cookie key. API credentials are entered only through the local settings IPC.
     await showSettings();
     await installConnections(); await startNativeBridge();
-    mcpBridge = await startMcpBroker({ directory, createServer: createSessionServer, onConnections: clients => { mcpClients = clients; emit(); void refreshAddedHosts(); } });
+    mcpBridge = await startMcpBroker({ directory, createServer: createSessionServer, onConnections: clients => { mcpClients = clients; noteSessions(clients); emit(); void refreshAddedHosts(); } });
     try { await initialize(); } catch (error) { failure = error?.code === 'LEGACY_VAULT_LOCKED' ? error.message : 'Local storage is unavailable. Check the companion data folder, then open local storage.'; }
     await refreshReviewHosts();
+    loadJobs();
     heartbeatTimer = setInterval(() => {
       if (locked || heartbeatBusy || quitDraining || updateInstalling || !vault.get().pairing) return;
       heartbeatBusy = true;
       void workGate.run(() => client.request('POST', '/device/heartbeat', {}), { meaningful: false })
         .catch(() => {}).finally(() => { heartbeatBusy = false; });
     }, 30000);
-    const lock = () => { backups.cancel(); browserForms.cancelAll(); sessionEpoch++; locked = true; pairingReturn?.close(); pendingApproval?.finish(false); mcpBridge.disconnect(); emit(); };
-    const unlock = () => { if (screenLocked || sleeping) return; workGate.activity(); void initialize().then(startUpdates).then(() => emit()).catch(() => { failure = 'Local storage could not be reopened. Your saved data has not been replaced.'; }); };
+    const lock = () => { backups.cancel(); browserForms.cancelAll(); jobsCatalogue.reset(); sessionEpoch++; locked = true; pairingReturn?.close(); pendingApproval?.finish(false); mcpBridge.disconnect(); emit(); };
+    const unlock = () => { if (screenLocked || sleeping) return; workGate.activity(); void initialize().then(startUpdates).then(() => { emit(); loadJobs(); }).catch(() => { failure = 'Local storage could not be reopened. Your saved data has not been replaced.'; }); };
     powerMonitor.on('lock-screen', () => { screenLocked = true; lock(); }); powerMonitor.on('suspend', () => { sleeping = true; lock(); });
     powerMonitor.on('unlock-screen', () => { screenLocked = false; unlock(); });
     powerMonitor.on('resume', () => { sleeping = false; unlock(); void updateScheduler.resume(); });

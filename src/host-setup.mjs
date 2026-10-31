@@ -1,11 +1,10 @@
-import { access, cp, lstat, mkdir, writeFile, rm, readFile, readdir, realpath, rename, stat } from 'node:fs/promises';
+import { access, cp, mkdir, writeFile, rm, readFile, readdir, rename, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
-import AdmZip from 'adm-zip';
 import { privateDirectory } from './vault.mjs';
 import { fail } from './mcp/state.mjs';
 import platformRuntime from './platform-runtime.cjs';
@@ -83,24 +82,95 @@ const tableEnabled = (toml, table) => {
   return !(end < 0 ? body : body.slice(0, end)).some(line => /^\s*enabled\s*=\s*false\b/.test(line));
 };
 
-/** Whether Codex / Claude have a recruiters.rip MCP entry they load, read from their own config files. Unreadable means not found. */
+const claudeDesktopDirectory = (platform, env, home) => {
+  const p = paths(platform);
+  return platform === 'darwin' ? p.join(home, 'Library', 'Application Support', 'Claude')
+    : platform === 'win32' ? p.join(env.APPDATA || p.join(home, 'AppData', 'Roaming'), 'Claude') : p.join(env.XDG_CONFIG_HOME || p.join(home, '.config'), 'Claude');
+};
+
+/** Whether Codex / Claude have a recruiters.rip MCP entry that Continue in Codex / Claude can use, read from their own config
+ *  files. Unreadable means not found. A Claude Desktop extension serves only Claude's Chat, not the Code tab Continue opens. */
 export async function addedHosts({ workspace, localOnly = false, platform = process.platform, env = process.env, home = homedir(),
-  read = filename => readFile(filename, 'utf8'), list = readdir } = {}) {
+  read = filename => readFile(filename, 'utf8') } = {}) {
   const p = paths(platform), name = serverName(localOnly), workspaceName = 'recruiters-rip-applications';
   const text = async filename => { try { return await read(filename); } catch { return ''; } };
   const servers = async filename => { try { const value = JSON.parse(await read(filename))?.mcpServers; return value && typeof value === 'object' ? value : {}; } catch { return {}; } };
   const codexConfig = await text(p.join(env.CODEX_HOME || p.join(home, '.codex'), 'config.toml'));
   const codex = [`plugins."recruiters-rip@${name}"`, `mcp_servers.${name}`, `mcp_servers."${name}"`].some(table => tableEnabled(codexConfig, table))
     || tableEnabled(await text(p.join(workspace, '.codex', 'config.toml')), `mcp_servers.${workspaceName}`);
-  const desktop = platform === 'darwin' ? p.join(home, 'Library', 'Application Support', 'Claude')
-    : platform === 'win32' ? p.join(env.APPDATA || p.join(home, 'AppData', 'Roaming'), 'Claude') : p.join(env.XDG_CONFIG_HOME || p.join(home, '.config'), 'Claude');
-  let extensions = [];
-  try { extensions = await list(p.join(desktop, 'Claude Extensions')); } catch {}
-  const claudeFiles = [p.join(desktop, 'claude_desktop_config.json'), p.join(home, '.claude.json'), ...(env.CLAUDE_CONFIG_DIR ? [p.join(env.CLAUDE_CONFIG_DIR, '.claude.json')] : [])];
-  const claude = extensions.some(entry => entry === name || entry.endsWith(`.${name}`))
-    || (await Promise.all(claudeFiles.map(servers))).some(value => Object.hasOwn(value, name))
+  const claudeFiles = [p.join(claudeDesktopDirectory(platform, env, home), 'claude_desktop_config.json'), p.join(home, '.claude.json'), ...(env.CLAUDE_CONFIG_DIR ? [p.join(env.CLAUDE_CONFIG_DIR, '.claude.json')] : [])];
+  const claude = (await Promise.all(claudeFiles.map(servers))).some(value => Object.hasOwn(value, name))
     || Object.hasOwn(await servers(p.join(workspace, '.mcp.json')), workspaceName);
   return { codex, claude };
+}
+
+/** An older Companion installed recruiters.rip as a Claude Desktop extension; it now duplicates the config entry in Chat. */
+export async function claudeExtensionInstalled({ localOnly = false, platform = process.platform, env = process.env, home = homedir(), list = readdir } = {}) {
+  const name = serverName(localOnly);
+  try { return (await list(paths(platform).join(claudeDesktopDirectory(platform, env, home), 'Claude Extensions'))).some(entry => entry === name || entry.endsWith(`.${name}`)); }
+  catch { return false; }
+}
+
+/** Claude Desktop starts the servers named in claude_desktop_config.json for Chat and for local Code tab sessions, and reads the
+ *  file only at launch. Merge recruiters.rip in, keep every other key and server, and never rewrite a file that does not parse. */
+export async function addClaudeDesktopServer({ command, localOnly = false, platform = process.platform, env = process.env, home = homedir() }) {
+  const p = paths(platform), directory = claudeDesktopDirectory(platform, env, home), filename = p.join(directory, 'claude_desktop_config.json');
+  let previous = null, config = {};
+  try { previous = await readFile(filename, 'utf8'); }
+  catch (error) { if (error.code !== 'ENOENT') fail('HOST_INSTALL_FAILED', 'Companion couldn’t read Claude’s settings file, so it left it unchanged. Use Copy prompt below instead.'); }
+  if (previous?.trim()) {
+    try { config = JSON.parse(previous); } catch { config = null; }
+    if (!config || typeof config !== 'object' || Array.isArray(config) ||
+        (config.mcpServers !== undefined && (!config.mcpServers || typeof config.mcpServers !== 'object' || Array.isArray(config.mcpServers))))
+      fail('HOST_INSTALL_FAILED', 'Claude’s settings file (claude_desktop_config.json) isn’t valid JSON, so Companion left it unchanged. Fix that file, then choose Set up again.');
+  }
+  const next = JSON.stringify({ ...config, mcpServers: { ...config.mcpServers, [serverName(localOnly)]: mcpInvocation(command, { platform, env }) } }, null, 2) + '\n';
+  if (previous !== null && JSON.stringify(JSON.parse(next)) === JSON.stringify(config)) return { changed: false };
+  await mkdir(directory, { recursive: true });
+  // The previous file stays beside it, so a user can always get back what Claude had before.
+  if (previous !== null) await writeFile(p.join(directory, 'claude_desktop_config.before-recruiters-rip.json'), previous);
+  const temporary = `${filename}.${randomUUID()}.tmp`;
+  try { await writeFile(temporary, next, { flag: 'wx' }); await rename(temporary, filename); }
+  finally { await rm(temporary, { force: true }); }
+  return { changed: true };
+}
+
+/** Claude Code (the terminal app and Claude Desktop's Code tab) loads personal skills from ~/.claude/skills. The copy is the same
+ *  skill the Codex plugin bundles; `onlyIfPresent` refreshes an installed copy after a Companion update without adding one. */
+export async function installClaudeSkill({ source, platform = process.platform, env = process.env, home = homedir(), onlyIfPresent = false }) {
+  const p = paths(platform), target = p.join(env.CLAUDE_CONFIG_DIR || p.join(home, '.claude'), 'skills', 'recruiters-rip');
+  if (onlyIfPresent) { try { await access(p.join(target, 'SKILL.md')); } catch { return false; } }
+  const temporary = `${target}.${randomUUID()}.tmp`;
+  try {
+    await mkdir(p.dirname(target), { recursive: true });
+    await cp(source, temporary, { recursive: true });
+    await rm(target, { recursive: true, force: true });
+    await rename(temporary, target);
+  } finally { await rm(temporary, { recursive: true, force: true }); }
+  return true;
+}
+
+/** Which Continue target each live MCP session can serve, from the clientInfo name it declared. Continue in Claude opens Claude
+ *  Code (Desktop's Code tab or the terminal app), so only Claude Code sessions make Claude "In use now"; Claude's Chat and Cowork
+ *  sessions are named as Claude chat. */
+export function liveSessions(names = []) {
+  const live = { codex: false, claude: false }, other = new Set();
+  for (const name of names) {
+    if (!name) continue;
+    if (/^claude-code\b/i.test(name)) live.claude = true;
+    else if (/codex|chatgpt|openai/i.test(name)) live.codex = true;
+    else if (/^claude-ai\b|^local-agent-mode-/i.test(name)) other.add('Claude chat');
+    else other.add(name);
+  }
+  return { live, other: [...other] };
+}
+
+/** After Set up, an app loads recruiters.rip only once it restarts. The notice stays until that app opens a new session. */
+export function settleRestartNotices(pending, previousCounts, names = []) {
+  const counts = { codex: 0, claude: 0 };
+  for (const name of names) for (const [host, live] of Object.entries(liveSessions([name]).live)) if (live) counts[host]++;
+  const next = Object.fromEntries(Object.keys(counts).map(host => [host, Boolean(pending[host]) && counts[host] <= (previousCounts[host] ?? 0)]));
+  return { pending: next, counts };
 }
 
 export async function findHostCli(host, { platform = process.platform, env = process.env, home = homedir(), canExecute = executable,
@@ -212,48 +282,6 @@ async function findHostCommand(name, { platform, env, canExecute }) {
     if (await canExecute(command, platform)) return command;
   }
   return null;
-}
-
-export async function prepareClaudePackage({ template, directory, localOnly, version }) {
-  const profileDirectory = await realpath(directory);
-  platformRuntime.assertPrivatePath(profileDirectory, { directory: true });
-  if (path.basename(profileDirectory) !== (localOnly ? 'local-device' : 'device')) fail('HOST_INSTALL_FAILED', 'Open the selected Companion profile before setting up Claude.');
-  const info = await lstat(template);
-  if (!info.isFile() || info.size > 32 * 1024 * 1024) fail('HOST_INSTALL_FAILED', 'The bundled Claude extension is unavailable. Reinstall the complete companion.');
-  const archive = new AdmZip(await readFile(template));
-  const entries = archive.getEntries(), names = new Set();
-  let unpackedBytes = 0;
-  if (entries.length > 256) fail('HOST_INSTALL_FAILED', 'The bundled Claude extension is invalid.');
-  for (const item of entries) {
-    const name = item.entryName.toLowerCase();
-    unpackedBytes += item.header.size;
-    if (names.has(name) || name.startsWith('/') || name.includes('\\') || name.split('/').some(part => part === '..' || part === '.') ||
-        (item.header.attr >>> 16 & 0o170000) === 0o120000 || unpackedBytes > 64 * 1024 * 1024)
-      fail('HOST_INSTALL_FAILED', 'The bundled Claude extension is invalid.');
-    names.add(name);
-  }
-  for (const filename of ['server/index.cjs', 'platform-runtime.cjs'])
-    if (!archive.getEntry(filename) || archive.getEntry(filename).isDirectory) fail('HOST_INSTALL_FAILED', 'The bundled Claude extension is incomplete.');
-  const entry = archive.getEntry('manifest.json');
-  if (!entry || entry.isDirectory || entry.header.size > 64 * 1024) fail('HOST_INSTALL_FAILED', 'The bundled Claude extension is invalid.');
-  const manifest = JSON.parse(archive.readAsText(entry));
-  const name = localOnly ? 'recruiters-rip-local' : 'recruiters-rip';
-  if (manifest.manifest_version !== '0.3' || manifest.name !== name || manifest.version !== version || manifest.server?.type !== 'node' || manifest.server.entry_point !== 'server/index.cjs')
-    fail('HOST_INSTALL_FAILED', 'The bundled Claude extension does not match this companion.');
-  // Public bundles contain a selector, never a user's path. The installed copy
-  // is private and bound to the profile from which Setup was explicitly chosen.
-  manifest.server.mcp_config = { command: 'node', args: ['${__dirname}/server/index.cjs', `--directory=${profileDirectory}`, ...(localOnly ? ['--local-product'] : [])] };
-  delete manifest.user_config;
-  archive.updateFile('manifest.json', Buffer.from(JSON.stringify(manifest, null, 2) + '\n'));
-  const integration = path.join(profileDirectory, 'host-integration');
-  await privateDirectory(integration);
-  const destination = path.join(integration, `${name}.mcpb`), temporary = `${destination}.${randomUUID()}.tmp`;
-  try {
-    await writeFile(temporary, archive.toBuffer(), { mode: 0o600, flag: 'wx' });
-    platformRuntime.protectPrivatePath(temporary);
-    await rename(temporary, destination);
-  } finally { await rm(temporary, { force: true }); }
-  return destination;
 }
 
 export async function installChatGptPlugin({ directory, root, localOnly, command, platform = process.platform, env = process.env, findCli = findChatGptCli, runCommand = exec }) {

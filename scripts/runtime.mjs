@@ -33,4 +33,4 @@ const skillDigest = createHash('sha256').update(await readFile(path.join(skill, 
   await readFile(path.join(skill, 'agents', 'openai.yaml'), 'utf8')).digest('hex');
 await writeFile(path.join(generated, 'skill-digest.mjs'), `export const SKILL_DIGEST = '${skillDigest}';\n`);
 await packageMcp();
-console.log('Built local MCP bridge, desktop extension packages and document engine.');
+console.log('Built local MCP bridge, Codex plugin with skill and document engine.');

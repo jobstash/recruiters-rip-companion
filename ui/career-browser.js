@@ -5,7 +5,7 @@
     facts: { title: 'Facts', empty: 'No details saved yet. Tell your AI app about your experience.', locked: 'Unlock to see your saved work.', select: 'Select an answer' },
     preferences: { title: 'Preferences', empty: 'No preferences saved. Tell your AI app what you want and what you want to avoid.', locked: 'Unlock to see your saved preferences.', select: 'Select a preference group' },
     career: { title: 'Career', empty: 'No work history saved yet. Ask your AI app to read your CV and add your previous jobs.', locked: 'Unlock to see your work history.', select: 'Select an employer' },
-    jobs: { title: 'Jobs', empty: 'No jobs for these dates. Choose a longer date range or continue in Codex or Claude. To connect an AI app, open Settings → AI apps.', locked: 'Unlock to see your saved jobs.', select: 'Select a job' },
+    jobs: { title: 'Jobs', locked: 'Unlock to see your saved jobs.', select: 'Select a job' },
     applications: { title: 'Job Applications', empty: 'No saved applications.', locked: 'Unlock to see your saved applications.', select: 'Select an application' },
     blocks: { title: 'Blocked jobs', empty: 'Nothing blocked. Open a job to block it, its company or its category.', locked: 'Unlock to see your blocked jobs.', select: 'Select a block' },
   };
@@ -85,6 +85,7 @@
     const records = element('records');
     const listStatus = element('list-status');
     const listRetry = element('list-retry');
+    const listAction = element('list-action');
     const pagination = element('pagination');
     const previous = element('previous');
     const next = element('next');
@@ -97,7 +98,17 @@
     let enabled = false;
     let kind = initialKind;
     let view = 'jobs';
-    const viewEmpty = { jobs: categories.jobs.empty, reviewed: 'Nothing reviewed yet. Continue in Codex or Claude to review the jobs in this window.' };
+    const viewEmpty = { reviewed: 'Nothing reviewed yet. Continue in Codex or Claude to review the jobs in this window.' };
+    let jobsContext = {}, showingEmpty = false;
+    // Only the Jobs view's empty state has a next step (ui/jobs-empty.js); every other empty list is plain text.
+    function renderEmpty() {
+      const empty = kind === 'jobs' && view === 'jobs' ? window.jobsEmptyState(jobsContext, publication?.label.textContent) : null;
+      listStatus.textContent = empty ? empty.text : kind === 'jobs' ? viewEmpty[view] : categories[kind].empty;
+      if (!listAction) return;
+      listAction.hidden = !empty?.action;
+      listAction.textContent = empty?.label ?? '';
+      listAction.dataset.action = empty?.action ?? '';
+    }
     const stageCounts = [...root.querySelectorAll('[data-stage-count]')];
     let generation = 0;
     let readGeneration = 0;
@@ -510,6 +521,8 @@
         previous.disabled = true;
         next.disabled = true;
         listStatus.textContent = `Loading ${categories[kind].title.toLowerCase()}…`;
+        showingEmpty = false;
+        if (listAction) listAction.hidden = true;
       }
       loading = true;
       nextOffset = null;
@@ -546,10 +559,12 @@
         }
         nextOffset = Number.isInteger(result.nextOffset) && result.nextOffset > offset ? result.nextOffset : null;
         records.hidden = result.items.length === 0;
+        showingEmpty = result.items.length === 0 && !offset;
+        if (listAction) listAction.hidden = true;
         const range = `${integer(offset + 1)}–${integer(offset + result.items.length)} of ${integer(result.total)}`;
-        listStatus.textContent = result.items.length
-          ? range
-          : offset ? 'No records on this page. Choose Previous.' : kind === 'jobs' ? viewEmpty[view] : category.empty;
+        if (result.items.length) listStatus.textContent = range;
+        else if (offset) listStatus.textContent = 'No records on this page. Choose Previous.';
+        else renderEmpty();
         if (typeof place?.notice === 'string' && place.notice) listStatus.textContent = `${place.notice} · ${listStatus.textContent}`;
         previous.disabled = priorOffsets.length === 0;
         next.disabled = nextOffset === null;
@@ -565,6 +580,8 @@
         records.hidden = true;
         listStatus.textContent = `Could not load ${category.title.toLowerCase()}. ${error.message} Retry to load them again.`;
         listRetry.hidden = false;
+        showingEmpty = false;
+        if (listAction) listAction.hidden = true;
         previous.disabled = priorOffsets.length === 0;
         pagination.hidden = previous.disabled;
       } finally {
@@ -621,7 +638,7 @@
       showJobActions();
       void loadPage();
     }));
-    // Dragging only moves the label; the range is saved once on change, then the agent's next review uses it.
+    // Dragging only moves the label; the range is saved once on change, then Companion loads that window's jobs.
     publication?.input.addEventListener('input', () => {
       const index = Number.parseInt(publication.input.value, 10);
       publication.label.textContent = publicationRanges[index]?.[2] ?? '';
@@ -651,6 +668,10 @@
       void loadPage(true);
     });
     listRetry.addEventListener('click', () => { void loadPage(true); });
+    listAction?.addEventListener('click', () => {
+      if (listAction.dataset.action === 'retry') { request('jobs-load', {}).catch(error => { listStatus.textContent = `Couldn’t load new jobs. ${error.message}`; }); return; }
+      document.getElementById('connect-account').click();
+    });
     readerRetry.addEventListener('click', () => {
       if (selected && selectedButton) void openRecord(selected, selectedButton);
     });
@@ -661,10 +682,14 @@
     if (persistentReader) sideBySide.addEventListener?.('change', () => { if (!selected) closeReader(); });
 
     return {
-      setContext({ review: nextReview, publicationRange } = {}) {
+      setContext({ review: nextReview, publicationRange, paired, catalogue } = {}) {
         if (nextReview?.hosts) review = nextReview;
         renderReviewLaunch();
         renderPublication(publicationRange);
+        const next = { paired: Boolean(paired), catalogue: catalogue ?? null };
+        if (JSON.stringify(next) === JSON.stringify(jobsContext)) return;
+        jobsContext = next;
+        if (enabled && showingEmpty && !loading) renderEmpty();
       },
       refresh() {
         // A state broadcast while the list is already showing keeps the page and the open record; only the first load starts at the top.
@@ -687,6 +712,8 @@
         categoryButtons.forEach(button => { button.disabled = true; });
         records.replaceChildren();
         records.hidden = true;
+        showingEmpty = false;
+        if (listAction) listAction.hidden = true;
         records.removeAttribute('aria-busy');
         listStatus.textContent = categories[kind].locked;
         listRetry.hidden = true;

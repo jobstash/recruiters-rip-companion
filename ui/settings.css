@@ -240,8 +240,9 @@ button.pipeline-card-open { display: grid; gap: 4px; width: 100%; padding: 0; bo
 .pipeline-card-role { font: 500 14px/1.4 var(--font-geist); color: var(--color-ink); overflow-wrap: anywhere; }
 .pipeline-card-detail { font: 400 12px/1.5 var(--font-geist-mono); color: var(--color-ink); font-variant-numeric: tabular-nums; }
 .pipeline-card-documents { font: 400 12px/1.5 var(--font-geist-mono); color: var(--color-smoke); }
-.pipeline-card-actions, .pipeline-choice { display: flex; flex-wrap: wrap; align-items: center; gap: 0 var(--spacing-8); }
-.pipeline-move { flex: none; max-width: 100%; min-height: 44px; padding: 0; border: 0; border-radius: 0; background: var(--color-canvas); color: var(--color-smoke); font: 400 12px/1.5 var(--font-geist-mono); cursor: pointer; }
+.pipeline-card-actions { display: flex; flex-direction: column; align-items: flex-start; }
+.pipeline-choice { display: flex; flex-wrap: wrap; align-items: center; gap: 0 var(--spacing-8); }
+.pipeline-move { flex: none; width: 15ch; max-width: 100%; min-height: 44px; padding: 0; border: 0; border-radius: 0; background: var(--color-canvas); color: var(--color-smoke); font: 400 12px/1.5 var(--font-geist-mono); cursor: pointer; }
 .pipeline-move:hover { color: var(--color-ink); }
 .pipeline-move:focus-visible { outline: 2px solid transparent; box-shadow: var(--shadow-focus-ring); color: var(--color-ink); }
 .pipeline-card-actions .text, .pipeline-choice .text { padding-inline: var(--spacing-8); }

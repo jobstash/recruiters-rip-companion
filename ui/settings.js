@@ -12,7 +12,7 @@ window.showCompanionNotice = notice;
 // The topbar wraps at narrow widths, so the toast anchors to its measured height rather than a constant.
 new ResizeObserver(([entry]) => document.documentElement.style.setProperty('--topbar-height', `${entry.borderBoxSize[0].blockSize}px`)).observe(document.querySelector('.topbar'));
 async function invoke(op, input = {}) { const response = await window.companion.invoke(op, input); if (!response.ok) throw new Error(response.error.message); return response.result; }
-const views = ['me', 'jobs', 'setup', 'help'];
+const views = ['me', 'jobs', 'pipeline', 'setup', 'help'];
 function showView(next) {
   view = next;
   for (const button of document.querySelectorAll('[data-view]')) {
@@ -204,7 +204,7 @@ async function action(op, success) {
   busy = true;
   window.backupsUI?.setBusy(true);
   // Browser instances manage their own controls; the Jobs toolbar's Copy review prompt is an ordinary action.
-  const controls = [...document.querySelectorAll('button')].filter(button => (!button.closest('#me-browser, #career-browser, #views, #decisions, #update-settings, #settings-backups, .settings-tabs') || ['copy-review-prompt', 'review-codex', 'review-claude'].includes(button.id)) && !['approval-cancel', 'approval-allow'].includes(button.id));
+  const controls = [...document.querySelectorAll('button')].filter(button => (!button.closest('#me-browser, #career-browser, #pipeline-browser, #views, #decisions, #update-settings, #settings-backups, .settings-tabs') || ['copy-review-prompt', 'review-codex', 'review-claude'].includes(button.id)) && !['approval-cancel', 'approval-allow'].includes(button.id));
   const disabled = controls.map(control => control.disabled); controls.forEach(control => { control.disabled = true; });
   try {
     const result = await invoke(op);

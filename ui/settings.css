@@ -211,13 +211,44 @@ main { flex: 1; min-height: 0; overflow: auto; padding: var(--spacing-32) var(--
 .career-progress-history li { display: grid; grid-template-columns: 12ch minmax(0, 1fr); gap: var(--spacing-16); padding-block: var(--spacing-8); border-bottom: 1px solid var(--color-facet); font: 400 13px/1.6 var(--font-geist-mono); color: var(--color-ink-2); }
 .career-progress-history li:last-child { border-bottom: 0; }
 .career-progress-when { color: var(--color-smoke); font-variant-numeric: tabular-nums; }
-/* Applications stage counts filter the list: mono text, the selected one underlined like a tab, never boxed. */
-.career-stage-filter { display: flex; flex-wrap: wrap; align-items: center; gap: 0 6px; }
-.career-stage-filter-dot { font: 400 12px/1.5 var(--font-geist-mono); color: var(--color-smoke); }
-.career-stage-filter .career-stage-filter-item { min-height: 44px; padding: 0; border: 0; border-bottom: 2px solid transparent; border-radius: 0; color: var(--color-smoke); font: 400 12px/1.5 var(--font-geist-mono); letter-spacing: .02em; text-transform: none; font-variant-numeric: tabular-nums; }
-.career-stage-filter-item:hover:not(:disabled) { color: var(--color-ink); }
-.career-stage-filter-item[aria-pressed="true"] { color: var(--color-ink); border-bottom-color: var(--color-ink); }
-.career-stage-filter-item[aria-pressed="true"]::after { content: ""; position: absolute; bottom: -2px; left: 0; right: 0; height: 2px; background: var(--rr-dispersion); box-shadow: var(--shadow-edge-glow); }
+/* Pipeline: a ruled board of applications by stage beside the shared reader. Columns scroll on their own; the board scrolls
+   sideways when the window is narrower than its columns. */
+.pipeline-view { grid-template-rows: minmax(0, 1fr); }
+.pipeline-browser { grid-template-rows: minmax(0, 1fr); }
+.pipeline-panes { grid-template-columns: minmax(0, 1fr) minmax(360px, 480px); }
+.pipeline-list { display: grid; grid-template-rows: auto auto minmax(0, 1fr); min-width: 0; min-height: 0; }
+.pipeline-status { min-height: 21px; padding-bottom: var(--spacing-8); font: 400 13px/1.6 var(--font-geist-mono); color: var(--color-smoke); }
+.pipeline-list > .ghost { justify-self: start; margin-bottom: var(--spacing-16); }
+/* Lanes, not a table: each stage is its own ruled surface, separated by a gutter, as tall as its cards up to the board's
+   height, scrolling on its own. Cards are separate boxes with space between them. */
+.pipeline-board { display: flex; align-items: flex-start; gap: var(--spacing-16); min-height: 0; overflow-x: auto; overflow-y: hidden; padding-bottom: var(--spacing-8); }
+.pipeline-column { display: flex; flex-direction: column; flex: 1 0 216px; max-width: 360px; max-height: 100%; min-height: 0; border: 1px solid var(--color-facet); background: var(--color-surface); }
+.pipeline-column.is-drop-target { border-color: var(--color-ink); box-shadow: var(--shadow-edge-glow); }
+.pipeline-column-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--spacing-8); padding: var(--spacing-16); border-bottom: 1px solid var(--color-ink); font: 500 12px/1.33 var(--font-geist-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--color-ink); }
+.pipeline-count { color: var(--color-smoke); font-variant-numeric: tabular-nums; }
+.pipeline-lane-body { display: grid; align-content: start; gap: var(--spacing-8); min-height: 0; padding: var(--spacing-8); overflow-y: auto; overscroll-behavior: contain; }
+.pipeline-cards { display: grid; gap: var(--spacing-8); list-style: none; margin: 0; padding: 0; }
+.pipeline-empty { padding: var(--spacing-8); font: 400 12px/1.5 var(--font-geist-mono); color: var(--color-smoke); }
+.pipeline-drop-slot { border: 1px dashed var(--color-ink); }
+.pipeline-card { position: relative; display: grid; gap: var(--spacing-8); padding: var(--spacing-16) var(--spacing-16) var(--spacing-8); border: 1px solid var(--color-facet); background: var(--color-canvas); }
+.pipeline-card:hover::before, .pipeline-card:has([aria-current="true"])::before { content: ""; position: absolute; top: -1px; bottom: -1px; left: -1px; width: 1px; background: var(--rr-dispersion-v); box-shadow: var(--shadow-edge-glow); pointer-events: none; }
+.pipeline-card:has([aria-current="true"]) { border-color: var(--color-ink-2); }
+.pipeline-card.is-dragging { opacity: .4; }
+.pipeline-ghost { position: fixed; z-index: 10; list-style: none; border-color: var(--color-ink); pointer-events: none; }
+button.pipeline-card-open { display: grid; gap: 4px; width: 100%; padding: 0; border: 0; text-align: left; letter-spacing: normal; text-transform: none; font: 400 13px/1.4 var(--font-geist); color: var(--color-ink-2); cursor: grab; }
+.pipeline-card-open[aria-current="true"] .pipeline-card-role { font-weight: 600; }
+.pipeline-card-role { font: 500 14px/1.4 var(--font-geist); color: var(--color-ink); overflow-wrap: anywhere; }
+.pipeline-card-detail { font: 400 12px/1.5 var(--font-geist-mono); color: var(--color-ink); font-variant-numeric: tabular-nums; }
+.pipeline-card-documents { font: 400 12px/1.5 var(--font-geist-mono); color: var(--color-smoke); }
+.pipeline-card-actions, .pipeline-choice { display: flex; flex-wrap: wrap; align-items: center; gap: 0 var(--spacing-8); }
+.pipeline-move { flex: none; max-width: 100%; min-height: 44px; padding: 0; border: 0; border-radius: 0; background: var(--color-canvas); color: var(--color-smoke); font: 400 12px/1.5 var(--font-geist-mono); cursor: pointer; }
+.pipeline-move:hover { color: var(--color-ink); }
+.pipeline-move:focus-visible { outline: 2px solid transparent; box-shadow: var(--shadow-focus-ring); color: var(--color-ink); }
+.pipeline-card-actions .text, .pipeline-choice .text { padding-inline: var(--spacing-8); }
+.pipeline-choice .ghost { padding-inline: var(--spacing-16); }
+.pipeline-choice-label { font: 400 12px/1.5 var(--font-geist-mono); color: var(--color-smoke); }
+.pipeline-browser .career-reader { border-left: 0; }
+.pipeline-browser .career-reader .back { display: inline-flex; }
 /* Reviewed fit chart: ink bars on a ruled track, no colour. Overall first and heavier; dimensions in ink-2. */
 .career-chart { display: grid; gap: var(--spacing-8); }
 .career-chart-row { display: grid; grid-template-columns: minmax(96px, 128px) minmax(0, 1fr) 3ch; align-items: center; gap: var(--spacing-16); }
@@ -336,6 +367,8 @@ dialog::backdrop { background: color-mix(in oklab, var(--color-void) 80%, transp
   .brand { gap: var(--spacing-16); }
   .career-panes { grid-template-columns: minmax(0, 1fr); }
   .career-browser.is-reading .career-list { display: none; }
+  .pipeline-browser.is-reading .pipeline-list { display: none; }
+  .pipeline-panes { grid-template-columns: minmax(0, 1fr); }
   .career-reader { border-left: 1px solid var(--color-facet); padding: var(--spacing-16); }
   .career-reader .back { display: inline-flex; }
   .app-row { grid-template-columns: minmax(0, 1fr); grid-template-areas: "name" "status" "action" "details"; }

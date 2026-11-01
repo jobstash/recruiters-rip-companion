@@ -8,6 +8,7 @@
 <link rel="stylesheet" href="design-tokens.css">
 <link rel="stylesheet" href="settings.css">
 <script src="jobs-empty.js" defer></script>
+<script src="pipeline.js" defer></script>
 <script src="career-browser.js" defer></script>
 <script src="decisions.js" defer></script>
 <script src="updates.js" defer></script>
@@ -31,6 +32,7 @@
 <nav id="views" class="view-nav" aria-label="Companion sections" hidden>
 <div class="tab"><button type="button" class="text" data-view="me">Me</button></div>
 <div class="tab"><button type="button" class="text" data-view="jobs">Jobs</button></div>
+<div class="tab"><button type="button" class="text" data-view="pipeline">Pipeline</button></div>
 <div class="tab"><button type="button" class="text" data-view="setup">Settings</button></div>
 <div class="tab"><button type="button" class="text" data-view="help">Help</button></div>
 </nav>
@@ -90,7 +92,6 @@
 <div class="tabs jobs-stages" role="tablist" aria-label="Job stages">
 <button id="career-stage-jobs" type="button" class="tab" role="tab" data-career-kind="jobs" data-career-view="jobs" aria-selected="true" disabled>Jobs<span class="stage-count" data-stage-count="jobs"></span></button>
 <button id="career-stage-reviewed" type="button" class="tab" role="tab" data-career-kind="jobs" data-career-view="reviewed" aria-selected="false" disabled>Reviewed<span class="stage-count" data-stage-count="reviewed"></span></button>
-<button id="career-category-applications" type="button" class="tab" role="tab" data-career-kind="applications" aria-selected="false" disabled>Applications<span class="stage-count" data-stage-count="applications"></span></button>
 <button id="career-category-blocks" type="button" class="tab" role="tab" data-career-kind="blocks" aria-selected="false" disabled>Blocked<span class="stage-count" data-stage-count="blocks"></span></button>
 </div>
 </div>
@@ -106,7 +107,6 @@
 <div class="career-panes jobs-panes">
 <section class="career-list panel" aria-label="Saved jobs">
 <div class="panel-head career-list-head">
-<div id="career-stage-filter" class="career-stage-filter" role="group" aria-label="Filter applications by stage" hidden></div>
 <div class="career-list-tools">
 <p id="career-list-status" role="status">Unlock to see your saved jobs.</p>
 <button id="delete-rankings" class="text" type="button" disabled hidden>Clear reviews</button>
@@ -127,6 +127,25 @@
 <p id="career-reader-status" class="career-reader-status" role="status"></p>
 <button id="career-reader-retry" class="ghost" type="button" hidden>Retry</button>
 <div id="career-reader-content" class="career-reader-content"></div>
+</section>
+</div>
+</div>
+</section>
+<section id="view-pipeline" class="career-view pipeline-view" aria-label="Pipeline" hidden>
+<div id="pipeline-browser" class="career-browser pipeline-browser">
+<div class="career-panes pipeline-panes">
+<section class="pipeline-list" aria-label="Applications by stage">
+<p id="pipeline-list-status" class="pipeline-status" role="status">Unlock to see your saved applications.</p>
+<button id="pipeline-list-retry" class="ghost" type="button" hidden>Retry</button>
+<div id="pipeline-records" class="pipeline-board" hidden></div>
+</section>
+<section id="pipeline-reader" class="career-reader panel" aria-labelledby="pipeline-reader-title" hidden>
+<button id="pipeline-close" class="back text" type="button">Close</button>
+<h2 id="pipeline-reader-title" tabindex="-1"></h2>
+<div class="edge-rule" aria-hidden="true"></div>
+<p id="pipeline-reader-status" class="career-reader-status" role="status"></p>
+<button id="pipeline-reader-retry" class="ghost" type="button" hidden>Retry</button>
+<div id="pipeline-reader-content" class="career-reader-content"></div>
 </section>
 </div>
 </div>
@@ -284,7 +303,7 @@
 </section>
 <section class="setup-section" aria-labelledby="help-documents-title">
 <h2 id="help-documents-title">Open your CV and letter</h2>
-<div class="settings-content"><ol class="help-steps"><li>Ask your AI to create and save a tailored CV and cover letter for a job.</li><li>Open Jobs in Companion and select that job.</li><li>Under <strong>Job and documents</strong>, choose <strong>Open CV</strong> or <strong>Open letter</strong>. Check them, then choose <strong>Open job</strong> to apply.</li></ol><p>The same saved documents are available when you select the job under Applications. Both PDFs are saved together in a folder for the company and job title, named with your name: <strong>Your name - CV.pdf</strong> and <strong>Your name - COVER LETTER.pdf</strong>. If they are missing, ask your AI to create and save both PDFs.</p></div>
+<div class="settings-content"><ol class="help-steps"><li>Ask your AI to create and save a tailored CV and cover letter for a job.</li><li>Open Jobs in Companion and select that job.</li><li>Under <strong>Job and documents</strong>, choose <strong>Open CV</strong> or <strong>Open letter</strong>. Check them, then choose <strong>Open job</strong> to apply.</li></ol><p>The same saved documents are available when you select the application in Pipeline. Both PDFs are saved together in a folder for the company and job title, named with your name: <strong>Your name - CV.pdf</strong> and <strong>Your name - COVER LETTER.pdf</strong>. If they are missing, ask your AI to create and save both PDFs.</p></div>
 </section>
 <section class="setup-section" aria-labelledby="help-extension-title">
 <h2 id="help-extension-title">Apply from your browser</h2>

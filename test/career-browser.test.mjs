@@ -114,7 +114,7 @@ test('browser kinds cut over to jobs without keeping obsolete assessment endpoin
     await assert.rejects(browser.read({ kind, id: 'saved' }), { code: 'INVALID_INPUT' });
   }
   assert.deepEqual(await browser.list({ kind: 'jobs' }), { items: [], total: 0, nextOffset: null,
-    counts: { jobs: 0, reviewed: 0, applications: 0, blocks: 0 }, inclusion: { included: 0, candidates: 0 } });
+    counts: { jobs: 0, reviewed: 0, blocks: 0 }, inclusion: { included: 0, candidates: 0 } });
   await assert.rejects(browser.read({ kind: 'jobs', id: 'missing' }), { code: 'NOT_FOUND' });
 });
 
@@ -129,7 +129,7 @@ test('Jobs views are strictly validated and obsolete sorts are rejected', async 
     await assert.rejects(browser.list({ kind: 'jobs', sort }), { code: 'INVALID_INPUT' });
   for (const view of ['jobs', 'reviewed'])
     assert.deepEqual(await browser.list({ kind: 'jobs', view }), { items: [], total: 0, nextOffset: null,
-      counts: { jobs: 0, reviewed: 0, applications: 0, blocks: 0 }, inclusion: { included: 0, candidates: 0 } });
+      counts: { jobs: 0, reviewed: 0, blocks: 0 }, inclusion: { included: 0, candidates: 0 } });
   await assert.rejects(browser.read({ kind: 'jobs', id: 'missing', view: 'jobs' }), { code: 'INVALID_INPUT' });
 });
 
@@ -323,7 +323,7 @@ test('Jobs preserve every archived assessment and capture across globally sorted
   assert.deepEqual(items.map(item => item.id), expected);
   assert.equal(new Set(items.map(item => item.id)).size, items.length);
   assert.deepEqual(await browser.list({ kind: 'jobs', offset: 108 }), { items: [], total: 108, nextOffset: null,
-    counts: { jobs: 108, reviewed: 105, applications: 0, blocks: 0 }, inclusion: { included: 2, candidates: 2 } });
+    counts: { jobs: 108, reviewed: 105, blocks: 0 }, inclusion: { included: 2, candidates: 2 } });
   const merged = items.find(item => item.id === 'reviewed-0');
   assert.deepEqual(merged.card, { ...merged.card, stage: 'reviewed', score: 1, stale: false });
   assert.deepEqual({ ...merged.verdict, reason: null }, { kind: 'reviewed', number: 1, numberLabel: 'Fit', headline: 'Not recommended',
@@ -454,7 +454,7 @@ test('Jobs views separate publication order from current reviews; stale reviews 
   assert.deepEqual(page.items.map(item => item.id),
     ['never-reviewed', 'review-only', 'stale-review', 'weak-review', 'old-open', 'stale-both']);
   assert.deepEqual(page.inclusion, { included: 4, candidates: 4 });
-  assert.deepEqual(page.counts, { jobs: 6, reviewed: 2, applications: 0, blocks: 0 });
+  assert.deepEqual(page.counts, { jobs: 6, reviewed: 2, blocks: 0 });
   assert.equal(Object.hasOwn(page, 'cutoffIndex'), false);
   const stage = id => { const { stage, score, stale } = page.items.find(item => item.id === id).card; return { stage, score, stale }; };
   assert.deepEqual(stage('weak-review'), { stage: 'reviewed', score: 40, stale: false });
@@ -506,7 +506,7 @@ test('ineligible reviews sort last with a label instead of a number; established
   assert.deepEqual(card('ranked'), { ...card('ranked'), stage: 'open', label: null, established: false, score: null, stale: false });
   assert.equal(page.items.find(item => item.id === 'ranked').verdict, null);
   assert.deepEqual(page.inclusion, { included: 1, candidates: 3 });
-  assert.deepEqual(page.counts, { jobs: 5, reviewed: 4, applications: 0, blocks: 0 });
+  assert.deepEqual(page.counts, { jobs: 5, reviewed: 4, blocks: 0 });
   assert.deepEqual((await browser.list({ kind: 'jobs', view: 'reviewed' })).items.map(item => item.id),
     ['excluded', 'relocation', 'stale-gate', 'stale-relocation']);
 });
@@ -608,12 +608,16 @@ async function rendererFixture(browser, wide, operations = {}) {
   }
   const names = ['records', 'list-status', 'list-retry', 'list-action', 'pagination', 'previous', 'next', 'reader', 'reader-title',
     'reader-status', 'reader-retry', 'reader-content', 'close'];
-  const ids = [...names.flatMap(name => [`career-${name}`, `me-${name}`]), 'career-browser', 'me-browser', 'delete-rankings',
-    'stage-jobs', 'publication-range', 'publication-range-label', 'review-launch', 'review-codex', 'review-claude', 'copy-review-prompt',
-    'career-stage-filter'];
+  // Pipeline has the board in place of the paged list, so no list action or pagination.
+  const pipelineNames = names.filter(name => !['list-action', 'pagination', 'previous', 'next'].includes(name));
+  const ids = [...names.flatMap(name => [`career-${name}`, `me-${name}`]), ...pipelineNames.map(name => `pipeline-${name}`),
+    'career-browser', 'me-browser', 'pipeline-browser', 'delete-rankings',
+    'stage-jobs', 'publication-range', 'publication-range-label', 'review-launch', 'review-codex', 'review-claude', 'copy-review-prompt'];
   const nodes = Object.fromEntries(ids.map(id => [id, new Node()]));
   for (const id of ids) nodes[id].id = id;
   nodes['stage-jobs'].dataset.stagePanel = 'jobs';
+  // As in index.html: the Pipeline board and its reader start hidden.
+  nodes['pipeline-reader'].hidden = true; nodes['pipeline-records'].hidden = true;
   nodes['publication-range'].value = '2';
   nodes['publication-range'].disabled = true;
   nodes['publication-range-label'].textContent = 'in the past 3 days';
@@ -625,9 +629,9 @@ async function rendererFixture(browser, wide, operations = {}) {
     return [kind, node];
   };
   const categories = Object.fromEntries(['sources', 'facts', 'preferences'].map(category));
-  const jobCategories = Object.fromEntries(['jobs', 'applications', 'blocks'].map(category));
+  const jobCategories = Object.fromEntries(['jobs', 'blocks'].map(category));
   const stageCounts = [];
-  // The Jobs tab list: two jobs views, then applications and blocks; each tab carries its own count.
+  // The Jobs tab list: two jobs views, then blocks; each tab carries its own count.
   for (const view of ['jobs', 'reviewed']) {
     const button = view === 'jobs' ? jobCategories.jobs : category('jobs')[1];
     button.dataset.careerView = view;
@@ -635,11 +639,9 @@ async function rendererFixture(browser, wide, operations = {}) {
     nodes[`career-stage-${view}`] = button;
     if (view !== 'jobs') jobCategories[view] = button;
   }
-  for (const name of ['applications', 'blocks']) {
-    jobCategories[name].setAttribute('aria-selected', 'false');
-    nodes[`career-category-${name}`] = jobCategories[name];
-  }
-  for (const name of ['jobs', 'reviewed', 'applications', 'blocks']) {
+  jobCategories.blocks.setAttribute('aria-selected', 'false');
+  nodes['career-category-blocks'] = jobCategories.blocks;
+  for (const name of ['jobs', 'reviewed', 'blocks']) {
     const count = new Node('span'); count.className = 'stage-count'; count.dataset.stageCount = name;
     (nodes[`career-stage-${name}`] ?? jobCategories[name]).append(count);
     stageCounts.push(count);
@@ -647,16 +649,18 @@ async function rendererFixture(browser, wide, operations = {}) {
   nodes['me-browser'].querySelectorAll = selector => selector === '[data-stage-count]' ? [] : Object.values(categories);
   nodes['career-browser'].querySelectorAll = selector => selector === '[data-stage-count]' ? stageCounts : Object.values(jobCategories);
   const calls = [], notices = [];
-  const window = { matchMedia: () => ({ matches: wide }), companion: { async invoke(operation, args) {
+  const window = { matchMedia: () => ({ matches: wide }), addEventListener() {}, companion: { async invoke(operation, args) {
     const input = structuredClone(args);
     calls.push({ operation, args: input });
-    if (operation !== 'career-list' && operation !== 'career-read') return { ok: true, result: (await operations[operation]?.(input)) ?? {} };
-    return { ok: true, result: await (operation === 'career-list' ? browser.list(input) : browser.read(input)) };
+    try {
+      if (!['career-list', 'career-read', 'career-pipeline'].includes(operation)) return { ok: true, result: (await operations[operation]?.(input)) ?? {} };
+      return { ok: true, result: await (operation === 'career-list' ? browser.list(input) : operation === 'career-pipeline' ? browser.pipeline(input) : browser.read(input)) };
+    } catch (error) { return { ok: false, error: { code: error.code, message: error.message } }; }
   } } };
   window.showCompanionNotice = (...args) => notices.push(args);
   const document = { getElementById: id => nodes[id], createElement: tag => new Node(tag),
     querySelectorAll: () => [nodes['stage-jobs']], get activeElement() { return focused; } };
-  for (const script of ['jobs-empty.js', 'career-browser.js'])
+  for (const script of ['jobs-empty.js', 'pipeline.js', 'career-browser.js'])
     runInNewContext(await readFile(new URL(`../ui/${script}`, import.meta.url), 'utf8'), { window, document });
   const byClass = (node, className) => node.className.split(' ').includes(className) ? node
     : node.children.map(child => byClass(child, className)).find(Boolean) ?? null;
@@ -672,7 +676,6 @@ for (const wide of [false, true]) test(`Jobs paging and stage changes keep the r
   const rows = Array.from({ length: 27 }, (_, index) => catalogueJob(String(index).padStart(2, '0'),
     new Date(Date.now() - (index + 1) * 60000).toISOString()));
   state.career.matching = { jobs: Object.fromEntries(rows.map(row => [row.id, row])), scores: { 26: finalAssessment(50) } };
-  state.career.applications.app = { id: 'app', job: { title: 'Applied Role', company: 'Employer' } };
   const ui = await rendererFixture(browser, wide);
   await ui.window.careerBrowser.refresh();
   await ui.settle();
@@ -716,18 +719,18 @@ for (const wide of [false, true]) test(`Jobs paging and stage changes keep the r
   assert.equal(ui.focused(), ui.nodes['career-stage-reviewed']);
   assert.equal(ui.nodes['career-records'].querySelectorAll('[aria-current]').length, wide ? 1 : 0);
 
-  // Applications shares the Jobs list + reader; the jobs-only toolbar controls hide and disable while it is active.
-  ui.jobCategories.applications.fire('click');
+  // Blocked shares the Jobs list + reader; the jobs-only toolbar controls hide and disable while it is active.
+  ui.jobCategories.blocks.fire('click');
   await ui.settle();
-  assert.deepEqual(ui.titles(), ['Applied Role — Employer']);
-  assert.equal(ui.jobCategories.applications.attributes.get('aria-selected'), 'true');
+  assert.deepEqual(ui.titles(), []);
+  assert.equal(ui.jobCategories.blocks.attributes.get('aria-selected'), 'true');
   assert.equal(ui.jobCategories.jobs.attributes.get('aria-selected'), 'false');
   assert.equal(ui.nodes['career-stage-reviewed'].attributes.get('aria-selected'), 'false');
   for (const id of ['stage-jobs', 'review-launch', 'delete-rankings']) assert.equal(ui.nodes[id].hidden, true, id);
   assert.equal(ui.nodes['delete-rankings'].disabled, true);
   assert.equal(ui.nodes['publication-range'].disabled, true);
   assert.equal(ui.nodes['career-reader'].hidden, !wide);
-  assert.equal(ui.nodes['career-reader-title'].textContent, wide ? 'Applied Role — Employer' : '');
+  assert.equal(ui.nodes['career-reader-title'].textContent, '');
   ui.jobCategories.jobs.fire('click');
   await ui.settle();
   assert.equal(ui.titles()[0], '00');
@@ -796,7 +799,7 @@ test('job cards show reviewed fit or nothing yet, plus facts, without a switch, 
   assert.deepEqual(lis.map(li => li.className), Array(5).fill('career-row career-card'));
   assert.equal(lis.some(li => li.className === 'career-cutoff'), false);
   assert.equal(ui.nodes['career-list-status'].textContent, '1–5 of 5');
-  assert.deepEqual(['jobs', 'reviewed', 'applications', 'blocks'].map(name => ui.stageCount(name).textContent), [' 5', ' 1', ' 0', ' 0']);
+  assert.deepEqual(['jobs', 'reviewed', 'blocks'].map(name => ui.stageCount(name).textContent), [' 5', ' 1', ' 0']);
 
   // The first record opened on its own: an open job has no verdict block and no inclusion control in the reader.
   assert.equal(ui.nodes['career-reader-title'].textContent, 'Protocol Engineer');
@@ -831,7 +834,7 @@ test('job cards show reviewed fit or nothing yet, plus facts, without a switch, 
   assert.equal(ui.calls.findLast(call => call.operation === 'career-list').args.view, 'reviewed');
   assert.deepEqual(ui.titles(), ['Analyst']);
   assert.equal(ui.nodes['delete-rankings'].hidden, false);
-  ui.jobCategories.applications.fire('click');
+  ui.jobCategories.blocks.fire('click');
   await ui.settle();
   assert.equal(ui.nodes['stage-jobs'].hidden, true);
   assert.equal(ui.nodes['delete-rankings'].hidden, true);
@@ -923,7 +926,7 @@ test('ineligible cards show the verdict instead of a number, and an established 
   ui.nodes['career-stage-reviewed'].fire('click');
   await ui.settle();
   assert.deepEqual(ui.titles(), ['Montréal Lead', 'Gated Role']);
-  assert.deepEqual(['jobs', 'reviewed', 'applications', 'blocks'].map(name => ui.stageCount(name).textContent), [' 3', ' 2', ' 0', ' 0']);
+  assert.deepEqual(['jobs', 'reviewed', 'blocks'].map(name => ui.stageCount(name).textContent), [' 3', ' 2', ' 0']);
 });
 
 test('a state refresh while reading keeps the page and the open record; a record that left the page keeps its reader', async () => {
@@ -1017,7 +1020,7 @@ test('the publication slider saves its range once on change, restores the saved 
   assert.deepEqual([launch('codex').hidden, launch('claude').hidden], [true, true]);
   assert.equal(ui.nodes['copy-review-prompt'].className, 'primary');
   // The launch and the slider belong to the Jobs tabs only.
-  ui.jobCategories.applications.fire('click');
+  ui.jobCategories.blocks.fire('click');
   await ui.settle();
   assert.equal(ui.nodes['review-launch'].hidden, true);
   assert.equal(input.disabled, true);
@@ -1041,10 +1044,10 @@ test('each Jobs stage preserves its active tab and controls when empty', async (
     assert.equal(ui.nodes['review-launch'].hidden, false);
     assert.equal(ui.nodes['delete-rankings'].hidden, view !== 'reviewed');
     assert.equal(ui.nodes['delete-rankings'].disabled, false);
-    for (const candidate of ['stage-jobs', 'stage-reviewed', 'category-applications', 'category-blocks'])
+    for (const candidate of ['stage-jobs', 'stage-reviewed', 'category-blocks'])
       assert.equal(ui.nodes[`career-${candidate}`].attributes.get('aria-selected'), String(candidate === `stage-${view}`));
   }
-  for (const kind of ['applications', 'blocks']) {
+  for (const kind of ['blocks']) {
     ui.jobCategories[kind].fire('click');
     await ui.settle();
     assert.equal(ui.jobCategories[kind].attributes.get('aria-selected'), 'true');
@@ -1109,8 +1112,13 @@ test('the Jobs list column keeps Previous/Next on its own last grid row regardle
   assert.match(html, /<div class="tabs jobs-stages" role="tablist" aria-label="Job stages">/);
   for (const view of ['jobs', 'reviewed'])
     assert.match(html, new RegExp(`<button id="career-stage-${view}" type="button" class="tab" role="tab" data-career-kind="jobs" data-career-view="${view}" aria-selected="${view === 'jobs'}" disabled>[^<]*<span class="stage-count" data-stage-count="${view}"></span></button>`));
-  for (const kind of ['applications', 'blocks'])
-    assert.match(html, new RegExp(`<button id="career-category-${kind}" type="button" class="tab" role="tab" data-career-kind="${kind}" aria-selected="false" disabled>[^<]*<span class="stage-count" data-stage-count="${kind}"></span></button>`));
+  assert.match(html, /<button id="career-category-blocks" type="button" class="tab" role="tab" data-career-kind="blocks" aria-selected="false" disabled>Blocked<span class="stage-count" data-stage-count="blocks"><\/span><\/button>/);
+  // Applications left Jobs for its own Pipeline section: no tab, filter row or list code remains.
+  for (const removed of ['career-category-applications', 'data-career-kind="applications"', 'data-stage-count="applications"', 'career-stage-filter'])
+    assert.equal(html.includes(removed) || css.includes(removed), false, removed);
+  assert.deepEqual([...html.matchAll(/data-view="([a-z]+)">([^<]+)</g)].map(match => match[2]), ['Me', 'Jobs', 'Pipeline', 'Settings', 'Help']);
+  assert.match(html, /<section id="view-pipeline" class="career-view pipeline-view" aria-label="Pipeline" hidden>/);
+  assert.match(html, /<script src="pipeline.js" defer><\/script>\s*<script src="career-browser.js" defer><\/script>/);
   assert.match(css, /^#career-browser \{ grid-template-rows: auto auto minmax\(0, 1fr\); \}$/m);
   // Four explicit rows, each child pinned to one, so hidden children never let the records take the `auto` row.
   assert.match(css, /^\.career-list \{[^}]*grid-template-rows: auto auto minmax\(0, 1fr\) auto;[^}]*overflow: hidden; \}$/m);
@@ -1341,7 +1349,7 @@ test('selected detail groups exact job and document actions once, preserves coun
   f.state.career.applications.exact.job.applyUrl = 'https://jobs.example.test/roles/exact/apply';
   const letter = await f.files.exportDocument({ applicationId: 'exact', kind: 'cover_letter', bytes: Buffer.from('%PDF-1.7\nsynthetic letter for grouped actions\n%%EOF'), mediaType: 'application/pdf' });
   f.state.career.applications.exact.exports.push({ ...letter, kind: 'cover_letter', format: 'pdf', createdAt: '2025-02-03T12:00:00.000Z' });
-  const pages = { jobs: await f.browser.list({ kind: 'jobs' }), applications: await f.browser.list({ kind: 'applications' }) };
+  const pages = { jobs: await f.browser.list({ kind: 'jobs' }) };
   let application = await f.browser.read({ kind: 'applications', id: 'exact' });
   let job = await f.browser.read({ kind: 'jobs', id: f.job.id });
   const urls = [];
@@ -1349,6 +1357,7 @@ test('selected detail groups exact job and document actions once, preserves coun
   const ui = await rendererFixture({
     list: args => pages[args.kind] ?? f.browser.list(args),
     read: args => args.kind === 'applications' ? application : args.kind === 'jobs' ? job : f.browser.read(args),
+    pipeline: args => f.browser.pipeline(args),
   }, false, {
     'career-open-document': args => (opening = f.browser.openDocument(args)),
     'career-open-job': args => (opening = openJobPage({ store: f.store, openExternal: async url => { urls.push(url); } }, args)),
@@ -1391,23 +1400,22 @@ test('selected detail groups exact job and document actions once, preserves coun
   assert.equal(ui.nodes['career-reader'].scrollTop, 120);
   assert.equal(ui.nodes['career-records'].querySelectorAll('[aria-current]').length, 1);
   assert.ok(ui.calls.filter(call => call.operation === 'career-read' && call.args.kind === 'jobs').length >= 3);
-  ui.jobCategories.applications.fire('click'); await ui.settle();
-  assert.equal(ui.nodes['career-records'].querySelectorAll('button').length, ui.rows('career').length);
-  ui.rows('career')[0].fire('click'); await ui.settle();
-  const appFiles = ui.byClass(content, 'career-files');
-  // Progress leads, then the Application metadata, then Job and documents.
-  assert.deepEqual(content.children.slice(0, 3).map(child => child.className || child.children[0]?.textContent), ['career-progress', 'Application', 'career-files']);
+  // The same reader opens beside Pipeline: Progress leads, then the Application metadata, then Job and documents.
+  ui.byClass(ui.nodes['pipeline-records'], 'pipeline-card-open').fire('click'); await ui.settle();
+  const appContent = ui.nodes['pipeline-reader-content'];
+  const appFiles = ui.byClass(appContent, 'career-files');
+  assert.deepEqual(appContent.children.slice(0, 3).map(child => child.className || child.children[0]?.textContent), ['career-progress', 'Application', 'career-files']);
   const appActions = appFiles.querySelectorAll('button');
   appActions[0].fire('click'); await opening; await ui.settle();
   assert.deepEqual(urls, [f.job.applyUrl, f.state.career.applications.exact.job.applyUrl]);
   assert.deepEqual(ui.calls.filter(call => call.operation === 'career-open-job').at(-1).args, { kind: 'applications', id: 'exact' });
   appActions[1].fire('click'); await opening; await ui.settle();
   assert.deepEqual(ui.calls.filter(call => call.operation === 'career-open-document').at(-1).args, await f.args('applications', 'exact'));
-  const applicationCount = ui.nodes['career-list-status'].textContent;
+  const applicationCount = ui.nodes['pipeline-list-status'].textContent;
   await unlink(f.pdf.path);
   appActions[1].fire('click');
   await assert.rejects(opening, { code: 'DOCUMENT_UNAVAILABLE' }); await ui.settle();
-  assert.equal(ui.nodes['career-list-status'].textContent, applicationCount);
+  assert.equal(ui.nodes['pipeline-list-status'].textContent, applicationCount);
   assert.equal(ui.notices.at(-1)[1], 'error');
   assert.equal(ui.notices.at(-1)[2], true);
 });
@@ -1448,10 +1456,11 @@ test('list refresh never validates PDFs; only the selected detail resolves its s
     resolved.push(uri);
     return f.files.resolveExport(uri);
   } } });
-  for (const kind of ['jobs', 'applications']) {
-    const first = await browser.list({ kind });
-    await browser.list({ kind });
-    assert.ok(first.items.every(item => item.documents === undefined));
+  for (const load of [() => browser.list({ kind: 'jobs' }), () => browser.pipeline()]) {
+    const first = await load();
+    await load();
+    assert.equal(JSON.stringify(first).includes('"documents":['), false);
+    assert.equal(JSON.stringify(first).includes('"token"'), false);
   }
   assert.deepEqual(resolved, []);
   const detail = await browser.read({ kind: 'jobs', id: f.job.id });
@@ -1471,118 +1480,219 @@ function progressFixture() {
       createdAt: '2025-10-01T10:00:00Z', updatedAt: '2025-10-01T10:00:00Z', ...(progress ? { progress } : {}), ...documents };
   };
   const both = { cv: { version: 1 }, coverLetter: { version: 1, paragraphs: ['Dear team,', 'Hello.'] } };
-  return { state, store, steps, app, both, browser: createCareerBrowser({ store }) };
+  const set = args => setApplicationProgress({ store }, args);
+  const from = id => ({ stage: replayProgress(state.career.applications[id].progress?.history ?? []).stage,
+    round: replayProgress(state.career.applications[id].progress?.history ?? []).round ?? 0, steps: state.career.applications[id].progress?.history.length ?? 0 });
+  return { state, store, steps, app, both, set, from, browser: createCareerBrowser({ store }) };
 }
 
-test('Applications lead with progress, count every stage, filter by one and put the furthest along first', async () => {
-  const { state, store, steps, app, both, browser } = progressFixture();
+test('Pipeline puts every application in its stage column with the last step, documents and what a change is based on', async () => {
+  const { steps, app, both, browser } = progressFixture();
   app('prepared', null, both);
   app('applied', steps(['applied', '2025-10-21']));
-  app('round 1', steps(['applied', '2025-10-20'], ['interviewing', '2025-10-25']), both);
+  app('round 1', steps(['applied', '2025-10-20'], ['interviewing', '2025-10-31']), both);
   app('round 2', steps(['applied', '2025-10-21'], ['interviewing', '2025-10-24'], ['interviewing', '2025-10-30']), { cv: { version: 1 } });
   app('offer', steps(['applied', '2025-10-01'], ['interviewing', '2025-10-02'], ['offer', '2025-11-05']));
   app('hired', steps(['applied', '2025-09-01'], ['interviewing', '2025-09-02'], ['offer', '2025-09-03'], ['hired', '2025-09-04']));
   app('rejected', steps(['applied', '2025-10-21'], ['interviewing', '2025-10-24'], ['rejected', '2025-11-02']), both);
   app('declined', steps(['applied', '2025-10-01'], ['interviewing', '2025-10-02'], ['offer', '2025-10-03'], ['withdrawn', '2025-10-04']));
-  const all = await browser.list({ kind: 'applications' });
-  assert.deepEqual(all.stages, { all: 8, prepared: 1, applied: 1, interviewing: 2, offer: 1, hired: 1, rejected: 1, withdrawn: 1 });
-  assert.deepEqual(all.items.map(({ title, summary }) => [title, summary]), [
-    ['offer — Example', 'Offer · No documents saved'],
-    ['round 2 — Example', 'Interview round 2 · CV saved'],
-    ['round 1 — Example', 'Interview round 1 · CV and cover letter saved'],
-    ['applied — Example', 'Applied · No documents saved'],
-    ['prepared — Example', 'CV draft saved · Cover letter saved'],
-    ['hired — Example', 'Hired · No documents saved'],
-    ['rejected — Example', 'Rejected after round 1 · CV and cover letter saved'],
-    ['declined — Example', 'Declined offer · No documents saved'],
+  const board = await browser.pipeline();
+  assert.equal(board.total, 8);
+  assert.deepEqual(board.columns.map(column => [column.id, column.cards.map(card => [card.title, card.detail, card.documents])]), [
+    ['prepared', [['prepared', 'Created 1 Oct 2025', 'CV and cover letter saved']]],
+    ['applied', [['applied', 'Applied · 21 Oct 2025', 'No documents saved']]],
+    // The later round leads even though round 1 moved more recently.
+    ['interviewing', [['round 2', 'Round 2 · 30 Oct 2025', 'CV saved'], ['round 1', 'Round 1 · 31 Oct 2025', 'CV and cover letter saved']]],
+    ['offer', [['offer', 'Offer · 5 Nov 2025', 'No documents saved']]],
+    ['hired', [['hired', 'Hired · 4 Sept 2025', 'No documents saved']]],
+    ['closed', [['rejected', 'Rejected after round 1 · 2 Nov 2025', 'CV and cover letter saved'], ['declined', 'Declined offer · 4 Oct 2025', 'No documents saved']]],
   ]);
-  const interviewing = await browser.list({ kind: 'applications', stage: 'interviewing', limit: 1 });
-  assert.deepEqual([interviewing.items.map(item => item.id), interviewing.total, interviewing.nextOffset, interviewing.stages], [['round 2'], 2, 1, all.stages]);
-  for (const args of [{ kind: 'applications', stage: 'all' }, { kind: 'applications', stage: null }, { kind: 'jobs', stage: 'applied' }, { kind: 'facts', stage: 'applied' }])
-    await assert.rejects(browser.list(args), { code: 'INVALID_INPUT' });
+  assert.deepEqual(board.columns[2].cards[0], { id: 'round 2', title: 'round 2', company: 'Example', stage: 'interviewing',
+    detail: 'Round 2 · 30 Oct 2025', documents: 'CV saved', from: { stage: 'interviewing', round: 2, steps: 3 } });
+  await assert.rejects(browser.pipeline({ stage: 'applied' }), { code: 'INVALID_INPUT' });
+  // Applications are no longer a Jobs list.
+  await assert.rejects(browser.list({ kind: 'applications' }), { code: 'INVALID_INPUT' });
+  assert.equal(Object.hasOwn((await browser.list({ kind: 'jobs' })).counts, 'applications'), false);
 
   const progress = async id => (await browser.read({ kind: 'applications', id })).progress;
-  assert.deepEqual(await progress('round 2'), { headline: 'Interview round 2 · 30 Oct 2025', steps: 3, at: '2025-10-30',
-    actions: [{ stage: 'interviewing', label: 'Next round' }, { stage: 'offer', label: 'Offer' }, { stage: 'rejected', label: 'Rejected' },
-      { stage: 'withdrawn', label: 'Withdrew', quiet: true }],
+  assert.deepEqual(await progress('round 2'), { headline: 'Interview round 2 · 30 Oct 2025', from: { stage: 'interviewing', round: 2, steps: 3 }, at: '2025-10-30',
+    actions: [{ label: 'Next round', nextRound: true }, { label: 'Offer', move: 'offer' }, { label: 'Rejected', move: 'rejected' },
+      { label: 'Withdrew', move: 'withdrawn', quiet: true }],
     history: [{ date: '30 Oct 2025', label: 'Interview round 2' }, { date: '24 Oct 2025', label: 'Interview round 1' }, { date: '21 Oct 2025', label: 'Applied' }] });
-  assert.deepEqual(await progress('prepared'), { headline: 'Not applied yet', steps: 0, at: null, actions: [{ stage: 'applied', label: 'Mark applied' }], history: [] });
-  assert.deepEqual((await progress('applied')).actions.map(action => action.label), ['Interview invite', 'Rejected', 'Withdrew']);
+  assert.deepEqual(await progress('prepared'), { headline: 'Not applied yet', from: { stage: 'prepared', round: 0, steps: 0 }, at: null,
+    actions: [{ label: 'Mark applied', move: 'applied' }], history: [] });
   assert.deepEqual((await progress('offer')).actions.map(action => action.label), ['Accepted', 'Declined']);
-  assert.deepEqual(await progress('rejected'), { headline: 'Rejected after round 1 · 2 Nov 2025', steps: 3, at: '2025-11-02', actions: [],
-    history: [{ date: '2 Nov 2025', label: 'Rejected after round 1' }, { date: '24 Oct 2025', label: 'Interview round 1' }, { date: '21 Oct 2025', label: 'Applied' }] });
   assert.equal((await progress('declined')).headline, 'Declined offer · 4 Oct 2025');
-
-  // The reader's buttons change one step on the application it showed, and only if nothing changed meanwhile.
-  const revision = state.career.revision;
-  assert.equal((await setApplicationProgress({ store }, { id: 'round 2', steps: 3, stage: 'interviewing', at: '2025-11-01' })).progress.round, 3);
-  assert.equal(state.career.revision, revision + 1);
-  await assert.rejects(setApplicationProgress({ store }, { id: 'round 2', steps: 3, undo: true }), { code: 'PROGRESS_CHANGED' });
-  await assert.rejects(setApplicationProgress({ store }, { id: 'round 2', steps: 4, stage: 'hired' }), { code: 'INVALID_PROGRESS' });
-  await assert.rejects(setApplicationProgress({ store }, { id: 'missing', steps: 0, stage: 'applied' }), { code: 'NOT_FOUND' });
-  for (const args of [{ id: 'round 2', stage: 'offer' }, { id: 'round 2', steps: -1, undo: true }, { id: 'round 2', steps: 4, undo: true, url: 'x' }, { id: '__proto__', steps: 0, undo: true }])
-    await assert.rejects(setApplicationProgress({ store }, args), { code: 'INVALID_INPUT' });
-  assert.equal((await setApplicationProgress({ store }, { id: 'round 2', steps: 4, undo: true })).progress.round, 2);
-  assert.equal((await setApplicationProgress({ store }, { id: 'prepared', steps: 0, stage: 'applied', at: '2025-10-21' })).progress.stage, 'applied');
 });
 
-test('the Applications reader records progress and the stage line filters the list', async () => {
-  const { store, steps, app, browser } = progressFixture();
+test('Pipeline moves fill skipped steps, undo backwards, close as rejected or withdrew and add interview rounds', async () => {
+  const { state, steps, app, set, from } = progressFixture();
+  const history = id => state.career.applications[id].progress.history.map(step => [step.stage, step.round ?? null, step.at]);
+  app('a', null);
+  // Forward: Prepared → Interviewing records applied and round 1, dated as given.
+  assert.equal((await set({ id: 'a', from: from('a'), move: 'interviewing', at: '2025-11-01' })).changed, true);
+  assert.deepEqual(history('a'), [['applied', null, '2025-11-01'], ['interviewing', 1, '2025-11-01']]);
+  assert.equal((await set({ id: 'a', from: from('a'), nextRound: true, at: '2025-11-03' })).progress.round, 2);
+  // Prepared → Offer always passes through an interview.
+  app('b', null);
+  await set({ id: 'b', from: from('b'), move: 'offer', at: '2025-11-01' });
+  assert.deepEqual(history('b').map(([stage]) => stage), ['applied', 'interviewing', 'offer']);
+  // Backward: undo steps until the card reaches the column; nothing new is recorded.
+  await set({ id: 'a', from: from('a'), move: 'applied', at: '2025-11-05' });
+  assert.deepEqual(history('a'), [['applied', null, '2025-11-01']]);
+  await set({ id: 'a', from: from('a'), move: 'prepared' });
+  assert.deepEqual(state.career.applications.a.progress, { stage: 'prepared', history: [] });
+  // Closed: the user's choice; where it ended is kept, and moving out of Closed undoes the ending.
+  app('c', steps(['applied', '2025-10-21'], ['interviewing', '2025-10-24']));
+  const rejected = (await set({ id: 'c', from: from('c'), move: 'rejected', at: '2025-10-28' })).progress;
+  assert.deepEqual([rejected.stage, rejected.atStage, rejected.round], ['rejected', 'interviewing', 1]);
+  const withdrew = (await set({ id: 'c', from: from('c'), move: 'withdrawn', at: '2025-10-29' })).progress;
+  assert.deepEqual([withdrew.stage, withdrew.atStage, withdrew.history.length], ['withdrawn', 'interviewing', 3]);
+  await set({ id: 'c', from: from('c'), move: 'interviewing', at: '2025-10-30' });
+  assert.deepEqual(history('c'), [['applied', null, '2025-10-21'], ['interviewing', 1, '2025-10-24']]);
+  app('d', null);
+  await set({ id: 'd', from: from('d'), move: 'withdrawn', at: '2025-10-30' });
+  assert.deepEqual(history('d').map(([stage]) => stage), ['applied', 'withdrawn']);
+  // Dates still never run backwards or into the future.
+  await assert.rejects(set({ id: 'c', from: from('c'), move: 'offer', at: '2025-10-01' }), { code: 'INVALID_PROGRESS' });
+  await assert.rejects(set({ id: 'c', from: from('c'), move: 'offer', at: '2099-01-01' }), { code: 'INVALID_PROGRESS' });
+  await assert.rejects(set({ id: 'a', from: from('a'), nextRound: true }), { code: 'INVALID_PROGRESS' });
+  for (const args of [{ id: 'a', move: 'applied' }, { id: 'a', from: { stage: 'prepared', round: 0 }, move: 'applied' },
+    { id: 'a', from: from('a'), move: 'closed' }, { id: 'a', from: from('a'), move: 'applied', undo: true }, { id: 'a', from: from('a') },
+    { id: 'a', from: from('a'), undo: true, at: '2025-10-01' }, { id: 'a', from: from('a'), nextRound: 'yes' }, { id: '__proto__', from: from('a'), undo: true },
+    { id: 'a', from: from('a'), move: 'applied', steps: 0 }])
+    await assert.rejects(set(args), { code: 'INVALID_INPUT' }, JSON.stringify(args));
+  await assert.rejects(set({ id: 'missing', from: from('a'), move: 'applied' }), { code: 'NOT_FOUND' });
+});
+
+test('a repeated click or drag never conflicts with itself; only a change made meanwhile is reported', async () => {
+  const { state, app, set, from } = progressFixture();
+  app('lifi', null);
+  // The owner's report: Mark applied, then the same click again before the reader redrew (a double click).
+  const shown = from('lifi'), revision = state.career.revision;
+  assert.equal((await set({ id: 'lifi', from: shown, move: 'applied', at: '2025-11-01' })).changed, true);
+  assert.deepEqual(await set({ id: 'lifi', from: shown, move: 'applied', at: '2025-11-01' }),
+    { progress: state.career.applications.lifi.progress, changed: false });
+  assert.equal(state.career.applications.lifi.progress.history.length, 1);
+  assert.equal(state.career.revision, revision + 1);
+  // Next round twice from the same view adds one round, not two; a repeated date change is also already done.
+  await set({ id: 'lifi', from: from('lifi'), move: 'interviewing', at: '2025-11-01' });
+  const interview = from('lifi');
+  await set({ id: 'lifi', from: interview, nextRound: true, at: '2025-11-02' });
+  assert.equal((await set({ id: 'lifi', from: interview, nextRound: true, at: '2025-11-02' })).changed, false);
+  assert.equal(state.career.applications.lifi.progress.round, 2);
+  const dated = from('lifi');
+  await set({ id: 'lifi', from: dated, at: '2025-11-03' });
+  assert.equal((await set({ id: 'lifi', from: dated, at: '2025-11-03' })).changed, false);
+  // Someone else moved it meanwhile (the AI app recorded an offer): a stale move, round or undo is reported, never stacked.
+  const stale = from('lifi');
+  state.career.applications.lifi.progress = replayProgress([...state.career.applications.lifi.progress.history, { stage: 'offer', at: '2025-11-04' }]);
+  for (const change of [{ move: 'rejected' }, { nextRound: true }, { undo: true }, { at: '2025-11-04' }])
+    await assert.rejects(set({ id: 'lifi', from: stale, ...change }), { code: 'PROGRESS_CHANGED' }, JSON.stringify(change));
+  assert.equal(state.career.applications.lifi.progress.stage, 'offer');
+  // A move to where it already is succeeds whatever was shown.
+  assert.equal((await set({ id: 'lifi', from: stale, move: 'offer' })).changed, false);
+});
+
+test('the Pipeline board moves cards by keyboard and Move to…, closes inline, adds rounds and opens the shared reader', async () => {
+  const { state, store, steps, app, browser } = progressFixture();
   app('tangem', steps(['applied', '2025-10-21'], ['interviewing', '2025-10-24']));
   app('example', steps(['applied', '2025-10-22']));
   app('draft', null);
   const ui = await rendererFixture(browser, true, { 'application-progress': input => setApplicationProgress({ store }, input) });
-  const filter = ui.nodes['career-stage-filter'];
-  const filterButtons = () => filter.children.filter(child => child.tagName === 'BUTTON');
+  const board = ui.nodes['pipeline-records'];
+  const column = id => board.children.find(section => section.dataset.column === id);
+  const titles = id => column(id).querySelectorAll('.pipeline-card-role').map(role => role.textContent);
+  const card = title => board.querySelectorAll('.pipeline-card').find(item => ui.byClass(item, 'pipeline-card-role').textContent === title);
+  const open = title => ui.byClass(card(title), 'pipeline-card-open');
+  const status = () => ui.nodes['pipeline-list-status'].textContent;
+  const lastMove = () => ui.calls.findLast(call => call.operation === 'application-progress').args;
   await ui.window.careerBrowser.refresh();
   await ui.settle();
-  assert.equal(filter.hidden, true);
-  ui.jobCategories.applications.fire('click');
-  await ui.settle();
-  assert.equal(filter.hidden, false);
-  assert.deepEqual(filterButtons().map(button => [button.textContent, button.attributes.get('aria-pressed')]),
-    [['All 3', 'true'], ['Prepared 1', 'false'], ['Applied 1', 'false'], ['Interviewing 1', 'false']]);
-  assert.deepEqual(ui.titles(), ['tangem — Example', 'example — Example', 'draft — Example']);
+  assert.equal(board.hidden, false);
+  assert.deepEqual(board.children.map(section => section.querySelector('.pipeline-column-head').children.map(part => part.textContent)),
+    [['Prepared', '1'], ['Applied', '1'], ['Interviewing', '1'], ['Offer', '0'], ['Hired', '0'], ['Closed', '0']]);
+  assert.deepEqual(titles('interviewing'), ['tangem']);
+  // Empty lanes say so rather than showing blank cells.
+  assert.deepEqual(['offer', 'hired', 'closed'].map(id => ui.byClass(column(id), 'pipeline-empty')?.textContent), ['No applications', 'No applications', 'No applications']);
+  assert.equal(ui.byClass(column('applied'), 'pipeline-empty'), null);
+  assert.equal(open('tangem').attributes.get('aria-label'), 'tangem, Example, Round 1 · 24 Oct 2025, No documents saved');
+  assert.deepEqual(card('tangem').querySelectorAll('button').map(button => button.textContent).slice(1), ['Next round']);
+  assert.deepEqual(card('example').querySelectorAll('button').length, 1);
+  // The reader is closed until a card is chosen; nothing opens by itself.
+  assert.equal(ui.nodes['pipeline-reader'].hidden, true);
 
-  // The first record opens beside the list: the Progress block leads the reader.
-  const progress = () => ui.byClass(ui.nodes['career-reader-content'], 'career-progress');
-  assert.equal(ui.nodes['career-reader-content'].children[0], progress());
-  assert.equal(ui.byClass(progress(), 'career-progress-current').textContent, 'Interview round 1 · 24 Oct 2025');
-  const buttons = () => progress().querySelectorAll('button').map(button => button.textContent);
-  assert.deepEqual(buttons(), ['Change date', 'Undo last step', 'Next round', 'Offer', 'Rejected', 'Withdrew']);
-  const date = ui.byClass(progress(), 'career-progress-date');
-  assert.equal(date.type, 'date');
-  date.value = '2025-10-30';
-  progress().querySelectorAll('button').find(button => button.textContent === 'Next round').fire('click');
+  // Keyboard: Right moves the focused card one column on, filling the skipped step, and focus stays on that card.
+  open('draft').focus();
+  open('draft').fire('keydown', { key: 'ArrowRight' });
+  await ui.settle(); await ui.settle();
+  assert.deepEqual(lastMove(), { id: 'draft', from: { stage: 'prepared', round: 0, steps: 0 }, move: 'applied', at: lastMove().at });
+  assert.match(lastMove().at, /^\d{4}-\d{2}-\d{2}$/);
+  assert.deepEqual(titles('applied').sort(), ['draft', 'example']);
+  assert.equal(status(), 'Moved draft — Example to Applied.');
+  assert.equal(ui.focused(), open('draft'));
+  open('draft').fire('keydown', { key: 'ArrowLeft' });
+  await ui.settle(); await ui.settle();
+  assert.deepEqual(titles('prepared'), ['draft']);
+  assert.deepEqual(state.career.applications.draft.progress, { stage: 'prepared', history: [] });
+  open('draft').fire('keydown', { key: 'ArrowLeft' });
   await ui.settle();
-  assert.deepEqual(ui.calls.findLast(call => call.operation === 'application-progress').args,
-    { id: 'tangem', steps: 2, stage: 'interviewing', at: '2025-10-30' });
-  await ui.window.careerBrowser.refresh();
-  await ui.settle();
-  assert.equal(ui.byClass(progress(), 'career-progress-current').textContent, 'Interview round 2 · 30 Oct 2025');
-  assert.deepEqual(ui.byClass(progress(), 'career-progress-history').children.map(row => row.children.map(cell => cell.textContent)),
-    [['30 Oct 2025', 'Interview round 2'], ['24 Oct 2025', 'Interview round 1'], ['21 Oct 2025', 'Applied']]);
-  progress().querySelectorAll('button').find(button => button.textContent === 'Undo last step').fire('click');
-  await ui.settle();
-  assert.deepEqual(ui.calls.findLast(call => call.operation === 'application-progress').args, { id: 'tangem', steps: 3, undo: true });
-  await ui.window.careerBrowser.refresh();
-  await ui.settle();
+  assert.equal(ui.calls.filter(call => call.operation === 'application-progress').length, 2);
 
-  filterButtons().find(button => button.textContent === 'Applied 1').fire('click');
+  // Move to…: Closed asks Rejected or Withdrew on the card, never a dialog; Escape or Cancel keeps the card where it was.
+  const select = ui.byClass(card('example'), 'pipeline-move');
+  assert.equal(select.attributes.get('aria-label'), 'Move example to');
+  assert.deepEqual(select.children.map(option => option.textContent), ['Move to…', 'Prepared', 'Interviewing', 'Offer', 'Hired', 'Closed']);
+  select.value = 'closed';
+  select.fire('change');
+  const choice = ui.byClass(card('example'), 'pipeline-choice');
+  assert.equal(choice.attributes.get('aria-label'), 'Close example as');
+  assert.deepEqual(choice.children.map(part => part.textContent), ['Close as', 'Rejected', 'Withdrew', 'Cancel']);
+  assert.equal(ui.focused(), choice.children[1]);
+  choice.fire('keydown', { key: 'Escape' });
+  assert.equal(ui.byClass(card('example'), 'pipeline-choice'), null);
+  assert.equal(ui.focused(), open('example'));
+  select.value = '';
+  ui.byClass(card('example'), 'pipeline-move').value = 'closed';
+  ui.byClass(card('example'), 'pipeline-move').fire('change');
+  ui.byClass(card('example'), 'pipeline-choice').children[1].fire('click');
+  await ui.settle(); await ui.settle();
+  assert.deepEqual(titles('closed'), ['example']);
+  assert.equal(state.career.applications.example.progress.atStage, 'applied');
+  assert.equal(status(), 'Moved example — Example to Closed, rejected.');
+  assert.equal(ui.byClass(card('example'), 'pipeline-card-detail').textContent.startsWith('Rejected after applying · '), true);
+
+  // Next round on an Interviewing card; the second click of a double click does nothing.
+  const next = card('tangem').querySelectorAll('button').find(button => button.textContent === 'Next round');
+  next.fire('click');
+  next.fire('click', { detail: 2 });
+  await ui.settle(); await ui.settle();
+  assert.equal(state.career.applications.tangem.progress.round, 2);
+  assert.equal(status(), 'tangem — Example: interview round 2.');
+
+  // Selecting a card opens the shared reader beside the board; Escape returns focus to the card.
+  open('tangem').fire('click');
   await ui.settle();
-  assert.equal(ui.calls.findLast(call => call.operation === 'career-list').args.stage, 'applied');
-  assert.deepEqual(ui.titles(), ['example — Example']);
-  assert.deepEqual(filterButtons().map(button => button.attributes.get('aria-pressed')), ['false', 'false', 'true', 'false']);
-  assert.equal(ui.byClass(progress(), 'career-progress-current').textContent, 'Applied · 22 Oct 2025');
-  assert.deepEqual(buttons(), ['Change date', 'Undo last step', 'Interview invite', 'Rejected', 'Withdrew']);
-  filterButtons()[0].fire('click');
-  await ui.settle();
-  assert.equal(ui.calls.findLast(call => call.operation === 'career-list').args.stage, undefined);
-  ui.rows('career')[2].fire('click');
-  await ui.settle();
-  assert.equal(ui.byClass(progress(), 'career-progress-current').textContent, 'Not applied yet');
-  assert.deepEqual(buttons(), ['Mark applied']);
-  ui.jobCategories.blocks.fire('click');
-  await ui.settle();
-  assert.equal(filter.hidden, true);
+  assert.equal(ui.nodes['pipeline-reader'].hidden, false);
+  assert.equal(ui.nodes['pipeline-reader-title'].textContent, 'tangem — Example');
+  assert.equal(open('tangem').attributes.get('aria-current'), 'true');
+  const progress = () => ui.byClass(ui.nodes['pipeline-reader-content'], 'career-progress');
+  assert.equal(ui.byClass(progress(), 'career-progress-current').textContent, 'Interview round 2 · ' + ui.byClass(card('tangem'), 'pipeline-card-detail').textContent.split(' · ')[1]);
+  const buttons = () => progress().querySelectorAll('button');
+  assert.deepEqual(buttons().map(button => button.textContent), ['Change date', 'Undo last step', 'Next round', 'Offer', 'Rejected', 'Withdrew']);
+  // The reader's step redraws both the reader and the board; its controls stay disabled until then.
+  const offer = buttons().find(button => button.textContent === 'Offer');
+  offer.fire('click');
+  assert.equal(offer.disabled, true);
+  offer.fire('click', { detail: 2 });
+  await ui.settle(); await ui.settle(); await ui.settle();
+  assert.equal(ui.calls.filter(call => call.operation === 'application-progress' && call.args.move === 'offer').length, 1);
+  assert.deepEqual(titles('offer'), ['tangem']);
+  assert.match(ui.byClass(progress(), 'career-progress-current').textContent, /^Offer · /);
+  assert.deepEqual(buttons().map(button => button.textContent), ['Change date', 'Undo last step', 'Accepted', 'Declined']);
+  ui.nodes['pipeline-reader'].fire('keydown', { key: 'Escape' });
+  assert.equal(ui.nodes['pipeline-reader'].hidden, true);
+  assert.equal(ui.focused(), open('tangem'));
+  ui.window.careerBrowser.clear();
+  assert.equal(ui.nodes['pipeline-list-status'].textContent, 'Unlock to see your saved applications.');
 });

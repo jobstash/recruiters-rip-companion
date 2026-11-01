@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applicationProgress, changeProgress, nextStages, replayProgress } from '../src/application-progress.mjs';
+import { applicationProgress, changeProgress, moveProgress, nextStages, replayProgress } from '../src/application-progress.mjs';
 
 const now = new Date('2026-11-05T12:00:00Z');
 const step = (app, change) => changeProgress(app, change, now);
@@ -74,4 +74,38 @@ test('saved steps replay exactly: jumps, wrong rounds and unknown fields are rej
     [{ stage: 'applied', at: '2026-10-01' }, { stage: 'applied', at: '2026-10-02' }],
     [null], {},
   ]) assert.throws(() => replayProgress(history, now), error => ['INVALID_INPUT', 'INVALID_PROGRESS'].includes(error.code));
+});
+
+test('moving straight to a stage fills skipped steps forward and undoes steps backward', () => {
+  const move = (app, to, at = '2026-11-01') => moveProgress(app, to, { at, now });
+  const stages = app => app.progress.history.map(entry => entry.round ? `${entry.stage} ${entry.round}` : entry.stage);
+  const app = {};
+  assert.deepEqual(stages({ progress: move(app, 'hired') }), ['applied', 'interviewing 1', 'offer', 'hired']);
+  assert.ok(app.progress.history.every(entry => entry.at === '2026-11-01'));
+  move(app, 'interviewing');
+  assert.deepEqual(stages(app), ['applied', 'interviewing 1']);
+  step(app, { stage: 'interviewing', at: '2026-11-02' });
+  // Back to Interviewing from Offer keeps every round; already there changes nothing.
+  move(app, 'offer', '2026-11-03');
+  move(app, 'interviewing');
+  assert.deepEqual(stages(app), ['applied', 'interviewing 1', 'interviewing 2']);
+  const before = structuredClone(app);
+  assert.deepEqual(move(app, 'interviewing'), before.progress);
+  assert.deepEqual(app, before);
+  // Closing records the choice where it ended; leaving Closed undoes the ending first.
+  assert.deepEqual([move(app, 'rejected', '2026-11-03').atStage, app.progress.round], ['interviewing', 2]);
+  move(app, 'withdrawn', '2026-11-04');
+  assert.deepEqual(stages(app), ['applied', 'interviewing 1', 'interviewing 2', 'withdrawn']);
+  move(app, 'offer', '2026-11-05');
+  assert.deepEqual(stages(app), ['applied', 'interviewing 1', 'interviewing 2', 'offer']);
+  // From an offer, Rejected undoes the offer: offers are declined (withdrawn), not rejected.
+  assert.deepEqual([move(app, 'withdrawn', '2026-11-05').atStage], ['offer']);
+  move(app, 'offer');
+  move(app, 'rejected', '2026-11-05');
+  assert.deepEqual(stages(app), ['applied', 'interviewing 1', 'interviewing 2', 'rejected']);
+  move(app, 'prepared');
+  assert.deepEqual(app.progress, { stage: 'prepared', history: [] });
+  assert.deepEqual(stages({ progress: move({}, 'rejected') }), ['applied', 'rejected']);
+  assert.throws(() => move({}, 'closed'), { code: 'INVALID_INPUT' });
+  assert.throws(() => move(app, 'offer', '2026-11-09'), { code: 'INVALID_PROGRESS' });
 });

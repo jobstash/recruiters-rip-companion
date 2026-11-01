@@ -839,12 +839,13 @@ async function settingsOperation(op, input, ownMutation) {
       scoped.assertAvailable(false); careerViewRevision++; browserForms.cancelAll(); emit();
       return { ok: true, result };
     }
-    if (['career-list', 'career-read', 'career-open-document'].includes(op)) {
+    if (['career-list', 'career-read', 'career-pipeline', 'career-open-document'].includes(op)) {
       const scoped = createScopedAccess(store, { assertAvailable, epoch: () => sessionEpoch });
       const localFiles = createDocumentFiles({ directory, store: scoped.store, assertAvailable: scoped.assertAvailable });
       const reader = createCareerBrowser({ store: scoped.store, files: localFiles,
         openPath: filename => { scoped.assertAvailable(false); return shell.openPath(filename); } });
-      const result = await (op === 'career-list' ? reader.list(input) : op === 'career-read' ? reader.read(input) : reader.openDocument(input));
+      const result = await (op === 'career-list' ? reader.list(input) : op === 'career-read' ? reader.read(input)
+        : op === 'career-pipeline' ? reader.pipeline(input) : reader.openDocument(input));
       scoped.assertAvailable(false);
       return { ok: true, result };
     }
@@ -868,11 +869,12 @@ async function settingsOperation(op, input, ownMutation) {
       emit(); return { ok: true, result };
     }
     if (op === 'application-progress') {
-      assertAvailable(false); exact(input, ['id', 'steps', 'stage', 'at', 'undo']);
+      assertAvailable(false); exact(input, ['id', 'from', 'move', 'nextRound', 'at', 'undo']);
       const scoped = createScopedAccess(store, { assertAvailable, epoch: () => sessionEpoch });
       const result = await setApplicationProgress({ store: scoped.store }, input);
-      scoped.assertAvailable(false); careerViewRevision++;
-      emit(); return { ok: true, result };
+      scoped.assertAvailable(false);
+      if (result.changed) { careerViewRevision++; emit(); }
+      return { ok: true, result };
     }
     if (op === 'career-open-profile') {
       assertAvailable(false); exact(input, ['id']);
@@ -1015,7 +1017,7 @@ ipcMain.handle('local-settings', async (event, op, input = {}) => {
       if (['decisions-key-save', 'decisions-key-remove', 'publication-range-set', 'import-cv', 'cv-delete', 'delete-rankings', 'connect-account', 'backup', 'backup-preview', 'backup-restore'].includes(op))
         return mutation(ownMutation => settingsOperation(op, input, ownMutation));
       return settingsOperation(op, input);
-    }, { meaningful: !['career-list', 'career-read', 'account-platform'].includes(op) });
+    }, { meaningful: !['career-list', 'career-read', 'career-pipeline', 'account-platform'].includes(op) });
   } catch (error) { return { ok: false, error: safeFailure(error) }; }
 });
 app.on('open-url', (event, url) => { event.preventDefault(); acceptPairingURL(url); });

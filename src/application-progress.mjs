@@ -62,3 +62,29 @@ export function changeProgress(app, { stage, at, undo } = {}, now = new Date()) 
   app.updatedAt = now.toISOString();
   return app.progress;
 }
+
+const forward = ['prepared', 'applied', 'interviewing', 'offer', 'hired'];
+/** The steps that take `from` to `to` going forward only (an interview before an offer, an application before anything
+ *  else), or null when `to` lies behind or beside it. */
+function forwardSteps(from, to) {
+  if (to === 'rejected') return from === 'prepared' ? ['applied', 'rejected'] : ['applied', 'interviewing'].includes(from) ? ['rejected'] : null;
+  if (to === 'withdrawn') return from === 'prepared' ? ['applied', 'withdrawn'] : ['applied', 'interviewing', 'offer'].includes(from) ? ['withdrawn'] : null;
+  const start = forward.indexOf(from), end = forward.indexOf(to);
+  return start >= 0 && end > start ? forward.slice(start + 1, end + 1) : null;
+}
+/** Move straight to a stage, as on the Pipeline board: steps back (undoing the latest steps) until `to` is reached or lies
+ *  ahead, then records any steps in between, dated `at` (today by default). Already at `to` changes nothing. */
+export function moveProgress(app, to, { at, now = new Date() } = {}) {
+  if (!PROGRESS_STAGES.includes(to)) fail('INVALID_INPUT', `Choose a stage: ${PROGRESS_STAGES.join(', ')}.`);
+  const history = [...applicationProgress(app).history];
+  let progress = replayProgress(history, now);
+  if (progress.stage === to) return progress;
+  while (progress.stage !== to && !forwardSteps(progress.stage, to)) {
+    history.pop();
+    progress = replayProgress(history, now);
+  }
+  for (const stage of progress.stage === to ? [] : forwardSteps(progress.stage, to)) history.push({ stage, at: at ?? todayDate(now) });
+  app.progress = replayProgress(history, now);
+  app.updatedAt = now.toISOString();
+  return app.progress;
+}

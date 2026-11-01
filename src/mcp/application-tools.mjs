@@ -226,7 +226,7 @@ export function createApplicationTools({ store, platform, documents, exportDocum
     const career = readCareer(store), app = application(career, args.applicationId);
     return { revision: career.revision, application: { ...app, progress: applicationProgress(app) } };
   });
-  mutate('career_application_progress_set', 'Record how an application went, without asking: applied right after you submit it yourself and observe the employer’s newly shown confirmation or receipt, or any step the user explicitly tells you. Never infer it from time passing, documents, silence or a submit click without an observed confirmation. stage is the next step: applied; interviewing (an invite; again from interviewing adds a round); offer; hired (offer accepted); rejected; withdrawn (the user pulled out or declined the offer). Steps run prepared → applied → interviewing → offer → hired; rejected or withdrawn end it. date is when it happened (YYYY-MM-DD, default today). Only date: correct the current step’s date. undo: remove the last step.',
+  mutate('career_application_progress_set', 'Record how an application went, without asking: applied right after you submit it yourself and observe the employer’s newly shown confirmation or receipt; applied with the saved date when saved records (progress, facts, notes, form answers) show it was already sent; or any step the user explicitly tells you. Never infer it from time passing, documents, silence or a submit click without an observed confirmation. stage is the next step: applied; interviewing (an invite; again from interviewing adds a round); offer; hired (offer accepted); rejected; withdrawn (the user pulled out or declined the offer). Steps run prepared → applied → interviewing → offer → hired; rejected or withdrawn end it. date is when it happened (YYYY-MM-DD, default today). Only date: correct the current step’s date. undo: remove the last step.',
     { applicationId: uuid, stage: { enum: PROGRESS_STAGES.slice(1) }, date: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' }, undo: { const: true } },
     ['applicationId'], (career, args) => {
       const app = application(career, args.applicationId);
@@ -239,7 +239,7 @@ export function createApplicationTools({ store, platform, documents, exportDocum
       for (const id of args.applicationIds) delete career.applications[id];
       return { deleted: args.applicationIds.length };
     });
-  add('career_application_context', 'Everything needed to tailor the CV and cover letter: the job, profile, preferences, the saved CV text (the career record), known facts grouped by kind, the current saved match assessment of a catalogue job (or null), presentation options and the writing guide. Ask about job must-haves the CV and facts do not cover with career_interview_ask before writing.',
+  add('career_application_context', 'Everything needed to tailor the CV and cover letter: the job, profile, preferences, the saved CV text (the career record), known facts grouped by kind, the current saved match assessment of a catalogue job (or null), presentation options and the writing guide. Write from this evidence without asking; a required form answer it cannot support blocks only this application.',
     object({ applicationId: uuid }), true, args => {
       const career = readCareer(store);
       return context(career, application(career, args.applicationId));
@@ -294,7 +294,7 @@ export function createApplicationTools({ store, platform, documents, exportDocum
       const draft = args.kind === 'cv' ? app.cv : app.coverLetter;
       if (!draft) fail('MISSING_DRAFT', `Save the ${args.kind === 'cv' ? 'CV' : 'cover letter'} before exporting it.`);
       if (draft.contextFingerprint !== applicationContextFingerprint(career, app))
-        fail('APPLICATION_CONTEXT_CHANGED', 'The job or career evidence changed, or this draft has no job binding. Read the application context and save a current draft before exporting.');
+        fail('APPLICATION_CONTEXT_CHANGED', 'The job or career evidence changed, or this draft has no job binding. Read career_application_context, rewrite and save a current draft, then export again; no need to ask the candidate.');
       const format = args.format ?? 'pdf';
       let bytes, expectedText, textValidation = null;
       if (args.kind === 'cv') {

@@ -261,17 +261,35 @@ test('CV onboarding asks to import, then read, and is ready once the profile is 
   assert.equal(status.locallyReady, false);
   assert.deepEqual((await f.call('career_profile_read')).missingPreferences.map(item => item.field),
     ['careerPaths', 'locations', 'workModes', 'willingToRelocate', 'travel']);
-  // The whole record is read before paths are proposed.
-  assert.ok(status.nextSteps.some(step => step.startsWith('Before asking about careerPaths, read every current CV end to end')));
+  // Career paths are the agent's to derive and save; only the other basics are questions for the candidate.
+  assert.deepEqual(status.actions.filter(item => item.field.startsWith('preferences.')).map(item => item.field), ['preferences.careerPaths']);
+  assert.deepEqual(status.questions.filter(item => item.field.startsWith('preferences.')).map(item => item.field),
+    ['preferences.locations', 'preferences.workModes', 'preferences.willingToRelocate', 'preferences.travel']);
   // An empty list is not an answer.
   await f.edit('career_preferences_update', { patch: { careerPaths: [path('Platform engineering', ['Senior platform engineer', 'Staff platform engineer'])], locations: ['Berlin'], workModes: [], willingToRelocate: true, travel: 'none' } });
-  assert.deepEqual((await f.call('career_profile_read')).missingPreferences, [{ field: 'workModes', question: 'Which work modes suit you: remote, hybrid, onsite?' }]);
+  assert.deepEqual((await f.call('career_profile_read')).missingPreferences.map(item => item.field), ['workModes']);
   await f.edit('career_preferences_update', { patch: { workModes: ['hybrid'] } });
   status = await f.call('onboarding_status');
   assert.equal(status.locallyReady, true);
   assert.deepEqual(status.missing, []);
   const reopened = fixture({}, f.store.get());
   assert.deepEqual(await reopened.call('career_profile_read'), await f.call('career_profile_read'));
+});
+
+test('the agent saves derived career paths without any approval and onboarding becomes ready', async () => {
+  const f = fixture({ interaction: { canElicit: () => true, elicit: async () => assert.fail('saving career paths never asks the candidate') } }, { pairing: { account: { id: 'account-a', label: 'Candidate' } } });
+  await importText(f);
+  await f.edit('career_profile_update', { patch: { headline: 'Senior engineer' } });
+  await f.edit('career_preferences_update', { patch: { locations: ['Berlin'], workModes: ['remote'], willingToRelocate: false, travel: 'none' } });
+  const before = await f.call('career_profile_read');
+  assert.deepEqual(before.missingPreferences.map(item => [item.field, Object.hasOwn(item, 'action')]), [['careerPaths', true]]);
+  assert.equal((await f.call('onboarding_status')).questions.length, 0, 'nothing is left to ask the candidate');
+  const paths = Array.from({ length: 10 }, (_, index) => path(`Path ${index + 1}`));
+  const saved = await f.edit('career_preferences_update', { patch: { careerPaths: paths } });
+  assert.deepEqual(saved.saved, ['preferences.careerPaths']);
+  assert.deepEqual((await f.call('career_profile_read')).missingPreferences, []);
+  assert.equal((await f.call('onboarding_status')).locallyReady, true);
+  await assert.rejects(f.edit('career_preferences_update', { patch: { careerPaths: [...paths, path('Path 11')] } }), { code: 'INVALID_INPUT' });
 });
 
 test('onboarding commit saves a pasted source and preferences atomically, rolls back on invalid facts, and replays', async () => {

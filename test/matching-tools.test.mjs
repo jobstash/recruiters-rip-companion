@@ -1245,12 +1245,10 @@ test('discovery and batches refuse to start until the basic preferences are answ
   assert.equal((await f.call('career_match_jobs')).jobIds.length, 3);
 });
 
-test('existing profiles without career paths are asked for them once, after a full read of the record', async () => {
+test('existing profiles without career paths refuse review until the agent saves them', async () => {
   const f = fixture();
   await f.store.update(state => { state.career.profile.preferences.careerPaths = []; });
-  await assert.rejects(f.call('career_match_jobs'), error => error.code === 'PREFERENCES_REQUIRED' &&
-    error.message.includes('Which of these career paths should I search?') && error.message.includes('read every current CV end to end') &&
-    error.message.includes('(fields: careerPaths)'));
+  await assert.rejects(f.call('career_match_jobs'), { code: 'PREFERENCES_REQUIRED' });
   assert.deepEqual(f.calls, []);
   const paths = [{ name: 'Software engineering', titles: ['Software engineer', 'Senior software engineer'], why: 'Built reporting services.' },
     { name: 'Engineering leadership', titles: ['Engineering manager'], why: 'Led internal tooling.' }];

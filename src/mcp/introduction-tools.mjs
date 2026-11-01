@@ -116,7 +116,7 @@ export function createIntroductionTools({ store, platform, shareCv, openGithub, 
     },
     {
       name: 'career_intro_paths', readOnly: true, inputSchema: introPathsSchema,
-      description: 'Who the candidate already knows at the employers of up to 10 platform jobs, from the GitHub collaboration graph: direct coworkers (hops 1) and people reachable through one shared contact (hops 2). Each path names real GitHub identities (login, name, avatar, profile URL) and up to three verified commit emails per person, with the shared organizations, repositories and overlap dates as evidence. Requires current paid membership and a linked GitHub account (github null → call account_github_connect). Relationships are inferred from overlapping contributions, not confirmed; local job IDs are not supported.',
+      description: 'People the candidate knows at the employers of up to 10 platform jobs (recruiters.rip connections), from recruiters.rip’s GitHub collaboration graph: direct coworkers (hops 1) and people reachable through one shared contact (hops 2). Call it yourself whenever you work on platform jobs. Each path names real GitHub identities (login, name, avatar, profile URL) and up to three verified commit emails per person, with the shared organizations, repositories and overlap dates as evidence. Requires current paid membership and a linked GitHub account (github null → call account_github_connect). Relationships are inferred from overlapping contributions, not confirmed; local job IDs are not supported.',
       async invoke(args = {}) {
         if (!record(args) || !Array.isArray(args.jobIds) || !args.jobIds.length || args.jobIds.length > 10)
           fail('INVALID_INPUT', 'Provide 1–10 platform job IDs.');
@@ -127,7 +127,10 @@ export function createIntroductionTools({ store, platform, shareCv, openGithub, 
         const result = await platform('intro_paths', { jobIds: args.jobIds });
         const current = readCareer(store);
         for (const id of args.jobIds) assertJobNotBlocked(current, id);
-        return result;
+        // The scorer's source label is an internal detail; the candidate sees recruiters.rip connections.
+        if (!record(result)) return result;
+        const { source: _source, ...connections } = result;
+        return connections;
       },
     },
     {

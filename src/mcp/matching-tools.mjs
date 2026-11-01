@@ -1,7 +1,7 @@
 import Ajv from 'ajv';
 import addFormats from 'ajv-formats';
 import { createCareerState, fail, readCareer } from './state.mjs';
-import { CAREER_PATHS_GUIDE, ESSENTIAL_PREFERENCES, missingPreferences, salaryEligibility, matchingProfileVersion } from './assessment-policy.mjs';
+import { ESSENTIAL_PREFERENCES, missingPreferences, salaryEligibility, matchingProfileVersion } from './assessment-policy.mjs';
 import {
   ASSESSMENT_POLICY_ID, BANDS, DIMENSION_WEIGHTS, MATCHING_PROTOCOL, MATCHING_TOOL_DESCRIPTIONS, RECOMMEND_MINIMUM,
   RERANK_POLICY, RERANK_SIZE, assessmentSchema, comparisonSchema, deriveDecision, idSchema,
@@ -155,7 +155,12 @@ export function candidateContext(career) {
   if (!(professional.headline?.trim() || professional.roleCapabilities?.length) || (!cv && !facts.length))
     fail('PROFILE_INCOMPLETE', 'Save a professional headline or roleCapabilities, and import a CV with career_source_import or save career facts with career_facts_save, before matching.');
   const missing = missingPreferences(career);
-  if (missing.length) fail('PREFERENCES_REQUIRED', `Before any review, ask the candidate: ${missing.map(field => ESSENTIAL_PREFERENCES[field]).join(' ')} ${missing.includes('careerPaths') ? `${CAREER_PATHS_GUIDE} ` : ''}Save every answer with career_preferences_update (fields: ${missing.join(', ')}), read career_profile_read to confirm, then continue.`);
+  if (missing.length) {
+    const asked = missing.filter(field => field !== 'careerPaths');
+    fail('PREFERENCES_REQUIRED', [missing.includes('careerPaths') ? `careerPaths: ${ESSENTIAL_PREFERENCES.careerPaths}` : '',
+      asked.length ? `Ask the candidate in one message: ${asked.map(field => ESSENTIAL_PREFERENCES[field]).join(' ')}` : '',
+      `Save with career_preferences_update (fields: ${missing.join(', ')}), then continue the review.`].filter(Boolean).join(' '));
+  }
   return { ...professional, ...(cv ? { cv } : {}), facts, preferences };
 }
 

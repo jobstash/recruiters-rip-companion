@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { createCareerState, fail, hash, mutateCareer, mutationSchema, readCareer, replayCareer } from './state.mjs';
-import { CAREER_PATHS_GUIDE, ESSENTIAL_PREFERENCES, matchingProfileVersion, missingPreferences } from './assessment-policy.mjs';
+import { ESSENTIAL_PREFERENCES, matchingProfileVersion, missingPreferences } from './assessment-policy.mjs';
 import { introductionsStatus } from './introduction-tools.mjs';
 import { FACT_KINDS, compareFacts, factInputSchema, factKey, needsDetail, normalizeFact } from './facts.mjs';
 import { chatText, formAnswers, formRequest, parseReply, prepareQuestions, questionSchema } from './interview.mjs';
@@ -171,9 +171,13 @@ function onboarding(career, pairing) {
     for (const source of cvs) action('profile', 'career_source_read', { sourceId: source.id }, 'Read the whole CV (follow nextOffset) before saving the profile.');
     action('profile', 'onboarding_commit', { mode }, 'Save headline, roleCapabilities, seniority and skills from the CV or stated background. Do not collect enrichment facts during onboarding. Keep demonstrated capabilities separate from future preferences; do not infer salary, relocation, travel or availability.');
   }
-  // Basic preferences come straight from the candidate before any scan; never inferred from the CV.
+  // The agent derives and saves career paths itself; the other basics come straight from the candidate, never from the CV.
   const unansweredPreferences = hasBackground ? missingPreferences(career) : Object.keys(ESSENTIAL_PREFERENCES);
-  if (hasBackground) for (const field of unansweredPreferences) question(`preferences.${field}`, 'career_preferences_update', ESSENTIAL_PREFERENCES[field]);
+  if (hasBackground) for (const field of unansweredPreferences) {
+    if (field === 'careerPaths') action('preferences.careerPaths', 'career_preferences_update', {}, ESSENTIAL_PREFERENCES.careerPaths);
+    else question(`preferences.${field}`, 'career_preferences_update', ESSENTIAL_PREFERENCES[field]);
+  }
+  const askPreferences = questions.some(item => item.field.startsWith('preferences.'));
   const locallyReady = hasBackground && hasRole && !unansweredPreferences.length;
   // CV sharing never blocks matching; these steps run once the basics are saved and on every later session.
   const introductions = introductionsStatus(career);
@@ -191,7 +195,7 @@ function onboarding(career, pairing) {
     pairing: { paired: Boolean(pairing), account: pairing?.account ? { id: pairing.account.id, label: pairing.account.label } : null },
     catalogRequiresPairing: !pairing, sourceCount: currentSources(career).length, factCount, missing, actions, questions,
     introductions: { ...introductions, nextSteps: locallyReady ? sharingSteps : [] },
-    nextSteps: locallyReady ? ['Match jobs using the CV/profile, saved preferences and any existing facts once paired. Collect new facts only while reviewing an individual matched listing for submission; reuse them in subsequent matching.'] : [...actions.map(item => item.instruction), ...questions.map(item => item.question), ...(hasBackground && unansweredPreferences.includes('careerPaths') ? [CAREER_PATHS_GUIDE] : []), ...(hasBackground && unansweredPreferences.length ? ['Ask these preference questions together in one message, save every answer with career_preferences_update, then read career_profile_read before any job review.'] : [])],
+    nextSteps: locallyReady ? ['Match jobs using the CV/profile, saved preferences and any existing facts once paired. Collect new facts only while reviewing an individual matched listing for submission; reuse them in subsequent matching.'] : [...actions.map(item => item.instruction), ...questions.map(item => item.question), ...(askPreferences ? ['Ask these preference questions together in one message, save every answer with career_preferences_update, then read career_profile_read before any job review.'] : [])],
   };
 }
 
@@ -242,8 +246,8 @@ export function createProfileTools({ store, selectSourceFile, extractFile, inter
     const career = readCareer(store);
     return {
       revision: career.revision, profile: profileView(career.profile), preferences: career.profile.preferences ?? {},
-      // Unanswered basics, with the question to ask for each; scans and reviews refuse to start until it is empty.
-      missingPreferences: missingPreferences(career).map(field => ({ field, question: ESSENTIAL_PREFERENCES[field] })),
+      // Unanswered basics: career paths are the agent's to save, the rest are questions; scans and reviews refuse to start until it is empty.
+      missingPreferences: missingPreferences(career).map(field => ({ field, [field === 'careerPaths' ? 'action' : 'question']: ESSENTIAL_PREFERENCES[field] })),
       factCount: Object.keys(career.facts).length, sourceCount: currentSources(career).length, matchingProfileVersion: matchingProfileVersion(career),
     };
   });
@@ -254,7 +258,7 @@ export function createProfileTools({ store, selectSourceFile, extractFile, inter
     return { profile: profileView(career.profile), saved };
   }));
 
-  tool('career_preferences_update', 'Save explicit future preferences using {requestId,revision,patch}. Obtain a UUID from request_id and the current integer revision from career_profile_read; requestId is not a descriptive label. careerPaths is the one complete list of directions to search, usually 3–10: each {name, titles, why} with concrete titles including seniority variants and common synonyms, and a one-sentence why citing CV or fact evidence. Propose paths from the whole CV and saved facts, save every path the candidate confirmed, and send the full list on each change. Use excludedRoles for role families they do not want and notes only for nuance without a dedicated field. Put supported preference fields inside patch; omitted values stay unchanged. Save only what the candidate stated or confirmed, never unconfirmed CV inferences. Save improvements immediately: re-assessing jobs under the new profile is never a reason to delay. Read career_profile_read afterward to confirm persistence; never report a rejected mutation as saved.', mutation({ patch: preferencePatch }, ['patch']), false, async args => edit('career_preferences_update', args, career => {
+  tool('career_preferences_update', 'Save future preferences using {requestId,revision,patch}. Obtain a UUID from request_id and the current integer revision from career_profile_read; requestId is not a descriptive label. careerPaths is the one complete list of directions to search, up to 10: each {name, titles, why} with concrete titles including seniority variants and common synonyms, and a one-sentence why citing CV or fact evidence. Derive careerPaths yourself from the whole CV and saved facts and save them without asking; send the full list on each change. Use excludedRoles for role families they do not want and notes only for nuance without a dedicated field. Put supported preference fields inside patch; omitted values stay unchanged. Every field except careerPaths holds only what the candidate stated, never CV inferences. Save improvements immediately: re-assessing jobs under the new profile is never a reason to delay. Read career_profile_read afterward to confirm persistence; never report a rejected mutation as saved.', mutation({ patch: preferencePatch }, ['patch']), false, async args => edit('career_preferences_update', args, career => {
     const saved = patchPreferences(career, args.patch);
     career.evidenceRevision++;
     return { preferences: career.profile.preferences, saved };

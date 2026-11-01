@@ -113,6 +113,15 @@ test('employer search and intro paths relay through the platform; GitHub onboard
   assert.equal((await f.call('career_employment_status')).github, 'skipped');
 });
 
+test('intro paths return asOf, inferred flags and paths without the scorer source label', async () => {
+  const response = { github: { login: 'candidate' }, asOf: '2026-10-01', source: 'scorer-label', results: [{ jobId: 'node:1', inferred: true, orgLogins: ['example'], paths: [] }] };
+  const f = fixture({ platform: async () => structuredClone(response) });
+  const result = await f.call('career_intro_paths', { jobIds: ['node:1'] });
+  assert.equal(Object.hasOwn(result, 'source'), false);
+  const { source: _source, ...expected } = response;
+  assert.deepEqual(result, expected);
+});
+
 
 test('introduction paths reject blocked company and job IDs without calling the platform', async () => {
   const f = fixture();

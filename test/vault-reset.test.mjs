@@ -21,7 +21,7 @@ test('opening a vault persists only GitHub introduction fields for current and a
   const { vault, reopen, directory } = await fixture(t);
   const github = { githubSkipped: false, githubRequestedAt: '2026-10-29T10:00:00.000Z' };
   await vault.update(state => {
-    state.career.introductions = { ...github, consent: { granted: true }, documents: { cv: { unexpected: 'discard' } } };
+    state.career.introductions = { ...github, unexpected: { value: true } };
     state.identityArchives = { old: { career: structuredClone(state.career) } };
   });
   const reopened = reopen(); await reopened.open();

@@ -63,7 +63,7 @@ const restoreArgs = preview => ({ restoreId: preview.restoreId, profileId: previ
 test('backup export and older restore keep only GitHub introduction fields', async t => {
   const from = await fixture(t);
   const career = profile();
-  career.introductions = { githubSkipped: true, consent: false, documents: 'obsolete data' };
+  career.introductions = { githubSkipped: true, unexpected: 'extra field' };
   await from.vault.update(state => { state.career = career; });
   const saved = await from.service.save();
   const payload = JSON.parse(await readFile(path.join(from.directory, saved.filename), 'utf8'));

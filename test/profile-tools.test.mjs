@@ -207,6 +207,23 @@ test('strict schemas reject unknown fields, paths, attribution and oversized bat
   assert.equal(f.store.get().career.revision, 0);
 });
 
+test('onboarding exposes optional GitHub state without making it a readiness requirement', async () => {
+  const f = fixture();
+  const before = await f.call('onboarding_status');
+  assert.equal(before.github, null);
+  for (const [introductions, expected] of [
+    [{ githubSkipped: true }, 'skipped'],
+    [{ githubRequestedAt: '2026-11-03T12:00:00.000Z' }, 'requested'],
+  ]) {
+    await f.store.update(state => { state.career.introductions = introductions; });
+    const status = await f.call('onboarding_status');
+    assert.equal(status.github, expected);
+    assert.equal(status.locallyReady, before.locallyReady);
+    assert.deepEqual(status.missing, before.missing);
+    assert.deepEqual(status.questions, before.questions);
+  }
+});
+
 test('no-CV onboarding reaches local readiness without pairing or provider credentials', async () => {
   const f = fixture({ platform: () => assert.fail('Local interview must not contact the account') });
   let status = await f.call('onboarding_status');

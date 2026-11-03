@@ -7,12 +7,11 @@ import { reviewInclusion } from './mcp/review-queue.mjs';
 import { localJobMetadata } from './mcp/job-tools.mjs';
 import { publicationInWindow } from './mcp/publication-range.mjs';
 import { blockedIds, listBlocks } from './mcp/blocklist.mjs';
-import { employmentHistory } from './employment-browser.mjs';
 import { preferenceItems } from './preferences-browser.mjs';
 import { currentApplicationJob, sameApplicationJob } from './application-workflow.mjs';
 import { PROGRESS_STAGES, applicationProgress, changeProgress, moveProgress, replayProgress } from './application-progress.mjs';
 
-const kinds = ['sources', 'facts', 'preferences', 'career', 'jobs', 'applications', 'blocks'];
+const kinds = ['sources', 'facts', 'preferences', 'jobs', 'applications', 'blocks'];
 const forbidden = new Set(['__proto__', 'prototype', 'constructor']);
 const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const own = (value, key) => record(value) && Object.hasOwn(value, key);
@@ -354,19 +353,6 @@ function sortJobs(staged, view) {
     (a.row.id < b.row.id ? -1 : a.row.id > b.row.id ? 1 : 0)).map(item => item.row);
 }
 
-function employmentItem(entry) {
-  return {
-    id: entry.id, title: entry.company, summary: `${entry.title}\n${entry.period}`,
-    profileLink: true,
-    sections: [
-      fields('Employment', [['Company', entry.company], ['Title', entry.title], ['Dates', entry.period]]),
-      fields('Inferred from CV', [['CV', entry.sourceName],
-        ['Status', entry.stale ? 'CV changed since extraction. Ask your agent to refresh this career history.' : null]]),
-    ],
-  };
-}
-
-
 // Saved PDFs are historical artifacts, not a claim that the current draft is ready.
 function documentApplication(career, kind, id) {
   if (kind === 'applications') {
@@ -465,11 +451,6 @@ export function createCareerBrowser({ store, files, openPath }) {
         fail('INVALID_INPUT', 'Use limit 1–100 and a nonnegative safe integer offset.');
       }
       const career = readCareer(store);
-      if (kind === 'career') {
-        const entries = employmentHistory(career);
-        const items = entries.slice(offset, offset + limit).map(employmentItem);
-        return { items, total: entries.length, nextOffset: offset + items.length < entries.length ? offset + items.length : null };
-      }
       if (kind === 'preferences') {
         const all = preferenceItems(career);
         const items = all.slice(offset, offset + limit);
@@ -510,11 +491,6 @@ export function createCareerBrowser({ store, files, openPath }) {
         fail('INVALID_INPUT', 'Choose a saved record ID.');
       }
       const career = readCareer(store);
-      if (kind === 'career') {
-        const entry = employmentHistory(career).find(row => row.id === id);
-        if (!entry) fail('NOT_FOUND', 'This career entry is no longer available. Refresh Career.');
-        return employmentItem(entry);
-      }
       if (kind === 'preferences') {
         const item = preferenceItems(career).find(entry => entry.id === id);
         if (!item) fail('NOT_FOUND', 'This preference group is no longer available. Refresh Preferences.');

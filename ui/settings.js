@@ -171,7 +171,6 @@ async function refresh() {
     $('account-hint').textContent = state.paired ? 'Account connected. A paid membership is needed for new jobs. You can still use your saved work without a membership.'
       : state.reconnectAccount ? `This computer was disconnected from recruiters.rip. Connect ${state.reconnectAccount.label} again to see new jobs. Your saved work is still available.` : 'Not connected. Connect to see new jobs, or keep working with your CV and saved jobs.';
     renderSetup(state);
-    renderSharing(state.introductions);
     syncGithub(state.paired);
     if (!view) showView('me');
     if (state.paired && noticeKind === 'connect-account') notice('');
@@ -235,8 +234,6 @@ for (const [id, op, message] of [
   ['open-firefox-extensions', 'open-firefox-extensions', result => extensionsPage('firefox', result)],
   ['copy-chrome-extensions', 'copy-chrome-extensions', 'Copied.'],
   ['copy-firefox-extensions', 'copy-firefox-extensions', 'Copied.'],
-  ['sharing-keep-off', 'sharing-stop', 'CV sharing is off.'],
-  ['sharing-share', 'sharing-allow', 'CV sharing is on.'],
   ['import-cv', 'import-cv', result => result.cancelled ? 'Import canceled.' : 'CV imported.'],
   ['copy-review-prompt', 'copy-review-prompt', 'Copied. Paste into your connected Codex or Claude conversation and send.'],
   ['review-codex', 'review-codex', result => result.mode === 'cli' ? 'Codex opened. Press Enter in that window to send the message.' : 'Codex opened. Send the message there to start the review.'],
@@ -246,21 +243,6 @@ for (const [id, op, message] of [
   ['delete-rankings', 'delete-rankings', 'Job reviews cleared.'],
   ['unlock', 'unlock', 'Your saved work is open.'],
 ]) $(id).addEventListener('click', () => { void action(op, message); });
-for (const link of document.querySelectorAll('[data-open-jobstash]')) link.addEventListener('click', () => { void action('open-jobstash', ''); });
-// Sharing consent is standing but reversible: stopping blocks future uploads, and allowing again re-enables them.
-const sharingDate = value => typeof value === 'string' && Number.isFinite(Date.parse(value))
-  ? new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium' }).format(new Date(value)) : null;
-function renderSharing(introductions) {
-  const granted = introductions?.consent?.granted === true;
-  const since = sharingDate(introductions?.consent?.at);
-  // First run asks once in Me; any saved answer (including one given to the AI app) retires the prompt.
-  $('me-sharing').hidden = !introductions || introductions.consent !== null;
-  $('sharing-status').textContent = granted ? `CV sharing is on${since ? ` since ${since}` : ''}.` : 'CV sharing is off.';
-  const shared = (introductions?.sources ?? []).filter(source => source.sharedAt).sort((a, b) => b.sharedAt.localeCompare(a.sharedAt))[0];
-  $('sharing-shared').hidden = !shared;
-  $('sharing-shared').textContent = shared ? `Last shared ${shared.name} · ${shared.roles ?? 0} ${shared.roles === 1 ? 'role' : 'roles'} · ${sharingDate(shared.sharedAt)}` : '';
-  $('sharing-toggle').textContent = granted ? 'Stop sharing' : 'Share CV';
-}
 // GitHub linking is done on the website through the account sign-in. Only middleware's synchronized copy of the link counts,
 // so the row reads the platform status rather than a local flag, and re-reads it when the window regains focus after linking.
 let github = { paired: false, state: 'unknown', login: null };
@@ -312,10 +294,6 @@ $('connect-github').addEventListener('click', async () => {
   } catch (error) { notice(error.message, 'error', true); button.disabled = false; }
 });
 window.addEventListener('focus', () => { if (state?.paired) void syncGithub(true, true); });
-$('sharing-toggle').addEventListener('click', () => {
-  const granted = state?.introductions?.consent?.granted === true;
-  void action(granted ? 'sharing-stop' : 'sharing-allow', granted ? 'CV sharing stopped.' : 'CV sharing is on.');
-});
 async function answerApproval(allow) {
   const id = state?.approval?.id; if (!id) return;
   $('approval-cancel').disabled = true; $('approval-allow').disabled = true;

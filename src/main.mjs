@@ -13,9 +13,8 @@ import { installNative } from './install-native.mjs';
 import { BROWSER_IDENTITIES, nativeBrowser } from './browser-identity.mjs';
 import { claimInstance } from './instance-lock.mjs';
 import { endpoint, launcherScript, mcpCommand, protectPrivatePath, privateJSON, createAuthenticationChallenge, verifyAuthenticationProof, prepareBridgeRuntime, persistBrowserExtension } from './platform-runtime.cjs';
-import { createIntroductionTools, introductionsStatus, setSharingConsent } from './mcp/introduction-tools.mjs';
+import { createIntroductionTools } from './mcp/introduction-tools.mjs';
 import { deleteCv } from './mcp/cv-deletion.mjs';
-import { openEmploymentProfile } from './employment-browser.mjs';
 import { openJobPage, requirementContextPrompt, setApplicationProgress } from './career-browser.mjs';
 import { EXTENSIONS_PAGES, openExtensionsPage } from './browser-page.mjs';
 import { CareerError, createCareerState, fail, hash, upgradeCareer } from './mcp/state.mjs';
@@ -315,7 +314,6 @@ function localState() {
     updates: updateState(),
     review: { hosts: reviewHosts, hostInfo: reviewHostInfo, added: hostsAdded, ...liveSessions(mcpClients), restart: restartPending,
       preferredHost: ['claude', 'codex'].includes(state.browserPreferences?.applicationHost) ? state.browserPreferences.applicationHost : reviewHosts.codex ? 'codex' : 'claude' },
-    introductions: introductionsStatus(state.career ?? {}),
     approval: pendingApproval ? { id: pendingApproval.id, title: pendingApproval.title, detail: pendingApproval.detail } : null };
 }
 function emit(event = 'status', payload = status()) {
@@ -515,14 +513,6 @@ function createSessionServer() {
     ...createJobTools({ store: scoped.store }),
     ...createFormTools({ store: scoped.store, browser: browserBridge }),
     ...createIntroductionTools({ store: scoped.store, platform: scopedPlatform,
-      getAccountId: () => scoped.store.get().pairing?.account?.id,
-      shareCv: async body => {
-        scoped.assertAvailable(false);
-        if (!store.get().pairing) fail('PAIRING_REQUIRED', 'Connect your account in companion settings.');
-        const result = await client.request('POST', '/device/cv', body);
-        scoped.assertAvailable(false);
-        return result;
-      },
       openGithub: async () => { scoped.assertAvailable(false); await shell.openExternal(new URL('/account#github', productOrigin).href); } }),
   ];
   for (const tool of tools) {
@@ -823,19 +813,10 @@ async function settingsOperation(op, input, ownMutation) {
       const source = scoped.store.get().career?.sources?.[input.sourceId];
       if (!source || source.purpose !== 'cv' || source.contentHash !== input.contentHash) fail('CV_CHANGED', 'This CV changed. Choose it again before deleting it.');
       const choice = await dialog.showMessageBox(window, { type: 'warning', buttons: ['Cancel', 'Delete CV'], defaultId: 0, cancelId: 0,
-        message: 'Delete this CV?', detail: 'Delete this CV from Companion and remove its shared copy from JobStash? Existing backup files are not deleted.' });
+        message: 'Delete this CV?', detail: 'Delete this CV from Companion? Existing backup files are not deleted.' });
       scoped.assertAvailable(false);
       if (choice.response !== 1) return { ok: true, result: { cancelled: true } };
-      const result = await deleteCv({ store: scoped.store, ...input,
-        getAccountId: () => scoped.store.get().pairing?.account?.id,
-        deleteRemote: async body => {
-          scoped.assertAvailable(false);
-          if (!scoped.store.get().pairing) fail('PAIRING_REQUIRED', 'Connect your account before removing the shared CV.');
-          const result = await client.request('POST', '/device/cv/delete', body);
-          scoped.assertAvailable(false);
-          return result;
-        },
-      });
+      const result = await deleteCv({ store: scoped.store, ...input });
       scoped.assertAvailable(false); careerViewRevision++; browserForms.cancelAll(); emit();
       return { ok: true, result };
     }
@@ -876,13 +857,6 @@ async function settingsOperation(op, input, ownMutation) {
       if (result.changed) { careerViewRevision++; emit(); }
       return { ok: true, result };
     }
-    if (op === 'career-open-profile') {
-      assertAvailable(false); exact(input, ['id']);
-      const scoped = createScopedAccess(store, { assertAvailable, epoch: () => sessionEpoch });
-      const result = await openEmploymentProfile({ store: scoped.store, platform, openExternal: url => shell.openExternal(url) }, input);
-      scoped.assertAvailable(false);
-      return { ok: true, result };
-    }
     if (op === 'career-open-job') {
       assertAvailable(false); exact(input, ['kind', 'id']);
       const scoped = createScopedAccess(store, { assertAvailable, epoch: () => sessionEpoch });
@@ -897,14 +871,6 @@ async function settingsOperation(op, input, ownMutation) {
       scoped.assertAvailable(false);
       clipboard.writeText(prompt);
       return { ok: true, result: { copied: true } };
-    }
-    if (op === 'sharing-allow' || op === 'sharing-stop') {
-      assertAvailable(false); exact(input, []);
-      const scoped = createScopedAccess(store, { assertAvailable, epoch: () => sessionEpoch });
-      // Withdrawing stops future uploads only; anything already on JobStash stays there.
-      await scoped.store.update(state => { setSharingConsent(state.career ??= createCareerState(), op === 'sharing-allow'); });
-      scoped.assertAvailable(false);
-      emit(); return { ok: true, result: { completed: true } };
     }
     // GitHub linking happens on the website through Privy; middleware's copy of the link is what the platform status reports.
     if (op === 'account-platform') {
@@ -1003,7 +969,6 @@ async function settingsOperation(op, input, ownMutation) {
     }
     else if (op === 'open-chrome-extensions' || op === 'open-firefox-extensions') result = await openExtensionsPage(op === 'open-chrome-extensions' ? 'chrome' : 'firefox');
     else if (op === 'copy-chrome-extensions' || op === 'copy-firefox-extensions') clipboard.writeText(EXTENSIONS_PAGES[op === 'copy-chrome-extensions' ? 'chrome' : 'firefox']);
-    else if (op === 'open-jobstash') await shell.openExternal('https://jobstash.xyz');
     else fail('INVALID_INPUT', 'This settings action is unavailable.');
     emit(); return { ok: true, result };
   } catch (error) { return { ok: false, error: safeFailure(error) }; }

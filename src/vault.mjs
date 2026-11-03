@@ -1,7 +1,7 @@
 import { randomUUID, generateKeyPairSync } from 'node:crypto';
 import { mkdir, readFile, writeFile, rename, lstat, unlink } from 'node:fs/promises';
 import path from 'node:path';
-import { CAREER_SCHEMA, createCareerState } from './mcp/state.mjs';
+import { CAREER_SCHEMA, createCareerState, normalizeIntroductions } from './mcp/state.mjs';
 import { protectPrivatePath, assertPrivatePath } from './platform-runtime.cjs';
 
 export async function privateDirectory(directory) {
@@ -61,6 +61,10 @@ export function createVault(directory, { decryptLegacy } = {}) {
         await persist(loaded);
       }
       if (!Number.isSafeInteger(loaded.career?.version) || loaded.career.version < 1 || loaded.career.version > CAREER_SCHEMA || !Number.isSafeInteger(loaded.career.revision) || !loaded.career.sources || !loaded.career.facts || !loaded.career.applications || !loaded.career.receipts) throw new Error('The local career format is unavailable. Saved data has not been replaced.');
+      let normalized = normalizeIntroductions(loaded.career);
+      for (const archive of Object.values(loaded.identityArchives ?? {}))
+        normalized = normalizeIntroductions(archive.career) || normalized;
+      if (normalized) await persist(loaded);
       state = loaded;
     },
     get() { if (!state) throw new Error('Local storage is locked.'); return structuredClone(state); },

@@ -50,10 +50,6 @@
 <div><h2 id="setup-next-title">Start a job review</h2><p id="setup-next-description"></p><ol id="setup-next-steps" class="setup-progress" aria-label="Setup steps"></ol><p id="setup-next-status" class="caption" role="status"></p></div>
 <button id="setup-next" class="primary" type="button">Connect account</button>
 </section>
-<section id="me-sharing" class="setup-next" aria-labelledby="me-sharing-title" hidden>
-<div><h2 id="me-sharing-title">Share your CV with <button class="link" type="button" data-open-jobstash>JobStash</button>?</h2><p>If you choose Share, your AI app sends them your CV and work history for direct introductions to companies. Otherwise it stays off.</p></div>
-<div class="actions"><button id="sharing-keep-off" class="ghost" type="button">Keep off</button><button id="sharing-share" class="text" type="button">Share</button></div>
-</section>
 <div class="actions"><button id="import-cv" class="ghost" type="button">Import CV</button><button id="me-jobs" class="ghost" type="button">Jobs</button><button id="me-account" class="text" type="button" hidden>Connect account</button></div>
 </div>
 <div id="me-browser" class="career-browser">
@@ -62,7 +58,6 @@
 <button type="button" class="tab" role="tab" data-career-kind="sources" aria-selected="true" disabled>CVs</button>
 <button type="button" class="tab" role="tab" data-career-kind="facts" aria-selected="false" disabled>Facts</button>
 <button type="button" class="tab" role="tab" data-career-kind="preferences" aria-selected="false" disabled>Preferences</button>
-<button type="button" class="tab" role="tab" data-career-kind="career" aria-selected="false" disabled>Career</button>
 </div>
 </div>
 <div class="career-panes">
@@ -224,10 +219,6 @@
 </div>
 </div>
 </section>
-<section id="sharing-settings" class="setup-section" aria-labelledby="sharing-title">
-<h2 id="sharing-title">CV sharing</h2>
-<div class="settings-content"><p>When on, your AI app sends your CV and work history to <button class="link" type="button" data-open-jobstash>JobStash</button> for direct introductions to companies.</p><p id="sharing-status">CV sharing is off.</p><p id="sharing-shared" class="caption" hidden></p><button id="sharing-toggle" class="ghost" type="button">Share CV</button></div>
-</section>
 <section id="decisions" class="setup-section" aria-labelledby="decisions-title">
 <h2 id="decisions-title">Form filling</h2>
 <div class="settings-content">
@@ -280,7 +271,7 @@
 <p id="backup-profile-name"></p>
 <dl id="backup-counts" class="backup-counts"></dl>
 <ul id="backup-warnings" class="backup-warnings" hidden></ul>
-<p id="backup-consequence">This replaces this app’s current profile, CVs, saved documents, jobs and applications. Your sign-in, API keys and CV sharing choice stay the same. A backup of your current profile is saved first; find it in Open backups.</p>
+<p id="backup-consequence">This replaces this app’s current profile, CVs, saved documents, jobs and applications. Your sign-in and API keys stay the same. A backup of your current profile is saved first; find it in Open backups.</p>
 <div class="actions"><button id="backup-cancel" class="ghost" type="button">Cancel</button><button id="backup-restore" class="primary" type="button" aria-describedby="backup-consequence">Restore profile</button></div>
 </div>
 </section>
@@ -311,7 +302,7 @@
 </section>
 <section class="setup-section" aria-labelledby="help-backups-title">
 <h2 id="help-backups-title">Backups</h2>
-<div class="settings-content"><p>In Settings → Backups, choose <strong>Save backup</strong> to keep a private copy of your work. To recover one, choose <strong>Restore backup</strong>, select the file, check the preview and choose <strong>Restore profile</strong>.</p><p>Restoring replaces your current profile, not your sign-in or API keys. Companion saves the previous profile first; find it in <strong>Open backups</strong>. Backup files are not password-protected.</p><button id="help-backups" class="text" type="button">View backups</button><details><summary>Delete a CV instead</summary><p>Open Me → CVs, select the CV, choose <strong>Delete CV</strong> and confirm. If it was shared with JobStash, that copy must be removed first. If removal fails, the CV stays here so you can try again. Other CVs, applications and backups stay unchanged.</p><p>Use the account that shared it. Stopping CV sharing prevents future uploads; it does not delete a shared copy.</p></details></div>
+<div class="settings-content"><p>In Settings → Backups, choose <strong>Save backup</strong> to keep a private copy of your work. To recover one, choose <strong>Restore backup</strong>, select the file, check the preview and choose <strong>Restore profile</strong>.</p><p>Restoring replaces your current profile, not your sign-in or API keys. Companion saves the previous profile first; find it in <strong>Open backups</strong>. Backup files are not password-protected.</p><button id="help-backups" class="text" type="button">View backups</button><details><summary>Delete a CV instead</summary><p>Open Me → CVs, select the CV, choose <strong>Delete CV</strong> and confirm. This removes the CV from this computer’s profile. Other CVs, applications and backups stay unchanged.</p></details></div>
 </section>
 <section class="setup-section" aria-labelledby="help-links-title">
 <h2 id="help-links-title">Links</h2>

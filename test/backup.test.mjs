@@ -28,9 +28,7 @@ function profile(name = 'Synthetic candidate') {
   career.receipts.old = { operation: 'old', result: { sentinel: true } };
   career.applicationBindings = { old: { bindingId: 'old' } }; career.applicationPreparations = { old: { preparationId: 'old' } };
   career.formDrafts = { old: { formId: 'old', fields: [], answers: { answer: { value: 'Retained text' } }, evidence: 'old authority' } };
-  career.introductions = { consent: { granted: true, version: 1, at: now }, documents: { [sourceId]: { contentHash: hash('Synthetic CV text'), employment: [], sharedHash: 'old sharing receipt', sharedContentHash: hash('Synthetic CV text'), sharedAt: now } } };
-  Object.assign(career.introductions.documents[sourceId], { documentId: randomUUID(), sharedAccountId: 'original-account',
-    remoteCopies: [{ documentId: randomUUID(), accountId: 'original-account' }] });
+  career.introductions = { githubSkipped: true };
   return career;
 }
 async function fixture(t, options = {}) {
@@ -62,10 +60,25 @@ async function exported(t) {
 }
 const restoreArgs = preview => ({ restoreId: preview.restoreId, profileId: preview.profiles[0].id });
 
+test('backup export and older restore keep only GitHub introduction fields', async t => {
+  const from = await fixture(t);
+  const career = profile();
+  career.introductions = { githubSkipped: true, consent: false, documents: 'obsolete data' };
+  await from.vault.update(state => { state.career = career; });
+  const saved = await from.service.save();
+  const payload = JSON.parse(await readFile(path.join(from.directory, saved.filename), 'utf8'));
+  assert.deepEqual(payload.profiles[0].career.introductions, { githubSkipped: true });
+  const filename = path.join(from.directory, 'older.json');
+  await writeFile(filename, JSON.stringify({ version: 1, exportedAt: now, career }));
+  from.choose(filename);
+  await from.service.restore(restoreArgs(await from.service.preview()));
+  assert.deepEqual(from.vault.get().career.introductions, { githubSkipped: true });
+});
+
 test('portable backup round-trips originals, saved files, user history and blocks to a new real vault', async t => {
   const { from, filename } = await exported(t), target = await fixture(t);
   await target.vault.update(state => {
-    state.career.profile.name = 'Before restore'; state.career.introductions = { consent: { granted: false, version: 1, at: now } };
+    state.career.profile.name = 'Before restore';
     state.pairing = { origin: 'https://example.test', account: { id: 'current-account', label: 'Current sign-in' } };
     state.prescanCredentials = { openai: { apiKey: 'synthetic-secret-key' } }; state.prescanCredentialVersion = 4;
     state.identityArchives = { keep: { career: createCareerState(), marker: 'Do not replace' } };
@@ -78,10 +91,7 @@ test('portable backup round-trips originals, saved files, user history and block
   const after = target.vault.get(), original = from.vault.get().career;
   for (const key of ['deviceId', 'privateKey', 'publicKey', 'pairing', 'identityArchives', 'prescanCredentials', 'prescanCredentialVersion']) assert.deepEqual(after[key], before[key]);
   for (const key of ['sources', 'facts', 'jobs', 'blocklist', 'profile']) assert.deepEqual(after.career[key], original[key]);
-  assert.deepEqual(after.career.introductions.consent, before.career.introductions.consent);
-  const sharedBefore = Object.values(original.introductions.documents)[0], sharedAfter = Object.values(after.career.introductions.documents)[0];
-  for (const key of ['documentId', 'sharedAccountId', 'sharedContentHash', 'remoteCopies']) assert.deepEqual(sharedAfter[key], sharedBefore[key]);
-  assert.equal(sharedAfter.sharedAt, undefined); assert.equal(sharedAfter.sharedHash, undefined);
+  assert.deepEqual(after.career.introductions, original.introductions);
   assert.deepEqual(after.career.receipts, {}); assert.equal(after.career.applicationBindings, undefined); assert.equal(after.career.applicationPreparations, undefined);
   assert.equal(after.career.formDrafts.old.answers.answer.value, 'Retained text'); assert.equal(after.career.formDrafts.old.evidence, '');
   const application = Object.values(after.career.applications)[0], reference = application.exports[0];
@@ -120,7 +130,7 @@ test('current version-one JSON restores career and archives honestly without rea
   await writeFile(filename, JSON.stringify({ version: 1, exportedAt: now, account: { label: 'Old sign-in' }, career: old, archives: [{ deviceId: 'foreign-device', account: { label: 'Old account' }, career: archived }] }));
   target.choose(filename); const preview = await target.service.preview(); assert.equal(preview.profiles.length, 2); assert.ok(preview.profiles[0].warnings.length);
   await target.service.restore(restoreArgs(preview));
-  const restored = target.vault.get(); assert.deepEqual(restored.career.sources, old.sources); assert.equal(restored.pairing, null); assert.equal(restored.career.introductions.consent, undefined);
+  const restored = target.vault.get(); assert.deepEqual(restored.career.sources, old.sources); assert.equal(restored.pairing, null);
   const file = Object.values(restored.career.applications)[0].exports[0]; assert.equal(file.path, undefined); assert.equal(file.uri, undefined); assert.equal(file.unavailable, true);
   assert.deepEqual(await target.files.listResources(), []);
   const resaved = await target.service.save(); assert.ok(resaved.warnings.length);
@@ -149,8 +159,6 @@ test('invalid versions, nested containers, prototype keys and corrupted file has
     value => { value.files = []; },
     value => { Object.values(value.profiles[0].career.applications)[0].exports[0].uri = 'file:///etc/passwd'; },
     value => { Object.values(value.profiles[0].career.sources)[0].originalBase64 = '!!!!'; },
-    value => { Object.values(value.profiles[0].career.introductions.documents)[0].remoteCopies = {}; },
-    value => { Object.values(value.profiles[0].career.introductions.documents)[0].remoteCopies[0].documentId = '/foreign/path'; },
     value => { Object.values(value.profiles[0].career.jobs)[0].description = {}; },
     value => { value.profiles[0].career.evidenceRevision = Number.MAX_SAFE_INTEGER - 1; },
     value => { value.profiles[0].career.rankingVersion = Number.MAX_SAFE_INTEGER - 1; },
@@ -267,12 +275,11 @@ test('a failed destination document write cannot replace the current profile', a
   assert.deepEqual(target.vault.get(), before); assert.equal(target.restored(), 0);
 });
 
-test('known missing files are disclosed for the safety copy without preventing restore or changing consent', async t => {
+test('known missing files are disclosed for the safety copy without preventing restore', async t => {
   const { filename } = await exported(t), target = await fixture(t), current = await seed(target, 'Incomplete current profile');
   await unlink(Object.values(current.applications)[0].exports[0].path);
   target.choose(filename); const preview = await target.service.preview(); assert.ok(preview.profiles[0].warnings.length);
   await target.service.restore(restoreArgs(preview));
-  assert.deepEqual(target.vault.get().career.introductions.consent, current.introductions.consent);
   const [safetyName] = await readdir(path.join(target.directory, 'backups'));
   const safety = parseBackup(await readFile(path.join(target.directory, 'backups', safetyName), 'utf8'));
   assert.equal(safety.profiles[0].career.profile.name, 'Incomplete current profile'); assert.ok(safety.profiles[0].warnings.length);

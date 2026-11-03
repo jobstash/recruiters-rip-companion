@@ -5,7 +5,7 @@ import path from 'node:path';
 import { privateDirectory } from './vault.mjs';
 import { assertPrivatePath, protectPrivatePath } from './platform-runtime.cjs';
 import { createDocumentFiles, validExport, exportTypes, documentURI, documentName } from './mcp/files.mjs';
-import { CAREER_SCHEMA, fail, hash, upgradeCareer } from './mcp/state.mjs';
+import { CAREER_SCHEMA, fail, hash, upgradeCareer, normalizeIntroductions } from './mcp/state.mjs';
 import { BLOCK_KINDS } from './mcp/blocklist.mjs';
 import { FACT_KINDS } from './mcp/facts.mjs';
 import { applicationContextFingerprint } from './application-workflow.mjs';
@@ -90,6 +90,7 @@ function base64(value, maximum, label) {
 export function validateBackupCareer(career) {
   object(career, 'profile');
   if (career.version !== CAREER_SCHEMA) invalid(`career format ${String(career.version)} is unsupported; use a backup with career format ${CAREER_SCHEMA}`);
+  normalizeIntroductions(career);
   walk(career, value => { for (const key of Object.keys(value)) if (secrets.has(key)) invalid('credentials are not profile data'); });
   integer(career.revision, 'profile revision'); counter(career.evidenceRevision, 'evidence revision');
   for (const key of ['rankingVersion']) if (career[key] !== undefined) counter(career[key], key);
@@ -186,22 +187,6 @@ export function validateBackupCareer(career) {
       if (key === 'pairs') optionalText(item, ['a', 'b', 'preferred', 'reason', 'profileVersion', 'policyId', 'comparedAt']);
     });
   }
-  if (career.introductions !== undefined) {
-    const intro = object(career.introductions, 'CV sharing');
-    if (intro.consent !== undefined) object(intro.consent, 'sharing choice');
-    if (intro.documents !== undefined) entries(intro.documents, 'matched employment', item => {
-      optionalText(item, ['contentHash', 'extractedAt', 'sharedAt', 'sharedHash', 'sharedContentHash', 'documentId', 'sharedAccountId']);
-      if (item.remoteCopies !== undefined) for (const copy of array(item.remoteCopies, 'shared CV copies')) {
-        object(copy, 'shared CV copy');
-        if (typeof copy.documentId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(copy.documentId)) invalid('a shared CV document reference is invalid');
-        if (copy.accountId !== undefined && (typeof copy.accountId !== 'string' || !copy.accountId.length || copy.accountId.length > 300)) invalid('a shared CV account reference is invalid');
-      }
-      for (const role of array(item.employment, 'employment')) {
-        object(role, 'employment role'); for (const key of ['ref', 'name', 'title', 'startDate']) text(role[key], key);
-        optionalText(role, ['endDate']); if (typeof role.current !== 'boolean') invalid('an employment date is invalid');
-      }
-    });
-  }
   for (const key of ['prescan', 'prescanInclusion', 'prescanPublicationRange']) if (career[key] !== undefined && career[key] !== null && typeof career[key] !== 'string') object(career[key], key);
   return career;
 }
@@ -220,15 +205,11 @@ function references(career) {
   });
   return refs;
 }
-function invalidateRuntime(career, consent) {
+function invalidateRuntime(career) {
   career.receipts = {};
   delete career.applicationBindings; delete career.applicationPreparations;
   for (const form of Object.values(career.formDrafts ?? {})) { form.evidence = ''; delete form.applicationContext; }
-  career.introductions ??= {};
-  delete career.introductions.consent;
-  if (consent !== undefined) career.introductions.consent = structuredClone(consent);
-  // Remote references are untrusted deletion provenance, not permission or a claim that this account has shared the CV.
-  for (const item of Object.values(career.introductions.documents ?? {})) { delete item.sharedAt; delete item.sharedHash; }
+  normalizeIntroductions(career);
 }
 const profileName = (career, account, fallback) => (career.profile.name?.trim() || (typeof account?.label === 'string' && account.label.trim()) || fallback).slice(0, 300);
 const counts = career => ({ cvs: Object.values(career.sources).filter(source => source.purpose === 'cv' && !source.archived).length, facts: Object.keys(career.facts).length, jobs: new Set([...Object.keys(career.jobs ?? {}), ...Object.keys(career.matching?.jobs ?? {})]).size, applications: Object.keys(career.applications).length });
@@ -348,7 +329,7 @@ export function createBackups({ directory, store, selectBackup, selectDestinatio
     const entries = [{ deviceId: state.deviceId, career: state.career, account: state.pairing?.account }, ...(includeArchives ? Object.entries(state.identityArchives ?? {}).map(([deviceId, item]) => ({ deviceId, career: item.career, account: item.pairing?.account })) : [])];
     if (entries.length > MAX_PROFILES) fail('BACKUP_LIMIT', 'There are too many saved profiles for one backup. No profile data was changed.');
     for (const [index, item] of entries.entries()) {
-      const career = structuredClone(validateBackupCareer(item.career));
+      const career = validateBackupCareer(structuredClone(item.career));
       const refs = references(career), missing = new Set();
       const localFiles = createDocumentFiles({ directory, store: { get: () => ({ deviceId: item.deviceId, career: item.career }) }, assertAvailable });
       for (const ref of refs) {
@@ -475,7 +456,7 @@ export function createBackups({ directory, store, selectBackup, selectDestinatio
               Object.assign(ref, exported); delete ref.unavailable;
             }
             check(selected.context);
-            invalidateRuntime(career, state.career.introductions?.consent);
+            invalidateRuntime(career);
             career.revision = revision;
             state.career = upgradeCareer(career);
           }, { beforeCommit: () => check(selected.context) }));

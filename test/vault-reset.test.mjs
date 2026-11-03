@@ -17,6 +17,21 @@ async function fixture(t) {
 }
 const publicKey = state => createPublicKey({ key: Buffer.from(state.publicKey, 'base64url'), format: 'der', type: 'spki' });
 
+test('opening a vault persists only GitHub introduction fields for current and archived profiles', async t => {
+  const { vault, reopen, directory } = await fixture(t);
+  const github = { githubSkipped: false, githubRequestedAt: '2026-10-29T10:00:00.000Z' };
+  await vault.update(state => {
+    state.career.introductions = { ...github, consent: { granted: true }, documents: { cv: { unexpected: 'discard' } } };
+    state.identityArchives = { old: { career: structuredClone(state.career) } };
+  });
+  const reopened = reopen(); await reopened.open();
+  const saved = JSON.parse(await readFile(path.join(directory, 'vault.json'), 'utf8'));
+  for (const state of [reopened.get(), saved]) {
+    assert.deepEqual(state.career.introductions, github);
+    assert.deepEqual(state.identityArchives.old.career.introductions, github);
+  }
+});
+
 test('identity reset isolates old private career data while keeping recoverable archives', async t => {
   const { vault, reopen, directory } = await fixture(t);
   await vault.update(state => { state.pairing = { origin: 'https://recruiters.rip', account: { id: 'old-owner', label: 'Old account' } }; state.career.profile.name = 'Private candidate sentinel'; state.career.sources.one = { text: 'Original source sentinel' }; });

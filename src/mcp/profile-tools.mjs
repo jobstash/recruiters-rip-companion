@@ -179,22 +179,11 @@ function onboarding(career, pairing) {
   }
   const askPreferences = questions.some(item => item.field.startsWith('preferences.'));
   const locallyReady = hasBackground && hasRole && !unansweredPreferences.length;
-  // CV sharing never blocks matching; these steps run once the basics are saved and on every later session.
-  const introductions = introductionsStatus(career);
-  const sharingSteps = [];
-  if (introductions.sources.some(source => source.status === 'needs_extraction'))
-    sharingSteps.push('For each CV with status needs_extraction in career_employment_status: read the whole CV, extract every employer with title and dates, search them with career_employer_search, keep only confident matches (prefer profiles) and save with career_employment_save.');
-  if (!introductions.consent)
-    sharingSteps.push(`Ask once whether JobStash may receive the CV and matched work history: ${introductions.purpose} Record the answer with career_introductions_update({consent}).`);
-  else if (introductions.consent.granted && introductions.sources.some(source => source.status === 'ready_to_share'))
-    sharingSteps.push('Share each ready_to_share CV with career_cv_share; it sends immediately under the standing consent.');
-  if (!introductions.github)
-    sharingSteps.push('Ask whether they are a developer with open-source work. If so, open account_github_connect so they link GitHub through their sign-in, then confirm with account_status; otherwise record career_introductions_update({githubSkipped:true}).');
   return {
     revision: career.revision, mode, locallyReady, providerRequired: false,
     pairing: { paired: Boolean(pairing), account: pairing?.account ? { id: pairing.account.id, label: pairing.account.label } : null },
     catalogRequiresPairing: !pairing, sourceCount: currentSources(career).length, factCount, missing, actions, questions,
-    introductions: { ...introductions, nextSteps: locallyReady ? sharingSteps : [] },
+    github: introductionsStatus(career).github,
     nextSteps: locallyReady ? ['Match jobs using the CV/profile, saved preferences and any existing facts once paired. Collect new facts only while reviewing an individual matched listing for submission; reuse them in subsequent matching.'] : [...actions.map(item => item.instruction), ...questions.map(item => item.question), ...(askPreferences ? ['Ask these preference questions together in one message, save every answer with career_preferences_update, then read career_profile_read before any job review.'] : [])],
   };
 }

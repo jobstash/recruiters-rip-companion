@@ -55,7 +55,7 @@ For an application task, the host creates/reuses the job-bound application, expo
 
 The agent must reread `career_application_context` through Companion before acting on a saved job/application and immediately before the final native Submit action. `JOB_BLOCKED` stops that application even if its tab is already open; never change IDs or use another tool around the block. Reconcile changed career/document context first. Submission requires the candidate's application task, not a document-only request. A click/navigation/generic thanks is not a receipt; rejected, challenged, validation-failed, pending or uncertain results are not successful submissions. No automatic retries, duplicates, fingerprint spoofing or challenge bypass. Native input is an input-compatibility choice, not an anti-detection guarantee.
 
-Companion settings consent governs its own tools, never host/tool permissions. Keep host browser/workspace access rules and prompts intact without adding conversational confirmation ceremony. Native companion approvals remain for account pairing and update installation; there is no companion submit approval.
+Companion settings govern its own tools, never host/tool permissions. Keep host browser/workspace access rules and prompts intact without adding conversational confirmation ceremony. Native companion approvals remain for account pairing and update installation; there is no companion submit approval. Private career data never leaves this computer for the platform; only catalogue and introduction lookups by job ID are sent.
 
 ## Updates and packages
 

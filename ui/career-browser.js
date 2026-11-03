@@ -4,7 +4,6 @@
     sources: { title: 'CVs', empty: 'No CV added yet. Choose Import CV to add yours.', locked: 'Unlock to see your saved work.', select: 'Select a document' },
     facts: { title: 'Facts', empty: 'No details saved yet. Tell your AI app about your experience.', locked: 'Unlock to see your saved work.', select: 'Select an answer' },
     preferences: { title: 'Preferences', empty: 'No preferences saved. Tell your AI app what you want and what you want to avoid.', locked: 'Unlock to see your saved preferences.', select: 'Select a preference group' },
-    career: { title: 'Career', empty: 'No work history saved yet. Ask your AI app to read your CV and add your previous jobs.', locked: 'Unlock to see your work history.', select: 'Select an employer' },
     jobs: { title: 'Jobs', locked: 'Unlock to see your saved jobs.', select: 'Select a job' },
     applications: { title: 'Job Applications', empty: 'No saved applications.', locked: 'Unlock to see your saved applications.', select: 'Select an application' },
     blocks: { title: 'Blocked jobs', empty: 'Nothing blocked. Open a job to block it, its company or its category.', locked: 'Unlock to see your blocked jobs.', select: 'Select a block' },
@@ -213,19 +212,6 @@
       section.append(node('h3', '', 'Block from evaluation'), actions);
       return section;
     }
-    // Each Career entry can open its employer's ecosystem.vision page; the reader offers it as a named action.
-    function renderProfileAction(item, className = 'ghost') {
-      if (item?.profileLink !== true) return null;
-      const button = blockButton(`Go to ${item.title}'s profile`, null, async () => {
-        if (!enabled) return;
-        button.disabled = true;
-        try { await request('career-open-profile', { id: item.id }); }
-        catch (error) { listStatus.textContent = `Could not open ${item.title}'s profile. ${error.message}`; }
-        finally { button.disabled = false; }
-      }, className);
-      return button;
-    }
-
     function renderDocumentActions(detail, item) {
       const documents = Array.isArray(detail?.documents) ? detail.documents : [];
       const hasJobPage = detail?.jobPage === true || Boolean(detail?.header?.applyUrl);
@@ -509,8 +495,6 @@
       if (removal) content.append(removal);
       const blockActions = kind === 'jobs' ? renderBlockActions(item) : null;
       if (blockActions) content.append(blockActions);
-      const profile = kind === 'career' ? renderProfileAction(item) : null;
-      if (profile) { const section = node('section', 'career-block'); section.append(profile); content.append(section); }
       readerStatus.textContent = content.childElementCount ? '' : 'No saved content is available for this record.';
     }
 

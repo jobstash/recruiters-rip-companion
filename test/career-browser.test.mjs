@@ -122,7 +122,7 @@ test('Jobs views are strictly validated and obsolete sorts are rejected', async 
   const { browser } = fixture();
   for (const view of [null, undefined, '', 'newest', 'Score', 'rank', 'shortlist', 'queue', 0, {}, ['jobs']])
     await assert.rejects(browser.list({ kind: 'jobs', view }), { code: 'INVALID_INPUT' });
-  for (const kind of ['sources', 'facts', 'preferences', 'career', 'applications', 'blocks'])
+  for (const kind of ['sources', 'facts', 'preferences', 'applications', 'blocks'])
     await assert.rejects(browser.list({ kind, view: 'jobs' }), {
       code: 'INVALID_INPUT', message: 'Use view jobs or reviewed for Jobs only.' });
   for (const sort of [null, undefined, '', 'score', 'recent'])
@@ -1117,6 +1117,8 @@ test('the Jobs list column keeps Previous/Next on its own last grid row regardle
   for (const removed of ['career-category-applications', 'data-career-kind="applications"', 'data-stage-count="applications"', 'career-stage-filter'])
     assert.equal(html.includes(removed) || css.includes(removed), false, removed);
   assert.deepEqual([...html.matchAll(/data-view="([a-z]+)">([^<]+)</g)].map(match => match[2]), ['Me', 'Jobs', 'Pipeline', 'Settings', 'Help']);
+  const me = html.match(/<div class="tabs" role="tablist" aria-label="Saved career records">[\s\S]*?<\/div>/)[0];
+  assert.deepEqual([...me.matchAll(/data-career-kind="([^"]+)"/g)].map(match => match[1]), ['sources', 'facts', 'preferences']);
   assert.match(html, /<section id="view-pipeline" class="career-view pipeline-view" aria-label="Pipeline" hidden>/);
   assert.match(html, /<script src="pipeline.js" defer><\/script>\s*<script src="career-browser.js" defer><\/script>/);
   assert.match(css, /^#career-browser \{ grid-template-rows: auto auto minmax\(0, 1fr\); \}$/m);
@@ -1197,7 +1199,7 @@ test('blocking from the reader hides matching jobs; Blocked lists each block and
   assert.deepEqual(ui.titles().sort(), ['Backend Engineer — EXAMPLE  labs', 'Smart Contracts']);
 });
 
-test('CV detail offers explicit linked deletion and preserves the local reader on cancel or failure', async () => {
+test('CV detail offers explicit deletion and preserves the local reader on cancel or failure', async () => {
   const { state, browser } = fixture();
   state.career.sources.cv = { id: 'cv', name: 'Selected CV', purpose: 'cv', text: 'Synthetic CV', contentHash: 'synthetic-hash' };
   state.career.sources.other = { id: 'other', name: 'Other CV', purpose: 'cv', text: 'Other synthetic CV', contentHash: 'other-hash' };
@@ -1205,7 +1207,7 @@ test('CV detail offers explicit linked deletion and preserves the local reader o
   const ui = await rendererFixture(browser, false, { 'cv-delete': async args => {
     assert.deepEqual(args, { sourceId: 'cv', contentHash: 'synthetic-hash' });
     if (outcome === 'cancel') return { cancelled: true };
-    if (outcome === 'failure') throw new Error('JobStash is offline.');
+    if (outcome === 'failure') throw new Error('Could not save the local profile.');
     await pending;
     delete state.career.sources.cv;
     return { deleted: true, sourceId: 'cv' };

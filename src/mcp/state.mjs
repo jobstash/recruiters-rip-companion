@@ -19,8 +19,20 @@ export function createCareerState() {
       links: [], roleCapabilities: [], seniority: null, skills: [], preferences: {} },
     sources: {}, facts: {}, applications: {}, receipts: {} };
 }
+/** Keep only the GitHub onboarding answers in introduction state. */
+export function normalizeIntroductions(career) {
+  const intro = career?.introductions;
+  if (intro === undefined) return false;
+  const next = {};
+  if (typeof intro?.githubSkipped === 'boolean') next.githubSkipped = intro.githubSkipped;
+  if (typeof intro?.githubRequestedAt === 'string') next.githubRequestedAt = intro.githubRequestedAt;
+  if (JSON.stringify(intro) === JSON.stringify(next)) return false;
+  career.introductions = next;
+  return true;
+}
 /** Schema cutover without migration: keeps CV sources and profile, discards everything else and invalidates evidence and rankings. */
 export function upgradeCareer(old) {
+  normalizeIntroductions(old);
   // Application prose is no longer a reusable profile fact.
   if (old?.profile && Object.hasOwn(old.profile, 'personalSummary')) delete old.profile.personalSummary;
   // Target roles live only in careerPaths; the old flat lists go and the agent derives paths again before the next search.

@@ -109,3 +109,79 @@ test('moving straight to a stage fills skipped steps forward and undoes steps ba
   assert.throws(() => move({}, 'closed'), { code: 'INVALID_INPUT' });
   assert.throws(() => move(app, 'offer', '2026-11-09'), { code: 'INVALID_PROGRESS' });
 });
+
+test('next interview dates save, reschedule and clear without changing historical steps', () => {
+  const app = {};
+  step(app, { stage: 'applied', at: '2026-10-21' });
+  step(app, { stage: 'interviewing', at: '2026-10-24', nextInterviewAt: '2099-01-15' });
+  const history = structuredClone(app.progress.history);
+  assert.equal(app.progress.nextInterviewAt, '2099-01-15');
+  assert.deepEqual(replayProgress(history, now, '2099-01-15'), app.progress);
+  assert.equal(step(app, { nextInterviewAt: '2099-02-20' }).nextInterviewAt, '2099-02-20');
+  assert.deepEqual(app.progress.history, history);
+  step(app, { at: '2026-10-25' });
+  assert.equal(app.progress.nextInterviewAt, '2099-02-20');
+  assert.equal(app.progress.history.at(-1).at, '2026-10-25');
+  const beforeMove = structuredClone(app);
+  assert.deepEqual(moveProgress(app, 'interviewing', { now }), beforeMove.progress);
+  assert.deepEqual(app, beforeMove);
+  step(app, { nextInterviewAt: null });
+  assert.equal(Object.hasOwn(app.progress, 'nextInterviewAt'), false);
+  assert.equal(app.progress.round, 1);
+});
+
+test('invalid schedule dates and scheduling outside interviews leave applications untouched', () => {
+  const app = {};
+  moveProgress(app, 'interviewing', { at: '2026-10-21', now });
+  step(app, { nextInterviewAt: '2099-01-15' });
+  const before = structuredClone(app);
+  for (const nextInterviewAt of ['2099-02-29', '2099-04-31', '2099-13-01', '15 Jan 2099', '2099-01-15T12:00:00Z', '', 20990115, false, {}]) {
+    assert.throws(() => step(app, { nextInterviewAt }), { code: 'INVALID_INPUT' });
+    assert.deepEqual(app, before);
+  }
+  assert.equal(step(app, { nextInterviewAt: '2100-02-28' }).nextInterviewAt, '2100-02-28');
+  assert.equal(step(app, { nextInterviewAt: '2096-02-29' }).nextInterviewAt, '2096-02-29');
+  assert.throws(() => step(app, { undo: true, nextInterviewAt: null }), { code: 'INVALID_INPUT' });
+  for (const stage of ['prepared', 'applied', 'offer', 'hired', 'rejected', 'withdrawn']) {
+    const other = {};
+    moveProgress(other, stage, { at: '2026-10-21', now });
+    const original = structuredClone(other);
+    for (const nextInterviewAt of ['2099-01-15', null]) {
+      assert.throws(() => step(other, { nextInterviewAt }), { code: 'INVALID_PROGRESS' });
+      assert.throws(() => moveProgress(other, stage, { nextInterviewAt, now }), { code: 'INVALID_PROGRESS' });
+      assert.deepEqual(other, original);
+    }
+  }
+});
+
+test('round changes, undo and status transitions clear old schedules without resurrecting them', () => {
+  const scheduled = () => {
+    const app = {};
+    moveProgress(app, 'interviewing', { at: '2026-10-21', nextInterviewAt: '2099-01-15', now });
+    return app;
+  };
+  const app = scheduled();
+  step(app, { stage: 'interviewing' });
+  assert.equal(app.progress.round, 2);
+  assert.equal(app.progress.nextInterviewAt, undefined);
+  step(app, { nextInterviewAt: '2099-02-15' });
+  step(app, { undo: true });
+  assert.equal(app.progress.round, 1);
+  assert.equal(app.progress.nextInterviewAt, undefined);
+  step(app, { stage: 'interviewing', nextInterviewAt: '2099-03-15' });
+  assert.equal(app.progress.nextInterviewAt, '2099-03-15');
+  for (const stage of ['prepared', 'applied', 'offer', 'hired', 'rejected', 'withdrawn']) {
+    const other = scheduled();
+    moveProgress(other, stage, { now });
+    assert.equal(other.progress.nextInterviewAt, undefined, stage);
+    moveProgress(other, 'interviewing', { now });
+    assert.equal(other.progress.nextInterviewAt, undefined, stage);
+  }
+  for (const stage of ['offer', 'rejected', 'withdrawn']) {
+    const other = scheduled();
+    step(other, { stage });
+    assert.equal(other.progress.nextInterviewAt, undefined, stage);
+    step(other, { undo: true });
+    assert.equal(other.progress.nextInterviewAt, undefined, stage);
+  }
+});

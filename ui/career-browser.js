@@ -231,7 +231,7 @@
               window.showCompanionNotice(success, 'document-open');
           } catch (error) {
             if (enabled && kind === recordKind && selected?.id === item.id && currentRead === readGeneration)
-              window.showCompanionNotice(error.message, 'error', true);
+              window.showCompanionNotice(error.message, 'error');
           } finally { button.disabled = false; }
         }, 'ghost');
         button.dataset.careerAction = actionKind;
@@ -298,7 +298,7 @@
         if (enabled && announcement) listStatus.textContent = announcement;
       } catch (error) {
         controls.forEach(control => { control.disabled = false; });
-        if (enabled) window.showCompanionNotice(error.message, 'error', true);
+        if (enabled) window.showCompanionNotice(error.message, 'error');
       }
       detailSignature = '';
       if (enabled) await loadBoard();
@@ -325,7 +325,7 @@
           // The second click of a double-click is not a second step.
           if (event.detail > 1 || !enabled || button.disabled || selected?.id !== item.id) return;
           const input = change();
-          if (!input) { window.showCompanionNotice('Choose a date first.', 'error', true); return; }
+          if (!input) { window.showCompanionNotice('Choose a date first.', 'error'); return; }
           void saveProgress(item.id, progress.from, input, { controls: section.querySelectorAll('button') });
         });
         return button;
@@ -341,6 +341,20 @@
       if (progress.from.steps) field.append(step('Change date', 'date', dated, 'text'), step('Undo last step', 'undo', () => ({ undo: true }), 'text'));
       section.append(field);
       if (actions.childElementCount) section.append(actions);
+      if (progress.from.stage === 'interviewing') {
+        const schedule = node('div', 'career-progress-field career-progress-schedule');
+        const nextDate = node('input', 'career-progress-date');
+        nextDate.type = 'date';
+        nextDate.id = `${prefix}-next-interview-date`;
+        nextDate.value = progress.nextInterviewAt ?? '';
+        const nextLabel = node('label', '', 'Next interview date (optional)');
+        nextLabel.htmlFor = nextDate.id;
+        schedule.append(nextLabel, nextDate,
+          step('Save date', 'interview-date', () => ({ nextInterviewAt: nextDate.value || null }), 'ghost'));
+        if (progress.nextInterviewAt) schedule.append(
+          step('Clear date', 'interview-clear', () => ({ nextInterviewAt: null }), 'text'));
+        section.append(schedule);
+      }
       const history = (Array.isArray(progress.history) ? progress.history : []).filter(entry => typeof entry?.date === 'string' && typeof entry?.label === 'string');
       if (history.length) {
         const list = node('ol', 'career-progress-history');

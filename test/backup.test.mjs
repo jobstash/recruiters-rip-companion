@@ -11,6 +11,7 @@ import { createDocumentFiles } from '../src/mcp/files.mjs';
 import { createScopedAccess } from '../src/mcp/scope.mjs';
 import { assertJobNotBlocked } from '../src/mcp/blocklist.mjs';
 import { assertPrivatePath } from '../src/platform-runtime.cjs';
+import { createCareerBrowser, setApplicationProgress } from '../src/career-browser.mjs';
 
 const now = '2026-10-29T10:00:00.000Z';
 const pdf = Buffer.from('%PDF-1.7\nSynthetic portable document bytes\n%%EOF');
@@ -110,6 +111,42 @@ test('portable backup round-trips originals, saved files, user history and block
   const safetyPath = path.join(target.directory, 'backups', safetyFiles[0]); assertPrivatePath(safetyPath);
   const safety = parseBackup(await readFile(safetyPath, 'utf8')); assert.equal(safety.profiles[0].career.profile.name, 'Before restore');
   assert.equal((await readFile(filename, 'utf8')).includes('privateKey'), false); assert.equal((await readFile(safetyPath, 'utf8')).includes('synthetic-secret-key'), false);
+});
+
+test('future interview schedules survive vault reopen and portable backup restore, while invalid schedules are rejected', async t => {
+  const from = await fixture(t), target = await fixture(t);
+  const career = await seed(from), id = Object.keys(career.applications)[0];
+  await setApplicationProgress({ store: from.vault }, { id, from: { stage: 'rejected', round: 1, steps: 3 },
+    move: 'interviewing', nextInterviewAt: '2099-05-17' });
+  const reopened = createVault(from.directory);
+  await reopened.open();
+  const saved = reopened.get().career.applications[id].progress;
+  assert.equal(saved.nextInterviewAt, '2099-05-17');
+  assert.equal(saved.history.at(-1).at, '2025-10-24');
+  const result = await from.service.save(), filename = path.join(from.directory, result.filename);
+  const payload = JSON.parse(await readFile(filename, 'utf8'));
+  assert.deepEqual(parseBackup(JSON.stringify(payload)).profiles[0].career.applications[id].progress, saved);
+  target.choose(filename);
+  await target.service.restore(restoreArgs(await target.service.preview()));
+  const restored = createVault(target.directory);
+  await restored.open();
+  assert.deepEqual(restored.get().career.applications[id].progress, saved);
+  const browser = createCareerBrowser({ store: restored });
+  assert.equal((await browser.pipeline()).columns[2].cards[0].nextInterviewAt, '2099-05-17');
+  assert.equal((await browser.read({ kind: 'applications', id })).progress.nextInterviewAt, '2099-05-17');
+  for (const nextInterviewAt of ['2099-02-29', '2099-04-31', '2099-05-17T00:00:00Z', '', null, 123]) {
+    const invalid = structuredClone(payload);
+    invalid.profiles[0].career.applications[id].progress.nextInterviewAt = nextInterviewAt;
+    assert.throws(() => parseBackup(JSON.stringify(invalid)), { code: 'INVALID_INPUT' });
+  }
+  const invalid = structuredClone(payload);
+  invalid.profiles[0].career.applications[id].progress = { ...career.applications[id].progress, nextInterviewAt: '2099-05-17' };
+  assert.throws(() => parseBackup(JSON.stringify(invalid)), { code: 'INVALID_INPUT' });
+  const fromKey = (await browser.read({ kind: 'applications', id })).progress.from;
+  await setApplicationProgress({ store: restored }, { id, from: fromKey, nextInterviewAt: null });
+  const cleared = createVault(target.directory);
+  await cleared.open();
+  assert.equal(Object.hasOwn(cleared.get().career.applications[id].progress, 'nextInterviewAt'), false);
 });
 
 test('archives are selectable and do not replace existing identity archives', async t => {

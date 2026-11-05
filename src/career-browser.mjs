@@ -91,7 +91,10 @@ function applicationTitle(app) {
 }
 const savedJobPage = job => [job?.applyUrl, job?.url].find(value => typeof value === 'string' && /^https?:\/\//.test(value));
 // Progress is what the user reports about an application; the list and reader only put it into plain words.
-const readProgress = app => { try { return replayProgress(applicationProgress(app).history); } catch { return replayProgress([]); } };
+const readProgress = app => {
+  const saved = applicationProgress(app);
+  try { return replayProgress(saved.history, new Date(), saved.nextInterviewAt); } catch { return replayProgress([]); }
+};
 const progressDate = (value, now = new Date()) => {
   const date = new Date(`${value}T00:00:00Z`);
   return new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC',
@@ -112,18 +115,19 @@ const progressActions = {
   offer: [['hired', 'Accepted'], ['withdrawn', 'Declined']],
 };
 // What a change was based on: a change is applied only to the progress the user was looking at.
-const progressKey = progress => ({ stage: progress.stage, round: progress.round ?? 0, steps: progress.history.length });
+const progressKey = progress => ({ stage: progress.stage, round: progress.round ?? 0, steps: progress.history.length,
+  ...(progress.nextInterviewAt ? { nextInterviewAt: progress.nextInterviewAt } : {}) });
 function progressDetail(app) {
   const progress = readProgress(app), last = progress.history.at(-1);
   // Each step reads from the one before it ("Rejected after round 1").
   const history = progress.history.map((step, index) => ({ date: progressDate(step.at),
     label: stageLabel(replayProgress(progress.history.slice(0, index + 1))) })).reverse();
   return { headline: last ? `${stageLabel(progress)} · ${progressDate(last.at)}` : 'Not applied yet', from: progressKey(progress),
+    ...(progress.nextInterviewAt ? { nextInterviewAt: progress.nextInterviewAt } : {}),
     at: last?.at ?? null, actions: (progressActions[progress.stage] ?? []).map(([stage, label, quiet]) =>
       ({ label, ...(stage === 'round' ? { nextRound: true } : { move: stage }), ...(quiet ? { quiet } : {}) })),
     history };
 }
-const documentLine = app => app.cv && app.coverLetter ? 'CV and cover letter saved' : app.cv ? 'CV saved' : app.coverLetter ? 'Cover letter saved' : 'No documents saved';
 // Pipeline columns: rejected and withdrawn share Closed, where the card says which.
 const PIPELINE_COLUMNS = ['prepared', 'applied', 'interviewing', 'offer', 'hired', 'closed'];
 const pipelineColumn = stage => ['rejected', 'withdrawn'].includes(stage) ? 'closed' : stage;
@@ -438,7 +442,8 @@ export function createCareerBrowser({ store, files, openPath }) {
       const rows = entries(readCareer(store).applications).map(([id, app]) => ({ id, app, progress: readProgress(app) }));
       const columns = PIPELINE_COLUMNS.map(column => ({ id: column, cards: rows.filter(row => pipelineColumn(row.progress.stage) === column)
         .sort(byActivity).map(({ id, app, progress }) => ({ id, title: text(app.job?.title, 'Untitled role'), company: text(app.job?.company, ''),
-          stage: progress.stage, detail: cardDetail(app, progress), documents: documentLine(app), from: progressKey(progress) })) }));
+          stage: progress.stage, detail: cardDetail(app, progress),
+          ...(progress.nextInterviewAt ? { nextInterviewAt: progress.nextInterviewAt } : {}), from: progressKey(progress) })) }));
       return { columns, total: rows.length };
     },
     async list(args = {}) {
@@ -562,35 +567,44 @@ export async function openJobPage({ store, openExternal }, args) {
   return { opened: true, url };
 }
 
-/** One change from the Pipeline board or its reader: a move to a stage, the next interview round, a new date for the current
- *  step, or undo. `from` is the progress the user was looking at. A change that already holds (a second click, a drag repeated
+/** One change from the Pipeline board or its reader: a stage, next round, historical date, interview schedule or undo.
+ *  `from` includes any interview schedule the user was looking at. A change that already holds (a second click, a drag repeated
  *  before the board redrew) succeeds without changing anything; any other difference means someone else changed this
  *  application meanwhile, and is reported rather than stacked on top. */
 export async function setApplicationProgress({ store }, args) {
-  const from = args?.from, date = args?.at;
+  const from = args?.from, date = args?.at, nextInterviewAt = args?.nextInterviewAt;
   const actions = ['move', 'nextRound', 'undo'].filter(key => own(args, key));
-  if (!record(args) || Reflect.ownKeys(args).some(key => !['id', 'from', 'move', 'nextRound', 'at', 'undo'].includes(key)) ||
+  if (!record(args) || Reflect.ownKeys(args).some(key => !['id', 'from', 'move', 'nextRound', 'at', 'undo', 'nextInterviewAt'].includes(key)) ||
       typeof args.id !== 'string' || !args.id.trim() || args.id.length > 500 || forbidden.has(args.id) ||
-      !record(from) || Reflect.ownKeys(from).some(key => !['stage', 'round', 'steps'].includes(key)) || !PROGRESS_STAGES.includes(from.stage) ||
+      !record(from) || Reflect.ownKeys(from).some(key => !['stage', 'round', 'steps', 'nextInterviewAt'].includes(key)) || !PROGRESS_STAGES.includes(from.stage) ||
       !Number.isSafeInteger(from.round) || from.round < 0 || !Number.isSafeInteger(from.steps) || from.steps < 0 ||
-      actions.length > 1 || (!actions.length && date === undefined) || (own(args, 'move') && !PROGRESS_STAGES.includes(args.move)) ||
-      (own(args, 'nextRound') && args.nextRound !== true) || (own(args, 'undo') && (args.undo !== true || date !== undefined)) ||
-      (date !== undefined && typeof date !== 'string')) fail('INVALID_INPUT', 'Choose a saved application and one progress change.');
+      (own(from, 'nextInterviewAt') && (from.stage !== 'interviewing' || typeof from.nextInterviewAt !== 'string')) ||
+      actions.length > 1 || (!actions.length && date === undefined && nextInterviewAt === undefined) ||
+      (own(args, 'move') && !PROGRESS_STAGES.includes(args.move)) ||
+      (own(args, 'nextRound') && args.nextRound !== true) ||
+      (own(args, 'undo') && (args.undo !== true || date !== undefined || nextInterviewAt !== undefined)) ||
+      (date !== undefined && typeof date !== 'string') ||
+      (nextInterviewAt !== undefined && nextInterviewAt !== null && typeof nextInterviewAt !== 'string'))
+    fail('INVALID_INPUT', 'Choose a saved application and one progress change.');
   let progress, changed = false;
   await store.update(state => {
     const career = state.career, app = lookup(career?.applications, args.id);
     if (!app) fail('NOT_FOUND', 'This application is no longer saved. Refresh Pipeline.');
     const current = readProgress(app), key = progressKey(current);
-    const seen = key.stage === from.stage && key.round === from.round && key.steps === from.steps;
-    const done = own(args, 'move') ? current.stage === args.move
+    const sameStep = key.stage === from.stage && key.round === from.round && key.steps === from.steps;
+    const seen = sameStep && key.nextInterviewAt === from.nextInterviewAt;
+    if (nextInterviewAt !== undefined && (args.move ?? current.stage) !== 'interviewing')
+      fail('INVALID_PROGRESS', 'Only an application in interviews has a next interview date.');
+    const done = (own(args, 'move') ? current.stage === args.move
       : args.nextRound ? from.stage === 'interviewing' && current.stage === 'interviewing' && current.round === from.round + 1
-        : !args.undo && key.steps === from.steps && current.history.at(-1)?.at === date;
+        : !args.undo && sameStep && (date === undefined || current.history.at(-1)?.at === date)) &&
+      (nextInterviewAt === undefined || (current.nextInterviewAt ?? null) === nextInterviewAt);
     progress = current;
     if (seen && !done) {
-      progress = own(args, 'move') ? moveProgress(app, args.move, { at: date })
-        : args.nextRound ? (from.stage === 'interviewing' ? changeProgress(app, { stage: 'interviewing', at: date })
+      progress = own(args, 'move') ? moveProgress(app, args.move, { at: date, nextInterviewAt })
+        : args.nextRound ? (from.stage === 'interviewing' ? changeProgress(app, { stage: 'interviewing', at: date, nextInterviewAt })
           : fail('INVALID_PROGRESS', 'Only an application in interviews has a next round.'))
-          : changeProgress(app, args.undo ? { undo: true } : { at: date });
+          : changeProgress(app, args.undo ? { undo: true } : { at: date, nextInterviewAt });
       changed = true;
       career.revision++;
     } else if (!done) fail('PROGRESS_CHANGED', 'This application’s progress changed meanwhile. Check it again.');

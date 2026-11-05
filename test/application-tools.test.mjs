@@ -347,6 +347,50 @@ test('application progress moves one valid step at a time and is read with the a
     assert.equal(validate({ ...base, ...args }), false, JSON.stringify(args));
 });
 
+test('MCP interview scheduling preserves history, validates dates and honors mutation retries and revision conflicts', async t => {
+  const f = await fixture(t), { applicationId } = await f.create();
+  const set = args => f.call('application_progress_set', f.mutation({ applicationId, ...args }));
+  await assert.rejects(set({ nextInterviewAt: '2099-05-17' }), { code: 'INVALID_PROGRESS' });
+  await set({ stage: 'applied', date: '2025-10-21' });
+  const request = f.mutation({ applicationId, stage: 'interviewing', date: '2025-10-24', nextInterviewAt: '2099-05-17' });
+  const first = await f.call('application_progress_set', request), revision = f.state().revision;
+  assert.equal(first.progress.nextInterviewAt, '2099-05-17');
+  assert.equal(first.progress.history.at(-1).at, '2025-10-24');
+  assert.deepEqual(await f.call('application_progress_set', request), first);
+  assert.equal(f.state().revision, revision);
+  await assert.rejects(f.call('application_progress_set', { ...request, nextInterviewAt: '2099-05-18' }), { code: 'REQUEST_CONFLICT' });
+  await assert.rejects(f.call('application_progress_set', { ...request, requestId: randomUUID() }), { code: 'REVISION_CONFLICT' });
+  const before = structuredClone(f.state());
+  for (const nextInterviewAt of ['2099-02-29', '2099-04-31', '2099-05-17T00:00:00Z', '', 123, false]) {
+    await assert.rejects(set({ nextInterviewAt }), { code: 'INVALID_INPUT' });
+    assert.deepEqual(f.state(), before);
+  }
+  await set({ nextInterviewAt: '2099-05-18' });
+  await set({ date: '2025-10-25' });
+  const read = (await f.call('application_read', { applicationId })).application.progress;
+  assert.equal(read.nextInterviewAt, '2099-05-18');
+  assert.equal(read.round, 1);
+  assert.equal(read.history.length, 2);
+  assert.deepEqual((await f.call('applications_list')).applications[0].progress, read);
+  // Saving an unrelated application field must not erase its interview schedule.
+  await f.store.update(state => { state.career.applications[applicationId].formAnswers = { saved: { value: 'Answer' } }; });
+  assert.equal((await f.call('application_read', { applicationId })).application.progress.nextInterviewAt, '2099-05-18');
+  await set({ nextInterviewAt: null });
+  assert.equal(Object.hasOwn(f.state().applications[applicationId].progress, 'nextInterviewAt'), false);
+  await set({ nextInterviewAt: '2099-05-19' });
+  await set({ stage: 'interviewing' });
+  assert.equal(f.state().applications[applicationId].progress.round, 2);
+  assert.equal(f.state().applications[applicationId].progress.nextInterviewAt, undefined);
+  await set({ nextInterviewAt: '2099-05-20' });
+  await set({ stage: 'offer' });
+  assert.equal(f.state().applications[applicationId].progress.nextInterviewAt, undefined);
+  await assert.rejects(set({ nextInterviewAt: null }), { code: 'INVALID_PROGRESS' });
+  const ajv = new Ajv({ strict: false }); addFormats(ajv);
+  const tool = f.tools.get('career_application_progress_set'), validate = ajv.compile(tool.inputSchema);
+  for (const nextInterviewAt of ['2099-05-17', null]) assert.equal(validate(f.mutation({ applicationId, nextInterviewAt })), true);
+  for (const nextInterviewAt of ['May 17', 123, false]) assert.equal(validate(f.mutation({ applicationId, nextInterviewAt })), false);
+});
+
 test('tool schemas accept a structured CV and reject malformed documents and removed tools', async t => {
   const f = await fixture(t);
   assert.deepEqual([...f.tools.keys()].sort(), ['career_application_context', 'career_application_create', 'career_application_cv_save',

@@ -15,9 +15,9 @@ export function applicationProgress(app) {
   return saved !== null && typeof saved === 'object' && !Array.isArray(saved) ? saved : prepared();
 }
 
-/** Rebuild the current state from its steps: every step follows the previous one, dates never go backwards or past
- *  tomorrow (the user's calendar can be ahead of UTC), and rounds are counted rather than trusted. */
-export function replayProgress(history, now = new Date()) {
+/** Rebuild historical steps: dates never go backwards or past tomorrow (the user's calendar can be ahead of UTC),
+ *  and rounds are counted rather than trusted. The optional interview schedule is separate and may be in the future. */
+export function replayProgress(history, now = new Date(), nextInterviewAt) {
   if (!Array.isArray(history) || history.length > 200) fail('INVALID_INPUT', 'Progress history must be a list of steps.');
   const latest = todayDate(new Date(now.getTime() + 86_400_000));
   let progress = prepared(), previousAt = null;
@@ -40,25 +40,36 @@ export function replayProgress(history, now = new Date()) {
       history: [...progress.history, step] };
     previousAt = entry.at;
   }
+  if (nextInterviewAt !== undefined) {
+    if (!validDate(nextInterviewAt)) fail('INVALID_INPUT', 'Use a next interview date in the form YYYY-MM-DD.');
+    if (progress.stage !== 'interviewing') fail('INVALID_PROGRESS', 'Only an application in interviews has a next interview date.');
+    progress.nextInterviewAt = nextInterviewAt;
+  }
   return progress;
 }
 
-/** One change: a next stage (dated today unless `at` is given), a new date for the current step, or undo of the last step. */
-export function changeProgress(app, { stage, at, undo } = {}, now = new Date()) {
-  const history = [...applicationProgress(app).history];
+/** One change: a next stage, a corrected historical date, an upcoming interview date, or undo of the last step. */
+export function changeProgress(app, { stage, at, undo, nextInterviewAt } = {}, now = new Date()) {
+  const current = applicationProgress(app), history = [...current.history];
   if (undo !== undefined) {
-    if (undo !== true || stage !== undefined || at !== undefined) fail('INVALID_INPUT', 'Undo takes no stage or date.');
+    if (undo !== true || stage !== undefined || at !== undefined || nextInterviewAt !== undefined) fail('INVALID_INPUT', 'Undo takes no stage or date.');
     if (!history.length) fail('INVALID_PROGRESS', 'There is no step to undo.');
     history.pop();
   } else if (stage === undefined) {
-    if (at === undefined) fail('INVALID_INPUT', 'Provide a stage, a date or undo.');
-    if (!history.length) fail('INVALID_PROGRESS', 'Record a step before changing its date.');
-    history[history.length - 1] = { ...history.at(-1), at };
+    if (at === undefined && nextInterviewAt === undefined) fail('INVALID_INPUT', 'Provide a stage, a date or undo.');
+    if (at !== undefined) {
+      if (!history.length) fail('INVALID_PROGRESS', 'Record a step before changing its date.');
+      history[history.length - 1] = { ...history.at(-1), at };
+    }
   } else {
     if (!PROGRESS_STAGES.includes(stage) || stage === 'prepared') fail('INVALID_INPUT', `Choose a stage: ${PROGRESS_STAGES.slice(1).join(', ')}.`);
     history.push({ stage, at: at ?? todayDate(now) });
   }
-  app.progress = replayProgress(history, now);
+  const schedule = nextInterviewAt === undefined && stage === undefined && !undo ? current.nextInterviewAt : nextInterviewAt;
+  const progress = replayProgress(history, now, schedule ?? undefined);
+  if (nextInterviewAt !== undefined && progress.stage !== 'interviewing')
+    fail('INVALID_PROGRESS', 'Only an application in interviews has a next interview date.');
+  app.progress = progress;
   app.updatedAt = now.toISOString();
   return app.progress;
 }
@@ -72,19 +83,21 @@ function forwardSteps(from, to) {
   const start = forward.indexOf(from), end = forward.indexOf(to);
   return start >= 0 && end > start ? forward.slice(start + 1, end + 1) : null;
 }
-/** Move straight to a stage, as on the Pipeline board: steps back (undoing the latest steps) until `to` is reached or lies
- *  ahead, then records any steps in between, dated `at` (today by default). Already at `to` changes nothing. */
-export function moveProgress(app, to, { at, now = new Date() } = {}) {
+/** Move straight to a stage, undoing or filling steps as needed, dated `at` (today by default).
+ *  Already at `to` preserves progress unless a new schedule is supplied; changing stage clears the old schedule. */
+export function moveProgress(app, to, { at, nextInterviewAt, now = new Date() } = {}) {
   if (!PROGRESS_STAGES.includes(to)) fail('INVALID_INPUT', `Choose a stage: ${PROGRESS_STAGES.join(', ')}.`);
-  const history = [...applicationProgress(app).history];
-  let progress = replayProgress(history, now);
-  if (progress.stage === to) return progress;
+  if (nextInterviewAt !== undefined && to !== 'interviewing')
+    fail('INVALID_PROGRESS', 'Only an application in interviews has a next interview date.');
+  const current = applicationProgress(app), history = [...current.history];
+  let progress = replayProgress(history, now, current.nextInterviewAt);
+  if (progress.stage === to) return nextInterviewAt === undefined ? progress : changeProgress(app, { nextInterviewAt }, now);
   while (progress.stage !== to && !forwardSteps(progress.stage, to)) {
     history.pop();
     progress = replayProgress(history, now);
   }
   for (const stage of progress.stage === to ? [] : forwardSteps(progress.stage, to)) history.push({ stage, at: at ?? todayDate(now) });
-  app.progress = replayProgress(history, now);
+  app.progress = replayProgress(history, now, nextInterviewAt ?? undefined);
   app.updatedAt = now.toISOString();
   return app.progress;
 }

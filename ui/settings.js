@@ -1,13 +1,21 @@
 'use strict';
 const $ = id => document.getElementById(id);
 let state, busy = false, noticeKind = '', noticeTimer, careerViewVersion, stateRequest = 0, view = null;
-let requestedSection = null;
-// Confirmations leave on their own after a few seconds; errors and in-progress instructions stay until something replaces them.
-const notice = (text, kind = '', sticky = false) => {
+let requestedSection = null, stateNoticeKey = '';
+const notice = (text, kind = '') => {
   clearTimeout(noticeTimer);
-  $('notice').textContent = text; noticeKind = kind;
-  if (text && !sticky) noticeTimer = setTimeout(() => { if ($('notice').textContent === text) notice(''); }, 5000);
+  $('notice-text').textContent = text || '';
+  $('notice').hidden = !text;
+  noticeKind = text ? kind : '';
+  if (text) noticeTimer = setTimeout(() => notice(''), 10000);
 };
+const stateNotice = (text, kind = '') => {
+  const key = text ? `${kind}:${text}` : '';
+  if (stateNoticeKey === key) return;
+  stateNoticeKey = key;
+  if (text) notice(text, kind);
+};
+$('notice-close').addEventListener('click', () => notice(''));
 window.showCompanionNotice = notice;
 // The topbar wraps at narrow widths, so the toast anchors to its measured height rather than a constant.
 new ResizeObserver(([entry]) => document.documentElement.style.setProperty('--topbar-height', `${entry.borderBoxSize[0].blockSize}px`)).observe(document.querySelector('.topbar'));
@@ -188,8 +196,7 @@ async function refresh() {
     window.updatesUI?.refresh(state.updates);
     window.helpUI.refresh(state);
     if (requestedSection) { const section = requestedSection; requestedSection = null; openSettings(section); }
-    if (state.failure) notice(state.failure, 'error', true);
-    else if (state.review?.errors?.length) notice(state.review.errors.map(error => error.message).join(' '), 'error', true);
+    stateNotice(state.failure || state.review?.errors?.map(error => error.message).join(' ') || '', 'error');
   } catch {
     if (request !== stateRequest) return;
     if (!state) {
@@ -199,7 +206,7 @@ async function refresh() {
     renderSetup(null);
     window.backupsUI?.unavailable();
     $('codex-status').textContent = ''; $('claude-status').textContent = '';
-    notice('Could not reach Companion. Choose Retry in Me, or reopen Companion. Your saved work is unchanged.', 'state-unavailable', true);
+    stateNotice('Could not reach Companion. Choose Retry in Me, or reopen Companion. Your saved work is unchanged.', 'state-unavailable');
   }
 }
 async function action(op, success) {
@@ -207,7 +214,7 @@ async function action(op, success) {
   busy = true;
   window.backupsUI?.setBusy(true);
   // Browser instances manage their own controls; the Jobs toolbar's Copy review prompt is an ordinary action.
-  const controls = [...document.querySelectorAll('button')].filter(button => (!button.closest('#me-browser, #career-browser, #pipeline-browser, #views, #decisions, #update-settings, #settings-backups, .settings-tabs') || ['copy-review-prompt', 'review-codex', 'review-claude'].includes(button.id)) && !['approval-cancel', 'approval-allow'].includes(button.id));
+  const controls = [...document.querySelectorAll('button')].filter(button => (!button.closest('#notice, #me-browser, #career-browser, #pipeline-browser, #views, #decisions, #update-settings, #settings-backups, .settings-tabs') || ['copy-review-prompt', 'review-codex', 'review-claude'].includes(button.id)) && !['approval-cancel', 'approval-allow'].includes(button.id));
   const disabled = controls.map(control => control.disabled); controls.forEach(control => { control.disabled = true; });
   try {
     const result = await invoke(op);
@@ -215,9 +222,9 @@ async function action(op, success) {
       showView('me');
       document.querySelector('[data-career-kind="sources"]').click();
     }
-    notice(typeof success === 'function' ? success(result) : success, op, ['connect-account', 'install-chatgpt', 'install-claude'].includes(op));
+    notice(typeof success === 'function' ? success(result) : success, op);
   }
-  catch (error) { notice(error.message, 'error', true); }
+  catch (error) { notice(error.message, 'error'); }
   finally { busy = false; controls.forEach((control, index) => { control.disabled = disabled[index]; }); window.backupsUI?.setBusy(false); await refresh(); }
 }
 // Browsers open their extension pages only when launched with them; if that fails, the exact address is shown to copy.
@@ -295,13 +302,13 @@ $('connect-github').addEventListener('click', async () => {
     await invoke('connect-github');
     githubPollUntil = Date.now() + 3 * 60 * 1000;
     $('github-status').textContent = 'Choose Link GitHub on the recruiters.rip page that opened, then come back here.';
-  } catch (error) { notice(error.message, 'error', true); button.disabled = false; }
+  } catch (error) { notice(error.message, 'error'); button.disabled = false; }
 });
 window.addEventListener('focus', () => { if (state?.paired) void syncGithub(true, true); });
 async function answerApproval(allow) {
   const id = state?.approval?.id; if (!id) return;
   $('approval-cancel').disabled = true; $('approval-allow').disabled = true;
-  try { await invoke('approval', { id, allow }); } catch (error) { notice(error.message, 'error', true); }
+  try { await invoke('approval', { id, allow }); } catch (error) { notice(error.message, 'error'); }
   await refresh();
 }
 $('approval-cancel').addEventListener('click', () => { void answerApproval(false); });

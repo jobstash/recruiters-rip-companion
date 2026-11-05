@@ -324,7 +324,7 @@ function emit(event = 'status', payload = status()) {
 function showSettings() {
   if (!installationAdmitted) return;
   if (window && !window.isDestroyed()) { window.show(); window.focus(); window.webContents.send('state-changed'); return windowLoaded; }
-  window = new BrowserWindow({ width: 1180, height: 820, minWidth: 420, minHeight: 560, title: 'Recruiters.rip Companion', backgroundColor: '#0a0b0e',
+  window = new BrowserWindow({ width: 1180, height: 820, minWidth: 420, minHeight: 560, title: 'recruiters.rip', backgroundColor: '#0a0b0e',
     webPreferences: { preload: path.join(root, 'src', 'preload.cjs'), partition: 'recruiters-settings', nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true, devTools: !app.isPackaged, spellcheck: false } });
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   window.webContents.on('will-navigate', event => event.preventDefault());
@@ -855,7 +855,7 @@ async function settingsOperation(op, input, ownMutation) {
       emit(); return { ok: true, result };
     }
     if (op === 'application-progress') {
-      assertAvailable(false); exact(input, ['id', 'from', 'move', 'nextRound', 'at', 'undo']);
+      assertAvailable(false); exact(input, ['id', 'from', 'move', 'nextRound', 'at', 'undo', 'nextInterviewAt']);
       const scoped = createScopedAccess(store, { assertAvailable, epoch: () => sessionEpoch });
       const result = await setApplicationProgress({ store: scoped.store }, input);
       scoped.assertAvailable(false);
@@ -1027,7 +1027,7 @@ else {
     // A second live process would serve a separate in-memory vault and overwrite the first one's saves.
     if (!await claimInstance(directory)) { app.exit(0); return; }
     documents = createRequire(import.meta.url)('./generated/document-engine.cjs');
-    Menu.setApplicationMenu(Menu.buildFromTemplate([{ label: 'Recruiters.rip Companion', submenu: [{ label: 'Settings', click: showSettings }, { type: 'separator' }, { role: 'quit' }] }, { role: 'editMenu' }]));
+    Menu.setApplicationMenu(Menu.buildFromTemplate([{ label: 'recruiters.rip', submenu: [{ label: 'Settings', click: showSettings }, { type: 'separator' }, { role: 'quit' }] }, { role: 'editMenu' }]));
     // Render the recovery controls before local storage opens.
     // The settings page uses an in-memory browser session, never Chromium's
     // persistent cookie key. API credentials are entered only through the local settings IPC.

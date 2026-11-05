@@ -143,7 +143,7 @@ export function validateBackupCareer(career) {
     if (app.progress !== undefined) {
       object(app.progress, 'application progress');
       let replayed;
-      try { replayed = replayProgress(app.progress.history); } catch { invalid('an application progress step is invalid'); }
+      try { replayed = replayProgress(app.progress.history, new Date(), app.progress.nextInterviewAt); } catch { invalid('an application progress step or next interview date is invalid'); }
       if (hash(replayed) !== hash(app.progress)) invalid('an application progress does not match its steps');
     }
   });

@@ -72,11 +72,13 @@ Your AI handles the application. Find its saved documents again under the job in
 
 ## Track your applications
 
-Open **Pipeline**. Every application sits in one column: **Prepared · Applied · Interviewing · Offer · Hired · Closed** (Closed holds rejected and withdrawn ones), each with its count. A card shows the role, company, where it stands with the date of the last step (**Round 2 · 30 Oct**) and whether its CV and cover letter are saved.
+Open **Pipeline**. Every application sits in one column: **Prepared · Applied · Interviewing · Offer · Hired · Closed** (Closed holds rejected and withdrawn ones), each with its count. All six separate lanes fit the default window; narrower windows scroll sideways, and each lane scrolls vertically on its own. A card shows the role, company and where it stands with the date of the last step (**Round 2 · 30 Oct**). Interviewing cards also show **Next interview · 12 Nov** when you have saved a date.
 
-To move a card, drag it to another column, choose **Move to…** on the card, or press **←** / **→** while the card has focus. Moving forward fills in the steps it skips, dated today; moving back undoes steps; moving to **Closed** asks **Rejected** or **Withdrew** on the card. **Next round** on an Interviewing card adds an interview round.
+To move a card, drag it to another column, choose **Set status…** on the card, or press **←** / **→** while the card has focus. Moving forward fills in the steps it skips, dated today; moving back undoes steps; moving to **Closed** asks **Rejected** or **Withdrew** on the card, with **Cancel** to keep the current status. **Next round** on an Interviewing card adds an interview round.
 
 Select a card to open it beside the board. **Progress** at the top offers only the next steps (**Mark applied**; then **Interview invite** or **Rejected**; then **Next round**, **Offer** or **Rejected**; then **Accepted** or **Declined**; **Withdrew** where it applies). A step is dated today: set **Date** first, or fix it afterwards with **Change date**; **Undo last step** removes a step recorded by mistake. Below are the history, **Open job**, **Open CV**, **Open letter** and the saved CV and letter text. **Close** or **Esc** returns to the card.
+
+While Interviewing, set **Next interview date (optional)** and choose **Save date** to record a future appointment separately from the history. **Clear date** removes it; saving an empty field also clears it. Advancing to the next round or leaving Interviewing clears the old appointment so it cannot be mistaken for the next interview.
 
 **Save as applied** in the browser extension marks the job applied. When Codex or Claude submits an application for you and sees the employer's confirmation, it marks it applied; when your saved notes show an application was already sent, it marks it applied with that date; you can also tell it, for example “I applied to tangem” or “I got an interview at tangem”. It records only what it saw or what you said (`career_application_progress_set`). Progress stays on this computer and is part of your backups; it is never sent to recruiters.rip.
 

@@ -1,6 +1,6 @@
 'use strict';
 // Pipeline board: a column per stage and a card per application. A card moves by dragging it to another column, with its
-// Move to… menu, or with Left/Right arrows while it has focus; Closed asks Rejected or Withdrew on the card itself. Saving,
+// Set status… menu, or with Left/Right arrows while it has focus; Closed asks Rejected or Withdrew on the card itself. Saving,
 // announcing and redrawing belong to the handlers (ui/career-browser.js).
 (() => {
   const columns = [['prepared', 'Prepared'], ['applied', 'Applied'], ['interviewing', 'Interviewing'], ['offer', 'Offer'], ['hired', 'Hired'], ['closed', 'Closed']];
@@ -14,6 +14,11 @@
   };
   // A pointer must travel this far before a press becomes a drag; a shorter press is a click that opens the card.
   const DRAG_DISTANCE = 6;
+  const interviewDate = value => {
+    const date = new Date(`${value}T12:00:00`);
+    return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short',
+      ...(date.getFullYear() !== new Date().getFullYear() ? { year: 'numeric' } : {}) });
+  };
 
   function create(container, handlers) {
     let data = null, selectedId = null, signature = '', choice = null, drag = null, suppressClick = false;
@@ -56,8 +61,11 @@
       open.type = 'button';
       open.append(node('span', 'pipeline-card-role', card.title));
       if (card.company) open.append(node('span', 'pipeline-card-company', card.company));
-      open.append(node('span', 'pipeline-card-detail', card.detail), node('span', 'pipeline-card-documents', card.documents));
-      open.setAttribute('aria-label', [card.title, card.company, card.detail, card.documents].filter(Boolean).join(', '));
+      open.append(node('span', 'pipeline-card-detail', card.detail));
+      const nextInterview = card.stage === 'interviewing' && card.nextInterviewAt
+        ? `Next interview · ${interviewDate(card.nextInterviewAt)}` : null;
+      if (nextInterview) open.append(node('span', 'pipeline-card-interview', nextInterview));
+      open.setAttribute('aria-label', [card.title, card.company, card.detail, nextInterview].filter(Boolean).join(', '));
       open.setAttribute('aria-keyshortcuts', 'ArrowLeft ArrowRight');
       if (card.id === selectedId) open.setAttribute('aria-current', 'true');
       open.addEventListener('click', () => {
@@ -77,8 +85,8 @@
         drag = { card, column, item, x: event.clientX, y: event.clientY, ghost: null, target: null };
       });
       const move = control(node('select', 'pipeline-move'), `${card.id}:move`);
-      move.setAttribute('aria-label', `Move ${card.title} to`);
-      const placeholder = node('option', '', 'Move to…');
+      move.setAttribute('aria-label', `Set status for ${card.title}`);
+      const placeholder = node('option', '', 'Set status…');
       placeholder.value = '';
       move.append(placeholder, ...order.filter(id => id !== column).map(id => { const option = node('option', '', labels[id]); option.value = id; return option; }));
       move.value = '';

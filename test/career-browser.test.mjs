@@ -1419,7 +1419,6 @@ test('selected detail groups exact job and document actions once, preserves coun
   await assert.rejects(opening, { code: 'DOCUMENT_UNAVAILABLE' }); await ui.settle();
   assert.equal(ui.nodes['pipeline-list-status'].textContent, applicationCount);
   assert.equal(ui.notices.at(-1)[1], 'error');
-  assert.equal(ui.notices.at(-1)[2], true);
 });
 
 test('CV and letter select separate saved PDFs and shell failures are not reported as opened', async t => {
@@ -1484,11 +1483,12 @@ function progressFixture() {
   const both = { cv: { version: 1 }, coverLetter: { version: 1, paragraphs: ['Dear team,', 'Hello.'] } };
   const set = args => setApplicationProgress({ store }, args);
   const from = id => ({ stage: replayProgress(state.career.applications[id].progress?.history ?? []).stage,
-    round: replayProgress(state.career.applications[id].progress?.history ?? []).round ?? 0, steps: state.career.applications[id].progress?.history.length ?? 0 });
+    round: replayProgress(state.career.applications[id].progress?.history ?? []).round ?? 0, steps: state.career.applications[id].progress?.history.length ?? 0,
+    ...(state.career.applications[id].progress?.nextInterviewAt ? { nextInterviewAt: state.career.applications[id].progress.nextInterviewAt } : {}) });
   return { state, store, steps, app, both, set, from, browser: createCareerBrowser({ store }) };
 }
 
-test('Pipeline puts every application in its stage column with the last step, documents and what a change is based on', async () => {
+test('Pipeline puts every application in its stage column with the last step and change identity, without document readiness', async () => {
   const { steps, app, both, browser } = progressFixture();
   app('prepared', null, both);
   app('applied', steps(['applied', '2025-10-21']));
@@ -1500,17 +1500,18 @@ test('Pipeline puts every application in its stage column with the last step, do
   app('declined', steps(['applied', '2025-10-01'], ['interviewing', '2025-10-02'], ['offer', '2025-10-03'], ['withdrawn', '2025-10-04']));
   const board = await browser.pipeline();
   assert.equal(board.total, 8);
-  assert.deepEqual(board.columns.map(column => [column.id, column.cards.map(card => [card.title, card.detail, card.documents])]), [
-    ['prepared', [['prepared', 'Created 1 Oct 2025', 'CV and cover letter saved']]],
-    ['applied', [['applied', 'Applied · 21 Oct 2025', 'No documents saved']]],
+  assert.deepEqual(board.columns.map(column => [column.id, column.cards.map(card => [card.title, card.detail])]), [
+    ['prepared', [['prepared', 'Created 1 Oct 2025']]],
+    ['applied', [['applied', 'Applied · 21 Oct 2025']]],
     // The later round leads even though round 1 moved more recently.
-    ['interviewing', [['round 2', 'Round 2 · 30 Oct 2025', 'CV saved'], ['round 1', 'Round 1 · 31 Oct 2025', 'CV and cover letter saved']]],
-    ['offer', [['offer', 'Offer · 5 Nov 2025', 'No documents saved']]],
-    ['hired', [['hired', 'Hired · 4 Sept 2025', 'No documents saved']]],
-    ['closed', [['rejected', 'Rejected after round 1 · 2 Nov 2025', 'CV and cover letter saved'], ['declined', 'Declined offer · 4 Oct 2025', 'No documents saved']]],
+    ['interviewing', [['round 2', 'Round 2 · 30 Oct 2025'], ['round 1', 'Round 1 · 31 Oct 2025']]],
+    ['offer', [['offer', 'Offer · 5 Nov 2025']]],
+    ['hired', [['hired', 'Hired · 4 Sept 2025']]],
+    ['closed', [['rejected', 'Rejected after round 1 · 2 Nov 2025'], ['declined', 'Declined offer · 4 Oct 2025']]],
   ]);
   assert.deepEqual(board.columns[2].cards[0], { id: 'round 2', title: 'round 2', company: 'Example', stage: 'interviewing',
-    detail: 'Round 2 · 30 Oct 2025', documents: 'CV saved', from: { stage: 'interviewing', round: 2, steps: 3 } });
+    detail: 'Round 2 · 30 Oct 2025', from: { stage: 'interviewing', round: 2, steps: 3 } });
+  assert.ok(board.columns.flatMap(column => column.cards).every(card => !Object.hasOwn(card, 'documents')));
   await assert.rejects(browser.pipeline({ stage: 'applied' }), { code: 'INVALID_INPUT' });
   // Applications are no longer a Jobs list.
   await assert.rejects(browser.list({ kind: 'applications' }), { code: 'INVALID_INPUT' });
@@ -1596,7 +1597,64 @@ test('a repeated click or drag never conflicts with itself; only a change made m
   assert.equal((await set({ id: 'lifi', from: stale, move: 'offer' })).changed, false);
 });
 
-test('the Pipeline board moves cards by keyboard and Move to…, closes inline, adds rounds and opens the shared reader', async () => {
+test('Pipeline schedule DTOs and mutations save, reschedule and clear dates with optimistic concurrency and exact retries', async () => {
+  const { state, app, set, from, browser } = progressFixture();
+  app('scheduled', null);
+  const id = 'scheduled', initial = from(id);
+  const enter = { id, from: initial, move: 'interviewing', at: '2025-10-24', nextInterviewAt: '2099-05-17' };
+  assert.equal((await set(enter)).changed, true);
+  assert.equal((await set(enter)).changed, false);
+  const card = (await browser.pipeline()).columns[2].cards[0];
+  const detail = await browser.read({ kind: 'applications', id });
+  assert.equal(card.nextInterviewAt, '2099-05-17');
+  assert.equal(detail.progress.nextInterviewAt, card.nextInterviewAt);
+  assert.deepEqual(card.from, { stage: 'interviewing', round: 1, steps: 2, nextInterviewAt: '2099-05-17' });
+  assert.deepEqual(detail.progress.from, card.from);
+  assert.equal(detail.progress.at, '2025-10-24');
+  assert.ok(Array.isArray(detail.documents), 'Detailed reader retains document controls');
+  const schedule = { id, from: card.from, nextInterviewAt: '2099-05-18' }, revision = state.career.revision;
+  const history = structuredClone(state.career.applications[id].progress.history);
+  assert.equal((await set(schedule)).changed, true);
+  assert.equal((await set(schedule)).changed, false);
+  assert.equal(state.career.revision, revision + 1);
+  assert.deepEqual(state.career.applications[id].progress.history, history);
+  // A stale view must not erase a reschedule, advance its round or leave the stage.
+  for (const change of [{ nextInterviewAt: null }, { nextInterviewAt: '2099-05-19' }, { nextRound: true }, { move: 'offer' }, { undo: true }, { at: '2025-10-25' }])
+    await assert.rejects(set({ id, from: card.from, ...change }), { code: 'PROGRESS_CHANGED' });
+  assert.equal(state.career.applications[id].progress.nextInterviewAt, '2099-05-18');
+  const current = from(id);
+  for (const nextInterviewAt of ['2099-02-29', '2099-04-31', '2099-05-17T00:00:00Z', '', 123, false]) {
+    const before = structuredClone(state);
+    await assert.rejects(set({ id, from: current, nextInterviewAt }), { code: 'INVALID_INPUT' });
+    assert.deepEqual(state, before);
+  }
+  await set({ id, from: from(id), at: '2025-10-25' });
+  assert.equal(state.career.applications[id].progress.nextInterviewAt, '2099-05-18');
+  const clear = { id, from: from(id), nextInterviewAt: null };
+  assert.equal((await set(clear)).changed, true);
+  assert.equal((await set(clear)).changed, false);
+  assert.equal(Object.hasOwn(state.career.applications[id].progress, 'nextInterviewAt'), false);
+  assert.equal(Object.hasOwn((await browser.pipeline()).columns[2].cards[0], 'nextInterviewAt'), false);
+  const clearedReader = (await browser.read({ kind: 'applications', id })).progress;
+  assert.equal(Object.hasOwn(clearedReader, 'nextInterviewAt'), false);
+  assert.equal(Object.hasOwn(clearedReader.from, 'nextInterviewAt'), false);
+  await set({ id, from: from(id), nextInterviewAt: '2099-05-19' });
+  const round = { id, from: from(id), nextRound: true };
+  assert.equal((await set(round)).progress.nextInterviewAt, undefined);
+  assert.equal((await set(round)).changed, false);
+  const newRound = { id, from: from(id), nextRound: true, nextInterviewAt: '2099-05-20' };
+  assert.equal((await set(newRound)).progress.nextInterviewAt, '2099-05-20');
+  assert.equal((await set(newRound)).changed, false);
+  const offer = { id, from: from(id), move: 'offer' };
+  assert.equal((await set(offer)).progress.nextInterviewAt, undefined);
+  assert.equal((await set(offer)).changed, false);
+  for (const nextInterviewAt of ['2099-05-17', null])
+    await assert.rejects(set({ id, from: from(id), nextInterviewAt }), { code: 'INVALID_PROGRESS' });
+  await set({ id, from: from(id), undo: true });
+  assert.equal(state.career.applications[id].progress.nextInterviewAt, undefined);
+});
+
+test('the Pipeline board moves cards by keyboard and Set status…, closes inline, adds rounds and opens the shared reader', async () => {
   const { state, store, steps, app, browser } = progressFixture();
   app('tangem', steps(['applied', '2025-10-21'], ['interviewing', '2025-10-24']));
   app('example', steps(['applied', '2025-10-22']));
@@ -1618,7 +1676,9 @@ test('the Pipeline board moves cards by keyboard and Move to…, closes inline, 
   // Empty lanes say so rather than showing blank cells.
   assert.deepEqual(['offer', 'hired', 'closed'].map(id => ui.byClass(column(id), 'pipeline-empty')?.textContent), ['No applications', 'No applications', 'No applications']);
   assert.equal(ui.byClass(column('applied'), 'pipeline-empty'), null);
-  assert.equal(open('tangem').attributes.get('aria-label'), 'tangem, Example, Round 1 · 24 Oct 2025, No documents saved');
+  assert.equal(open('tangem').attributes.get('aria-label'), 'tangem, Example, Round 1 · 24 Oct 2025');
+  assert.equal(ui.byClass(card('tangem'), 'pipeline-card-interview'), null);
+  assert.equal(ui.byClass(card('tangem'), 'pipeline-card-documents'), null);
   assert.deepEqual(card('tangem').querySelectorAll('button').map(button => button.textContent).slice(1), ['Next round']);
   assert.deepEqual(card('example').querySelectorAll('button').length, 1);
   // The reader is closed until a card is chosen; nothing opens by itself.
@@ -1641,10 +1701,10 @@ test('the Pipeline board moves cards by keyboard and Move to…, closes inline, 
   await ui.settle();
   assert.equal(ui.calls.filter(call => call.operation === 'application-progress').length, 2);
 
-  // Move to…: Closed asks Rejected or Withdrew on the card, never a dialog; Escape or Cancel keeps the card where it was.
+  // Set status…: Closed asks Rejected or Withdrew on the card, never a dialog; Escape or Cancel keeps the card where it was.
   const select = ui.byClass(card('example'), 'pipeline-move');
-  assert.equal(select.attributes.get('aria-label'), 'Move example to');
-  assert.deepEqual(select.children.map(option => option.textContent), ['Move to…', 'Prepared', 'Interviewing', 'Offer', 'Hired', 'Closed']);
+  assert.equal(select.attributes.get('aria-label'), 'Set status for example');
+  assert.deepEqual(select.children.map(option => option.textContent), ['Set status…', 'Prepared', 'Interviewing', 'Offer', 'Hired', 'Closed']);
   select.value = 'closed';
   select.fire('change');
   const choice = ui.byClass(card('example'), 'pipeline-choice');
@@ -1681,7 +1741,7 @@ test('the Pipeline board moves cards by keyboard and Move to…, closes inline, 
   const progress = () => ui.byClass(ui.nodes['pipeline-reader-content'], 'career-progress');
   assert.equal(ui.byClass(progress(), 'career-progress-current').textContent, 'Interview round 2 · ' + ui.byClass(card('tangem'), 'pipeline-card-detail').textContent.split(' · ')[1]);
   const buttons = () => progress().querySelectorAll('button');
-  assert.deepEqual(buttons().map(button => button.textContent), ['Change date', 'Undo last step', 'Next round', 'Offer', 'Rejected', 'Withdrew']);
+  assert.deepEqual(buttons().map(button => button.textContent), ['Change date', 'Undo last step', 'Next round', 'Offer', 'Rejected', 'Withdrew', 'Save date']);
   // The reader's step redraws both the reader and the board; its controls stay disabled until then.
   const offer = buttons().find(button => button.textContent === 'Offer');
   offer.fire('click');
@@ -1698,3 +1758,51 @@ test('the Pipeline board moves cards by keyboard and Move to…, closes inline, 
   ui.window.careerBrowser.clear();
   assert.equal(ui.nodes['pipeline-list-status'].textContent, 'Unlock to see your saved applications.');
 });
+
+test('Pipeline schedules optional interview dates, preserves snapshots and clears appointments through the reader', async () => {
+  const { state, store, steps, app, browser } = progressFixture();
+  app('scheduled', steps(['applied', '2025-10-21'], ['interviewing', '2025-10-24']));
+  app('unscheduled', steps(['applied', '2025-10-21'], ['interviewing', '2025-10-24']));
+  app('applied', steps(['applied', '2025-10-21']));
+  const ui = await rendererFixture(browser, true, { 'application-progress': input => setApplicationProgress({ store }, input) });
+  await ui.window.careerBrowser.refresh(); await ui.settle();
+  const card = id => ui.nodes['pipeline-records'].querySelectorAll('.pipeline-card').find(item => item.dataset.id === id);
+  const reader = ui.nodes['pipeline-reader-content'];
+  const schedule = () => ui.byClass(reader, 'career-progress-schedule');
+  const field = () => schedule().querySelector('input');
+  const button = label => reader.querySelectorAll('button').find(item => item.textContent === label);
+  const saved = () => state.career.applications.scheduled.progress;
+  ui.byClass(card('scheduled'), 'pipeline-card-open').fire('click'); await ui.settle();
+  assert.equal(schedule().querySelector('label').textContent, 'Next interview date (optional)');
+  assert.equal(schedule().querySelector('label').htmlFor, field().id);
+  assert.equal(field().value, '');
+  assert.equal(field().max, undefined);
+  field().value = '2099-11-12';
+  button('Save date').fire('click'); await ui.settle(); await ui.settle();
+  assert.equal(saved().nextInterviewAt, '2099-11-12');
+  assert.equal(ui.byClass(card('scheduled'), 'pipeline-card-interview').textContent, 'Next interview · 12 Nov 2099');
+  assert.match(ui.byClass(card('scheduled'), 'pipeline-card-open').attributes.get('aria-label'), /Next interview · 12 Nov 2099/);
+  assert.equal(ui.byClass(card('unscheduled'), 'pipeline-card-interview'), null);
+  assert.equal(ui.byClass(card('applied'), 'pipeline-card-interview'), null);
+  await ui.window.careerBrowser.refresh(); await ui.settle();
+  assert.equal(field().value, '2099-11-12');
+  button('Clear date').fire('click'); await ui.settle(); await ui.settle();
+  const clearing = ui.calls.findLast(call => call.operation === 'application-progress').args;
+  assert.equal(clearing.from.nextInterviewAt, '2099-11-12');
+  assert.equal(clearing.nextInterviewAt, null);
+  assert.equal(saved().nextInterviewAt, undefined);
+  assert.equal(ui.byClass(card('scheduled'), 'pipeline-card-interview'), null);
+  field().value = '2099-11-13';
+  button('Save date').fire('click'); await ui.settle(); await ui.settle();
+  field().value = '';
+  button('Save date').fire('click'); await ui.settle(); await ui.settle();
+  assert.equal(saved().nextInterviewAt, undefined);
+  field().value = '2099-11-14';
+  button('Save date').fire('click'); await ui.settle(); await ui.settle();
+  button('Next round').fire('click'); await ui.settle(); await ui.settle();
+  assert.equal(saved().nextInterviewAt, undefined);
+  assert.equal(field().value, '');
+  button('Offer').fire('click'); await ui.settle(); await ui.settle();
+  assert.equal(schedule(), null);
+});
+

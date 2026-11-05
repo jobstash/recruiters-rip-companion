@@ -199,6 +199,8 @@ The user opens the extension on the application tab and chooses **Read page**. T
 
 Progress is the candidate's own record of what happened after the documents: applied, interview rounds, offer, hired, rejected or withdrawn; Companion shows it on the Pipeline board. Record it with `career_application_progress_set` on that application (find it with `career_applications_list`; ask which one only if several match), dated today unless a date is given, without asking for confirmation, in three cases only: (1) right after you submit an application yourself and observe the employer's newly shown confirmation or receipt, record `applied`; (2) when saved records (facts, notes, form answers) show it was already sent, record `applied` with that date; (3) when the user explicitly tells you what happened (“I applied to tangem”, “I got an interview at tangem”, “they rejected me after round 2”). Never infer progress from silence, elapsed time, prepared documents or a submit click without an observed confirmation. An interview reported on an application still marked prepared means it was sent: record applied, then interviewing. Use `undo` or `date` to correct a step the user says was wrong.
 
+Save a supplied upcoming interview date as `nextInterviewAt` (`YYYY-MM-DD`, future allowed), alongside `stage: "interviewing"` for an invite, or alone to schedule/reschedule the current round without adding one. Use `null` to clear it. This is separate from historical `date` (stored as `at`): keep the step dated when it happened, not when the interview is scheduled. Do not invent a missing date or ask for confirmation. Advancing a round or leaving interviewing clears the old schedule.
+
 
 ## Connection
 

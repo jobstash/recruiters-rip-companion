@@ -27,7 +27,7 @@ import { createScopedAccess } from './mcp/scope.mjs';
 import { createMatchingTools, deleteRankings } from './mcp/matching-tools.mjs';
 import { matchingProfileVersion } from './mcp/assessment-policy.mjs';
 import { addBlock, removeBlock } from './mcp/blocklist.mjs';
-import { addClaudeCodeServer, addClaudeDesktopServer, addedHosts, agentSetupPrompt, claudeExtensionInstalled, findHostCli, installChatGptPlugin, installClaudeSkill, liveSessions, settleRestartNotices } from './host-setup.mjs';
+import { addClaudeCodeServer, addClaudeDesktopServer, addedHosts, agentSetupPrompt, claudeExtensionInstalled, findHostCli, installChatGptPlugin, installClaudeSkill, liveSessions, refreshInstalledHostSkills, settleRestartNotices } from './host-setup.mjs';
 import { createCareerBrowser } from './career-browser.mjs';
 import { createDecisionCredentials, decisionCredentialStatus } from './decisions/credentials.mjs';
 import { savedPublicationRange, setPublicationRange } from './mcp/review-queue.mjs';
@@ -295,9 +295,9 @@ async function refreshAddedHosts() {
     if (JSON.stringify(next) !== JSON.stringify(hostsAdded)) { hostsAdded = next; emit(); }
   } catch { /* keeps the last known value */ }
 }
-// After Set up, the app must restart (Claude Code: start a new session) to load recruiters.rip; the AI apps step says so until
-// that app opens a new recruiters.rip session.
-let restartPending = { codex: false, claude: false }, sessionCounts = { codex: 0, claude: 0 };
+// Setup and refreshed skills need a new host session; never restart the user's AI app.
+// The notice clears when that app opens a new recruiters.rip session.
+let restartPending = { codex: false, claude: false }, sessionCounts = { codex: 0, claude: 0 }, hostRefreshErrors = [];
 function noteSessions(clients) {
   ({ pending: restartPending, counts: sessionCounts } = settleRestartNotices(restartPending, sessionCounts, clients));
 }
@@ -312,7 +312,7 @@ function localState() {
     decisions: { credentials: decisionCredentialStatus(state) },
     publicationRange: savedPublicationRange(state.career ?? {}),
     updates: updateState(),
-    review: { hosts: reviewHosts, hostInfo: reviewHostInfo, added: hostsAdded, ...liveSessions(mcpClients), restart: restartPending,
+    review: { hosts: reviewHosts, hostInfo: reviewHostInfo, added: hostsAdded, ...liveSessions(mcpClients), restart: restartPending, errors: hostRefreshErrors,
       preferredHost: ['claude', 'codex'].includes(state.browserPreferences?.applicationHost) ? state.browserPreferences.applicationHost : reviewHosts.codex ? 'codex' : 'claude' },
     approval: pendingApproval ? { id: pendingApproval.id, title: pendingApproval.title, detail: pendingApproval.detail } : null };
 }
@@ -551,8 +551,13 @@ async function installConnections() {
     try { await refreshBrowserExtension(browser); }
     catch { delete browserExtensions[browser]; }
   }));
-  // An installed Claude skill follows Companion updates, like the saved browser extension folders.
-  try { await installClaudeSkill({ source: claudeSkillSource(), onlyIfPresent: true }); } catch { /* Set up for Claude rewrites it. */ }
+  // Refresh configured hosts before the broker can accept a session with stale skills.
+  // Host failures are independent of local storage and must not block normal startup.
+  const refreshed = await refreshInstalledHostSkills({ directory,
+    root: app.isPackaged ? root.replace(/app\.asar$/, 'app.asar.unpacked') : root,
+    localOnly, command: setup().command, claudeSource: claudeSkillSource() });
+  hostRefreshErrors = refreshed.errors;
+  for (const host of ['claude', 'codex']) if (refreshed.updated[host]) restartPending[host] = true;
 }
 // Save to Downloads creates the managed folder; launches refresh only folders the user saved,
 // so Companion never touches Downloads (or triggers OS folder prompts) uninvited.
@@ -948,6 +953,7 @@ async function settingsOperation(op, input, ownMutation) {
     else if (op === 'install-chatgpt') {
       result = await installChatGptPlugin({ directory, root: app.isPackaged ? root.replace(/app\.asar$/, 'app.asar.unpacked') : root, localOnly, command: setup().command });
       restartPending = { ...restartPending, codex: true };
+      hostRefreshErrors = hostRefreshErrors.filter(error => error.host !== 'codex');
       await refreshAddedHosts();
     }
     else if (op === 'install-claude') {
@@ -960,6 +966,7 @@ async function settingsOperation(op, input, ownMutation) {
       await installClaudeSkill({ source: claudeSkillSource() });
       result = { mode: hostInfo.claude.mode };
       restartPending = { ...restartPending, claude: true };
+      hostRefreshErrors = hostRefreshErrors.filter(error => error.host !== 'claude');
       await refreshAddedHosts();
     }
     else if (op === 'save-extension' || op === 'save-firefox-extension') {

@@ -130,6 +130,9 @@ async function generateConnections({ directory, appRoot, env, home }) {
     setup: () => ({ command: mcpCommand(directory) }), unlink: async file => rm(file), browserRegistrations: {}, browserConnection: 'pending', browserExtensions: {},
     installNative: options => installNative({ ...options, env, home, run: async () => ({ stdout: '' }) }),
     refreshBrowserExtension: async () => { throw new Error('Browser folder generation is outside this transport fixture'); },
+    root: appRoot, claudeSkillSource: () => path.join(appRoot, 'skills', 'recruiters-rip'),
+    refreshInstalledHostSkills: async () => ({ updated: { claude: false, codex: false }, errors: [] }),
+    hostRefreshErrors: [], restartPending: { claude: false, codex: false },
   });
   vm.runInContext(mainSource.slice(mainSource.indexOf('async function installConnections()'), mainSource.indexOf('async function refreshBrowserExtension(')), context);
   await context.installConnections();

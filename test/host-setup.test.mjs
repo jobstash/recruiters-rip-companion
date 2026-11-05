@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, rm, stat } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm, stat, cp, rename, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { addClaudeCodeServer, addClaudeDesktopServer, addedHosts, agentSetupPrompt, claudeExtensionInstalled, discoverHost, findHostCli, findChatGptCli, hostEnvironment,
-  installChatGptPlugin, installClaudeSkill, liveSessions, mcpInvocation, mcpServerToml, settleRestartNotices } from '../src/host-setup.mjs';
+  installChatGptPlugin, installClaudeSkill, liveSessions, mcpInvocation, mcpServerToml, refreshInstalledHostSkills, settleRestartNotices } from '../src/host-setup.mjs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
@@ -307,4 +307,208 @@ test('Windows batch MCP launcher executes literal special-character paths withou
   const invocation = mcpInvocation(command);
   await promisify(execFile)(invocation.command, invocation.args, { env: { ...process.env, ...invocation.env, SYNTHETIC_OUTPUT: output }, timeout: 10000 });
   assert.equal((await readFile(output, 'utf8')).trim(), 'literal-launch');
+});
+
+async function refreshFixture(t, { localOnly = false } = {}) {
+  const root = await temporary(t), home = path.join(root, 'home'), directory = path.join(root, 'device');
+  const env = { HOME: home, CODEX_HOME: path.join(root, 'custom-codex'), CLAUDE_CONFIG_DIR: path.join(root, 'custom-claude') };
+  const generated = path.join(root, 'src', 'generated', 'recruiters-rip-plugin');
+  const skill = path.join(generated, 'skills', 'recruiters-rip');
+  const claude = path.join(env.CLAUDE_CONFIG_DIR, 'skills', 'recruiters-rip');
+  const name = localOnly ? 'recruiters-rip-local' : 'recruiters-rip';
+  const cache = path.join(env.CODEX_HOME, 'plugins', 'cache', name, 'recruiters-rip');
+  const personal = path.join(home, '.agents', 'skills', 'recruiters-rip');
+  const config = path.join(env.CODEX_HOME, 'config.toml'), calls = [];
+  await mkdir(path.join(generated, '.codex-plugin'), { recursive: true });
+  await mkdir(path.join(skill, 'resources'), { recursive: true });
+  await mkdir(env.CODEX_HOME, { recursive: true });
+  await mkdir(env.CLAUDE_CONFIG_DIR, { recursive: true });
+  await writeFile(path.join(generated, '.codex-plugin', 'plugin.json'), JSON.stringify({ name: 'recruiters-rip', version: '1.0.0', skills: './skills/' }));
+  await writeFile(path.join(skill, 'SKILL.md'), 'Current skill\n');
+  await writeFile(path.join(skill, 'resources', 'guide.txt'), 'Current resource\n');
+  const command = path.join(directory, 'recruiters-rip-mcp');
+  const options = { directory, root, home, env, localOnly, command, claudeSource: skill,
+    findCli: async () => ({ command: '/synthetic/codex', args: [] }),
+    runCommand: async (_command, args, options) => {
+      calls.push({ args, options });
+      if (args[1] === 'marketplace') return { stdout: JSON.stringify({ marketplaceName: name }) };
+      assert.deepEqual(args, ['plugin', 'add', `recruiters-rip@${name}`, '--json']);
+      const plugin = path.join(directory, 'host-integration', 'plugins', 'recruiters-rip');
+      const manifest = JSON.parse(await readFile(path.join(plugin, '.codex-plugin', 'plugin.json'), 'utf8'));
+      const installedPath = path.join(cache, manifest.version);
+      // Model the observed host CLI: re-add replaces even the same-version cache,
+      // and a newer install removes the earlier version directory.
+      await rm(cache, { recursive: true, force: true });
+      await mkdir(cache, { recursive: true });
+      await cp(plugin, installedPath, { recursive: true });
+      return { stdout: JSON.stringify({ pluginId: `recruiters-rip@${name}`, installedPath }) };
+    } };
+  return { ...options, options, generated, skill, claude, cache, personal, config, calls, name,
+    refresh: overrides => refreshInstalledHostSkills({ ...options, ...overrides }),
+    registerClaude: () => writeFile(path.join(env.CLAUDE_CONFIG_DIR, '.claude.json'),
+      JSON.stringify({ mcpServers: { [name]: { command }, other: { command: '/other' } }, permissions: { keep: true } })),
+    registerCodex: (enabled = true) => writeFile(config,
+      `approval_policy = "on-request"\nsandbox_mode = "read-only"\n[plugins."recruiters-rip@${name}"]\nenabled = ${enabled}\n[plugins."other@elsewhere"]\nenabled = false\n[mcp_servers.other]\ncommand = "/other"\n`) };
+}
+
+test('boot skips unconfigured hosts without creating settings or skills', async t => {
+  const fixture = await refreshFixture(t);
+  assert.deepEqual(await fixture.refresh(), { updated: { claude: false, codex: false }, errors: [] });
+  for (const filename of [fixture.claude, fixture.cache, fixture.personal, fixture.config, fixture.directory])
+    await assert.rejects(stat(filename), { code: 'ENOENT' });
+  assert.equal(fixture.calls.length, 0);
+});
+
+test('boot repairs registered missing host skills and refreshes actual cache and nested resources', async t => {
+  const fixture = await refreshFixture(t);
+  await fixture.registerClaude();
+  await fixture.registerCodex();
+  const configBefore = await readFile(fixture.config, 'utf8');
+  const claudeConfig = path.join(fixture.env.CLAUDE_CONFIG_DIR, '.claude.json');
+  const claudeBefore = await readFile(claudeConfig, 'utf8');
+  assert.deepEqual(await fixture.refresh(), { updated: { claude: true, codex: true }, errors: [] });
+  const cached = path.join(fixture.cache, '1.0.0', 'skills', 'recruiters-rip');
+  for (const target of [fixture.claude, cached]) {
+    assert.equal(await readFile(path.join(target, 'SKILL.md'), 'utf8'), 'Current skill\n');
+    await mkdir(path.join(target, 'resources', 'obsolete'), { recursive: true });
+    await writeFile(path.join(target, 'resources', 'obsolete', 'old.txt'), 'Remove me');
+  }
+  await writeFile(path.join(fixture.skill, 'SKILL.md'), 'Changed without a version bump\n');
+  assert.deepEqual(await fixture.refresh(), { updated: { claude: true, codex: true }, errors: [] });
+  for (const target of [fixture.claude, cached]) {
+    assert.equal(await readFile(path.join(target, 'SKILL.md'), 'utf8'), 'Changed without a version bump\n');
+    assert.equal(await readFile(path.join(target, 'resources', 'guide.txt'), 'utf8'), 'Current resource\n');
+    await assert.rejects(stat(path.join(target, 'resources', 'obsolete')), { code: 'ENOENT' });
+  }
+  assert.equal(await readFile(fixture.config, 'utf8'), configBefore);
+  assert.equal(await readFile(claudeConfig, 'utf8'), claudeBefore);
+  await assert.rejects(stat(fixture.personal), { code: 'ENOENT' });
+  const callsBefore = fixture.calls.length, modifiedBefore = (await stat(path.join(fixture.claude, 'SKILL.md'))).mtimeMs;
+  assert.deepEqual(await fixture.refresh(), { updated: { claude: false, codex: false }, errors: [] });
+  assert.equal(fixture.calls.length, callsBefore);
+  assert.equal((await stat(path.join(fixture.claude, 'SKILL.md'))).mtimeMs, modifiedBefore);
+  // A damaged loaded cache is detected even when Companion's source copy is current.
+  await rm(path.join(cached, 'SKILL.md'));
+  assert.deepEqual((await fixture.refresh()).updated, { claude: false, codex: true });
+  assert.equal(await readFile(path.join(cached, 'SKILL.md'), 'utf8'), 'Changed without a version bump\n');
+});
+
+test('boot follows current packaged/source plugin version rather than an older installation', async t => {
+  const fixture = await refreshFixture(t);
+  await fixture.registerCodex();
+  await fixture.refresh();
+  const nextRoot = path.join(fixture.root, 'next-app.asar.unpacked');
+  const nextPlugin = path.join(nextRoot, 'src', 'generated', 'recruiters-rip-plugin');
+  await cp(fixture.generated, nextPlugin, { recursive: true });
+  await writeFile(path.join(nextPlugin, '.codex-plugin', 'plugin.json'), JSON.stringify({ name: 'recruiters-rip', version: '2.0.0', skills: './skills/' }));
+  await writeFile(path.join(nextPlugin, 'skills', 'recruiters-rip', 'SKILL.md'), 'New installed app\n');
+  assert.deepEqual(await fixture.refresh({ root: nextRoot, claudeSource: path.join(nextPlugin, 'skills', 'recruiters-rip') }),
+    { updated: { claude: false, codex: true }, errors: [] });
+  assert.equal(await readFile(path.join(fixture.cache, '2.0.0', 'skills', 'recruiters-rip', 'SKILL.md'), 'utf8'), 'New installed app\n');
+  await assert.rejects(stat(path.join(fixture.cache, '1.0.0')), { code: 'ENOENT' });
+});
+
+test('disabled Codex plugins refresh cached skills without touching versions, settings or the CLI', async t => {
+  const fixture = await refreshFixture(t);
+  await fixture.registerCodex();
+  await fixture.refresh();
+  await fixture.registerCodex(false);
+  const configBefore = await readFile(fixture.config, 'utf8');
+  const manifest = path.join(fixture.cache, '1.0.0', '.codex-plugin', 'plugin.json');
+  const manifestBefore = await readFile(manifest, 'utf8'), callsBefore = fixture.calls.length;
+  await writeFile(path.join(fixture.generated, '.codex-plugin', 'plugin.json'), JSON.stringify({ name: 'recruiters-rip', version: '2.0.0' }));
+  await writeFile(path.join(fixture.skill, 'SKILL.md'), 'Updated while disabled\n');
+  assert.deepEqual(await fixture.refresh(), { updated: { claude: false, codex: true }, errors: [] });
+  assert.equal(await readFile(path.join(fixture.cache, '1.0.0', 'skills', 'recruiters-rip', 'SKILL.md'), 'utf8'), 'Updated while disabled\n');
+  assert.equal(await readFile(manifest, 'utf8'), manifestBefore);
+  assert.equal(await readFile(fixture.config, 'utf8'), configBefore);
+  assert.equal(fixture.calls.length, callsBefore);
+  assert.deepEqual((await fixture.refresh()).updated, { claude: false, codex: false });
+});
+
+test('standalone Codex MCP gains a personal skill without converting its setup to a plugin', async t => {
+  const fixture = await refreshFixture(t);
+  await writeFile(fixture.config, '[mcp_servers.recruiters-rip]\ncommand = "/keep-this-command"\n');
+  const previous = await readFile(fixture.config, 'utf8');
+  assert.deepEqual(await fixture.refresh(), { updated: { claude: false, codex: true }, errors: [] });
+  assert.equal(await readFile(path.join(fixture.personal, 'SKILL.md'), 'utf8'), 'Current skill\n');
+  assert.equal(await readFile(fixture.config, 'utf8'), previous);
+  assert.equal(fixture.calls.length, 0);
+  await assert.rejects(stat(fixture.cache), { code: 'ENOENT' });
+  await assert.rejects(stat(path.join(fixture.env.CODEX_HOME, 'skills')), { code: 'ENOENT' });
+});
+
+test('local boot does not take over production registrations or shared personal skills', async t => {
+  const fixture = await refreshFixture(t, { localOnly: true });
+  await writeFile(fixture.config, '[plugins."recruiters-rip@recruiters-rip"]\nenabled = true\n');
+  await writeFile(path.join(fixture.env.CLAUDE_CONFIG_DIR, '.claude.json'), JSON.stringify({ mcpServers: { 'recruiters-rip': {} } }));
+  for (const target of [fixture.claude, fixture.personal]) {
+    await mkdir(target, { recursive: true });
+    await writeFile(path.join(target, 'SKILL.md'), 'Production skill\n');
+  }
+  assert.deepEqual(await fixture.refresh(), { updated: { claude: false, codex: false }, errors: [] });
+  for (const target of [fixture.claude, fixture.personal]) assert.equal(await readFile(path.join(target, 'SKILL.md'), 'utf8'), 'Production skill\n');
+  assert.equal(fixture.calls.length, 0);
+  await fixture.registerClaude();
+  await fixture.registerCodex();
+  assert.deepEqual(await fixture.refresh(), { updated: { claude: true, codex: true }, errors: [] });
+  assert.equal(await readFile(path.join(fixture.cache, '1.0.0', 'skills', 'recruiters-rip', 'SKILL.md'), 'utf8'), 'Current skill\n');
+  assert.equal(fixture.calls.at(-1).args[2], 'recruiters-rip@recruiters-rip-local');
+});
+
+test('a failed Claude directory swap restores the old skill and never prevents Codex refresh', async t => {
+  const fixture = await refreshFixture(t);
+  await fixture.registerClaude();
+  await fixture.registerCodex();
+  await mkdir(fixture.claude, { recursive: true });
+  await writeFile(path.join(fixture.claude, 'SKILL.md'), 'Retained skill\n');
+  const result = await fixture.refresh({ moveDirectory: async (from, to) => {
+    if (from.endsWith('.tmp') && to === fixture.claude) throw Object.assign(new Error('Synthetic locked folder'), { code: 'EACCES' });
+    await rename(from, to);
+  } });
+  assert.deepEqual(result.updated, { claude: false, codex: true });
+  assert.deepEqual(result.errors.map(error => error.host), ['claude']);
+  assert.equal(await readFile(path.join(fixture.claude, 'SKILL.md'), 'utf8'), 'Retained skill\n');
+  assert.deepEqual(await readdir(path.dirname(fixture.claude)), ['recruiters-rip']);
+  assert.deepEqual(await fixture.refresh(), { updated: { claude: true, codex: false }, errors: [] });
+});
+
+test('failed Codex refresh keeps old loaded files, retries next boot and does not block Claude', async t => {
+  const fixture = await refreshFixture(t);
+  await fixture.registerClaude();
+  await fixture.registerCodex();
+  await fixture.refresh();
+  await writeFile(path.join(fixture.skill, 'SKILL.md'), 'Next skill\n');
+  const configBefore = await readFile(fixture.config, 'utf8');
+  const failed = await fixture.refresh({ runCommand: async () => { throw new Error('Synthetic unavailable CLI'); } });
+  assert.deepEqual(failed.updated, { claude: true, codex: false });
+  assert.deepEqual(failed.errors.map(error => error.host), ['codex']);
+  assert.equal(await readFile(path.join(fixture.cache, '1.0.0', 'skills', 'recruiters-rip', 'SKILL.md'), 'utf8'), 'Current skill\n');
+  assert.equal(await readFile(fixture.config, 'utf8'), configBefore);
+  assert.deepEqual(await fixture.refresh(), { updated: { claude: false, codex: true }, errors: [] });
+  assert.equal(await readFile(path.join(fixture.cache, '1.0.0', 'skills', 'recruiters-rip', 'SKILL.md'), 'utf8'), 'Next skill\n');
+});
+
+test('registered disabled plugin with a missing cache is repaired without enabling it', async t => {
+  const fixture = await refreshFixture(t);
+  await fixture.registerCodex(false);
+  const before = await readFile(fixture.config, 'utf8');
+  assert.deepEqual(await fixture.refresh(), { updated: { claude: false, codex: true }, errors: [] });
+  assert.equal(await readFile(path.join(fixture.cache, '1.0.0', 'skills', 'recruiters-rip', 'SKILL.md'), 'utf8'), 'Current skill\n');
+  assert.equal(await readFile(fixture.config, 'utf8'), before);
+  assert.equal(fixture.calls.length, 0);
+});
+
+test('existing personal skill copies refresh without requiring registrations or creating duplicates', async t => {
+  const fixture = await refreshFixture(t), legacy = path.join(fixture.env.CODEX_HOME, 'skills', 'recruiters-rip');
+  for (const target of [fixture.claude, legacy]) {
+    await mkdir(target, { recursive: true });
+    await writeFile(path.join(target, 'SKILL.md'), 'Old installed skill\n');
+  }
+  assert.deepEqual(await fixture.refresh(), { updated: { claude: true, codex: true }, errors: [] });
+  await writeFile(fixture.config, '[mcp_servers.recruiters-rip]\ncommand = "/keep-this-command"\n');
+  assert.deepEqual(await fixture.refresh(), { updated: { claude: false, codex: false }, errors: [] });
+  for (const target of [fixture.claude, legacy]) assert.equal(await readFile(path.join(target, 'SKILL.md'), 'utf8'), 'Current skill\n');
+  await assert.rejects(stat(fixture.personal), { code: 'ENOENT' });
+  assert.equal(fixture.calls.length, 0);
 });

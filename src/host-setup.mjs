@@ -1,4 +1,4 @@
-import { access, cp, mkdir, writeFile, rm, readFile, readdir, rename, stat } from 'node:fs/promises';
+import { access, cp, mkdir, writeFile, rm, readFile, readdir, rename, stat, lstat, realpath } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -145,19 +145,59 @@ export async function addClaudeCodeServer({ cli, command, localOnly = false, pla
   return { changed: true };
 }
 
-/** Claude Code (the terminal app and Claude Desktop's Code tab) loads personal skills from ~/.claude/skills. The copy is the same
- *  skill the Codex plugin bundles; `onlyIfPresent` refreshes an installed copy after a Companion update without adding one. */
-export async function installClaudeSkill({ source, platform = process.platform, env = process.env, home = homedir(), onlyIfPresent = false }) {
-  const p = paths(platform), target = p.join(env.CLAUDE_CONFIG_DIR || p.join(home, '.claude'), 'skills', 'recruiters-rip');
-  if (onlyIfPresent) { try { await access(p.join(target, 'SKILL.md')); } catch { return false; } }
-  const temporary = `${target}.${randomUUID()}.tmp`;
-  try {
-    await mkdir(p.dirname(target), { recursive: true });
-    await cp(source, temporary, { recursive: true });
-    await rm(target, { recursive: true, force: true });
-    await rename(temporary, target);
-  } finally { await rm(temporary, { recursive: true, force: true }); }
+async function exists(filename) {
+  try { await lstat(filename); return true; }
+  catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+}
+
+async function sameTree(source, target, extraFiles = {}) {
+  const sourceInfo = await lstat(source);
+  let targetInfo;
+  try { targetInfo = await lstat(target); }
+  catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+  if (sourceInfo.isFile()) return targetInfo.isFile() && (await readFile(source)).equals(await readFile(target));
+  if (!sourceInfo.isDirectory()) throw new Error('A bundled host skill contains an unsupported file.');
+  if (!targetInfo.isDirectory()) return false;
+  const names = [...new Set([...(await readdir(source)), ...Object.keys(extraFiles)])].sort(), installed = (await readdir(target)).sort();
+  if (names.length !== installed.length || names.some((name, index) => name !== installed[index])) return false;
+  for (const name of names) {
+    if (Object.hasOwn(extraFiles, name)) {
+      const filename = path.join(target, name);
+      if (!(await lstat(filename)).isFile() || await readFile(filename, 'utf8') !== extraFiles[name]) return false;
+    } else if (!await sameTree(path.join(source, name), path.join(target, name))) return false;
+  }
   return true;
+}
+
+// Keep the old tree until the staged copy is complete, and restore it if the swap fails.
+// Renaming a nonempty directory over another is not portable (notably on Windows).
+async function replaceTree(source, target, { moveDirectory = rename, extraFiles = {} } = {}) {
+  if (await sameTree(source, target, extraFiles)) return false;
+  const temporary = `${target}.${randomUUID()}.tmp`, backup = `${target}.${randomUUID()}.previous`;
+  let moved = false, installed = false;
+  try {
+    await mkdir(path.dirname(target), { recursive: true });
+    await cp(source, temporary, { recursive: true });
+    for (const [name, content] of Object.entries(extraFiles)) {
+      await writeFile(path.join(temporary, name), content, { mode: 0o600 });
+      platformRuntime.protectPrivatePath(path.join(temporary, name));
+    }
+    if (await exists(target)) { await moveDirectory(target, backup); moved = true; }
+    try { await moveDirectory(temporary, target); installed = true; }
+    catch (error) { if (moved) await moveDirectory(backup, target); throw error; }
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+    if (installed && moved) await rm(backup, { recursive: true, force: true });
+  }
+  return true;
+}
+
+/** Claude Code and Claude Desktop's Code tab read this personal skill on new sessions.
+ * Replace only the product-owned tree; identical content leaves the installed copy untouched. */
+export async function installClaudeSkill({ source, platform = process.platform, env = process.env, home = homedir(), onlyIfPresent = false, moveDirectory = rename }) {
+  const p = paths(platform), target = p.join(env.CLAUDE_CONFIG_DIR || p.join(home, '.claude'), 'skills', 'recruiters-rip');
+  if (onlyIfPresent && !await exists(target)) return false;
+  return replaceTree(source, target, { moveDirectory });
 }
 
 /** Which Continue target each live MCP session can serve, from the clientInfo name it declared. Continue in Claude opens Claude
@@ -294,6 +334,34 @@ async function findHostCommand(name, { platform, env, canExecute }) {
   return null;
 }
 
+const pluginSource = root => path.join(root, 'src', 'generated', 'recruiters-rip-plugin');
+const pluginFiles = (command, platform, env) => ({
+  '.mcp.json': JSON.stringify({ mcpServers: { 'recruiters-rip': mcpInvocation(command, { platform, env }) } }, null, 2) + '\n',
+});
+
+async function preparePlugin({ directory, root, localOnly, command, platform, env, moveDirectory = rename }) {
+  const marketplace = mcpServerName(localOnly), integration = path.join(directory, 'host-integration');
+  const plugin = path.join(integration, 'plugins', 'recruiters-rip');
+  await privateDirectory(integration);
+  const changed = await replaceTree(pluginSource(root), plugin, { extraFiles: pluginFiles(command, platform, env), moveDirectory });
+  const filename = path.join(integration, '.agents', 'plugins', 'marketplace.json');
+  const content = JSON.stringify({
+    name: marketplace, interface: { displayName: 'Recruiters.rip' },
+    plugins: [{ name: 'recruiters-rip', source: { source: 'local', path: './plugins/recruiters-rip' },
+      policy: { installation: 'AVAILABLE', authentication: 'ON_INSTALL' }, category: 'Productivity' }],
+  }, null, 2) + '\n';
+  if (!await exists(filename) || await readFile(filename, 'utf8') !== content) {
+    await mkdir(path.dirname(filename), { recursive: true, mode: 0o700 });
+    const temporary = `${filename}.${randomUUID()}.tmp`;
+    try {
+      await writeFile(temporary, content, { flag: 'wx', mode: 0o600 });
+      platformRuntime.protectPrivatePath(temporary);
+      await rename(temporary, filename);
+    } finally { await rm(temporary, { force: true }); }
+  }
+  return { changed, marketplace, integration, plugin };
+}
+
 export async function installChatGptPlugin({ directory, root, localOnly, command, platform = process.platform, env = process.env, findCli = findChatGptCli, runCommand = exec }) {
   const cli = await findCli({ platform, env });
   const run = args => runCommand(cli.command, [...cli.args, ...args], { cwd: root, env: hostEnvironment(env), timeout: 60000, maxBuffer: 1024 * 1024 });
@@ -302,27 +370,7 @@ export async function installChatGptPlugin({ directory, root, localOnly, command
     const help = await run(['plugin', '--help']);
     if (!/\badd\b/.test(help.stdout) || !/\bmarketplace\b/.test(help.stdout)) throw new Error('Unsupported plugin CLI');
   } catch { fail('HOST_INSTALL_FAILED', 'Update ChatGPT desktop or Codex CLI to a version with plugin add and plugin marketplace support.'); }
-  const marketplace = localOnly ? 'recruiters-rip-local' : 'recruiters-rip';
-  const integration = path.join(directory, 'host-integration');
-  const plugin = path.join(integration, 'plugins', 'recruiters-rip');
-  await privateDirectory(integration);
-  await mkdir(path.join(integration, '.agents', 'plugins'), { recursive: true, mode: 0o700 });
-  // This desktop runtime uses its native plugin manifest for bundled STDIO MCP.
-  // Remove only our earlier generated portable manifests, not user host settings.
-  for (const name of ['plugin.json', 'mcp.json']) await rm(path.join(plugin, name), { force: true });
-  await cp(path.join(root, 'src', 'generated', 'recruiters-rip-plugin'), plugin, { recursive: true });
-  // Installation-specific paths are emitted here, never guessed by the model or
-  // embedded in the distributed plugin. No provider secret is passed to the CLI.
-  await writeFile(path.join(plugin, '.mcp.json'), JSON.stringify({
-    mcpServers: { 'recruiters-rip': mcpInvocation(command, { platform, env }) },
-  }, null, 2) + '\n', { mode: 0o600 });
-  platformRuntime.protectPrivatePath(path.join(plugin, '.mcp.json'));
-  await writeFile(path.join(integration, '.agents/plugins/marketplace.json'), JSON.stringify({
-    name: marketplace, interface: { displayName: 'Recruiters.rip' },
-    plugins: [{ name: 'recruiters-rip', source: { source: 'local', path: './plugins/recruiters-rip' },
-      policy: { installation: 'AVAILABLE', authentication: 'ON_INSTALL' }, category: 'Productivity' }],
-  }, null, 2) + '\n', { mode: 0o600 });
-  platformRuntime.protectPrivatePath(path.join(integration, '.agents/plugins/marketplace.json'));
+  const { marketplace, integration } = await preparePlugin({ directory, root, localOnly, command, platform, env });
   try {
     await run(['plugin', 'marketplace', 'add', integration, '--json']);
     const installation = await run(['plugin', 'add', `recruiters-rip@${marketplace}`, '--json']);
@@ -340,4 +388,79 @@ export async function installChatGptPlugin({ directory, root, localOnly, command
   } catch {
     fail('HOST_INSTALL_FAILED', 'Codex could not install the Recruiters.rip local plugin. Check the local plugin marketplace in ChatGPT desktop or Codex CLI. No provider credentials are required.');
   }
+}
+
+/** Verify installed host skills on every boot, including the first boot of a new app.
+ * Host settings are not rewritten here; only an enabled Codex plugin uses the host's
+ * install command to refresh its versioned cache. Existing conversations may retain old prompts. */
+export async function refreshInstalledHostSkills({ directory, root, localOnly = false, command, claudeSource,
+  platform = process.platform, env = process.env, home = homedir(), findCli = findChatGptCli, runCommand = exec,
+  moveDirectory = rename } = {}) {
+  const updated = { claude: false, codex: false }, errors = [], p = paths(platform);
+  const source = claudeSource || p.join(pluginSource(root), 'skills', 'recruiters-rip');
+  const attempt = async (host, refresh) => {
+    try { updated[host] = await refresh(); }
+    catch {
+      errors.push({ host, message: `${host === 'claude' ? 'Claude' : 'Codex'} skill refresh failed. Companion will retry on its next launch. Check that the app’s settings and skill folders are writable${host === 'codex' ? ' and that Codex supports local plugins' : ''}.` });
+    }
+  };
+  await attempt('claude', async () => {
+    const configured = await addedHosts({ localOnly, platform, env, home });
+    const target = p.join(env.CLAUDE_CONFIG_DIR || p.join(home, '.claude'), 'skills', 'recruiters-rip');
+    if (!configured.claude && (localOnly || !await exists(target))) return false;
+    return installClaudeSkill({ source, platform, env, home, moveDirectory });
+  });
+  await attempt('codex', async () => {
+    const codexHome = env.CODEX_HOME || p.join(home, '.codex'), name = mcpServerName(localOnly);
+    const configPath = p.join(codexHome, 'config.toml');
+    const config = await exists(configPath) ? await readFile(configPath, 'utf8') : '';
+    const pluginTable = `plugins."recruiters-rip@${name}"`;
+    const registered = config.split(/\r?\n/).some(line => line.trim() === `[${pluginTable}]`);
+    const enabled = tableEnabled(config, pluginTable);
+    const standalone = [`mcp_servers.${name}`, `mcp_servers."${name}"`].some(table => tableEnabled(config, table));
+    const cache = p.join(codexHome, 'plugins', 'cache', name, 'recruiters-rip');
+    const versions = await exists(cache) ? (await readdir(cache, { withFileTypes: true }))
+      .filter(entry => entry.isDirectory() && /^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/.test(entry.name)).map(entry => p.join(cache, entry.name)) : [];
+    let changed = false;
+    const bundled = pluginSource(root), extraFiles = pluginFiles(command, platform, env);
+    let current;
+    if (enabled || (registered && !versions.length)) {
+      const manifest = JSON.parse(await readFile(p.join(bundled, '.codex-plugin', 'plugin.json'), 'utf8'));
+      if (manifest.name !== 'recruiters-rip' || !/^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/.test(manifest.version)) throw new Error('Invalid bundled plugin manifest.');
+      current = p.join(cache, manifest.version);
+    }
+    if (enabled) {
+      let stale = !versions.includes(current);
+      for (const version of versions) if (!await sameTree(bundled, version, extraFiles)) stale = true;
+      const prepared = await preparePlugin({ directory, root, localOnly, command, platform, env, moveDirectory });
+      if (stale || prepared.changed) {
+        const cli = await findCli({ platform, env, home });
+        const run = args => runCommand(cli.command, [...cli.args, ...args],
+          { cwd: root, env: hostEnvironment(env), timeout: 60000, maxBuffer: 1024 * 1024 });
+        await run(['plugin', 'marketplace', 'add', prepared.integration, '--json']);
+        const installation = JSON.parse((await run(['plugin', 'add', `recruiters-rip@${name}`, '--json'])).stdout);
+        // Source files alone are insufficient: Codex reads the installed versioned copy.
+        if (await realpath(installation.installedPath) !== await realpath(current) || !await sameTree(bundled, current, extraFiles)) throw new Error('Codex did not refresh its installed plugin cache.');
+        changed = true;
+      }
+    } else {
+      // `plugin add` enables disabled plugins. Refresh only their skill, keeping the
+      // cached version/manifest and every auth, permission and enabled setting intact.
+      for (const version of versions) {
+        if (await replaceTree(source, p.join(version, 'skills', 'recruiters-rip'), { moveDirectory })) changed = true;
+      }
+      if (registered && !versions.length) changed = await replaceTree(bundled, current, { extraFiles, moveDirectory });
+    }
+    const personal = p.join(home, '.agents', 'skills', 'recruiters-rip');
+    const legacy = p.join(codexHome, 'skills', 'recruiters-rip');
+    const legacyPresent = await exists(legacy);
+    for (const target of [personal, legacy]) {
+      const present = await exists(target);
+      if ((target === personal && standalone && !registered && !legacyPresent) || (present && (!localOnly || standalone || registered))) {
+        if (await replaceTree(source, target, { moveDirectory })) changed = true;
+      }
+    }
+    return changed;
+  });
+  return { updated, errors };
 }

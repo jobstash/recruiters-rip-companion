@@ -74,9 +74,9 @@ window.helpUI = {
   refresh(current) { $('help-version').textContent = typeof current?.updates?.version === 'string' ? `Version ${current.updates.version}` : ''; },
   clear() { $('help-version').textContent = ''; },
 };
-// After Set up an app loads recruiters.rip only once it restarts; the line stays until that app opens a new session.
-const restartLine = (host, mode) => host === 'codex' ? 'Restart Codex, then choose Continue in Codex.'
-  : mode === 'cli' ? 'Start a new Claude Code session.' : 'Quit Claude completely and reopen it, then choose Continue in Claude.';
+// Setup and automatic skill refresh take effect in new sessions, not already loaded conversations.
+const restartLine = (host, mode) => host === 'codex' ? 'Start a new Codex conversation. If recruiters.rip is not available, restart Codex.'
+  : mode === 'cli' ? 'Start a new Claude Code session.' : 'Start a new Claude conversation. If recruiters.rip is not available, quit Claude completely and reopen it.';
 // The first-run path, in order. Each step is done from authoritative state; the last ends in the AI app, whose reviews fill Jobs.
 const setupSteps = [['paired', 'Connect account'], ['hasCv', 'Import CV'], ['ai', 'Add Codex or Claude'], ['hasReviews', 'Start a job search']];
 let setupSignature = '';
@@ -128,8 +128,11 @@ function renderIntegrations(current) {
     $(`get-${host}`).disabled = busy;
     $(host === 'codex' ? 'install-chatgpt' : 'install-claude').disabled = busy || !info?.available;
     $(`setup-${host}`).disabled = busy || !info?.available;
-    $(`${host}-restart`).hidden = !restart[host];
-    $(`${host}-restart`).textContent = restart[host] ? restartLine(host, info?.mode) : '';
+    const error = current.review?.errors?.find(error => error.host === host);
+    const message = $(`${host}-restart`);
+    message.hidden = !error && !restart[host];
+    message.setAttribute('role', error ? 'alert' : 'status');
+    message.textContent = error?.message || (restart[host] ? restartLine(host, info?.mode) : '');
   }
   $('claude-extension').hidden = !(added.claude && added.claudeExtension && hosts.claude?.mode !== 'cli');
   $('other-connections').hidden = !other.length;
@@ -186,6 +189,7 @@ async function refresh() {
     window.helpUI.refresh(state);
     if (requestedSection) { const section = requestedSection; requestedSection = null; openSettings(section); }
     if (state.failure) notice(state.failure, 'error', true);
+    else if (state.review?.errors?.length) notice(state.review.errors.map(error => error.message).join(' '), 'error', true);
   } catch {
     if (request !== stateRequest) return;
     if (!state) {

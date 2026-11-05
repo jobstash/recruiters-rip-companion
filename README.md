@@ -48,6 +48,8 @@ In **Settings → AI apps**, follow the steps for one app:
 3. **Restart the app** so it loads recruiters.rip: quit Claude completely and reopen it, restart Codex, or start a new Claude Code session. Companion shows this line until that app is in use.
 4. **Start a job search:** choose **Continue in Codex** or **Continue in Claude**. Its reviews appear in **Jobs → Reviewed**.
 
+Companion automatically refreshes recruiters.rip skills for configured Claude and Codex installations on every start, including the first start after an update. You do not need **Set up** again after a normal Companion upgrade. Start a new conversation to load changed instructions; an already-open conversation may keep the old skill. If an update fails, Companion names the affected app and explains recovery without blocking your saved work or Jobs.
+
 Using another agent (Codex CLI, Claude Code, Cursor)? Choose **Copy prompt** under **Setup prompt for your agent**, paste it into that agent and send. It adds recruiters.rip with this computer's exact paths.
 
 ### 5. Review jobs
@@ -176,6 +178,8 @@ pnpm start
 
 `pnpm start` builds the tools, document engine and browser extensions before opening Electron. Use `pnpm start:local` for isolated development, never a user's vault.
 
+After `pnpm build:runtime`, `node scripts/smoke-host-skills.mjs --codex=/absolute/path/to/codex` exercises automatic skill refresh with real Electron and Codex CLI on macOS or a Linux desktop. It creates disposable HOME, custom host-config and Electron user-data directories, seeds a stale real Codex plugin cache, then checks refresh, an unchanged second boot, an independent host failure and next-boot recovery. It never invokes Companion’s manual Set up, uses no real vault or host configuration, and prints screenshot paths. This is a source-build smoke, not a packaged upgrade or proof that existing AI conversations reload instructions.
+
 `pnpm build:browser` builds Chrome `browser-extension/dist/{production,local}` and Firefox `browser-extension/dist/{firefox-production,firefox-local}`. Create upload archives with `node browser-extension/build.mjs production --browser=chrome --zip` or `--browser=firefox --zip`. Firefox permanent distribution requires Mozilla signing.
 
 Chrome uses `sidePanel`; Firefox uses `sidebarAction`. Both use `nativeMessaging`, `activeTab`, `scripting` and `clipboardWrite`; production and local identities remain separate. Account connection returns through Companion, not through a browser extension.
@@ -197,6 +201,8 @@ Ready-made installs use the exact Mac arm64 ZIP, Windows x64 NSIS installer or L
 Managed source installs fetch the exact published source, install locked dependencies and build a separate version locally before the same safe restart. They do not overwrite developer edits or switch silently to prebuilt binaries. Ordinary unmanaged clones remain under their owner's control.
 
 Automatic-update preferences and receipts live outside career backups. Updates keep the app identity, profile and account connection; they do not reset career data. Mac releases remain ad-hoc signed, not notarized; Windows releases remain unsigned. No update requires an Apple developer key or disables operating-system protections.
+
+Each boot refreshes configured Claude skills and Codex plugin files, including installed plugin caches, before accepting AI-app sessions. Unchanged files are left alone; unrelated host settings, sign-in and permissions are preserved. Companion never closes or restarts Claude or Codex.
 
 ## Repository boundary and privacy
 

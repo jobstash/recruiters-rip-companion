@@ -20,7 +20,7 @@ Three voices have distinct jobs:
 - **Geist Mono:** navigation, buttons, labels, metadata, code and numbers.
 - **Geist:** reading copy and field content.
 
-No italics, emoji, decorative serial numbers, centred headlines or chromatic body/link/status text. Keep the brand lowercase: **recruiters.rip**. Product capabilities, privacy claims and status labels must remain true; the artifact's examples are not evidence of features such as an employer posting flow. Warm introductions (recruiters.rip connections) are real but live only in the connected agent, which looks them up on its own for the platform jobs it works on (`career_intro_paths`); the companion has no introductions screen, so never draw one.
+No italics, emoji, decorative serial numbers, centred headlines or chromatic body/link/status text. Keep the brand lowercase: **recruiters.rip**. Product capabilities, privacy claims and status labels must remain true; the artifact's examples are not evidence of features such as an employer posting flow. Warm introductions (recruiters.rip connections) are real but live only in the connected agent, which queries GitHub person/organization identities directly or automatically for companies in its job work, including local captures (`career_intro_paths`), independently of catalogue coverage and publication dates. Organization contributors are not confirmed employees or acquaintances. The companion has no introductions screen, so never draw one.
 
 ## Colour tokens
 

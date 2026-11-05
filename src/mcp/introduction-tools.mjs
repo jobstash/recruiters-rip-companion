@@ -1,9 +1,23 @@
-import { createCareerState, fail, readCareer } from './state.mjs';
-import { assertJobNotBlocked } from './blocklist.mjs';
+import { createCareerState, fail } from './state.mjs';
 const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const object = (properties, required = []) => ({ type: 'object', properties, required, additionalProperties: false });
-const PLATFORM_JOB_ID = /^node:[1-9][0-9]{0,18}$/;
-const introPathsSchema = object({ jobIds: { type: 'array', minItems: 1, maxItems: 10, uniqueItems: true, items: { type: 'string', pattern: PLATFORM_JOB_ID.source } } }, ['jobIds']);
+const GITHUB_LOGIN = /^(?!.*--)[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,37}[a-zA-Z0-9])?(?![\s\S])/;
+const endpointSchema = object({
+  login: { type: 'string', minLength: 1, maxLength: 39, pattern: GITHUB_LOGIN.source },
+  kind: { type: 'string', enum: ['user', 'organization'] },
+}, ['login', 'kind']);
+const introPathsSchema = object({
+  source: endpointSchema,
+  targets: { type: 'array', minItems: 1, maxItems: 20, items: endpointSchema },
+}, ['targets']);
+
+function endpoint(value) {
+  if (!record(value) || Object.keys(value).some(key => !['login', 'kind'].includes(key)) ||
+      typeof value.login !== 'string' || !GITHUB_LOGIN.test(value.login) ||
+      !['user', 'organization'].includes(value.kind))
+    fail('INVALID_INPUT', 'Provide a GitHub login and kind (user or organization), not a URL or company name.');
+  return { login: value.login.toLowerCase(), kind: value.kind };
+}
 
 const state = career => record(career.introductions) ? career.introductions : {};
 export function introductionsStatus(career) {
@@ -16,21 +30,18 @@ export function createIntroductionTools({ store, platform, openGithub }) {
   return [
     {
       name: 'career_intro_paths', readOnly: true, inputSchema: introPathsSchema,
-      description: 'People the candidate knows at the employers of up to 10 platform jobs (recruiters.rip connections), from recruiters.rip’s GitHub collaboration graph: direct coworkers (hops 1) and people reachable through one shared contact (hops 2). Call it yourself whenever you work on platform jobs. Each path names real GitHub identities (login, name, avatar, profile URL) and up to three verified commit emails per person, with the shared organizations, repositories and overlap dates as evidence. Requires current paid membership and a linked GitHub account (github null → call account_github_connect). Relationships are inferred from overlapping contributions, not confirmed; local job IDs are not supported.',
+      description: 'Inferred GitHub collaboration paths from a user or organization to 1–20 target users or organizations. Omit source to use the linked GitHub user, or provide an explicit source. Resolve actual target accounts from saved GitHub URLs or verified official public metadata, never guessed company-name slugs. Look up targets automatically for recommended, preparing and applying jobs, including local captures; direct requests need no job. Job IDs, publication dates, catalogue availability and job blocks do not scope this lookup. Results are grouped by target and retain source contributor identities and evidence for organization-origin paths. Contributions do not prove employment, acquaintance or willingness to introduce. Requires current membership; a missing default source is distinct from an unindexed account, no indexed paths, or graph unavailability.',
       async invoke(args = {}) {
-        if (!record(args) || !Array.isArray(args.jobIds) || !args.jobIds.length || args.jobIds.length > 10)
-          fail('INVALID_INPUT', 'Provide 1–10 platform job IDs.');
-        if (args.jobIds.some(id => typeof id !== 'string' || !PLATFORM_JOB_ID.test(id)))
-          fail('INVALID_INPUT', 'Intro paths exist only for platform jobs (node:<id>).');
-        const before = readCareer(store);
-        for (const id of args.jobIds) assertJobNotBlocked(before, id);
-        const result = await platform('intro_paths', { jobIds: args.jobIds });
-        const current = readCareer(store);
-        for (const id of args.jobIds) assertJobNotBlocked(current, id);
-        // The scorer's source label is an internal detail; the candidate sees recruiters.rip connections.
-        if (!record(result)) return result;
-        const { source: _source, ...connections } = result;
-        return connections;
+        if (!record(args) || Object.keys(args).some(key => !['source', 'targets'].includes(key)) ||
+            !Array.isArray(args.targets) || !args.targets.length || args.targets.length > 20)
+          fail('INVALID_INPUT', 'Provide 1–20 GitHub targets and an optional GitHub source.');
+        const source = Object.hasOwn(args, 'source') ? endpoint(args.source) : undefined;
+        const targets = [], seen = new Set();
+        for (const value of args.targets) {
+          const target = endpoint(value), key = `${target.kind}:${target.login}`;
+          if (!seen.has(key)) { seen.add(key); targets.push(target); }
+        }
+        return platform('intro_paths', { ...(source ? { source } : {}), targets });
       },
     },
     {

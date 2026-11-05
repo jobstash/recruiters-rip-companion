@@ -111,7 +111,8 @@ main { flex: 1; min-height: 0; overflow: auto; padding: var(--spacing-32) var(--
 .tabs .tab:disabled::after { display: none; }
 .tabs .tab:focus-visible { outline: 2px solid transparent; box-shadow: var(--shadow-focus-ring); }
 /* Sort and Clear belong to the list they act on: the list column's own head row, not the tab strip above both panes. */
-.review-launch { flex-wrap: wrap; justify-content: flex-end; min-width: 0; }
+.review-launch { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: stretch; gap: var(--spacing-8); min-width: 0; }
+.review-launch button { width: 100%; min-height: 44px; padding-inline: var(--spacing-16); }
 .career-list-tools { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--spacing-8) var(--spacing-16); min-width: 0; min-height: 44px; }
 .career-list-tools .text { padding-inline: var(--spacing-8); }
 .career-sort { display: flex; flex-wrap: wrap; align-items: center; gap: var(--spacing-8); min-width: 0; max-width: 100%; }
@@ -140,10 +141,7 @@ main { flex: 1; min-height: 0; overflow: auto; padding: var(--spacing-32) var(--
 .career-record:focus-visible { box-shadow: inset 0 0 0 2px var(--color-canvas), inset 0 0 0 4px var(--color-ink); }
 .career-record-title { font-family: var(--font-geist); font-size: 14px; font-weight: 500; line-height: 1.5; }
 .career-record-summary { font: 400 13px/1.6 var(--font-geist-mono); color: var(--color-smoke); white-space: pre-wrap; }
-/* Job cards: three plain lines (title, company · date, facts) and one right column that answers "is this job in the next run?"
-   A number appears only after an agent review. */
-/* Card: [Review switch] [mark + three lines] [figure]. The switch leads because it is the user's decision about the row;
-   the figure trails because it is what the list is sorted by. */
+/* Job cards: company mark and three plain lines, with a right column only for numeric reviewed fit. */
 .career-card .career-record { flex: 1 1 auto; flex-direction: row; align-items: flex-start; gap: var(--spacing-16); min-width: 0; padding: 20px var(--spacing-16) 20px var(--spacing-24); }
 .career-card-mark { flex: none; display: grid; place-items: center; width: 36px; height: 36px; border: 1px solid var(--color-facet); background: var(--color-surface); color: var(--color-smoke); font: 500 14px/1 var(--font-geist-mono); overflow: hidden; }
 .career-card-logo { position: absolute; width: 36px; height: 36px; object-fit: contain; background: var(--color-light); }
@@ -157,8 +155,6 @@ main { flex: 1; min-height: 0; overflow: auto; padding: var(--spacing-32) var(--
 .career-card-side { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; width: 112px; padding: 20px var(--spacing-24) 20px 0; text-align: right; }
 .career-card-figure { font: 500 24px/1 var(--font-geist-mono); font-variant-numeric: tabular-nums; letter-spacing: -.02em; color: var(--color-ink); }
 .career-card-caption { font: 400 10px/1.4 var(--font-geist-mono); letter-spacing: .02em; color: var(--color-smoke); }
-/* Ineligible job: the saved verdict stands where the number would, in ink, wrapping within the column if it must. */
-.career-card-verdict { font-size: 12px; color: var(--color-ink); white-space: normal; overflow-wrap: anywhere; }
 /* Hand over: the slider sets the score bound and the sentence states the resulting count. */
 .career-surface { display: grid; gap: var(--spacing-8); }
 #career-minimum-score { grid-area: slider; }
@@ -184,11 +180,11 @@ main { flex: 1; min-height: 0; overflow: auto; padding: var(--spacing-32) var(--
 .career-reader-content dl { display: grid; grid-template-columns: minmax(100px, 150px) minmax(0, 1fr); gap: var(--spacing-8) var(--spacing-16); }
 .career-reader-content dd { color: var(--color-ink-2); }
 .career-reader-content dd.numeric { font-family: var(--font-geist-mono); font-variant-numeric: tabular-nums; }
-/* Reader header: keep employer, publication date and role facts together. */
+/* Reader identity leads; publication is secondary, and role attributes are explicitly labelled. */
 .career-reader-meta { display: grid; gap: var(--spacing-8); }
-.career-reader-meta-top { display: flex; align-items: baseline; justify-content: space-between; gap: var(--spacing-16); }
-.career-reader-line { font: 400 13px/1.5 var(--font-geist-mono); color: var(--color-smoke); }
-.career-reader-facts { font: 400 13px/1.5 var(--font-geist-mono); color: var(--color-ink-2); overflow-wrap: anywhere; }
+.career-reader-company { font: 500 18px/1.5 var(--font-geist); color: var(--color-ink); }
+.career-reader-publication { font: 400 12px/1.5 var(--font-geist-mono); color: var(--color-smoke); }
+.career-reader-attributes { margin-top: var(--spacing-8); font: 400 13px/1.5 var(--font-geist); overflow-wrap: anywhere; }
 /* The verdict is a compact ruled decision, not another card. */
 .career-verdict { display: grid; gap: var(--spacing-8); padding-block: var(--spacing-16); border-top: 1px solid var(--color-ink); border-bottom: 1px solid var(--color-facet); }
 .career-verdict-row { display: flex; align-items: flex-start; gap: var(--spacing-16); }
@@ -386,13 +382,16 @@ dialog::backdrop { background: color-mix(in oklab, var(--color-void) 80%, transp
   .career-card-side { width: 96px; padding: var(--spacing-16) var(--spacing-16) var(--spacing-16) 0; }
   .stage-panel { grid-template-columns: minmax(0, 1fr); }
   .stage-panel-jobs { grid-template-columns: minmax(0, 1fr); }
-  .stage-panel-jobs .review-launch { justify-content: flex-start; }
+  .stage-panel-jobs .review-launch { width: 100%; }
   .career-chart-row { grid-template-columns: minmax(80px, 96px) minmax(0, 1fr) 3ch; gap: var(--spacing-8); }
   .career-requirement { grid-template-columns: minmax(0, 1fr); }
   .career-requirement-status { grid-column: 1; }
   .dialog-body { padding: var(--spacing-24); }
   .dialog-actions { flex-direction: column-reverse; align-items: stretch; }
   .dialog-actions button { width: 100%; }
+}
+@media (max-width: 479px) {
+  .review-launch { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 479px), (max-height: 639px) {
   .career-view { height: auto; min-height: 100%; grid-template-rows: auto auto; }

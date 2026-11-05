@@ -165,10 +165,9 @@ const assessmentLabels = {
 };
 const assessmentLabel = value => own(assessmentLabels, value) ? assessmentLabels[value] : readable(value);
 const blockKinds = { job: 'Job', company: 'Company', category: 'Category' };
-// A saved review with one of these verdicts makes the job ineligible: the card shows the verdict, never a number.
+// A saved review with one of these verdicts makes the job ineligible.
 const ineligibleMatches = new Set(['incompatible_location', 'excluded']);
-const ineligibleLabel = reviewed => ineligibleMatches.has(reviewed?.matchStatus) ? assessmentLabel(reviewed.matchStatus) : 'Location incompatible';
-// A card shows where the job stands: reviewed by the agent (fit), ineligible (a saved verdict instead of a number), or
+// A card records where the job stands: reviewed by the agent (fit), ineligible, or
 // open — waiting for the agent's next review. An established incompatibility (any saved gate fail, or relocation required
 // against a refusal to relocate) is never offered again until the profile changes.
 function cardStage({ id, reviewed }, inclusion) {
@@ -177,15 +176,13 @@ function cardStage({ id, reviewed }, inclusion) {
   const ineligible = reviewCurrent ? ineligibleMatches.has(reviewed.matchStatus) : established;
   return {
     stage: ineligible ? 'ineligible' : reviewCurrent ? 'reviewed' : 'open',
-    label: ineligible ? ineligibleLabel(reviewed) : null, established,
+    established,
     score: Number.isInteger(reviewed?.overall) ? reviewed.overall : null,
     stale: reviewed ? !reviewCurrent : false,
   };
 }
 const bandLabel = band => typeof band === 'string' && band ? band.replace(/^./, letter => letter.toUpperCase()) : undefined;
 const gateLabels = { pass: 'Passes', flag: 'Needs confirmation', fail: 'Fails' };
-// Ineligible reviews keep their dimension chart, but the heading says what the number cannot: the job is out.
-const fitHeadings = { incompatible_location: 'Fit excluding location — not eligible', excluded: 'Fit — excluded by a gate' };
 const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
 
 const decisionLabels = { recommend: 'Recommended', clarify: 'Needs clarification', skip: 'Not recommended' };
@@ -207,8 +204,8 @@ function jobVerdict({ reviewed }, card) {
       reason };
   }
   if (card.stage === 'ineligible') {
-    // The label is the whole actionable decision; repeating location, relocation and the saved review prose below it is noise.
-    return { kind: 'ineligible', number: null, numberLabel: null, headline: card.label, detail: null, reason: null };
+    // Only the saved explanation can identify why this job is ineligible.
+    return reason ? { kind: 'ineligible', number: null, numberLabel: null, headline: reason, detail: null, reason: null } : null;
   }
   // An open job has no verdict yet; a stale earlier review is still worth showing as context.
   if (!staleReview && !reason) return null;
@@ -226,7 +223,7 @@ function reviewedSections(row) {
   const ordered = [...requirements].sort((a, b) => (evidenceOrder[a.evidence] ?? 9) - (evidenceOrder[b.evidence] ?? 9) ||
     (importanceOrder[a.importance] ?? 9) - (importanceOrder[b.importance] ?? 9));
   return [
-    ...(record(row.dimensions) || Number.isInteger(row.overall) ? [chart(fitHeadings[row.matchStatus] ?? 'Fit', [
+    ...(record(row.dimensions) || Number.isInteger(row.overall) ? [chart('Fit', [
       ['Overall', row.overall], ['Direction', row.dimensions?.direction], ['Capability', row.dimensions?.capability],
       ['Scope', row.dimensions?.scope], ['Preferences', row.dimensions?.preferences],
     ], 'No breakdown saved.')] : []),
@@ -274,12 +271,20 @@ function jobItem({ id, reviewed, imported, metadata }, inclusion, career) {
   // What the reader can offer to block besides the job itself.
   const block = { company: company || null, category: text(role('classification'), '') || null };
   const applyUrl = typeof role('applyUrl') === 'string' && /^https?:\/\//.test(role('applyUrl')) ? role('applyUrl') : null;
-  const header = { company: company || null, published: displayDate(publishedAt) ? `Published ${displayDate(publishedAt)}` : null, facts, applyUrl };
+  const location = text(role('city') || role('location'), '').trim();
+  const workMode = readable(text(role('workMode'), '').trim());
+  const attributes = [
+    ['Seniority', role('seniority')], ['Salary', pay],
+    ['Location', location.toLowerCase() === workMode?.toLowerCase() ? null : location],
+    ['Work mode', workMode], ['Commitment', role('commitment')], ['Job category', role('classification')],
+  ].filter(([, value]) => typeof value === 'string' && value.trim())
+    .map(([label, value]) => ({ label, value }));
+  const header = { company: company || null, published: displayDate(publishedAt) ? `Published ${displayDate(publishedAt)}` : null, attributes, applyUrl };
   const verdict = jobVerdict({ reviewed }, card);
   const salaryCheck = reviewed?.salaryEligibility?.status && reviewed.salaryEligibility.status !== 'not_required'
     ? assessmentLabel(reviewed.salaryEligibility.status) : null;
-  // Checks contains only independent decision facts. An ineligible verdict already names the decisive gate, so location and
-  // relocation are not repeated beneath it.
+  // Keep independent gate and salary evidence; ineligible jobs use their saved reason
+  // rather than repeating generic location and relocation statuses.
   const ineligible = card.stage === 'ineligible';
   const checks = fields('Checks', [
     ['Location', ineligible ? undefined : reviewed ? assessmentLabel(reviewed.matchStatus) : undefined],

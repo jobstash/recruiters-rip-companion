@@ -21,13 +21,12 @@
   };
 
   function cardSpoken(card, date) {
-    const stage = card.stage === 'reviewed'
-      ? [`fit ${card.score === null ? 'not saved' : `${card.score} of 100`}`, card.stale ? 'out of date' : null]
-      : card.stage === 'ineligible' ? ['not eligible', card.label] : ['not reviewed yet'];
+    const stage = card.stage === 'reviewed' && Number.isInteger(card.score)
+      ? [`fit ${card.score} of 100`, card.stale ? 'out of date' : null]
+      : card.stage === 'ineligible' || card.stage === 'reviewed' ? [] : ['not reviewed yet'];
     return [card.title, card.company, ...stage, date ? `published ${date}` : 'publication date not stated'].filter(Boolean).join(', ');
   }
-  /** Row anatomy, left to right: the record button with the company mark and three text lines, then the agent's fit or
-   *  verdict when one exists. Open jobs carry nothing on the right: there is nothing to say yet. */
+  /** Rows show the company mark and job facts, with a right column only for numeric reviewed fit. */
   function renderLogo(card) {
     const mark = node('span', 'career-card-mark');
     const initial = (card.company ?? '').trim().charAt(0).toUpperCase();
@@ -59,17 +58,10 @@
     button.append(renderLogo(card), body);
     button.setAttribute('aria-label', cardSpoken(card, date));
 
-    if (card.stage === 'reviewed') {
-      side.append(node('span', 'career-card-figure', card.score === null ? '—' : String(card.score)),
+    if (card.stage === 'reviewed' && Number.isInteger(card.score)) {
+      side.append(node('span', 'career-card-figure', String(card.score)),
         node('span', 'career-card-caption', card.stale ? 'Fit · out of date' : 'Fit'));
-      return;
     }
-    // Ineligible: the saved verdict is the whole column; no number, no switch.
-    if (card.stage === 'ineligible') {
-      side.append(node('span', 'career-card-caption career-card-verdict', card.label));
-      return;
-    }
-    // The pre-qualification is a word, never a number: the number only orders the queue.
   }
   function renderRow(item, button) {
     button.append(node('span', 'career-record-title', item.title));
@@ -405,11 +397,15 @@
       const header = detail?.header;
       if (!header || typeof header !== 'object') return null;
       const block = node('div', 'career-reader-meta');
-      const top = node('div', 'career-reader-meta-top');
-      const line = [header.company, header.published].filter(value => typeof value === 'string' && value).join(' · ');
-      if (line) top.append(node('p', 'career-reader-line', line));
-      if (top.childElementCount) block.append(top);
-      if (Array.isArray(header.facts) && header.facts.length) block.append(node('p', 'career-reader-facts', header.facts.join(' · ')));
+      if (header.company) block.append(node('p', 'career-reader-company', header.company));
+      if (header.published) block.append(node('p', 'career-reader-publication', header.published));
+      if (Array.isArray(header.attributes) && header.attributes.length) {
+        const attributes = node('dl', 'career-reader-attributes');
+        for (const attribute of header.attributes) {
+          attributes.append(node('dt', '', attribute.label), node('dd', '', attribute.value));
+        }
+        block.append(attributes);
+      }
       return block.childElementCount ? block : null;
     }
 
@@ -551,10 +547,12 @@
       if (deleteRankings) { deleteRankings.hidden = !(active && view === 'reviewed'); deleteRankings.disabled = !enabled || !active; }
       if (publication) publication.input.disabled = !enabled || !active;
     }
-    function renderCounts(counts) {
+    let listCounts = null;
+    function renderCounts(counts = listCounts) {
+      listCounts = counts;
       for (const node of stageCounts) {
-        const value = counts?.[node.dataset.stageCount];
-        node.textContent = Number.isSafeInteger(value) ? ` ${value.toLocaleString('en-GB')}` : '';
+        const value = node.dataset.stageCount === 'jobs' ? jobsContext.catalogue?.catalogueTotal : counts?.[node.dataset.stageCount];
+        node.textContent = Number.isSafeInteger(value) && value >= 0 ? ` ${integer(value)}` : '';
       }
     }
     // Publication window: five positions, Today … Past 2 weeks; older saved presets fall back to the widest offered.
@@ -564,6 +562,13 @@
     ];
     const rangeIndexFor = value => { const index = publicationRanges.findIndex(([name]) => name === value); return index >= 0 ? index : ['past_month', 'all'].includes(value) ? publicationRanges.length - 1 : 2; };
     let savedRange = null, rangeSaving = false;
+    function renderPublicationCount() {
+      if (!publication) return;
+      const catalogue = jobsContext.catalogue;
+      const range = publicationRanges[Number.parseInt(publication.input.value, 10)]?.[0];
+      const total = catalogue?.status === 'ready' && catalogue.range === range ? catalogue.total : null;
+      publication.count.textContent = Number.isSafeInteger(total) && total >= 0 ? ` · ${integer(total)}` : '';
+    }
     function renderPublication(range) {
       if (!publication || range === undefined) return;
       savedRange = range;
@@ -572,20 +577,17 @@
       publication.input.value = String(index);
       publication.input.setAttribute('aria-valuetext', publicationRanges[index][1]);
       publication.label.textContent = publicationRanges[index][2];
+      renderPublicationCount();
     }
-    // The handoff leads whenever the user's AI app is installed; Copy prompt is the fallback for any other host.
-    let review = { hosts: { codex: false, claude: false }, preferredHost: 'codex' };
+    // Installed hosts and the portable prompt are equal alternatives.
+    let review = { hosts: { codex: false, claude: false } };
     function renderReviewLaunch() {
       if (!reviewLaunch) return;
       const installed = ['codex', 'claude'].filter(host => review.hosts?.[host] === true);
-      const primaryHost = installed.includes(review.preferredHost) ? review.preferredHost : installed[0] ?? null;
       for (const host of ['codex', 'claude']) {
         const button = reviewLaunch.querySelector(`#review-${host}`);
         button.hidden = !installed.includes(host);
-        button.classList.toggle('primary', host === primaryHost); button.classList.toggle('ghost', host !== primaryHost);
       }
-      const copy = reviewLaunch.querySelector('#copy-review-prompt');
-      copy.classList.toggle('primary', !primaryHost); copy.classList.toggle('text', Boolean(primaryHost)); copy.classList.toggle('ghost', false);
     }
     // Rows are keyed by record ID with a signature of what they render, so a background refresh touches only rows whose
     // content changed; unchanged rows (and their logos) stay in place and nothing blinks.
@@ -603,7 +605,8 @@
         row.className = 'career-row career-card';
         const side = node('span', 'career-card-side');
         renderCard(item, button, side);
-        row.append(button, side);
+        row.append(button);
+        if (side.children.length) row.append(side);
       } else {
         renderRow(item, button);
         row.append(button);
@@ -667,7 +670,7 @@
         records.hidden = result.items.length === 0;
         showingEmpty = result.items.length === 0 && !offset;
         if (listAction) listAction.hidden = true;
-        const range = `${integer(offset + 1)}–${integer(offset + result.items.length)} of ${integer(result.total)}`;
+        const range = `${integer(offset + 1)}–${integer(offset + result.items.length)}${kind === 'jobs' && view === 'jobs' ? '' : ` of ${integer(result.total)}`}`;
         if (result.items.length) listStatus.textContent = range;
         else if (offset) listStatus.textContent = 'No records on this page. Choose Previous.';
         else renderEmpty();
@@ -751,6 +754,7 @@
       const index = Number.parseInt(publication.input.value, 10);
       publication.label.textContent = publicationRanges[index]?.[2] ?? '';
       publication.input.setAttribute('aria-valuetext', publicationRanges[index]?.[1] ?? '');
+      renderPublicationCount();
     });
     publication?.input.addEventListener('change', () => {
       if (!enabled || kind !== 'jobs') return;
@@ -759,6 +763,7 @@
       rangeSaving = true;
       request('publication-range-set', { publicationRange: range }).catch(error => {
         listStatus.textContent = `Could not change the publication window. ${error.message}`;
+        rangeSaving = false;
         renderPublication(savedRange);
       }).finally(() => { rangeSaving = false; });
     });
@@ -793,10 +798,10 @@
       setContext({ review: nextReview, publicationRange, paired, catalogue } = {}) {
         if (nextReview?.hosts) review = nextReview;
         renderReviewLaunch();
+        jobsContext = { paired: Boolean(paired), catalogue: catalogue ?? null };
         renderPublication(publicationRange);
-        const next = { paired: Boolean(paired), catalogue: catalogue ?? null };
-        if (JSON.stringify(next) === JSON.stringify(jobsContext)) return;
-        jobsContext = next;
+        renderPublicationCount();
+        renderCounts();
         if (enabled && showingEmpty && !loading) renderEmpty();
       },
       refresh() {
@@ -838,7 +843,8 @@
     root: document.getElementById('career-browser'), prefix: 'career', kind: 'jobs', persistentReader: true,
     deleteRankings: document.getElementById('delete-rankings'),
     stagePanels: [...document.querySelectorAll('#stage-panels [data-stage-panel]')],
-    publication: { input: document.getElementById('publication-range'), label: document.getElementById('publication-range-label') },
+    publication: { input: document.getElementById('publication-range'), label: document.getElementById('publication-range-label'),
+      count: document.getElementById('publication-count') },
     reviewLaunch: document.getElementById('review-launch'),
   });
   const pipeline = createBrowser({ root: document.getElementById('pipeline-browser'), prefix: 'pipeline', kind: 'applications', board: true });

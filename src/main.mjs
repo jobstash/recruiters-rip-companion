@@ -900,7 +900,7 @@ async function settingsOperation(op, input, ownMutation) {
       const scoped = createScopedAccess(store, { assertAvailable, epoch: () => sessionEpoch });
       await scoped.store.update(state => { setPublicationRange(state.career ??= createCareerState(), input.publicationRange); });
       scoped.assertAvailable(false); careerViewRevision++;
-      emit(); loadJobs(true); return { ok: true, result: { publicationRange: input.publicationRange } };
+      emit(); loadJobs(); return { ok: true, result: { publicationRange: input.publicationRange } };
     }
     exact(input, op === 'approval' ? ['id', 'allow'] : []);
     if (op === 'unlock') { await initialize(); await startUpdates(); if (queuedPairing) { const payload = queuedPairing; queuedPairing = undefined; void pair(payload).catch(error => { failure = safeFailure(error).message; emit(); }); } emit(); loadJobs(); return { ok: true, result: localState() }; }

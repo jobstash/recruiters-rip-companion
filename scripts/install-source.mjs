@@ -137,11 +137,11 @@ export async function assertSourceDirectory(directory, { privateRoot = false } =
 // Bind type, ownership and size checks to the handle used for the bounded read.
 async function readSourceFile(file, code, message) {
   const invalid = () => sourceError(code, message);
-  const selected = await fs.lstat(file);
-  if (!selected.isFile() || selected.isSymbolicLink()) throw invalid();
   let handle;
   try {
     handle = await fs.open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const selected = await fs.lstat(file);
+    if (!selected.isFile() || selected.isSymbolicLink()) throw invalid();
     const info = await handle.stat();
     if (!info.isFile() || info.dev !== selected.dev || info.ino !== selected.ino || info.size > 65536 || (process.getuid && info.uid !== process.getuid())) throw invalid();
     const bytes = Buffer.alloc(info.size + 1);
@@ -154,7 +154,12 @@ async function readSourceFile(file, code, message) {
     if (length !== info.size) throw invalid();
     return bytes.subarray(0, length).toString('utf8');
   } catch (error) {
-    if (error.code === 'ELOOP') throw invalid();
+    if (error.code === 'ELOOP' || error.code === 'EISDIR') throw invalid();
+    if (process.platform === 'win32' && (error.code === 'EPERM' || error.code === 'ENOENT')) {
+      // Windows may refuse directory opens or follow a dangling link before lstat.
+      const selected = await fs.lstat(file).catch(() => null);
+      if (selected && (!selected.isFile() || selected.isSymbolicLink())) throw invalid();
+    }
     throw error;
   } finally { await handle?.close(); }
 }

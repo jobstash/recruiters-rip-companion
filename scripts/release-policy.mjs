@@ -27,7 +27,17 @@ export async function requireReleaseSecurity({ sha, request, timeout = 5 * 60_00
   async function pages(endpoint, field) {
     const rows = [];
     for (let page = 1; ; page++) {
-      const response = await request(`${endpoint}${endpoint.includes('?') ? '&' : '?'}per_page=100&page=${page}`);
+      const remaining = deadline - now();
+      if (remaining <= 0) throw new Error('Security verification deadline exceeded.');
+      const controller = new AbortController();
+      let timer;
+      const expired = new Promise((_, reject) => {
+        timer = setTimeout(() => { controller.abort(); reject(new Error('Security verification request timed out.')); }, Math.min(15_000, remaining));
+      });
+      let response;
+      try { response = await Promise.race([request(`${endpoint}${endpoint.includes('?') ? '&' : '?'}per_page=100&page=${page}`, { signal: controller.signal }), expired]); }
+      finally { clearTimeout(timer); }
+      if (now() >= deadline) throw new Error('Security verification deadline exceeded.');
       const values = field ? response?.[field] : response;
       if (!Array.isArray(values)) throw new Error('Security verification returned an invalid inventory.');
       rows.push(...values);

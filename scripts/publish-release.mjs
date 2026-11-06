@@ -61,7 +61,7 @@ async function request(url, options = {}, missing = false) {
 const tag = `v${version}`;
 const currentMain = await request(`${api}/commits/main`);
 if (currentMain.sha !== process.env.GITHUB_SHA) throw new Error('This run is no longer the current main commit; refusing stale publication.');
-await requireReleaseSecurity({ sha: process.env.GITHUB_SHA, request: endpoint => request(`${api}/${endpoint}`, { signal: AbortSignal.timeout(15_000) }) });
+await requireReleaseSecurity({ sha: process.env.GITHUB_SHA, request: (endpoint, options) => request(`${api}/${endpoint}`, options) });
 if (await request(`${api}/releases/tags/${tag}`, {}, true)) throw new Error(`Release ${tag} already exists. Public releases and interrupted drafts are never overwritten.`);
 if (await request(`${api}/git/ref/tags/${tag}`, {}, true)) throw new Error(`Tag ${tag} already exists; refusing to publish under an unverified tag.`);
 const latest = await request(`${api}/releases/latest`, {}, true);

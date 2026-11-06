@@ -65,3 +65,34 @@ test('security API errors never authorize publication', async () => {
   fixture.options.request = async () => { throw new Error('permission denied'); };
   await assert.rejects(requireReleaseSecurity(fixture.options), /permission denied/);
 });
+
+test('a stalled security API request is aborted within the remaining verification deadline', async () => {
+  let signal;
+  await assert.rejects(requireReleaseSecurity({ sha: securitySha, timeout: 20,
+    request: (_endpoint, options) => { signal = options.signal; return new Promise(() => {}); } }), /timed out/);
+  assert.equal(signal.aborted, true);
+});
+
+test('a response arriving after the verification deadline cannot authorize publication', async () => {
+  const fixture = securityFixture();
+  let clock = 0;
+  fixture.options.now = () => clock;
+  const request = fixture.options.request;
+  fixture.options.request = async (...args) => { const result = await request(...args); clock += 6; return result; };
+  await assert.rejects(requireReleaseSecurity(fixture.options), /deadline exceeded/);
+  assert.equal(fixture.calls.some(endpoint => endpoint.startsWith('code-scanning/alerts')), false);
+});
+
+test('pagination expiry rejects without requesting another page', async () => {
+  const fixture = securityFixture({ alerts: Array.from({ length: 100 }, (_, number) => ({ number })) });
+  let clock = 0;
+  fixture.options.now = () => clock;
+  const request = fixture.options.request;
+  fixture.options.request = async (...args) => {
+    const result = await request(...args);
+    if (args[0].startsWith('code-scanning/alerts')) clock = 10;
+    return result;
+  };
+  await assert.rejects(requireReleaseSecurity(fixture.options), /deadline exceeded/);
+  assert.equal(fixture.calls.some(endpoint => endpoint.endsWith('page=2')), false);
+});

@@ -59,6 +59,7 @@ test('managed receipt binds real root, version, production package and private o
 
 test('source receipts reject linked, nonregular and oversized input', async t => {
   const root = await temporary(t), file = path.join(root, 'receipt.json');
+  await assert.rejects(readSourceJSON(file), { code: 'ENOENT' });
   await fs.writeFile(file, '{"schema":1}');
   assert.deepEqual(await readSourceJSON(file), { schema: 1 });
   await fs.writeFile(file, ' '.repeat(65537));
@@ -67,6 +68,8 @@ test('source receipts reject linked, nonregular and oversized input', async t =>
   if (process.platform !== 'win32') {
     const link = path.join(root, 'linked.json');
     await fs.symlink(file, link);
+    await assert.rejects(readSourceJSON(link), { code: 'INVALID_SOURCE_RECEIPT' });
+    await fs.unlink(file);
     await assert.rejects(readSourceJSON(link), { code: 'INVALID_SOURCE_RECEIPT' });
   }
 });
@@ -78,6 +81,8 @@ for (const consumer of ['receipt', 'launcher']) test(`source ${consumer} reads t
   await fs.writeFile(file, selected, { mode: 0o700 });
   const replacement = path.join(root, 'replacement');
   await fs.writeFile(replacement, 'replacement bytes');
+  const replacementHandle = await fs.open(replacement, 'r');
+  t.after(() => replacementHandle.close());
   const probe = await fs.open(file, 'r');
   const metadata = await probe.stat(), prototype = Object.getPrototypeOf(probe);
   await probe.close();
@@ -94,7 +99,7 @@ for (const consumer of ['receipt', 'launcher']) test(`source ${consumer} reads t
   if (consumer === 'receipt') assert.deepEqual(await readSourceJSON(file), { schema: 1 });
   else assert.equal(await writeSourceLauncher(root, tools, { previousTools: tools }), false);
   assert.equal(swapped, true);
-  assert.equal(await fs.readFile(file, 'utf8'), 'replacement bytes');
+  assert.equal(await replacementHandle.readFile('utf8'), 'replacement bytes');
   if (consumer === 'receipt') await assert.rejects(readSourceJSON(file), SyntaxError);
   else await assert.rejects(writeSourceLauncher(root, tools, { previousTools: tools }), { code: 'SOURCE_LAUNCHER_MODIFIED' });
 });

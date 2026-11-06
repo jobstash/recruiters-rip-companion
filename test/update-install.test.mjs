@@ -4,6 +4,8 @@ import { createRequire } from 'node:module';
 import { mkdtemp, mkdir, readFile, readdir, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 
 const require = createRequire(import.meta.url);
 const { validateJournal, readJournal, writeJournal, confirmUpdate, performSwap, minimalEnvironment, launchEnvironment, claimInstallation } = require('../src/update-install.cjs');
@@ -182,4 +184,23 @@ test('a duplicate helper child exit never rolls back over the winning ordinary o
   assert.equal((await readJournal(journal.journal)).status, 'unconfirmed');
   assert.equal(await versionAt(journal.target), '1.3.0');
   assert.equal(await versionAt(journal.backup), '1.2.3');
+});
+
+test('Windows helper publishes the exact native handover proof atomically without a BOM', { skip: process.platform !== 'win32', timeout: 30000 }, async t => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'recruiters-ready-proof-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const helper = await readFile(new URL('../src/update-install.ps1', import.meta.url), 'utf8');
+  const definition = helper.slice(helper.indexOf('function Publish-Ready('), helper.indexOf('function Receipt('));
+  assert.ok(definition.startsWith('function Publish-Ready('));
+  const id = 'a'.repeat(32), quote = value => `'${value.replaceAll("'", "''")}'`;
+  const script = `$ErrorActionPreference='Stop'; ${definition}\nPublish-Ready ${quote(directory)} ${quote(id)}`;
+  await promisify(execFile)(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+    ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')]);
+  const ready = path.join(directory, 'ready'), proof = await readFile(ready);
+  assert.equal(proof.length, 32);
+  assert.equal(proof.toString('utf8'), id);
+  await assert.rejects(readFile(path.join(directory, 'ready.tmp')), { code: 'ENOENT' });
+  await assert.rejects(promisify(execFile)(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+    ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script.replace(quote(id), quote('b'.repeat(32))), 'utf16le').toString('base64')]));
+  assert.equal(await readFile(ready, 'utf8'), id, 'a second publication must not replace an existing proof');
 });

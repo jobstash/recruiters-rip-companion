@@ -33,6 +33,12 @@ function Confirmed {
   $proof = Get-Content -LiteralPath $file -Raw | ConvertFrom-Json
   return $proof.id -ceq $j.id -and $proof.version -ceq $j.version
 }
+function Publish-Ready([string]$directory, [string]$id) {
+  # Publish only the complete, BOM-free proof. The parent rejects partial files.
+  $temporary = Join-Path $directory 'ready.tmp'
+  [IO.File]::WriteAllText($temporary, $id, (New-Object Text.UTF8Encoding($false)))
+  [IO.File]::Move($temporary, (Join-Path $directory 'ready'))
+}
 function Receipt([string]$status) {
   if (Confirmed) { $status = 'confirmed' }
   $j.status = $status
@@ -95,7 +101,7 @@ try {
   $machine = @(Get-ItemProperty 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -eq ('Recruiters.rip Companion ' + $_.DisplayVersion) })
   if ($machine.Count) { throw 'Machine installation requires an administrator' }
   if ((Get-FileHash -LiteralPath $j.installer -Algorithm SHA256).Hash.ToLowerInvariant() -cne $j.digest) { throw 'Installer checksum mismatch' }
-  [IO.File]::WriteAllText((Join-Path $work 'ready'), $j.id)
+  Publish-Ready $work $j.id
   $deadline = [DateTime]::UtcNow.AddSeconds(30)
   while (!(Test-Path -LiteralPath (Join-Path $work 'commit'))) {
     if ([DateTime]::UtcNow -gt $deadline -or !(Get-Process -Id $j.pid -ErrorAction SilentlyContinue)) { throw 'Handover cancelled' }

@@ -13,7 +13,7 @@ await cleanDist();
 await mkdir(path.join(generated, 'assets'), { recursive: true });
 await build({
   entryPoints: [path.join(root, 'scripts', 'document-engine.cts')], outfile: path.join(generated, 'document-engine.cjs'),
-  bundle: true, platform: 'node', format: 'cjs', target: 'node22', sourcemap: false,
+  bundle: true, platform: 'node', format: 'cjs', target: 'node24', sourcemap: false,
   external: ['@nestjs/common', '@pdf-lib/fontkit', 'pdf-lib', 'pdf-parse', 'pdf-parse/*', 'mammoth', 'saxes', 'yauzl'],
   plugins: [{ name: 'existing-typescript-commonjs', setup(builder) {
     builder.onLoad({ filter: /\.[cm]?ts$/ }, async args => ({

@@ -118,10 +118,9 @@ async function fakeElectron(sourceRoot) {
   const executable = sourceExecutable(sourceRoot);
   await fs.mkdir(path.dirname(executable), { recursive: true, mode: 0o700 });
   if (process.platform === 'win32') {
-    // Windows cannot execute a shell file named .exe. Reuse the real Node PE as
-    // the synthetic runtime; it still launches the committed fixture main file.
-    try { await fs.link(process.execPath, executable); }
-    catch (error) { if (!['EXDEV', 'EPERM', 'EACCES', 'ENOTSUP'].includes(error.code)) throw error; await fs.copyFile(process.execPath, executable); }
+    // Copy the real Node PE into this fixture. A hard link shares the running
+    // test parent's image-file lock on Windows even after fixture children exit.
+    await fs.copyFile(process.execPath, executable);
   } else {
     const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
     await fs.writeFile(executable, `#!/bin/sh\nexec ${quote(process.execPath)} "$@"\n`, { mode: 0o700 });

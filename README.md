@@ -169,7 +169,7 @@ Managed source installs receive automatic updates from published source releases
 
 See [AGENTS.md](AGENTS.md) for ownership and safety boundaries, and [design.md](design.md) for the interface rules.
 
-Use Node 22.12 or newer and pnpm 10.28.0:
+Use Node 24 or newer and pnpm 10.34.9:
 
 ```sh
 git clone https://github.com/jobstash/recruiters-rip-companion.git
@@ -344,7 +344,7 @@ The scorer validates every reply against `assessmentSchema` and the same citatio
 
 ## Build from a fresh clone
 
-Developer builds require Node.js 22.12+ and pnpm 10.28.0; the supported one-command source installer uses Node.js 24/npm and Git. Native packaging must run on its target OS. Mac ad-hoc packaging uses the system signing tools without an Apple developer account.
+Developer builds require Node.js 24+ and pnpm 10.34.9; the supported one-command source installer uses Node.js 24/npm and Git. Native packaging must run on its target OS. Mac ad-hoc packaging uses the system signing tools without an Apple developer account.
 
 ```sh
 pnpm install --frozen-lockfile
@@ -354,6 +354,8 @@ pnpm test
 ```
 
 `pnpm test` builds runtime assets first. Tests use temporary synthetic local data; they must not use a real vault or invoke a model. `pnpm start` uses https://recruiters.rip. Only explicit developer commands `pnpm start:local` / `pnpm package:local` select `http://127.0.0.1:3001` and the separate `local-device` directory; no fixture server is bundled.
+
+The `Dockerfile.headless` verification target uses `node:24-alpine3.24`, builds the runtime and extensions, and runs synthetic MCP authentication, pairing, device-client and private-storage regressions as a non-root user. Run `docker build -f Dockerfile.headless -t companion-headless .` then `docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges companion-headless`. This is not a desktop deployment: Electron requires native macOS/Windows or glibc Linux packaging and the existing native smoke gates. No user vault, credentials, dependency directory or generated output is copied into the image.
 
 `pnpm dev` runs the companion from source with live reload: saving a file in `ui/` reloads the settings window in place, and saving in `src/` or `scripts/` restarts Electron (rebuilding the generated runtime first when `src/documents/`, `src/mcp/local-runner.cjs`, `scripts/` or `skills/` changed). Extra arguments pass through to Electron, e.g. `pnpm dev --local-product`. Without `--local-product` it uses the same data directory and vault as the installed app, so quit the installed companion first; a second instance exits immediately. Like every launch, it re-registers the Claude/Codex MCP launcher, the `recruiters-companion:` link handler and the browser native host to the source checkout; reopening the installed app registers them back to it.
 
@@ -384,7 +386,11 @@ Official hosted downloads synchronize verified published releases into an atomic
 
 The owned document closure in `src/documents/` consists of `candidate-document-codec.ts`, `candidate-document-provenance.ts`, `cv-document-layout.ts`, and `career-pdf.ts`. The codec owns the canonical preference-field list; no SQL/helper/service module is imported. Its legacy schema semantics remain on the explicit `ajv-legacy` alias (Ajv 6.14.0), separate from MCP's Ajv 8. TypeScript is an explicit build dependency.
 
-Security maintenance: run `pnpm audit` against the locked runtime and packaging dependencies. Release 3.12.26 upgrades MCP and both Ajv majors, explicitly supplies the patched Zod peer, and refreshes affected transitive dependencies. Scoped pnpm overrides keep file-type, minimatch and both Undici majors above their advisory fix versions where upstream ranges or pins still select vulnerable releases. Keep these overrides until upstream dependencies select patched versions without them; verify native packaging and source-install/update smoke gates before publishing dependency changes.
+Security maintenance: run `pnpm audit` against the locked runtime and packaging dependencies. Release 3.12.27 updates Electron, MCP, Nest, Ajv, esbuild and packaging dependencies; Node 24 is the build baseline. TypeScript stays on 6.0.3 because the document compiler uses `transpileModule`, which TypeScript 7's replacement public API does not provide. The explicit Ajv 6 alias preserves the document codec's schema semantics. pnpm stays on the latest 10.x release to retain the existing package configuration and lockfile contract. Scoped pnpm overrides keep file-type, minimatch and both Undici majors above their advisory fix versions where upstream ranges or pins still select vulnerable releases. Keep these overrides until upstream dependencies select patched versions without them; verify native packaging and source-install/update smoke gates before publishing dependency changes.
+
+The local MCP broker bounds queued messages and aggregate bytes, including while server connection setup is pending, and disconnects unauthenticated sockets when access is revoked. Its socket regressions cover flooding and late connection completion without contacting any service. The public repository's security workflow adds CodeQL security-extended analysis and offline Alpine boundary tests. Hosted Code Quality is a separate service: a disabled setup is not a clean scan and must not be enabled as a paid feature without approval.
+
+Native helper readiness proofs are published by same-directory rename only after the complete 32-byte UTF-8 token is closed. This prevents the strict parent handover validator from seeing a partially written file; Windows publication explicitly omits a BOM and refuses to replace an existing proof. The real native updater smoke remains the release gate for this path.
 
 `src/documents/assets/NotoSans-Regular.ttf` is Copyright 2018 The Noto Project Authors, distributed under the SIL Open Font License 1.1 in the adjacent `OFL.txt`; both are included in the app. UI fonts retain their separate Geist and Instrument Serif OFL notices under `ui/fonts`. The current application icon and mirrored-r logos come from the user-supplied design artifact linked in [design.md](design.md). CareerCup is a layout reference linked by the conversation skill, not a bundled CareerCup document or asset. Dependency licenses remain with their npm packages.
 

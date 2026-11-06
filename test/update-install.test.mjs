@@ -1,12 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { mkdtemp, mkdir, readFile, readdir, realpath, rename, rm, symlink, writeFile, open } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { constants } from 'node:fs';
 
 const require = createRequire(import.meta.url);
 const { validateJournal, readJournal, writeJournal, confirmUpdate, performSwap, minimalEnvironment, launchEnvironment, claimInstallation } = require('../src/update-install.cjs');
@@ -197,13 +196,9 @@ test('Windows helper publishes the exact native handover proof atomically withou
   const script = `$ErrorActionPreference='Stop'; ${definition}\nPublish-Ready ${quote(directory)} ${quote(id)}`;
   await promisify(execFile)(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
     ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')]);
-  const ready = path.join(directory, 'ready'), proof = await open(ready, constants.O_RDONLY | constants.O_NOFOLLOW);
-  try {
-    const info = await proof.stat();
-    assert.equal(info.isFile(), true);
-    assert.equal(info.size, 32);
-    assert.equal(await proof.readFile('utf8'), id);
-  } finally { await proof.close(); }
+  const ready = path.join(directory, 'ready'), proof = await readFile(ready);
+  assert.equal(proof.length, 32);
+  assert.equal(proof.toString('utf8'), id);
   await assert.rejects(readFile(path.join(directory, 'ready.tmp')), { code: 'ENOENT' });
   await assert.rejects(promisify(execFile)(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
     ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script.replace(quote(id), quote('b'.repeat(32))), 'utf16le').toString('base64')]));

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Copied to the private managed root; never points at an arbitrary checkout.
 import * as fs from 'node:fs/promises';
+import { constants } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawn, execFileSync } from 'node:child_process';
@@ -22,10 +23,27 @@ const info = await fs.lstat(root);
 if (info.isSymbolicLink() || await fs.realpath(root) !== root || (process.getuid && (info.uid !== process.getuid() || (info.mode & 0o077)))) throw new Error('The managed source launcher is not private.');
 if (process.platform === 'win32') assertWindowsSourcePath(root, { privateLeaf: true });
 const read = async file => {
-  const info = await fs.lstat(file);
-  if (!info.isFile() || info.isSymbolicLink() || info.size > 65536) throw new Error('Invalid managed source pointer.');
-  if (process.platform === 'win32') assertWindowsSourcePath(file, { privateLeaf: true, file: true });
-  return JSON.parse(await fs.readFile(file, 'utf8'));
+  const handle = await fs.open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+  try {
+    const info = await handle.stat();
+    if (!info.isFile() || info.size > 65536) throw new Error('Invalid managed source pointer.');
+    if (process.platform === 'win32') {
+      const named = await fs.lstat(file);
+      if (named.isSymbolicLink() || named.dev !== info.dev || named.ino !== info.ino) throw new Error('Invalid managed source pointer.');
+      assertWindowsSourcePath(file, { privateLeaf: true, file: true });
+      const checked = await fs.lstat(file);
+      if (checked.isSymbolicLink() || checked.dev !== info.dev || checked.ino !== info.ino) throw new Error('Invalid managed source pointer.');
+    }
+    const bytes = Buffer.alloc(info.size + 1);
+    let length = 0;
+    while (length < bytes.length) {
+      const result = await handle.read(bytes, length, bytes.length - length, null);
+      if (!result.bytesRead) break;
+      length += result.bytesRead;
+    }
+    if (length !== info.size) throw new Error('The managed source pointer changed while reading.');
+    return JSON.parse(bytes.subarray(0, length).toString('utf8'));
+  } finally { await handle.close(); }
 };
 const marker = await read(path.join(root, 'managed.json'));
 const current = await read(path.join(root, 'current.json'));

@@ -283,11 +283,18 @@ export function parseBackup(json) {
 }
 
 async function readSelectedBackup(filename) {
-  const info = await lstat(filename);
-  if (!info.isFile() || info.isSymbolicLink() || info.size < 1 || info.size > MAX_BACKUP_BYTES) invalid('choose a regular JSON file no larger than 128 MiB');
-  const handle = await open(filename, constants.O_RDONLY | constants.O_NOFOLLOW);
+  let handle;
+  try { handle = await open(filename, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0)); }
+  catch (error) {
+    if (['ELOOP', 'EMLINK'].includes(error.code)) invalid('choose a regular JSON file no larger than 128 MiB');
+    throw error;
+  }
   try {
     const current = await handle.stat();
+    if (process.platform === 'win32') {
+      const named = await lstat(filename);
+      if (named.isSymbolicLink() || named.dev !== current.dev || named.ino !== current.ino) invalid('choose a regular JSON file no larger than 128 MiB');
+    }
     if (!current.isFile() || current.size < 1 || current.size > MAX_BACKUP_BYTES) invalid('choose a JSON file no larger than 128 MiB');
     // A growing file cannot make readFile allocate without a bound.
     const bytes = Buffer.alloc(current.size + 1);

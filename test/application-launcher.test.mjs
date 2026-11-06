@@ -196,7 +196,7 @@ test('POSIX terminal waits for confirmation and preserves prompt/workspace as li
     child.stdin.end(input);
   });
   await run('cancel\n');
-  await assert.rejects(stat(result), { code: 'ENOENT' });
+  await assert.rejects(readFile(result), { code: 'ENOENT' });
   await run('\n');
   assert.deepEqual(JSON.parse(await readFile(result, 'utf8')), { args: ['--cd', workspace, '--', prompt], cwd: await realpath(workspace) });
 });
@@ -235,7 +235,7 @@ test('Windows terminal preserves native argv after explicit Enter without invoki
     child.stdin.end(input);
   });
   await run('cancel\n');
-  await assert.rejects(stat(result), { code: 'ENOENT' });
+  await assert.rejects(readFile(result), { code: 'ENOENT' });
   await run('\n');
   assert.deepEqual(JSON.parse(await readFile(result, 'utf8')), { args: ['--cd', workspace, '--', prompt], cwd: workspace });
 });

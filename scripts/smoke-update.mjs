@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { createVault } from '../src/vault.mjs';
+import { createVault, privateDirectory } from '../src/vault.mjs';
 
 if (process.env.GITHUB_ACTIONS !== 'true' || process.env.CI !== 'true') throw new Error('Native update smoke requires a disposable GitHub Actions runner.');
 if (process.argv.length !== 2) throw new Error('Usage: node scripts/smoke-update.mjs');
@@ -29,6 +29,7 @@ const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
 const reportFile = path.join(root, 'dist', 'update-smoke.json');
 const scratchBase = process.platform === 'win32' ? tmpdir() : process.env.RUNNER_TEMP || tmpdir();
 const scratch = await realpath(await mkdtemp(path.join(scratchBase, 'recruiters-update-smoke-')));
+await privateDirectory(scratch);
 const home = path.join(scratch, 'home');
 const userData = path.join(home, ...(process.platform === 'darwin' ? ['Library', 'Application Support'] : process.platform === 'win32' ? ['AppData', 'Roaming'] : ['.config']), 'Recruiters Companion');
 const updates = path.join(userData, 'updates');
@@ -93,12 +94,6 @@ async function downloadBaseline(file) {
   // This immutable test fixture already pins its official tag, size and digest.
   // Do not spend unauthenticated API quota rediscovering the same asset.
   let url = `https://github.com/jobstash/recruiters-rip-companion/releases/download/v3.10.0/${name}`;
-  try {
-    const cached = await lstat(file);
-    assert.equal(cached.isFile() && !cached.isSymbolicLink(), true); assert.equal(cached.size, target.size);
-    assert.equal(await digest(file), target.digest);
-    return;
-  } catch (error) { if (error.code !== 'ENOENT') throw error; }
   for (let redirects = 0; redirects <= 5; redirects++) {
     const response = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(10 * 60 * 1000) });
     if ([301, 302, 303, 307, 308].includes(response.status)) {
@@ -169,7 +164,7 @@ try {
     await execute(candidate.executable, ['--appimage-extract'], { cwd: path.join(scratch, 'candidate'), env, timeout: 180000, maxBuffer: 32 * 1024 * 1024 });
     candidate.asar = path.join(scratch, 'candidate', 'squashfs-root', 'resources', 'app.asar');
   }
-  const baselineFile = path.join(await realpath(scratchBase), `recruiters-update-baseline-${target.digest}.${target.suffix.split('.').pop()}`);
+  const baselineFile = path.join(scratch, `baseline.${target.suffix.split('.').pop()}`);
   await downloadBaseline(baselineFile);
   report.scenarios.push('official-3.10-artifact-pinned-size-and-sha256');
   ({ executable, appPath } = await install(baselineFile, path.join(scratch, 'installed')));

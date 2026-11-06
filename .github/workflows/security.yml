@@ -2,7 +2,7 @@ name: Companion security boundaries
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'security/**']
   pull_request:
   schedule:
     - cron: '17 6 * * 1'
@@ -25,7 +25,7 @@ jobs:
         with:
           node-version: 24.22.2
       - name: Exercise actual source recovery children and native readiness publication
-        run: node --test test/source-update-helper.test.mjs test/update-install.test.mjs
+        run: node --test test/source-update-helper.test.mjs test/update-install.test.mjs test/smoke-source-boundaries.test.mjs test/release-policy.test.mjs
 
   headless:
     runs-on: ubuntu-24.04

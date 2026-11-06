@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { lstat, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, rename, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { assertPrivatePath, protectPrivatePath } from './platform-runtime.cjs';
+import { protectPrivatePath } from './platform-runtime.cjs';
+import { readPrivateFile } from './vault.mjs';
 import { fail } from './mcp/state.mjs';
 
 export const UPDATE_INTERVAL = 30 * 60 * 1000;
@@ -34,8 +35,7 @@ export function createUpdatePreferences(directory) {
     async load() {
       await prepare();
       try {
-        assertPrivatePath(filename, { info: await lstat(filename), maxSize: 1024 });
-        return validateUpdatePreferences(JSON.parse(await readFile(filename, 'utf8')));
+        return validateUpdatePreferences(JSON.parse((await readPrivateFile(filename, 1024)).toString('utf8')));
       } catch (error) { if (error.code === 'ENOENT') return { automaticUpdates: true }; throw error; }
     },
     save(input) {

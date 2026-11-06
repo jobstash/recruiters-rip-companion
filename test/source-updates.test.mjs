@@ -57,6 +57,62 @@ test('managed receipt binds real root, version, production package and private o
   assert.equal(await inspectManagedSource(receipt.sourceRoot), null);
 });
 
+test('source receipts reject linked, nonregular and oversized input', async t => {
+  const root = await temporary(t), file = path.join(root, 'receipt.json');
+  await fs.writeFile(file, '{"schema":1}');
+  assert.deepEqual(await readSourceJSON(file), { schema: 1 });
+  await fs.writeFile(file, ' '.repeat(65537));
+  await assert.rejects(readSourceJSON(file), { code: 'INVALID_SOURCE_RECEIPT' });
+  await assert.rejects(readSourceJSON(root), { code: 'INVALID_SOURCE_RECEIPT' });
+  if (process.platform !== 'win32') {
+    const link = path.join(root, 'linked.json');
+    await fs.symlink(file, link);
+    await assert.rejects(readSourceJSON(link), { code: 'INVALID_SOURCE_RECEIPT' });
+  }
+});
+
+for (const consumer of ['receipt', 'launcher']) test(`source ${consumer} reads the inspected handle after a pathname replacement`, async t => {
+  const root = await temporary(t), tools = { node: process.execPath };
+  const file = path.join(root, consumer === 'receipt' ? 'receipt.json' : process.platform === 'win32' ? 'launch.cmd' : 'launch');
+  const selected = consumer === 'receipt' ? '{"schema":1}' : sourceLauncherText(root, tools.node);
+  await fs.writeFile(file, selected, { mode: 0o700 });
+  const replacement = path.join(root, 'replacement');
+  await fs.writeFile(replacement, 'replacement bytes');
+  const probe = await fs.open(file, 'r');
+  const metadata = await probe.stat(), prototype = Object.getPrototypeOf(probe);
+  await probe.close();
+  const original = prototype.stat;
+  let swapped = false;
+  t.mock.method(prototype, 'stat', async function (...args) {
+    const info = await original.apply(this, args);
+    if (!swapped && info.dev === metadata.dev && info.ino === metadata.ino) {
+      swapped = true;
+      await fs.rename(replacement, file);
+    }
+    return info;
+  });
+  if (consumer === 'receipt') assert.deepEqual(await readSourceJSON(file), { schema: 1 });
+  else assert.equal(await writeSourceLauncher(root, tools, { previousTools: tools }), false);
+  assert.equal(swapped, true);
+  assert.equal(await fs.readFile(file, 'utf8'), 'replacement bytes');
+  if (consumer === 'receipt') await assert.rejects(readSourceJSON(file), SyntaxError);
+  else await assert.rejects(writeSourceLauncher(root, tools, { previousTools: tools }), { code: 'SOURCE_LAUNCHER_MODIFIED' });
+});
+
+test('source receipt reads reject growth beyond the inspected size', async t => {
+  const root = await temporary(t), file = path.join(root, 'receipt.json');
+  await fs.writeFile(file, '{"schema":1}');
+  const probe = await fs.open(file, 'r'), prototype = Object.getPrototypeOf(probe);
+  await probe.close();
+  const original = prototype.stat;
+  t.mock.method(prototype, 'stat', async function (...args) {
+    const info = await original.apply(this, args);
+    await fs.appendFile(file, ' '.repeat(65537));
+    return info;
+  });
+  await assert.rejects(readSourceJSON(file), { code: 'INVALID_SOURCE_RECEIPT' });
+});
+
 test('ordinary clones cannot opt in through environment or borrowed receipt', async t => {
   const directory = await temporary(t), sourceRoot = path.join(directory, 'checkout');
   await fs.mkdir(sourceRoot);
@@ -147,6 +203,17 @@ test('child output, execution lifetime and cancellation are bounded', async () =
   const running = runSourceCommand(process.execPath, ['-e', 'setInterval(()=>{},1000)'], { signal: controller.signal });
   controller.abort(Object.assign(new Error('Cancelled by unit test'), { code: 'CANCELLED' }));
   await assert.rejects(running, { code: 'CANCELLED' });
+});
+
+test('source commands keep Unicode and shell metacharacters in paths and argv as data', async t => {
+  const root = await temporary(t), cwd = path.join(root, "résumé ‘single’ “double” & $(not-a-command) ; %PATH%");
+  await fs.mkdir(cwd);
+  const script = path.join(cwd, 'capture.cjs'), argument = "literal ‘; throw 1; ’ ` $() & %PATH%";
+  await fs.writeFile(script, 'process.stdout.write(JSON.stringify({cwd:process.cwd(),args:process.argv.slice(2)}));');
+  const executable = process.platform === 'win32' ? process.execPath : path.join(cwd, 'node');
+  if (process.platform !== 'win32') await fs.symlink(process.execPath, executable);
+  const result = JSON.parse(await runSourceCommand(executable, [script, argument], { cwd }));
+  assert.deepEqual(result, { cwd, args: [argument] });
 });
 
 test('build environment drops Node/Electron injection flags and credentials', () => {
@@ -459,4 +526,49 @@ test('explicit runtime installation refuses a mismatched package or absent bundl
   const options = { sourceRoot, tools: { node: process.execPath, git: process.execPath }, cache: path.join(sourceRoot, 'cache') };
   await assert.rejects(installSourceElectron({ ...options, version: '45.0.0' }), { code: 'INVALID_SOURCE_BUILD' });
   await assert.rejects(installSourceElectron({ ...options, version: '45.1.0' }), { code: 'ENOENT' });
+});
+
+test('launcher reads the checked pointer descriptor even when its pathname is replaced', { skip: process.platform === 'win32' }, async t => {
+  const receipt = await fixture(t), marker = path.join(receipt.root, 'unexpected-import');
+  const current = path.join(receipt.root, 'current.json'), retained = `${current}.retained`;
+  const replacement = JSON.stringify({ schema: 1, sourceRoot: receipt.sourceRoot, version: receipt.version });
+  await fs.writeFile(current, '{"schema":0}', { mode: 0o600 });
+  const runtime = path.join(receipt.sourceRoot, 'scripts', 'install-source.mjs');
+  await fs.mkdir(path.dirname(runtime));
+  await fs.writeFile(runtime, `import { writeFileSync } from 'node:fs';writeFileSync(${JSON.stringify(marker)}, 'unexpected import');throw new Error('sentinel imported');`);
+  const launcher = path.join(receipt.root, 'launch.mjs'), preload = path.join(receipt.root, 'replace-pointer.mjs');
+  await fs.copyFile(new URL('../src/source-launcher.mjs', import.meta.url), launcher);
+  // Instrument both the old path-stat and the descriptor-stat boundary so this
+  // regression demonstrates the original check/read gap, not just a code shape.
+  await fs.writeFile(preload, `
+    import fs from 'node:fs/promises';
+    import { syncBuiltinESMExports } from 'node:module';
+    const target = ${JSON.stringify(current)}, retained = ${JSON.stringify(retained)};
+    const stat = fs.lstat, open = fs.open;
+    let replaced = false;
+    async function replace() {
+      if (replaced) return;
+      replaced = true;
+      await fs.rename(target, retained);
+      await fs.writeFile(target, ${JSON.stringify(replacement)}, { mode: 0o600 });
+    }
+    fs.lstat = async (filename, ...args) => {
+      const info = await stat(filename, ...args);
+      if (filename === target) await replace();
+      return info;
+    };
+    fs.open = async (filename, ...args) => {
+      const handle = await open(filename, ...args);
+      if (filename === target) {
+        const stat = handle.stat.bind(handle);
+        handle.stat = async (...args) => { const info = await stat(...args); await replace(); return info; };
+      }
+      return handle;
+    };
+    syncBuiltinESMExports();
+  `, { mode: 0o600 });
+  await assert.rejects(runSourceCommand(process.execPath, ['--import', preload, launcher]), { code: 'SOURCE_COMMAND_FAILED' });
+  assert.equal(await fs.readFile(retained, 'utf8'), '{"schema":0}');
+  assert.equal(await fs.readFile(current, 'utf8'), replacement);
+  await assert.rejects(fs.lstat(marker), { code: 'ENOENT' });
 });

@@ -180,6 +180,8 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: write
+      security-events: read
+      actions: read
     concurrency:
       group: companion-publication
       cancel-in-progress: false

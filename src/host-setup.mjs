@@ -1,4 +1,4 @@
-import { access, cp, mkdir, writeFile, rm, readFile, readdir, rename, stat, lstat, realpath } from 'node:fs/promises';
+import { access, cp, mkdir, writeFile, rm, readFile, readdir, rename, stat, lstat, realpath, open } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -150,12 +150,32 @@ async function exists(filename) {
   catch (error) { if (error.code === 'ENOENT') return false; throw error; }
 }
 
+// Compare bytes from the same regular file we inspected, never a replacement link.
+async function readTreeFile(filename, selected) {
+  let handle;
+  try {
+    selected ||= await lstat(filename);
+    if (!selected.isFile()) return null;
+    handle = await open(filename, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const current = await handle.stat();
+    if (!current.isFile() || current.dev !== selected.dev || current.ino !== selected.ino) return null;
+    return await handle.readFile();
+  } catch (error) {
+    if (error.code === 'ENOENT' || error.code === 'ELOOP') return null;
+    throw error;
+  } finally { await handle?.close(); }
+}
+
 async function sameTree(source, target, extraFiles = {}) {
   const sourceInfo = await lstat(source);
   let targetInfo;
   try { targetInfo = await lstat(target); }
   catch (error) { if (error.code === 'ENOENT') return false; throw error; }
-  if (sourceInfo.isFile()) return targetInfo.isFile() && (await readFile(source)).equals(await readFile(target));
+  if (sourceInfo.isFile()) {
+    if (!targetInfo.isFile()) return false;
+    const original = await readTreeFile(source, sourceInfo), installed = await readTreeFile(target, targetInfo);
+    return original !== null && installed !== null && original.equals(installed);
+  }
   if (!sourceInfo.isDirectory()) throw new Error('A bundled host skill contains an unsupported file.');
   if (!targetInfo.isDirectory()) return false;
   const names = [...new Set([...(await readdir(source)), ...Object.keys(extraFiles)])].sort(), installed = (await readdir(target)).sort();
@@ -163,7 +183,8 @@ async function sameTree(source, target, extraFiles = {}) {
   for (const name of names) {
     if (Object.hasOwn(extraFiles, name)) {
       const filename = path.join(target, name);
-      if (!(await lstat(filename)).isFile() || await readFile(filename, 'utf8') !== extraFiles[name]) return false;
+      const content = await readTreeFile(filename);
+      if (content === null || content.toString('utf8') !== extraFiles[name]) return false;
     } else if (!await sameTree(path.join(source, name), path.join(target, name))) return false;
   }
   return true;
@@ -296,7 +317,7 @@ export async function discoverHost(host, options = {}) {
             const entry = await readFile(p.join(root, 'applications', id), 'utf8');
             const section = entry.split(/^\[Desktop Entry\]\s*$/m)[1]?.split(/^\[/m)[0] || '';
             const commandLine = section.match(/^TryExec=(.+)$/m)?.[1] || section.match(/^Exec=(.+)$/m)?.[1];
-            const binary = commandLine?.match(/^"((?:\\.|[^"])*)"/)?.[1]?.replace(/\\(["\\`$])/g, '$1') || commandLine?.match(/^([^\s]+)/)?.[1];
+            const binary = commandLine?.match(/^"((?:\\.|[^"\\])*)"/)?.[1]?.replace(/\\(["\\`$])/g, '$1') || commandLine?.match(/^([^\s]+)/)?.[1];
             const present = binary && (p.isAbsolute(binary) ? await canExecute(binary, platform) : await findHostCommand(binary, { platform, env, canExecute }));
             if (/^Type=Application\s*$/m.test(section) && present && !/^Hidden=true\s*$/m.test(section)) desktop = true;
           } catch {}

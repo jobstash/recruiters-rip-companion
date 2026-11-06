@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import fs, { mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
@@ -171,6 +172,43 @@ test('preference reads reject symlink files', { skip: process.platform === 'win3
   await writeFile(path.join(directory, 'other.json'), '{"automaticUpdates":true}', { mode: 0o600 });
   await symlink(path.join(directory, 'other.json'), path.join(directory, 'preferences.json'));
   await assert.rejects(preferences.load());
+});
+
+test('preference reads reject growth after checking and bound descriptor reads', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'rr-update-growth-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const preferences = createUpdatePreferences(directory);
+  await preferences.save({ automaticUpdates: false });
+  const filename = path.join(directory, 'preferences.json');
+  const originalStat = fs.lstat, originalOpen = fs.open;
+  let grown = false, requested = 0;
+  async function grow() {
+    if (grown) return;
+    grown = true;
+    await fs.appendFile(filename, ' '.repeat(2048));
+  }
+  const statMock = t.mock.method(fs, 'lstat', async (target, ...args) => {
+    const info = await originalStat(target, ...args);
+    if (target === filename) await grow();
+    return info;
+  });
+  const openMock = t.mock.method(fs, 'open', async (target, ...args) => {
+    const handle = await originalOpen(target, ...args);
+    if (target === filename) {
+      const stat = handle.stat.bind(handle), read = handle.read.bind(handle);
+      handle.stat = async (...args) => { const info = await stat(...args); await grow(); return info; };
+      handle.read = async (buffer, offset, length, position) => { requested += length; return read(buffer, offset, length, position); };
+    }
+    return handle;
+  });
+  syncBuiltinESMExports();
+  try {
+    await assert.rejects(preferences.load());
+    assert.equal(grown, true);
+    assert.ok(requested <= 1025, 'growth must not trigger an unbounded read');
+  } finally {
+    statMock.mock.restore(); openMock.mock.restore(); syncBuiltinESMExports();
+  }
 });
 
 test('work admission closes atomically, drains accepted requests and honors meaningful quiet time', async () => {

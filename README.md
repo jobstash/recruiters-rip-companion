@@ -392,6 +392,10 @@ The local MCP broker bounds queued messages and aggregate bytes, including while
 
 Native helper readiness proofs are published by same-directory rename only after the complete 32-byte UTF-8 token is closed. This prevents the strict parent handover validator from seeing a partially written file; Windows publication explicitly omits a BOM and refuses to replace an existing proof. The real native updater smoke remains the release gate for this path.
 
+Release 3.12.28 binds private vault, preferences, document, backup, host-plugin and managed-source reads to the opened file descriptor, preserving regular-file, size, ownership, symlink and Windows ACL checks. Linux desktop executable parsing uses disjoint quoted-token alternatives to avoid exponential backtracking. Native smoke installers stay in a fresh private directory rather than a shared predictable cache; Windows smoke command arguments are encoded as data before PowerShell parses the command.
+
+Publication fails closed unless the exact current main commit has a completed successful security workflow, a full default-branch CodeQL analysis with nonzero analyzed rules, and no open default-branch code-scanning alerts across all pages. It waits at most five minutes for that commit's analysis and performs this check before creating a draft release. Pull-request delta results are not a substitute for the full baseline. Security branches receive full push analyses, and only the main release job receives read access to security events and workflow status.
+
 `src/documents/assets/NotoSans-Regular.ttf` is Copyright 2018 The Noto Project Authors, distributed under the SIL Open Font License 1.1 in the adjacent `OFL.txt`; both are included in the app. UI fonts retain their separate Geist and Instrument Serif OFL notices under `ui/fonts`. The current application icon and mirrored-r logos come from the user-supplied design artifact linked in [design.md](design.md). CareerCup is a layout reference linked by the conversation skill, not a bundled CareerCup document or asset. Dependency licenses remain with their npm packages.
 
 ## License

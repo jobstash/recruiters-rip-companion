@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createPublicKey, sign, verify } from 'node:crypto';
-import { mkdtemp, rm, readFile, mkdir, rename } from 'node:fs/promises';
+import fs, { mkdtemp, rm, readFile, mkdir, rename } from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { createVault } from '../src/vault.mjs';
@@ -29,6 +30,42 @@ test('opening a vault persists only GitHub introduction fields for current and a
   for (const state of [reopened.get(), saved]) {
     assert.deepEqual(state.career.introductions, github);
     assert.deepEqual(state.identityArchives.old.career.introductions, github);
+  }
+});
+
+test('vault opening consumes the checked inode, not a replacement pathname', { skip: process.platform === 'win32' }, async t => {
+  const { vault, reopen, directory } = await fixture(t), expected = vault.get();
+  const filename = path.join(directory, 'vault.json'), retained = `${filename}.retained`;
+  const replacement = { ...expected, label: 'Unchecked replacement' };
+  const originalStat = fs.lstat, originalOpen = fs.open;
+  let replaced = false;
+  async function replace() {
+    if (replaced) return;
+    replaced = true;
+    await rename(filename, retained);
+    await fs.writeFile(filename, JSON.stringify(replacement), { mode: 0o600 });
+  }
+  const statMock = t.mock.method(fs, 'lstat', async (target, ...args) => {
+    const info = await originalStat(target, ...args);
+    if (target === filename) await replace();
+    return info;
+  });
+  const openMock = t.mock.method(fs, 'open', async (target, ...args) => {
+    const handle = await originalOpen(target, ...args);
+    if (target === filename) {
+      const stat = handle.stat.bind(handle);
+      handle.stat = async (...args) => { const info = await stat(...args); await replace(); return info; };
+    }
+    return handle;
+  });
+  syncBuiltinESMExports();
+  try {
+    const reopened = reopen(); await reopened.open();
+    assert.equal(replaced, true);
+    assert.deepEqual(reopened.get(), expected);
+    assert.equal(JSON.parse(await readFile(filename, 'utf8')).label, replacement.label);
+  } finally {
+    statMock.mock.restore(); openMock.mock.restore(); syncBuiltinESMExports();
   }
 });
 

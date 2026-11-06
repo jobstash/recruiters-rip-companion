@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { open, readdir, lstat, unlink, rmdir, mkdir, rename, copyFile } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import path from 'node:path';
-import { privateDirectory } from '../vault.mjs';
+import { privateDirectory, readPrivateFile } from '../vault.mjs';
 import { fail } from './state.mjs';
 import { assertPrivatePath } from '../platform-runtime.cjs';
 import { currentApplicationJob, applicationContextFingerprint } from '../application-workflow.mjs';
@@ -30,16 +30,30 @@ export function validExport(bytes, extension) {
   try { new TextDecoder('utf-8', { fatal: true }).decode(bytes); return true; } catch { return false; }
 }
 export async function readSelectedSource(filename) {
-  const selected = await lstat(filename);
-  if (selected.isSymbolicLink() || !selected.isFile()) fail('INVALID_INPUT', 'Choose a regular PDF, DOCX or text CV file.');
-  const file = await open(filename, constants.O_RDONLY | constants.O_NOFOLLOW);
+  let file;
+  try { file = await open(filename, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0)); }
+  catch (error) {
+    if (['ELOOP', 'EMLINK'].includes(error.code)) fail('INVALID_INPUT', 'Choose a regular PDF, DOCX or text CV file.');
+    throw error;
+  }
   try {
     const info = await file.stat();
+    if (process.platform === 'win32') {
+      const selected = await lstat(filename);
+      if (selected.isSymbolicLink() || selected.dev !== info.dev || selected.ino !== info.ino) fail('INVALID_INPUT', 'Choose a regular PDF, DOCX or text CV file.');
+    }
     if (!info.isFile() || info.size < 1 || info.size > MAX_SOURCE) fail('INVALID_INPUT', 'Choose a PDF, DOCX or text CV no larger than 5 MiB.');
     const mimetype = { '.pdf': 'application/pdf', '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', '.txt': 'text/plain' }[path.extname(filename).toLowerCase()];
     if (!mimetype) fail('INVALID_INPUT', 'Choose a PDF, DOCX or text CV.');
-    const buffer = await file.readFile();
-    if (buffer.length > MAX_SOURCE) fail('INVALID_INPUT', 'The selected CV became too large. Choose a file no larger than 5 MiB.');
+    const bytes = Buffer.alloc(info.size + 1);
+    let length = 0;
+    while (length < bytes.length) {
+      const result = await file.read(bytes, length, bytes.length - length, null);
+      if (!result.bytesRead) break;
+      length += result.bytesRead;
+    }
+    if (length !== info.size) fail('INVALID_INPUT', 'The selected CV changed while reading. Choose the file again.');
+    const buffer = bytes.subarray(0, length);
     return { buffer, originalname: path.basename(filename), mimetype, size: buffer.length };
   } finally { await file.close(); }
 }
@@ -231,21 +245,12 @@ export function createDocumentFiles({ directory, store, assertAvailable, onCreat
   }
   async function readExport(filename, expectedDigest, extension) {
     assertAvailable(false);
-    try { assertPrivatePath(filename, { info: await lstat(filename), maxSize: MAX_EXPORT }); }
+    let bytes;
+    try { bytes = await readPrivateFile(filename, MAX_EXPORT); }
     catch (error) { if (error.code === 'ENOENT') throw error; fail('EXPORT_CORRUPT', 'This local export is unavailable or its permissions changed.'); }
-    const handle = await open(filename, constants.O_RDONLY | constants.O_NOFOLLOW);
-    try {
-      const info = await handle.stat();
-      if (!info.isFile() || info.size > MAX_EXPORT || (process.platform !== 'win32' && ((process.getuid && info.uid !== process.getuid()) || (info.mode & 0o077)))) fail('EXPORT_CORRUPT', 'This local export is unavailable or its permissions changed.');
-      const buffer = Buffer.alloc(info.size + 1);
-      let length = 0;
-      while (length < buffer.length) { const result = await handle.read(buffer, length, buffer.length - length, null); if (!result.bytesRead) break; length += result.bytesRead; }
-      if (length !== info.size) fail('EXPORT_CORRUPT', 'The saved export changed while reading it. Your source and draft are intact.');
-      const bytes = buffer.subarray(0, length);
-      if (!validExport(bytes, extension) || digest(bytes) !== expectedDigest) fail('EXPORT_CORRUPT', 'The saved export failed its integrity check. Your source and draft are intact.');
-      assertAvailable(false);
-      return bytes;
-    } finally { await handle.close(); }
+    if (!validExport(bytes, extension) || digest(bytes) !== expectedDigest) fail('EXPORT_CORRUPT', 'The saved export failed its integrity check. Your source and draft are intact.');
+    assertAvailable(false);
+    return bytes;
   }
   async function readResource(uri) {
     const ranking = rankingURI.exec(uri), document = documentURI.exec(uri);

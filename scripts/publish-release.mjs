@@ -5,7 +5,7 @@ import { createReadStream } from 'node:fs';
 import { lstat, readFile, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { compareStable } from './release-policy.mjs';
+import { compareStable, requireReleaseSecurity } from './release-policy.mjs';
 
 const repository = 'jobstash/recruiters-rip-companion';
 const api = `https://api.github.com/repos/${repository}`;
@@ -53,7 +53,7 @@ const checksumBytes = await readFile(checksumFile);
 files.set('SHA256SUMS.txt', { file: checksumFile, size: checksumBytes.length, digest: createHash('sha256').update(checksumBytes).digest('hex') });
 const headers = { Authorization: `Bearer ${process.env.GH_TOKEN}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' };
 async function request(url, options = {}, missing = false) {
-  const response = await fetch(url, { ...options, headers: { ...headers, ...options.headers }, signal: AbortSignal.timeout(15 * 60 * 1000) });
+  const response = await fetch(url, { ...options, headers: { ...headers, ...options.headers }, signal: options.signal ?? AbortSignal.timeout(15 * 60 * 1000) });
   if (missing && response.status === 404) { await response.body?.cancel(); return null; }
   if (!response.ok) { await response.body?.cancel(); throw new Error(`GitHub release request failed (${response.status}); an incomplete draft, if created, remains unpublished.`); }
   return response.status === 204 ? null : response.json();
@@ -61,6 +61,7 @@ async function request(url, options = {}, missing = false) {
 const tag = `v${version}`;
 const currentMain = await request(`${api}/commits/main`);
 if (currentMain.sha !== process.env.GITHUB_SHA) throw new Error('This run is no longer the current main commit; refusing stale publication.');
+await requireReleaseSecurity({ sha: process.env.GITHUB_SHA, request: endpoint => request(`${api}/${endpoint}`, { signal: AbortSignal.timeout(15_000) }) });
 if (await request(`${api}/releases/tags/${tag}`, {}, true)) throw new Error(`Release ${tag} already exists. Public releases and interrupted drafts are never overwritten.`);
 if (await request(`${api}/git/ref/tags/${tag}`, {}, true)) throw new Error(`Tag ${tag} already exists; refusing to publish under an unverified tag.`);
 const latest = await request(`${api}/releases/latest`, {}, true);

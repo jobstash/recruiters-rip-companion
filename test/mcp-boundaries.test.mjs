@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, rm, readFile, writeFile, chmod, symlink, mkdir, rename, readdir, lstat } from 'node:fs/promises';
+import fs, { mkdtemp, rm, readFile, writeFile, chmod, symlink, mkdir, rename, readdir, lstat } from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -263,6 +264,90 @@ test('document exports reject corrupt bytes, changed permissions, symlinks and a
   await assert.rejects(files.readResource(csv.uri), { code: 'EXPORT_CORRUPT' });
   await assert.rejects(files.listResources(), { code: 'EXPORT_CORRUPT' });
   await assert.rejects(files.exportDocument({ mediaType: 'text/csv', bytes: csvBytes }));
+});
+
+test('selected CV reads are bounded when the opened file grows after stat', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'mcp-source-growth-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const filename = path.join(directory, 'CV.txt');
+  await writeFile(filename, 'Synthetic CV');
+  const originalOpen = fs.open;
+  let requested = 0, closed = false;
+  const openMock = t.mock.method(fs, 'open', async (target, ...args) => {
+    const handle = await originalOpen(target, ...args);
+    if (target === filename) {
+      const stat = handle.stat.bind(handle), read = handle.read.bind(handle), close = handle.close.bind(handle);
+      handle.stat = async (...args) => {
+        const info = await stat(...args);
+        await fs.appendFile(filename, ' growing synthetic content');
+        return info;
+      };
+      handle.read = async (buffer, offset, length, position) => { requested += length; return read(buffer, offset, length, position); };
+      handle.close = async () => { closed = true; return close(); };
+    }
+    return handle;
+  });
+  syncBuiltinESMExports();
+  try {
+    await assert.rejects(readSelectedSource(filename), { code: 'INVALID_INPUT' });
+    assert.equal(requested, Buffer.byteLength('Synthetic CV') + 1);
+    assert.equal(closed, true);
+  } finally { openMock.mock.restore(); syncBuiltinESMExports(); }
+});
+
+test('export reads keep the checked private inode after its name is replaced', { skip: process.platform === 'win32' }, async t => {
+  const f = fixture(), directory = await mkdtemp(path.join(os.tmpdir(), 'mcp-export-replaced-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const files = createDocumentFiles({ directory, store: f.scoped.store, assertAvailable: f.scoped.assertAvailable });
+  const bytes = Buffer.from('"synthetic original"\r\n'), csv = await files.exportDocument({ mediaType: 'text/csv', bytes });
+  const originalOpen = fs.open;
+  let replaced = false;
+  const openMock = t.mock.method(fs, 'open', async (target, ...args) => {
+    const handle = await originalOpen(target, ...args);
+    if (target === csv.path) {
+      const stat = handle.stat.bind(handle);
+      handle.stat = async (...args) => {
+        const info = await stat(...args);
+        await rename(csv.path, `${csv.path}.retained`);
+        await writeFile(csv.path, 'unchecked replacement', { mode: 0o600 });
+        replaced = true;
+        return info;
+      };
+    }
+    return handle;
+  });
+  syncBuiltinESMExports();
+  try {
+    assert.equal((await files.readResource(csv.uri)).text, bytes.toString('utf8'));
+    assert.equal(replaced, true);
+  } finally { openMock.mock.restore(); syncBuiltinESMExports(); }
+});
+
+test('selected CVs bind Windows link checks to the opened file identity', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'mcp-source-replaced-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const filename = path.join(directory, 'CV.txt'), original = 'Opened synthetic CV';
+  await writeFile(filename, original);
+  const originalOpen = fs.open;
+  let replaced = false, closed = false;
+  const openMock = t.mock.method(fs, 'open', async (target, ...args) => {
+    const handle = await originalOpen(target, ...args);
+    if (target === filename) {
+      const close = handle.close.bind(handle);
+      handle.close = async () => { closed = true; return close(); };
+      await rename(filename, `${filename}.retained`);
+      await writeFile(filename, 'Unchecked replacement CV');
+      replaced = true;
+    }
+    return handle;
+  });
+  syncBuiltinESMExports();
+  try {
+    if (process.platform === 'win32') await assert.rejects(readSelectedSource(filename), { code: 'INVALID_INPUT' });
+    else assert.equal((await readSelectedSource(filename)).buffer.toString('utf8'), original);
+    assert.equal(replaced, true);
+    assert.equal(closed, true);
+  } finally { openMock.mock.restore(); syncBuiltinESMExports(); }
 });
 
 test('export ancestor symlinks and malformed device identities cannot redirect private resources', async t => {

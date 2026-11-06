@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, rm, stat, cp, rename, readdir } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm, stat, cp, rename, readdir, open, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { addClaudeCodeServer, addClaudeDesktopServer, addedHosts, agentSetupPrompt, claudeExtensionInstalled, discoverHost, findHostCli, findChatGptCli, hostEnvironment,
@@ -12,6 +12,23 @@ async function temporary(t) {
   const root = await mkdtemp(path.join(tmpdir(), 'recruiters-host-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   return root;
+}
+
+async function swapAfterHandleStat(t, filename, replacement) {
+  const probe = await open(filename, 'r');
+  const selected = await probe.stat(), prototype = Object.getPrototypeOf(probe);
+  await probe.close();
+  const original = prototype.stat;
+  let swapped = false;
+  t.mock.method(prototype, 'stat', async function (...args) {
+    const info = await original.apply(this, args);
+    if (!swapped && info.dev === selected.dev && info.ino === selected.ino) {
+      swapped = true;
+      await rename(replacement, filename);
+    }
+    return info;
+  });
+  return () => swapped;
 }
 
 for (const host of ['codex', 'claude']) test(`${host} discovers a Linux CLI and terminal without running inference`, async () => {
@@ -84,6 +101,29 @@ test('Linux desktop support requires a real MIME handler and executable', async 
     run: async () => ({ stdout: 'claude.desktop\n' }), canExecute: async file => file === binary };
   assert.equal((await discoverHost('claude', options)).mode, 'desktop');
   assert.equal((await discoverHost('claude', { ...options, canExecute: async () => false })).available, false);
+});
+
+test('Linux desktop quoted executables preserve escapes and reject an unterminated escape-heavy command', { timeout: 10000 }, async t => {
+  const root = await temporary(t), entry = path.join(root, 'applications', 'claude.desktop');
+  await mkdir(path.dirname(entry));
+  const binary = '/opt/Claude "quoted" \\ résumé/claude';
+  const encoded = binary.replace(/["\\`$]/g, '\\$&');
+  const options = { platform: 'linux', home: root, env: { XDG_DATA_HOME: root, XDG_DATA_DIRS: root, DISPLAY: ':0' },
+    run: async () => ({ stdout: 'claude.desktop\n' }), canExecute: async file => file === binary };
+  await writeFile(entry, `[Desktop Entry]\nType=Application\nTryExec="${encoded}"\n`);
+  assert.equal((await discoverHost('claude', options)).mode, 'desktop');
+  await writeFile(entry, `[Desktop Entry]\nType=Application\nExec="${'\\!'.repeat(4096)}\n`);
+  // A child deadline also bounds a regression that blocks the JavaScript event loop.
+  const script = `
+    import assert from 'node:assert/strict';
+    import { discoverHost } from ${JSON.stringify(new URL('../src/host-setup.mjs', import.meta.url).href)};
+    const info = await discoverHost('claude', {
+      platform: 'linux', home: ${JSON.stringify(root)}, env: ${JSON.stringify(options.env)},
+      run: async () => ({ stdout: 'claude.desktop\\n' }), canExecute: async () => false,
+    });
+    assert.equal(info.available, false);
+  `;
+  await promisify(execFile)(process.execPath, ['--input-type=module', '-e', script], { timeout: 5000 });
 });
 
 test('MCP batch invocation keeps Unicode, shell metacharacters and percent signs in data', () => {
@@ -199,6 +239,38 @@ test('the Claude skill installs into ~/.claude/skills and refreshes only an inst
   // CLAUDE_CONFIG_DIR moves Claude Code's personal folder.
   assert.equal(await installClaudeSkill({ source, home, env: { CLAUDE_CONFIG_DIR: path.join(root, 'claude-config') } }), true);
   assert.ok((await stat(path.join(root, 'claude-config', 'skills', 'recruiters-rip', 'SKILL.md'))).isFile());
+});
+
+for (const selected of ['source', 'target']) test(`Claude skill comparison reads the inspected ${selected} handle after a path replacement`, async t => {
+  const root = await temporary(t), source = path.join(root, 'source'), home = path.join(root, 'home');
+  await mkdir(source);
+  await writeFile(path.join(source, 'SKILL.md'), 'selected bytes\n');
+  const options = { source, home, env: {} };
+  await installClaudeSkill(options);
+  const target = path.join(home, '.claude', 'skills', 'recruiters-rip');
+  const filename = path.join(selected === 'source' ? source : target, 'SKILL.md');
+  const replacement = path.join(root, 'replacement');
+  await writeFile(replacement, 'replacement bytes\n');
+  const swapped = await swapAfterHandleStat(t, filename, replacement);
+  assert.equal(await installClaudeSkill(options), false);
+  assert.equal(swapped(), true);
+  assert.equal(await installClaudeSkill(options), true);
+  assert.equal(await readFile(path.join(target, 'SKILL.md'), 'utf8'), selected === 'source' ? 'replacement bytes\n' : 'selected bytes\n');
+});
+
+test('Claude skill comparison replaces linked installed files without touching their targets', { skip: process.platform === 'win32' }, async t => {
+  const root = await temporary(t), source = path.join(root, 'source'), home = path.join(root, 'home');
+  await mkdir(source);
+  await writeFile(path.join(source, 'SKILL.md'), 'current skill\n');
+  const options = { source, home, env: {} };
+  await installClaudeSkill(options);
+  const target = path.join(home, '.claude', 'skills', 'recruiters-rip', 'SKILL.md'), outside = path.join(root, 'outside');
+  await writeFile(outside, 'current skill\n');
+  await rm(target);
+  await symlink(outside, target);
+  assert.equal(await installClaudeSkill(options), true);
+  assert.equal(await readFile(target, 'utf8'), 'current skill\n');
+  assert.equal(await readFile(outside, 'utf8'), 'current skill\n');
 });
 
 test('only Claude Code sessions make Claude “In use now”; Claude chat and Cowork sessions are named instead', () => {
@@ -350,6 +422,23 @@ async function refreshFixture(t, { localOnly = false } = {}) {
     registerCodex: (enabled = true) => writeFile(config,
       `approval_policy = "on-request"\nsandbox_mode = "read-only"\n[plugins."recruiters-rip@${name}"]\nenabled = ${enabled}\n[plugins."other@elsewhere"]\nenabled = false\n[mcp_servers.other]\ncommand = "/other"\n`) };
 }
+
+test('Codex generated MCP comparison reads the inspected handle after a path replacement', async t => {
+  const fixture = await refreshFixture(t);
+  await fixture.registerCodex();
+  await fixture.refresh();
+  const filename = path.join(fixture.directory, 'host-integration', 'plugins', 'recruiters-rip', '.mcp.json');
+  const selected = await readFile(filename, 'utf8'), replacement = path.join(fixture.root, 'replacement.json');
+  await writeFile(replacement, '{"replacement":true}');
+  const swapped = await swapAfterHandleStat(t, filename, replacement);
+  const calls = fixture.calls.length;
+  await fixture.refresh();
+  assert.equal(swapped(), true);
+  assert.equal(fixture.calls.length, calls);
+  await fixture.refresh();
+  assert.equal(await readFile(filename, 'utf8'), selected);
+  assert.ok(fixture.calls.length > calls);
+});
 
 test('boot skips unconfigured hosts without creating settings or skills', async t => {
   const fixture = await refreshFixture(t);

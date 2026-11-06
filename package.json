@@ -1,6 +1,6 @@
 {
   "name": "recruiters-companion",
-  "version": "3.12.25",
+  "version": "3.12.26",
   "private": true,
   "description": "Local career tools for Codex and Claude",
   "main": "src/main.mjs",
@@ -31,20 +31,21 @@
     "eval:score": "node eval/score.mjs"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.29.0",
+    "@modelcontextprotocol/sdk": "1.32.0",
     "@nestjs/common": "^10.4.15",
     "@pdf-lib/fontkit": "1.1.1",
     "adm-zip": "0.6.1",
-    "ajv": "8.17.1",
+    "ajv": "8.18.0",
     "ajv-formats": "3.0.1",
-    "ajv-legacy": "npm:ajv@6.12.6",
+    "ajv-legacy": "npm:ajv@6.14.0",
     "mammoth": "^1.12.0",
     "pdf-lib": "1.17.1",
     "pdf-parse": "^2.4.5",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
     "saxes": "^6.0.0",
-    "yauzl": "^3.4.0"
+    "yauzl": "^3.4.0",
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "electron": "45.1.0",
@@ -53,6 +54,12 @@
     "typescript": "5.9.3"
   },
   "pnpm": {
+    "overrides": {
+      "file-type@>=13 <21.3.2": "21.3.2",
+      "minimatch@>=7 <11.0.1": "11.0.1",
+      "undici@>=6 <6.29.1": "6.29.1",
+      "undici@>=7 <7.30.1": "7.30.1"
+    },
     "onlyBuiltDependencies": [
       "electron",
       "esbuild"

@@ -382,7 +382,9 @@ Official hosted downloads synchronize verified published releases into an atomic
 
 ## Document source and asset notices
 
-The owned document closure in `src/documents/` consists of `candidate-document-codec.ts`, `candidate-document-provenance.ts`, `cv-document-layout.ts`, and `career-pdf.ts`. The codec owns the canonical preference-field list; no SQL/helper/service module is imported. Its legacy schema semantics remain on the explicit `ajv-legacy` alias (Ajv 6.12.6), separate from MCP's Ajv 8. TypeScript is an explicit build dependency.
+The owned document closure in `src/documents/` consists of `candidate-document-codec.ts`, `candidate-document-provenance.ts`, `cv-document-layout.ts`, and `career-pdf.ts`. The codec owns the canonical preference-field list; no SQL/helper/service module is imported. Its legacy schema semantics remain on the explicit `ajv-legacy` alias (Ajv 6.14.0), separate from MCP's Ajv 8. TypeScript is an explicit build dependency.
+
+Security maintenance: run `pnpm audit` against the locked runtime and packaging dependencies. Release 3.12.26 upgrades MCP and both Ajv majors, explicitly supplies the patched Zod peer, and refreshes affected transitive dependencies. Scoped pnpm overrides keep file-type, minimatch and both Undici majors above their advisory fix versions where upstream ranges or pins still select vulnerable releases. Keep these overrides until upstream dependencies select patched versions without them; verify native packaging and source-install/update smoke gates before publishing dependency changes.
 
 `src/documents/assets/NotoSans-Regular.ttf` is Copyright 2018 The Noto Project Authors, distributed under the SIL Open Font License 1.1 in the adjacent `OFL.txt`; both are included in the app. UI fonts retain their separate Geist and Instrument Serif OFL notices under `ui/fonts`. The current application icon and mirrored-r logos come from the user-supplied design artifact linked in [design.md](design.md). CareerCup is a layout reference linked by the conversation skill, not a bundled CareerCup document or asset. Dependency licenses remain with their npm packages.
 

@@ -58,7 +58,8 @@ restore() {
   "$target" "--user-data-dir=$profile" 3>&- </dev/null >/dev/null 2>&1 &
 }
 validate
-printf '%s' "$id" > "$work/ready"
+printf '%s' "$id" > "$work/ready.tmp"
+mv -- "$work/ready.tmp" "$work/ready"
 i=0
 while [ ! -f "$work/commit" ]; do
   kill -0 "$oldpid" 2>/dev/null || exit 1

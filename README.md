@@ -390,6 +390,8 @@ Security maintenance: run `pnpm audit` against the locked runtime and packaging 
 
 The local MCP broker bounds queued messages and aggregate bytes, including while server connection setup is pending, and disconnects unauthenticated sockets when access is revoked. Its socket regressions cover flooding and late connection completion without contacting any service. The public repository's security workflow adds CodeQL security-extended analysis and offline Alpine boundary tests. Hosted Code Quality is a separate service: a disabled setup is not a clean scan and must not be enabled as a paid feature without approval.
 
+Native helper readiness proofs are published by same-directory rename only after the complete 32-byte UTF-8 token is closed. This prevents the strict parent handover validator from seeing a partially written file; Windows publication explicitly omits a BOM and refuses to replace an existing proof. The real native updater smoke remains the release gate for this path.
+
 `src/documents/assets/NotoSans-Regular.ttf` is Copyright 2018 The Noto Project Authors, distributed under the SIL Open Font License 1.1 in the adjacent `OFL.txt`; both are included in the app. UI fonts retain their separate Geist and Instrument Serif OFL notices under `ui/fonts`. The current application icon and mirrored-r logos come from the user-supplied design artifact linked in [design.md](design.md). CareerCup is a layout reference linked by the conversation skill, not a bundled CareerCup document or asset. Dependency licenses remain with their npm packages.
 
 ## License

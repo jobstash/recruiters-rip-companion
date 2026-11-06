@@ -71,6 +71,7 @@ for (const outcome of ['confirmed', 'crashed', 'tampered', 'competing-before-swa
       return;
     }
     await until(async () => await readFile(path.join(work, 'ready'), 'utf8') === id);
+    await assert.rejects(readFile(path.join(work, 'ready.tmp')), { code: 'ENOENT' });
     assert.equal(await readFile(target, 'utf8'), old);
     let release;
     if (outcome === 'competing-before-swap') {

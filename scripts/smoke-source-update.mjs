@@ -352,7 +352,7 @@ try {
   const defaultBytes = await readFile(path.join(defaultDevice, 'vault.json'));
   const defaultEntries = (await readdir(defaultDevice)).sort();
   if (process.platform === 'win32') {
-    const quote = value => `'${value.replaceAll("'", "''")}'`;
+    const quote = value => `([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${Buffer.from(value, 'utf8').toString('base64')}')))`;
     const bootstrap = async (shell, checkout, commit, destination, profile) => {
       const script = `& ([ScriptBlock]::Create([IO.File]::ReadAllText(${quote(path.join(checkout, 'scripts', 'install-source.ps1'))}))) -Root ${quote(destination)} -Checkout ${quote(checkout)} -Commit ${quote(commit)} -Profile ${quote(profile)} -NoLaunch`;
       assert.deepEqual((await readdir(env.TEMP)).filter(name => name.startsWith('recruiters-source-')), []);

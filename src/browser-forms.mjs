@@ -363,6 +363,8 @@ export function createBrowserForms({ store, credentials, assertAvailable, fetchI
     return mutateCareer(store, { requestId: args.requestId, revision: readCareer(store).revision }, 'forms_answer_save', args, (career, state) => {
       const { draft, plan } = bound(career, state), value = args.value;
       if (!plan.key && !plan.preference && !plan.topic) {
+        // IDs are exact members of the bound snapshot, not property paths. Defining an own
+        // data property preserves even a page field named "__proto__" without invoking its setter.
         if (value === null) delete draft.answers[args.fieldId];
         else Object.defineProperty(draft.answers, args.fieldId, { value: { value, source: 'user' }, writable: true, enumerable: true, configurable: true });
         draft.updatedAt = new Date().toISOString();

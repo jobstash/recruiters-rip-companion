@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Standalone release asset: built-ins only. Builds source, never downloads an app binary.
 import * as fs from 'node:fs/promises';
+import { constants } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { spawn, execFileSync } from 'node:child_process';
@@ -133,10 +134,37 @@ export async function assertSourceDirectory(directory, { privateRoot = false } =
     if (info.mode & 0o077) throw sourceError('INVALID_SOURCE_PATH', 'The managed source directory must be private.');
   }
 }
+// Bind type, ownership and size checks to the handle used for the bounded read.
+async function readSourceFile(file, code, message) {
+  const invalid = () => sourceError(code, message);
+  let handle;
+  try {
+    handle = await fs.open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const selected = await fs.lstat(file);
+    if (!selected.isFile() || selected.isSymbolicLink()) throw invalid();
+    const info = await handle.stat();
+    if (!info.isFile() || info.dev !== selected.dev || info.ino !== selected.ino || info.size > 65536 || (process.getuid && info.uid !== process.getuid())) throw invalid();
+    const bytes = Buffer.alloc(info.size + 1);
+    let length = 0;
+    while (length < bytes.length) {
+      const result = await handle.read(bytes, length, bytes.length - length, null);
+      if (!result.bytesRead) break;
+      length += result.bytesRead;
+    }
+    if (length !== info.size) throw invalid();
+    return bytes.subarray(0, length).toString('utf8');
+  } catch (error) {
+    if (error.code === 'ELOOP' || error.code === 'EISDIR') throw invalid();
+    if (process.platform === 'win32' && (error.code === 'EPERM' || error.code === 'ENOENT')) {
+      // Windows may refuse directory opens or follow a dangling link before lstat.
+      const selected = await fs.lstat(file).catch(() => null);
+      if (selected && (!selected.isFile() || selected.isSymbolicLink())) throw invalid();
+    }
+    throw error;
+  } finally { await handle?.close(); }
+}
 export async function readSourceJSON(file) {
-  const info = await fs.lstat(file);
-  if (!info.isFile() || info.isSymbolicLink() || info.size > 65536 || (process.getuid && info.uid !== process.getuid())) throw sourceError('INVALID_SOURCE_RECEIPT', 'Invalid managed source receipt.');
-  return JSON.parse(await fs.readFile(file, 'utf8'));
+  return JSON.parse(await readSourceFile(file, 'INVALID_SOURCE_RECEIPT', 'Invalid managed source receipt.'));
 }
 export async function writeSourceJSON(file, data) {
   const temporary = `${file}.${randomBytes(8).toString('hex')}.tmp`;
@@ -402,9 +430,7 @@ export async function writeSourceLauncher(root, tools, { previousTools } = {}) {
   const file = path.join(root, process.platform === 'win32' ? 'launch.cmd' : 'launch');
   const text = sourceLauncherText(root, tools.node);
   if (!previousTools) { await fs.writeFile(file, text, { mode: 0o700, flag: 'wx' }); return true; }
-  const info = await fs.lstat(file);
-  if (!info.isFile() || info.isSymbolicLink() || info.size > 65536) throw sourceError('INVALID_SOURCE_PATH', 'The source launcher is not a regular owned file.');
-  const current = await fs.readFile(file, 'utf8');
+  const current = await readSourceFile(file, 'INVALID_SOURCE_PATH', 'The source launcher is not a regular owned file.');
   if (current === text) return false;
   if (current !== sourceLauncherText(root, previousTools.node)) throw sourceError('SOURCE_LAUNCHER_MODIFIED', 'The managed launcher has local edits. They were preserved; run the launch.mjs file with Node.js 24 or move your launcher edits before repairing it.');
   const temporary = `${file}.${randomBytes(8).toString('hex')}.tmp`;

@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID, createHash } from 'node:crypto';
-import { mkdtemp, rm, readFile, writeFile, readdir, rename, mkdir, unlink, symlink, truncate } from 'node:fs/promises';
+import fs, { mkdtemp, rm, readFile, writeFile, readdir, rename, mkdir, unlink, symlink, truncate } from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { createVault } from '../src/vault.mjs';
@@ -280,6 +281,35 @@ test('oversized files, symlinks and unsafe backup directories are refused', asyn
     const elsewhere = path.join(target.directory, 'elsewhere'); await mkdir(elsewhere); await symlink(elsewhere, path.join(target.directory, 'backups'));
     await assert.rejects(target.service.openFolder());
   }
+});
+
+test('backup selection cannot switch to replacement bytes after opening', async t => {
+  const target = await fixture(t), filename = path.join(target.directory, 'selected-race.json');
+  const original = JSON.stringify({ version: 1, exportedAt: now, career: profile('Opened synthetic profile') });
+  const replacement = JSON.stringify({ version: 1, exportedAt: now, career: profile('Unchecked replacement') });
+  await writeFile(filename, original);
+  target.choose(filename);
+  const originalOpen = fs.open;
+  let replaced = false, closed = false;
+  const openMock = t.mock.method(fs, 'open', async (selected, ...args) => {
+    const handle = await originalOpen(selected, ...args);
+    if (selected === filename) {
+      const close = handle.close.bind(handle);
+      handle.close = async () => { closed = true; return close(); };
+      await rename(filename, `${filename}.retained`);
+      await writeFile(filename, replacement);
+      replaced = true;
+    }
+    return handle;
+  });
+  syncBuiltinESMExports();
+  try {
+    if (process.platform === 'win32') await assert.rejects(target.service.preview(), { code: 'INVALID_INPUT' });
+    else assert.equal((await target.service.preview()).profiles[0].name, 'Opened synthetic profile');
+    assert.equal(replaced, true);
+    assert.equal(closed, true);
+    assert.equal(await readFile(filename, 'utf8'), replacement);
+  } finally { openMock.mock.restore(); syncBuiltinESMExports(); }
 });
 
 test('vault before-commit guard aborts a late session change without touching disk state', async t => {

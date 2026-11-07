@@ -1,5 +1,6 @@
 import { randomUUID, generateKeyPairSync } from 'node:crypto';
-import { mkdir, readFile, writeFile, rename, lstat, unlink } from 'node:fs/promises';
+import { mkdir, open, readFile, writeFile, rename, lstat, unlink } from 'node:fs/promises';
+import { constants } from 'node:fs';
 import path from 'node:path';
 import { CAREER_SCHEMA, createCareerState, normalizeIntroductions } from './mcp/state.mjs';
 import { protectPrivatePath, assertPrivatePath } from './platform-runtime.cjs';
@@ -7,6 +8,37 @@ import { protectPrivatePath, assertPrivatePath } from './platform-runtime.cjs';
 export async function privateDirectory(directory) {
   await mkdir(directory, { recursive: true, mode: 0o700 });
   protectPrivatePath(directory, { directory: true });
+}
+/** Check and read the opened object, not a pathname that can be replaced between awaits. */
+export async function readPrivateFile(filename, maxSize) {
+  const handle = await open(filename, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+  try {
+    const info = await handle.stat();
+    // Windows has no O_NOFOLLOW. Retain the reparse-point and DACL checks and
+    // bind their pathname to the opened file identity before consuming bytes.
+    if (process.platform === 'win32') {
+      const named = await lstat(filename);
+      if (named.isSymbolicLink() || named.dev !== info.dev || named.ino !== info.ino) throw new Error('Invalid private storage.');
+    }
+    assertPrivatePath(filename, { info, maxSize });
+    if (process.platform === 'win32') {
+      const named = await lstat(filename);
+      if (named.isSymbolicLink() || named.dev !== info.dev || named.ino !== info.ino) throw new Error('Invalid private storage.');
+    }
+    const bytes = Buffer.alloc(info.size + 1);
+    let length = 0;
+    while (length < bytes.length) {
+      const result = await handle.read(bytes, length, bytes.length - length, null);
+      if (!result.bytesRead) break;
+      length += result.bytesRead;
+    }
+    if (length !== info.size) throw new Error('Private storage changed while reading.');
+    return bytes.subarray(0, length);
+  } catch (error) {
+    // Only failure to open means "not created yet" to vault/preferences callers.
+    if (error.code === 'ENOENT') throw new Error('Private storage changed while reading.', { cause: error });
+    throw error;
+  } finally { await handle.close(); }
 }
 function identity() {
   const pair = generateKeyPairSync('ed25519');
@@ -46,9 +78,7 @@ export function createVault(directory, { decryptLegacy } = {}) {
       await privateDirectory(directory); await writes;
       let loaded;
       try {
-        const info = await lstat(filename);
-        assertPrivatePath(filename, { info, maxSize: 130 * 1024 * 1024 });
-        loaded = JSON.parse(await readFile(filename, 'utf8'));
+        loaded = JSON.parse((await readPrivateFile(filename, 130 * 1024 * 1024)).toString('utf8'));
         if (!validEnvelope(loaded)) throw new Error('Invalid local storage.');
       } catch (error) {
         if (error.code !== 'ENOENT') throw new Error('Local storage could not be opened. Saved data has not been replaced.');

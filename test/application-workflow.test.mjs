@@ -419,6 +419,28 @@ test('equivalent HTML and captured text preserve the saved original, fingerprint
   assert.equal(changed.state, 'needs_refresh');
 });
 
+test('comparison normalization never replaces original markup with purportedly safe HTML', async () => {
+  for (const description of [
+    '<scr<span></span>ipt>untrusted()</script>',
+    '<<!--ignored-->!--untrusted-->',
+    '&lt;img src=x onerror=untrusted()&gt;',
+  ]) {
+    const f = fixture(), created = await f.create({ ...job, description });
+    const career = f.store.get().career, app = career.applications[created.applicationId];
+    const fingerprint = applicationContextFingerprint(career, app);
+    assert.match(fingerprint, /^[a-f0-9]{64}$/);
+    assert.equal(app.job.description, description);
+    const recreated = await f.create({ ...job, description: `<p>${description}</p>` });
+    assert.equal(recreated.applicationId, created.applicationId);
+    const current = f.store.get().career;
+    assert.equal(current.applications[created.applicationId].job.description, description);
+    assert.equal(applicationContextFingerprint(current, current.applications[created.applicationId]), fingerprint);
+    const context = await f.call('career_application_context', { applicationId: created.applicationId });
+    assert.equal(context.job.description, description, 'context retains untrusted source data, not normalized HTML');
+    assert.notEqual(applicationContextFingerprint(career, { ...app, job: { ...app.job, description: `${description} changed duties` } }), fingerprint);
+  }
+});
+
 test('custom-domain localized Pinpoint routes resolve only the exact same-origin role token', async () => {
   const f = fixture(), original = `https://careers.zebedee.io/en/postings/${role}`;
   const created = await f.create({ ...job, url: original });

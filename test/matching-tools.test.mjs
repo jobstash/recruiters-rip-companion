@@ -143,6 +143,7 @@ test('candidate brief preserves decisive late preferences through the valid note
   const result = await f.call('career_match_jobs');
   assert.equal(notes.length, 5000);
   assert.equal(result.candidate.preferences.notes.includes('a@b.co'), false);
+  // Negative privacy assertion over prose, not a URL allowlist or a navigation decision.
   assert.equal(result.candidate.preferences.notes.includes('https://x.y'), false);
   assert.equal(result.candidate.preferences.notes.includes('Hands-on and managerial work were both fine previously.'), true);
   assert.equal(result.candidate.preferences.notes.endsWith(direction), true);

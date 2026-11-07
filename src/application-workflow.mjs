@@ -13,7 +13,8 @@ const urlsFor = job => [...new Set([job?.url, job?.applyUrl, job?.originalUrl, .
 const sourceJobFingerprint = job => job ? hash({ title: job.title, company: job.company ?? null, description: job.description ?? '',
   location: job.location ?? null, url: job.url ?? null, applyUrl: job.applyUrl ?? null, complete: job.complete }) : null;
 
-/** Compare presentation-only HTML/spacing changes without replacing the saved original. */
+/** Comparison-only normalization for equality and hashing, not an HTML sanitizer.
+ * The result never replaces the original description or enters a rendering sink. */
 function originalText(value) {
   const entities = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', ensp: ' ', emsp: ' ', thinsp: ' ',
     ndash: '–', mdash: '—', lsquo: '‘', rsquo: '’', ldquo: '“', rdquo: '”', hellip: '…', bull: '•', middot: '·' };

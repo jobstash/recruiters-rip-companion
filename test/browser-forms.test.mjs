@@ -5,7 +5,7 @@ import { createBrowserForms } from '../src/browser-forms.mjs';
 import { createFormTools } from '../src/mcp/form-tools.mjs';
 import { createProfileTools } from '../src/mcp/profile-tools.mjs';
 import { createScopedAccess } from '../src/mcp/scope.mjs';
-import { CareerError, createCareerState } from '../src/mcp/state.mjs';
+import { CareerError, createCareerState, mutateCareer, replayCareer } from '../src/mcp/state.mjs';
 import { applicationContextFingerprint, upsertApplication } from '../src/application-workflow.mjs';
 
 const field = (id, label, type = 'text', extra = {}) => ({ id, label, type, signature: `signature:${id}`, empty: true, ...extra });
@@ -557,6 +557,68 @@ test('form reads discard stale career evidence while awaiting Chrome status', as
 const addable = result => result.unresolved.filter(item => item.add).map(item => item.id);
 const answer = (f, prepared, fieldId, value, source = 'panel', requestId = randomUUID()) =>
   f.service.saveAnswer({ requestId, formId: prepared.formId, snapshot: prepared.snapshot, fieldId, value, source });
+
+test('snapshot field IDs are own answer data even when they name built-in properties', async () => {
+  const f = fixture(), ids = ['__proto__', 'constructor', 'prototype', 'toString', 'valueOf'];
+  const prototype = Object.getOwnPropertyDescriptors(Object.prototype);
+  const args = snapshot(ids.map(id => field(id, 'Project code')));
+  const prepared = await f.service.prepare(args);
+  assert.deepEqual(addable(prepared), ids);
+  for (const id of ids) {
+    assert.equal((await answer(f, prepared, id, `Answer for ${id}`)).scope, 'application');
+    const answers = f.state().career.formDrafts[prepared.formId].answers;
+    assert.equal(Object.getPrototypeOf(answers), Object.prototype);
+    assert.deepEqual(Object.getOwnPropertyDescriptor(answers, id), {
+      value: { value: `Answer for ${id}`, source: 'user' }, writable: true, enumerable: true, configurable: true,
+    });
+  }
+  const reloaded = await f.service.prepare({ ...args, requestId: randomUUID() });
+  assert.deepEqual(reloaded.fields.map(({ id, value }) => [id, value]), ids.map(id => [id, `Answer for ${id}`]));
+  // Undo uses the original still-bound missing-field collection; re-preparation replaces it.
+  const undo = fixture(), undoPrepared = await undo.service.prepare(args);
+  for (const id of ids) {
+    await answer(undo, undoPrepared, id, `Answer for ${id}`);
+    await answer(undo, undoPrepared, id, null);
+    const answers = undo.state().career.formDrafts[undoPrepared.formId].answers;
+    assert.equal(Object.hasOwn(answers, id), false);
+    assert.equal(Object.getPrototypeOf(answers), Object.prototype);
+  }
+  assert.deepEqual(Object.getOwnPropertyDescriptors(Object.prototype), prototype);
+});
+
+test('unbound prototype form and field names cannot mutate a draft or built-ins', async () => {
+  const f = fixture(), prepared = await f.service.prepare(snapshot([field('project', 'Project code')]));
+  const before = f.state(), prototype = Object.getOwnPropertyDescriptors(Object.prototype), constructor = Object.getOwnPropertyDescriptors(Object);
+  for (const id of ['__proto__', 'constructor', 'prototype', 'toString', 'valueOf']) {
+    for (const value of ['Injected answer', null]) {
+      await assert.rejects(answer(f, prepared, id, value), byCode('INVALID_INPUT'));
+      await assert.rejects(f.service.saveAnswer({
+        requestId: randomUUID(), formId: id, snapshot: prepared.snapshot, fieldId: 'project', value, source: 'panel',
+      }), error => ['NOT_FOUND', 'FORM_CONTEXT_CHANGED'].includes(error.code));
+    }
+  }
+  assert.deepEqual(f.state(), before);
+  assert.deepEqual(Object.getOwnPropertyDescriptors(Object.prototype), prototype);
+  assert.deepEqual(Object.getOwnPropertyDescriptors(Object), constructor);
+});
+
+test('receipt writes and replays reject non-UUID property keys before mutation without relying on tool schemas', async () => {
+  const f = fixture(), before = f.state(), prototype = Object.getOwnPropertyDescriptors(Object.prototype);
+  const change = () => assert.fail('Invalid request IDs must not reach a mutation');
+  for (const requestId of ['__proto__', 'constructor', 'prototype', 'toString', 'valueOf', '', null, 42,
+    '10000000-0000-0000-8000-000000000001', '10000000-0000-4000-0000-000000000001']) {
+    const mutation = { requestId, revision: before.career.revision };
+    await assert.rejects(mutateCareer(f.store, mutation, 'synthetic', {}, change), byCode('INVALID_INPUT'));
+    assert.throws(() => replayCareer(f.store, mutation, 'synthetic', {}), byCode('INVALID_INPUT'));
+  }
+  assert.deepEqual(f.state(), before);
+  const mutation = { requestId: randomUUID(), revision: before.career.revision };
+  const result = await mutateCareer(f.store, mutation, 'synthetic', {}, () => ({ saved: true }));
+  assert.equal(Object.hasOwn(f.state().career.receipts, mutation.requestId), true);
+  assert.deepEqual(replayCareer(f.store, mutation, 'synthetic', {}), result);
+  assert.deepEqual(await mutateCareer(f.store, mutation, 'synthetic', {}, () => assert.fail('Exact retry must not mutate')), result);
+  assert.deepEqual(Object.getOwnPropertyDescriptors(Object.prototype), prototype);
+});
 
 test('explicit missing basics save once and reuse across differently labelled forms without splitting names', async () => {
   const f = fixture();

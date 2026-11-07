@@ -69,6 +69,7 @@ export async function mutateCareer(store, mutation, operation, input, change) {
     career.revision++;
     result = structuredClone({ ...data, revision: career.revision });
     if (Buffer.byteLength(JSON.stringify(result)) > 2 * 1024 * 1024) fail('RESULT_LIMIT', 'This result is too large. Request a smaller set of records.');
+    // preflight accepts only UUID keys before invoking change; built-in property names cannot reach this write.
     career.receipts[mutation.requestId] = { operation, inputHash: checked.inputHash, result: structuredClone(result), createdAt: new Date().toISOString() };
   });
   return result;

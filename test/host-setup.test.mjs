@@ -44,7 +44,11 @@ async function swapAfterHandleStat(t, filename, replacement) {
         const bytes = Buffer.alloc(selectedBytes.length);
         assert.equal((await this.read(bytes, 0, bytes.length, 0)).bytesRead, bytes.length);
         assert.deepEqual(bytes, selectedBytes);
-      } finally { await current.close(); }
+      } finally {
+        await current.close();
+        // Do not let fixture-owned handles block the subsequent Windows tree swap.
+        await replacementHandle.close();
+      }
       swapped = true;
     }
     return info;

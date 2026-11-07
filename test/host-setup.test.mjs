@@ -15,16 +15,37 @@ async function temporary(t) {
 }
 
 async function swapAfterHandleStat(t, filename, replacement) {
+  const replacementHandle = await open(replacement, 'r');
+  t.after(() => replacementHandle.close());
+  const replacementInfo = await replacementHandle.stat(), replacementBytes = await replacementHandle.readFile();
   const probe = await open(filename, 'r');
   const selected = await probe.stat(), prototype = Object.getPrototypeOf(probe);
+  const selectedBytes = await probe.readFile();
   await probe.close();
   const original = prototype.stat;
   let swapped = false;
   t.mock.method(prototype, 'stat', async function (...args) {
     const info = await original.apply(this, args);
     if (!swapped && info.dev === selected.dev && info.ino === selected.ino) {
+      // Windows cannot replace an open destination, but can move its name aside.
+      // Keep the retained inode outside either compared tree until fixture cleanup.
+      const retained = `${replacement}.retained`;
+      await rename(filename, retained);
+      try { await rename(replacement, filename); }
+      catch (error) { await rename(retained, filename); throw error; }
+      const current = await open(filename, 'r');
+      try {
+        const installed = await original.call(current), retainedInfo = await original.call(this);
+        assert.ok(installed.dev !== selected.dev || installed.ino !== selected.ino, 'pathname must identify the replacement');
+        assert.deepEqual([installed.dev, installed.ino], [replacementInfo.dev, replacementInfo.ino], 'pathname must identify the prepared replacement file');
+        assert.deepEqual([retainedInfo.dev, retainedInfo.ino], [selected.dev, selected.ino], 'production descriptor must retain the original file');
+        assert.deepEqual(await current.readFile(), replacementBytes);
+        // Positional reads leave the production descriptor's read offset untouched.
+        const bytes = Buffer.alloc(selectedBytes.length);
+        assert.equal((await this.read(bytes, 0, bytes.length, 0)).bytesRead, bytes.length);
+        assert.deepEqual(bytes, selectedBytes);
+      } finally { await current.close(); }
       swapped = true;
-      await rename(replacement, filename);
     }
     return info;
   });
@@ -426,16 +447,16 @@ async function refreshFixture(t, { localOnly = false } = {}) {
 test('Codex generated MCP comparison reads the inspected handle after a path replacement', async t => {
   const fixture = await refreshFixture(t);
   await fixture.registerCodex();
-  await fixture.refresh();
+  assert.deepEqual((await fixture.refresh()).errors, []);
   const filename = path.join(fixture.directory, 'host-integration', 'plugins', 'recruiters-rip', '.mcp.json');
   const selected = await readFile(filename, 'utf8'), replacement = path.join(fixture.root, 'replacement.json');
   await writeFile(replacement, '{"replacement":true}');
   const swapped = await swapAfterHandleStat(t, filename, replacement);
   const calls = fixture.calls.length;
-  await fixture.refresh();
+  assert.deepEqual((await fixture.refresh()).errors, []);
   assert.equal(swapped(), true);
   assert.equal(fixture.calls.length, calls);
-  await fixture.refresh();
+  assert.deepEqual((await fixture.refresh()).errors, []);
   assert.equal(await readFile(filename, 'utf8'), selected);
   assert.ok(fixture.calls.length > calls);
 });

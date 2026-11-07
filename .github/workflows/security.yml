@@ -26,6 +26,8 @@ jobs:
           node-version: 24.22.2
       - name: Exercise actual source recovery children and native readiness publication
         run: node --test test/source-update-helper.test.mjs test/update-install.test.mjs test/smoke-source-boundaries.test.mjs test/release-policy.test.mjs
+      - name: Exercise native Windows pathname replacement while descriptors remain open
+        run: node --test --test-name-pattern="reads the inspected|source receipts reject|source receipt reads reject" test/host-setup.test.mjs test/source-updates.test.mjs
 
   headless:
     runs-on: ubuntu-24.04

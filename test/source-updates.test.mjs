@@ -83,6 +83,7 @@ for (const consumer of ['receipt', 'launcher']) test(`source ${consumer} reads t
   await fs.writeFile(replacement, 'replacement bytes');
   const replacementHandle = await fs.open(replacement, 'r');
   t.after(() => replacementHandle.close());
+  const replacementInfo = await replacementHandle.stat();
   const probe = await fs.open(file, 'r');
   const metadata = await probe.stat(), prototype = Object.getPrototypeOf(probe);
   await probe.close();
@@ -91,8 +92,25 @@ for (const consumer of ['receipt', 'launcher']) test(`source ${consumer} reads t
   t.mock.method(prototype, 'stat', async function (...args) {
     const info = await original.apply(this, args);
     if (!swapped && info.dev === metadata.dev && info.ino === metadata.ino) {
+      // Move the open inode aside before installing the other real file: Windows
+      // rejects rename-over-open even though renaming that open file is allowed.
+      const retained = path.join(root, 'retained');
+      await fs.rename(file, retained);
+      try { await fs.rename(replacement, file); }
+      catch (error) { await fs.rename(retained, file); throw error; }
+      const current = await fs.open(file, 'r');
+      try {
+        const installed = await original.call(current), retainedInfo = await original.call(this);
+        assert.ok(installed.dev !== metadata.dev || installed.ino !== metadata.ino, 'pathname must identify the replacement');
+        assert.deepEqual([installed.dev, installed.ino], [replacementInfo.dev, replacementInfo.ino], 'pathname must identify the prepared replacement file');
+        assert.deepEqual([retainedInfo.dev, retainedInfo.ino], [metadata.dev, metadata.ino], 'production descriptor must retain the original file');
+        assert.equal(await current.readFile('utf8'), 'replacement bytes');
+        // Explicit position preserves the offset used by the production reader.
+        const bytes = Buffer.alloc(Buffer.byteLength(selected));
+        assert.equal((await this.read(bytes, 0, bytes.length, 0)).bytesRead, bytes.length);
+        assert.equal(bytes.toString('utf8'), selected);
+      } finally { await current.close(); }
       swapped = true;
-      await fs.rename(replacement, file);
     }
     return info;
   });

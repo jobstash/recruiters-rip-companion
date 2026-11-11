@@ -66,6 +66,16 @@ jobs:
           node-version: 24.22.2
           architecture: ${{ matrix.arch }}
           cache: pnpm
+      - name: Use public DNS when the runner cannot resolve Ubuntu's package hosts
+        if: runner.os == 'Linux'
+        # The hosted runner's own resolver has failed for every ubuntu.com name while other hosts resolved.
+        # apt still verifies the archive signatures, so only the lookup changes.
+        run: |
+          getent hosts archive.ubuntu.com security.ubuntu.com > /dev/null && exit 0
+          link="$(ip route show default | awk '{ print $5; exit }')"
+          sudo resolvectl dns "$link" 1.1.1.1 8.8.8.8
+          sudo resolvectl flush-caches
+          getent hosts archive.ubuntu.com security.ubuntu.com
       - name: Install Linux desktop smoke dependencies
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install --yes xvfb libfuse2t64 libgtk-3-0t64 libnss3 libasound2t64 libgbm1
@@ -158,6 +168,14 @@ jobs:
         with:
           node-version: 24.22.2
           architecture: ${{ matrix.arch }}
+      - name: Use public DNS when the runner cannot resolve Ubuntu's package hosts
+        if: runner.os == 'Linux'
+        run: |
+          getent hosts archive.ubuntu.com security.ubuntu.com > /dev/null && exit 0
+          link="$(ip route show default | awk '{ print $5; exit }')"
+          sudo resolvectl dns "$link" 1.1.1.1 8.8.8.8
+          sudo resolvectl flush-caches
+          getent hosts archive.ubuntu.com security.ubuntu.com
       - name: Install Linux graphical source smoke dependencies
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install --yes xvfb libgtk-3-0t64 libnss3 libasound2t64 libgbm1

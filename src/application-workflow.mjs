@@ -4,6 +4,7 @@ import { canonicalJobUrl, importCapturedJobs } from './mcp/job-tools.mjs';
 import { formEvidence, formFingerprint, unavailableField, validFormValue, validateFormSnapshot } from './mcp/form-tools.mjs';
 import { assertJobNotBlocked } from './mcp/blocklist.mjs';
 import { applicationProgress, changeProgress } from './application-progress.mjs';
+import { careerGapBinding } from './mcp/career-gap.mjs';
 
 const now = () => new Date().toISOString();
 const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -57,8 +58,10 @@ export function currentApplicationJob(career, app) {
 export function applicationContextFingerprint(career, app) {
   const job = currentApplicationJob(career, app);
   const { personalSummary, ...profile } = career.profile ?? {};
+  // Present only while the candidate shows career gaps, so other profiles keep their current documents.
+  const careerGap = careerGapBinding(career);
   return hash({ applicationId: app.id, job: { title: job.title, company: job.company, description: originalText(job.description), location: job.location ?? null },
-    evidenceRevision: career.evidenceRevision ?? 0, profile, facts: career.facts ?? {}, sources: career.sources ?? {} });
+    evidenceRevision: career.evidenceRevision ?? 0, profile, facts: career.facts ?? {}, sources: career.sources ?? {}, ...(careerGap ? { careerGap } : {}) });
 }
 export function upsertApplication(career, job) {
   assertJobNotBlocked(career, job.id, job);

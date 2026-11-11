@@ -8,6 +8,7 @@ import { createDocumentFiles, validExport, exportTypes, documentURI, documentNam
 import { CAREER_SCHEMA, fail, hash, upgradeCareer, normalizeIntroductions } from './mcp/state.mjs';
 import { BLOCK_KINDS } from './mcp/blocklist.mjs';
 import { FACT_KINDS } from './mcp/facts.mjs';
+import { assertCareerGapSetting } from './mcp/career-gap.mjs';
 import { applicationContextFingerprint } from './application-workflow.mjs';
 import { replayProgress } from './application-progress.mjs';
 
@@ -64,6 +65,9 @@ function draft(value, kind) {
       for (const bullet of array(item.bullets, 'CV bullets')) claim(bullet);
     }
     if (doc.highlights !== undefined) array(doc.highlights, 'CV highlights').forEach(claim);
+    if (doc.careerGaps !== undefined) for (const item of array(doc.careerGaps, 'CV career gaps')) {
+      object(item, 'CV career gap'); for (const key of ['label', 'startDate', 'endDate']) text(item[key], key);
+    }
     for (const key of ['education', 'skills', 'languages', 'additional']) if (doc[key] !== undefined)
       for (const item of array(doc[key], key)) {
         object(item, key);
@@ -188,6 +192,7 @@ export function validateBackupCareer(career) {
     });
   }
   for (const key of ['prescan', 'prescanInclusion', 'prescanPublicationRange']) if (career[key] !== undefined && career[key] !== null && typeof career[key] !== 'string') object(career[key], key);
+  if (career.careerGap !== undefined) try { assertCareerGapSetting(career.careerGap); } catch { invalid('the career gap setting is unsupported'); }
   return career;
 }
 

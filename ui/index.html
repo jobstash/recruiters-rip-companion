@@ -12,6 +12,7 @@
 <script src="career-browser.js" defer></script>
 <script src="decisions.js" defer></script>
 <script src="updates.js" defer></script>
+<script src="career-gap.js" defer></script>
 <script src="backups.js" defer></script>
 <script src="settings.js" defer></script>
 </head>
@@ -58,6 +59,18 @@
 <button type="button" class="tab" role="tab" data-career-kind="facts" aria-selected="false" disabled>Facts</button>
 <button type="button" class="tab" role="tab" data-career-kind="preferences" aria-selected="false" disabled>Preferences</button>
 </div>
+<section id="career-gap" class="career-gap" aria-label="Career gap detection" hidden>
+<label class="update-preference" for="career-gap-enabled"><input id="career-gap-enabled" type="checkbox" aria-describedby="career-gap-note" disabled>Career gap detection</label>
+<div id="career-gap-options" class="career-gap-options" hidden>
+<label class="decisions-field" for="career-gap-from">From year<input id="career-gap-from" type="number" inputmode="numeric" min="1950" max="2100" step="1" disabled></label>
+<label class="decisions-field" for="career-gap-to">To year<input id="career-gap-to" type="number" inputmode="numeric" min="1950" max="2100" step="1" disabled></label>
+<label class="decisions-field" for="career-gap-months">Minimum months<input id="career-gap-months" type="number" inputmode="numeric" min="3" max="120" step="1" disabled></label>
+<label class="decisions-field" for="career-gap-mode">Reason given<select id="career-gap-mode" disabled><option value="private">Career gap period - private reasons</option><option value="custom">My own wording</option></select></label>
+<label id="career-gap-text-field" class="decisions-field" for="career-gap-text" hidden>Your wording<input id="career-gap-text" type="text" maxlength="200" autocomplete="off" disabled></label>
+</div>
+<p id="career-gap-note" class="caption" role="status" aria-live="polite"></p>
+<p id="career-gap-error" role="alert" hidden></p>
+</section>
 </div>
 <div class="career-panes">
 <section class="career-list panel" aria-label="Saved records">

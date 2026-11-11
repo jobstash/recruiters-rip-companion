@@ -173,6 +173,7 @@ async function refresh() {
       window.careerBrowser?.clear(); careerViewVersion = undefined;
       window.decisionsUI?.clear();
       window.updatesUI?.clear();
+      window.careerGapUI?.clear();
       window.helpUI.clear();
       return;
     }
@@ -194,6 +195,7 @@ async function refresh() {
     window.decisionsUI?.refresh(state.decisions);
     window.careerBrowser?.setContext({ review: state.review, publicationRange: state.publicationRange, paired: state.paired, catalogue: state.catalogue });
     window.updatesUI?.refresh(state.updates);
+    window.careerGapUI?.refresh(state.careerGap);
     window.helpUI.refresh(state);
     if (requestedSection) { const section = requestedSection; requestedSection = null; openSettings(section); }
     stateNotice(state.failure || state.review?.errors?.map(error => error.message).join(' ') || '', 'error');

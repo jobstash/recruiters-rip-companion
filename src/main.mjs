@@ -31,6 +31,7 @@ import { addClaudeCodeServer, addClaudeDesktopServer, addedHosts, agentSetupProm
 import { createCareerBrowser } from './career-browser.mjs';
 import { createDecisionCredentials, decisionCredentialStatus } from './decisions/credentials.mjs';
 import { savedPublicationRange, setPublicationRange } from './mcp/review-queue.mjs';
+import { savedCareerGap, setCareerGap } from './mcp/career-gap.mjs';
 import { startPairingReturn } from './pairing-return.mjs';
 import { createJobTools } from './mcp/job-tools.mjs';
 import { createFormTools, currentForm, formEvidence } from './mcp/form-tools.mjs';
@@ -311,6 +312,7 @@ function localState() {
     catalogue: jobsCatalogue.state(), hasReviews: Object.keys(state.career?.matching?.scores ?? {}).length > 0,
     decisions: { credentials: decisionCredentialStatus(state) },
     publicationRange: savedPublicationRange(state.career ?? {}),
+    careerGap: savedCareerGap(state.career ?? {}),
     updates: updateState(),
     review: { hosts: reviewHosts, hostInfo: reviewHostInfo, added: hostsAdded, ...liveSessions(mcpClients), restart: restartPending, errors: hostRefreshErrors,
       preferredHost: ['claude', 'codex'].includes(state.browserPreferences?.applicationHost) ? state.browserPreferences.applicationHost : reviewHosts.codex ? 'codex' : 'claude' },
@@ -902,6 +904,14 @@ async function settingsOperation(op, input, ownMutation) {
       scoped.assertAvailable(false); careerViewRevision++;
       emit(); loadJobs(); return { ok: true, result: { publicationRange: input.publicationRange } };
     }
+    if (op === 'career-gap-set') {
+      assertAvailable(false);
+      const scoped = createScopedAccess(store, { assertAvailable, epoch: () => sessionEpoch });
+      let saved;
+      await scoped.store.update(state => { saved = setCareerGap(state.career ??= createCareerState(), input); });
+      scoped.assertAvailable(false); careerViewRevision++;
+      emit(); return { ok: true, result: saved };
+    }
     exact(input, op === 'approval' ? ['id', 'allow'] : []);
     if (op === 'unlock') { await initialize(); await startUpdates(); if (queuedPairing) { const payload = queuedPairing; queuedPairing = undefined; void pair(payload).catch(error => { failure = safeFailure(error).message; emit(); }); } emit(); loadJobs(); return { ok: true, result: localState() }; }
     assertAvailable(false); let result = { completed: true };
@@ -986,7 +996,7 @@ ipcMain.handle('local-settings', async (event, op, input = {}) => {
     if (typeof op !== 'string') fail('INVALID_INPUT', 'Choose a local settings action.');
     if (op === 'state' || op.startsWith('update-')) return await settingsOperation(op, input);
     return await workGate.run(() => {
-      if (['decisions-key-save', 'decisions-key-remove', 'publication-range-set', 'import-cv', 'cv-delete', 'delete-rankings', 'connect-account', 'backup', 'backup-preview', 'backup-restore'].includes(op))
+      if (['decisions-key-save', 'decisions-key-remove', 'publication-range-set', 'career-gap-set', 'import-cv', 'cv-delete', 'delete-rankings', 'connect-account', 'backup', 'backup-preview', 'backup-restore'].includes(op))
         return mutation(ownMutation => settingsOperation(op, input, ownMutation));
       return settingsOperation(op, input);
     }, { meaningful: !['career-list', 'career-read', 'career-pipeline', 'account-platform'].includes(op) });

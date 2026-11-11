@@ -3,6 +3,8 @@ export interface CvDocument {
   summary: string;
   highlights?: string[];
   experience: Array<{ employer: string; role: string; location?: string; startDate: string; endDate: string; bullets: string[] }>;
+  /** Periods without work, in the candidate's own wording. Never employment. */
+  careerGaps?: Array<{ label: string; startDate: string; endDate: string }>;
   education?: Array<{ institution: string; qualification?: string; startDate?: string; endDate?: string; details?: string }>;
   skills?: Array<{ label: string; items: string[] }>;
   languages?: Array<{ language: string; proficiency: string }>;
@@ -52,6 +54,11 @@ export function buildStructuredCvPresentation(document: CvDocument, heading: CvH
     ...(clean(entry.location) ? { location: clean(entry.location) } : {}),
     ...(dateRange(entry.startDate, entry.endDate) ? { dates: dateRange(entry.startDate, entry.endDate) } : {}),
     items: bullets(entry.bullets),
+  })));
+  section("Career gap", (document.careerGaps ?? []).map(entry => ({
+    kind: "experience" as const, company: clean(entry.label), role: "",
+    ...(dateRange(entry.startDate, entry.endDate) ? { dates: dateRange(entry.startDate, entry.endDate) } : {}),
+    items: [],
   })));
   section("Skills", (document.skills ?? []).filter(group => group.items.some(item => clean(item))).map(group => ({
     kind: "paragraph" as const, text: `${clean(group.label)}: ${group.items.map(clean).filter(Boolean).join(", ")}`,

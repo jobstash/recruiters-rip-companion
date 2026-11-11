@@ -19,8 +19,9 @@ export function renderableCv(document) {
 /**
  * Every authored text field of a renderable CvDocument, in reading order.
  * `bullet` marks list items; `claim` marks evidence-cited highlights and
- * experience bullets; `date` marks structured date fields.
- * @returns {Array<{field: string, text: string, bullet?: boolean, claim?: boolean, date?: boolean}>}
+ * experience bullets; `date` marks structured date fields; `setting` marks
+ * the candidate's own career-gap wording, which the host does not author.
+ * @returns {Array<{field: string, text: string, bullet?: boolean, claim?: boolean, date?: boolean, setting?: boolean}>}
  */
 export function cvDocumentTexts(document) {
   const texts = [{ field: 'headline', text: document.headline }, { field: 'summary', text: document.summary }];
@@ -31,6 +32,10 @@ export function cvDocumentTexts(document) {
     for (const key of ['employer', 'role', 'location']) add(`${at}.${key}`, entry[key]);
     for (const key of ['startDate', 'endDate']) add(`${at}.${key}`, entry[key], { date: true });
     entry.bullets.forEach((text, bullet) => add(`${at}.bullets[${bullet}]`, text, { bullet: true, claim: true }));
+  });
+  (document.careerGaps ?? []).forEach((entry, index) => {
+    add(`careerGaps[${index}].label`, entry.label, { setting: true });
+    for (const key of ['startDate', 'endDate']) add(`careerGaps[${index}].${key}`, entry[key], { date: true });
   });
   (document.education ?? []).forEach((entry, index) => {
     for (const key of ['institution', 'qualification', 'details']) add(`education[${index}].${key}`, entry[key]);
@@ -90,7 +95,7 @@ export function inspectCvQuality({ document, heading = {} }) {
   for (const [opening, matches] of openings) if (matches.length >= 3) {
     for (const item of matches) issues.push({ code: 'repeated_action_verb', field: item.field, message: `${matches.length} bullets begin with “${opening}”; vary the opening verb.` });
   }
-  for (const item of texts) for (const pattern of placeholders) for (const match of item.text.matchAll(pattern)) {
+  for (const item of texts) if (!item.setting) for (const pattern of placeholders) for (const match of item.text.matchAll(pattern)) {
     issues.push({ code: 'placeholder_text', field: item.field, message: `Unfinished placeholder “${match[0]}”; replace it with real content or remove it.` });
   }
   return issues;

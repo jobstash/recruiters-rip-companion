@@ -68,10 +68,7 @@ jobs:
           cache: pnpm
       - name: Install Linux desktop smoke dependencies
         if: runner.os == 'Linux'
-        # The hosted runner's Azure package mirror is sometimes unresolvable; fall back to the canonical Ubuntu archive.
-        run: |
-          install() { sudo apt-get update && sudo apt-get install --yes xvfb libfuse2 libgtk-3-0 libnss3 libasound2 libgbm1; }
-          install || { sudo sed -i '/azure\.archive\.ubuntu\.com/d' /etc/apt/apt-mirrors.txt && install; }
+        run: sudo apt-get update && sudo apt-get install --yes xvfb libfuse2 libgtk-3-0 libnss3 libasound2 libgbm1
       - run: pnpm install --frozen-lockfile
       - name: Materialize the pinned Electron runtime before build and tests
         run: node node_modules/electron/install.js

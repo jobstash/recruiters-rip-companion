@@ -10,6 +10,7 @@ import { SKILL_DIGEST } from '../generated/skill-digest.mjs';
 import { localJobOriginal } from './job-tools.mjs';
 import { formEvidence } from './form-tools.mjs';
 import { assertJobNotBlocked, blockFilter } from './blocklist.mjs';
+import { careerGapContext, careerGapsSchema, resolveCareerGaps } from './career-gap.mjs';
 
 export const CV_WRITING_GUIDE = [
   'Write to win the interview. The saved CV is the base career record: employers, roles, dates and achievements come from it. Facts are what the candidate has told you since; use them to tailor truthfully.',
@@ -34,6 +35,7 @@ const cvSchema = object({
     employer: text(300), role: text(300), location: text(300), startDate: text(40), endDate: text(40),
     bullets: { type: 'array', items: claim(400), minItems: 1, maxItems: 10 },
   }, ['employer', 'role', 'startDate', 'endDate', 'bullets']) },
+  careerGaps: careerGapsSchema,
   education: { type: 'array', maxItems: 20, items: object({
     institution: text(300), qualification: text(300), startDate: text(40), endDate: text(40), details: text(1000),
   }, ['institution']) },
@@ -150,7 +152,7 @@ function context(career, app) {
   const row = app.job.id ? career.matching?.scores?.[app.job.id] : undefined;
   const assessment = row && currentAssessment(row, matchingProfileVersion(career))
     ? (({ overall, band, decision, gates, dimensions, requirements, reason }) => ({ overall, band, decision, gates, dimensions, requirements, reason }))(row) : null;
-  const fingerprint = applicationContextFingerprint(career, app), evidence = formEvidence(career);
+  const fingerprint = applicationContextFingerprint(career, app), evidence = formEvidence(career), careerGap = careerGapContext(career);
   const forms = Object.values(career.formDrafts ?? {}).filter(draft => draft.applicationId === app.id)
     .sort((a, b) => (b.updatedAt ?? b.createdAt).localeCompare(a.updatedAt ?? a.createdAt))
     .map(draft => ({ formId: draft.formId, snapshot: draft.snapshot, evidenceRevision: draft.evidenceRevision,
@@ -160,7 +162,7 @@ function context(career, app) {
   return { revision: career.revision, application: app, job: currentApplicationJob(career, app),
     contextFingerprint: fingerprint, forms,
     profile: { name, email, phone, location, links, headline, seniority, roleCapabilities, skills }, preferences,
-    cv: cvRecord(career), facts, assessment,
+    cv: cvRecord(career), facts, assessment, ...(careerGap ? { careerGap } : {}),
     presentation: {
       templates: [{ id: 'classic', description: 'Serif text with ruled section headings.' }, { id: 'modern', description: 'Sans-serif text in a single column.' }],
       papers: ['A4', 'LETTER'], fontSize: 11, current: app.cv?.presentation ?? defaultPresentation,
@@ -240,22 +242,26 @@ export function createApplicationTools({ store, platform, documents, exportDocum
       for (const id of args.applicationIds) delete career.applications[id];
       return { deleted: args.applicationIds.length };
     });
-  add('career_application_context', 'Everything needed to tailor the CV and cover letter: the job, profile, preferences, the saved CV text (the career record), known facts grouped by kind, the current saved match assessment of a catalogue job (or null), presentation options and the writing guide. Write from this evidence without asking; a required form answer it cannot support blocks only this application.',
+  add('career_application_context', 'Everything needed to tailor the CV and cover letter: the job, profile, preferences, the saved CV text (the career record), known facts grouped by kind, the current saved match assessment of a catalogue job (or null), presentation options and the writing guide. careerGap appears only when the candidate chose to show career gaps in generated CVs; follow its instruction. Write from this evidence without asking; a required form answer it cannot support blocks only this application.',
     object({ applicationId: uuid }), true, args => {
       const career = readCareer(store);
       return context(career, application(career, args.applicationId));
     });
 
-  add('career_application_cv_save', 'Save the tailored CV as a structured document. Every highlight and experience bullet is {text, support}: support.cv quotes the saved CV verbatim, support.facts cites saved fact IDs, and the claim\'s numbers must appear in that cited evidence. Employers must appear in the saved CV or as a fact\'s employer; other numbers must come from the CV, facts or profile. Returns layout and non-blocking quality notes to fix silently.',
+  add('career_application_cv_save', 'Save the tailored CV as a structured document. Every highlight and experience bullet is {text, support}: support.cv quotes the saved CV verbatim, support.facts cites saved fact IDs, and the claim\'s numbers must appear in that cited evidence. Employers must appear in the saved CV or as a fact\'s employer; other numbers must come from the CV, facts or profile. careerGaps (periods only) is accepted only when career_application_context returns careerGap; Companion writes each entry in the candidate\'s wording under a "Career gap" section. Returns layout and non-blocking quality notes to fix silently.',
     object({ ...mutationSchema, applicationId: uuid, cv: cvSchema, presentation: presentationSchema }, ['requestId', 'revision', 'applicationId', 'cv']), false, async args => {
       guard(args);
       const replay = replayCareer(store, args, 'career_application_cv_save', args);
       if (replay) return replay;
       const career = readCareer(store), app = application(career, args.applicationId);
-      const document = renderableCv(args.cv), items = cvDocumentTexts(document);
+      // The host authors gap periods only; the stored and rendered wording is the candidate's setting.
+      const careerGaps = resolveCareerGaps(career, args.cv.careerGaps);
+      const { careerGaps: _periods, ...authored } = args.cv;
+      const stored = careerGaps ? { ...authored, careerGaps } : authored;
+      const document = renderableCv(stored), items = cvDocumentTexts(document).filter(item => !item.setting);
       assertVoice(items);
-      assertKnownEmployers(career, args.cv);
-      assertClaimSupport(career, args.cv);
+      assertKnownEmployers(career, stored);
+      assertClaimSupport(career, stored);
       assertNumbers(career, items.filter(item => !item.date && !item.claim));
       const heading = cvHeading(career.profile);
       const presentation = args.presentation ?? app.cv?.presentation ?? defaultPresentation;
@@ -264,7 +270,7 @@ export function createApplicationTools({ store, platform, documents, exportDocum
       if (!layout.fits) issues.unshift(`layout: ${layout.error}`);
       return save('career_application_cv_save', args, current => {
         const target = application(current, app.id);
-        const draft = { version: (target.cv?.version ?? 0) + 1, document: args.cv, presentation, policyId: CV_POLICY_ID,
+        const draft = { version: (target.cv?.version ?? 0) + 1, document: stored, presentation, policyId: CV_POLICY_ID,
           contextFingerprint: applicationContextFingerprint(current, target), createdAt: now() };
         if (target.cv) target.cvHistory.push(target.cv);
         target.cv = draft;

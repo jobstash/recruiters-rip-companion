@@ -135,6 +135,16 @@ The JSON files created by the earlier **Export backup** action can also be selec
 
 If the profile changes while you review the backup, select the file again before restoring. An invalid file does not replace your current profile.
 
+## Show career gaps in generated CVs — optional
+
+In **Me → CVs**, tick **Career gap detection**. It is off until you tick it. Three choices then appear:
+
+- **From year / To year**: the years to check for gaps. The default is the past ten years.
+- **Minimum months**: how long a period without a job must be to count. Three months is the shortest and the default.
+- **Reason given**: `Career gap period - private reasons`, or **My own wording** with one line you write.
+
+When your AI app next prepares a CV, a period that long between two jobs in your saved CV (or since your last job ended) appears in its own **Career gap** section with those dates and that wording. It is never listed as a job. Documents prepared before you changed the setting are refreshed the next time your AI app prepares them. Untick the checkbox to stop showing gaps.
+
 ## Delete a CV
 
 In **Me → CVs**, open the CV, choose **Delete CV** at the top and confirm the deletion request.
@@ -316,6 +326,7 @@ Browser form answers use one native operation, `forms_answer_save` `{requestId, 
 4. Saves reject invented employers (`UNKNOWN_EMPLOYER`), non-verbatim quotes (`UNKNOWN_QUOTE`), unknown facts (`UNKNOWN_FACT`), bullets citing another employer's fact (`MISATTRIBUTED_FACT`), numbers absent from a claim's own cited evidence or, outside claims, from the CV, profile or saved answers (`UNSUPPORTED_NUMBER`) and narrated, hedged or third-person wording (`UNCLEAR_FACT`, `CV_TONE`). Other quality notes are returned as `issues` for the host to fix silently.
 5. `career_application_letter_save` stores the cover letter as paragraphs with the same checks.
 6. `career_application_export` renders PDF (classic or modern, A4 or Letter, 11pt) or TXT; PDF text is read back before the file is saved.
+7. **Career gaps (optional, off by default).** `career.careerGap` is `{enabled, mode: 'private'|'custom', text, minMonths, fromYear, toYear}`, set only by the candidate in **Me → CVs** (IPC `career-gap-set`; no MCP tool changes it). While enabled, `career_application_context` returns `careerGap` with the wording, minimum length, year range and the host instruction, and `career_application_cv_save` accepts `cv.careerGaps: [{start, end}]` (`YYYY-MM` or `YYYY`; `end` may be `present`). The host supplies periods only: Companion writes the stored and rendered entry (`{label, startDate, endDate}`) from the candidate's wording under a **Career gap** section after Experience. Saves reject periods while the setting is off (`CAREER_GAPS_OFF`), shorter than `minMonths` (`CAREER_GAP_TOO_SHORT`; year-only dates count as the shortest period they can mean), outside the year range (`CAREER_GAP_OUT_OF_RANGE`) and any extra key such as an employer, role or label (`INVALID_INPUT`). The enabled setting is part of `contextFingerprint`, so changing it makes earlier drafts and exports stale; profiles that never enable it keep their fingerprints.
 
 For an agent-led application, export both current PDFs before `career_application_open({applicationId})` opens its saved URL in the user's default browser. Use Chrome or Firefox with the corresponding extension. Reading the application page links its questions back to that application; the active agent discovers them in `career_application_context.forms`, stages the short personal summary and other narrative answers, and the panel refreshes. Reopening the job reuses current outputs rather than regenerating them.
 

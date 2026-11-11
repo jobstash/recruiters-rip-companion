@@ -4,6 +4,7 @@ const allowed = new Set(['state', 'unlock', 'connect-account', 'account-platform
 for (const operation of ['backup-preview', 'backup-restore', 'backup-cancel', 'backup-open-folder', 'cv-delete', 'open-chrome-extensions', 'open-firefox-extensions', 'copy-chrome-extensions', 'copy-firefox-extensions', 'application-progress', 'career-pipeline']) allowed.add(operation);
 allowed.add('update-preferences');
 allowed.add('update-source-guide');
+allowed.add('career-gap-set');
 contextBridge.exposeInMainWorld('companion', Object.freeze({
   invoke(op, input = {}) {
     if (!allowed.has(op)) return Promise.reject(new Error('Unavailable local settings action.'));

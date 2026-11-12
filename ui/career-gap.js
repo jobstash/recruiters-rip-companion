@@ -1,38 +1,42 @@
 'use strict';
 
-// Career gap detection on Me → CVs. Off unless the candidate ticks the checkbox;
-// the years, minimum length and wording appear only while it is on.
+// Career gap detection on Me → CVs. Off unless the candidate ticks the checkbox. While it is on, the form shows what
+// counts as a gap (years, minimum length) and the parts of the entry each gap gets among the jobs in a generated CV:
+// activity, place and description in the candidate's words. Its time range comes from the CV, so it is not typed.
 (() => {
   const element = name => document.getElementById(`career-gap-${name}`);
   const root = document.getElementById('career-gap');
-  const fields = ['from', 'to', 'months', 'mode', 'text'];
-  const fixedWording = 'Career gap period - private reasons';
+  const fields = ['from', 'to', 'months', 'activity', 'place', 'description'];
   // saved: the stored setting. dirty: the candidate changed a control that is not stored yet.
   let saved = null, pending = false, dirty = false, failure = '', generation = 0, onCvs = true;
 
-  const draft = () => ({ enabled: element('enabled').checked, mode: element('mode').value, text: element('text').value.trim(),
+  // Same key order as the stored setting, so an unchanged form compares equal to it.
+  const draft = () => ({ enabled: element('enabled').checked, activity: element('activity').value.trim(), place: element('place').value.trim(),
+    description: element('description').value.trim(),
     minMonths: Number(element('months').value), fromYear: Number(element('from').value), toYear: Number(element('to').value) });
   function problem(value) {
     const year = number => Number.isInteger(number) && number >= 1950 && number <= 2100;
     if (!year(value.fromYear) || !year(value.toYear)) return 'Enter the years to check, from 1950 to 2100.';
     if (value.fromYear > value.toYear) return 'The first year must not be after the last year.';
     if (!Number.isInteger(value.minMonths) || value.minMonths < 3 || value.minMonths > 120) return 'A career gap is at least 3 months. Enter 3 to 120.';
-    if (value.mode === 'custom' && !value.text) return 'Write the wording to show for a career gap.';
+    if (!value.activity) return 'Write the activity to show for a career gap, such as Career break.';
     return '';
   }
   function fill(value) {
     element('enabled').checked = value.enabled;
     element('from').value = String(value.fromYear); element('to').value = String(value.toYear);
-    element('months').value = String(value.minMonths); element('mode').value = value.mode; element('text').value = value.text;
+    element('months').value = String(value.minMonths);
+    element('activity').value = value.activity; element('place').value = value.place; element('description').value = value.description;
   }
   function render() {
     root.hidden = !saved || !onCvs;
     element('enabled').disabled = !saved || pending;
     element('options').hidden = !element('enabled').checked;
-    element('text-field').hidden = element('mode').value !== 'custom';
     for (const name of fields) element(name).disabled = !saved || pending;
+    // The saved entry, part by part, in the order a job shows them.
+    const entry = saved ? [`“${saved.activity}”`, ...(saved.place ? [`“${saved.place}”`] : []), 'its dates from your CV', ...(saved.description ? [`“${saved.description}”`] : [])].join(' · ') : '';
     element('note').textContent = !saved ? '' : saved.enabled
-      ? `On. A gap of ${saved.minMonths} months or more between jobs in ${saved.fromYear}–${saved.toYear} gets a “Career gap” entry in generated CVs: “${saved.mode === 'custom' ? saved.text : fixedWording}”. Earlier documents update the next time your AI prepares them.`
+      ? `On. A gap of ${saved.minMonths} months or more between jobs in ${saved.fromYear}–${saved.toYear} is listed in Experience among your jobs in generated CVs: ${entry}. Earlier documents update the next time your AI prepares them.`
       : 'Off. Generated CVs do not mention gaps between jobs.';
     element('error').textContent = failure;
     element('error').hidden = !failure;

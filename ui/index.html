@@ -62,11 +62,18 @@
 <section id="career-gap" class="career-gap" aria-label="Career gap detection" hidden>
 <label class="update-preference" for="career-gap-enabled"><input id="career-gap-enabled" type="checkbox" aria-describedby="career-gap-note" disabled>Career gap detection</label>
 <div id="career-gap-options" class="career-gap-options" hidden>
+<div class="career-gap-row career-gap-detect">
 <label class="decisions-field" for="career-gap-from">From year<input id="career-gap-from" type="number" inputmode="numeric" min="1950" max="2100" step="1" disabled></label>
 <label class="decisions-field" for="career-gap-to">To year<input id="career-gap-to" type="number" inputmode="numeric" min="1950" max="2100" step="1" disabled></label>
 <label class="decisions-field" for="career-gap-months">Minimum months<input id="career-gap-months" type="number" inputmode="numeric" min="3" max="120" step="1" disabled></label>
-<label class="decisions-field" for="career-gap-mode">Reason given<select id="career-gap-mode" disabled><option value="private">Career gap period - private reasons</option><option value="custom">My own wording</option></select></label>
-<label id="career-gap-text-field" class="decisions-field" for="career-gap-text" hidden>Your wording<input id="career-gap-text" type="text" maxlength="200" autocomplete="off" disabled></label>
+</div>
+<p class="caption">Each gap is listed in Experience among your jobs, with the same four parts:</p>
+<div class="career-gap-row career-gap-entry">
+<label class="decisions-field" for="career-gap-activity">Activity<input id="career-gap-activity" type="text" maxlength="80" autocomplete="off" placeholder="Career break" disabled></label>
+<label class="decisions-field" for="career-gap-place">Place · optional<input id="career-gap-place" type="text" maxlength="80" autocomplete="off" placeholder="City or country" disabled></label>
+<p class="decisions-field">Time range<span class="career-gap-fixed">From your CV’s dates</span></p>
+<label id="career-gap-description-field" class="decisions-field" for="career-gap-description">Description · optional<input id="career-gap-description" type="text" maxlength="200" autocomplete="off" placeholder="One line about this time" disabled></label>
+</div>
 </div>
 <p id="career-gap-note" class="caption" role="status" aria-live="polite"></p>
 <p id="career-gap-error" role="alert" hidden></p>

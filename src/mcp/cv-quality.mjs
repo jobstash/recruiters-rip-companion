@@ -34,7 +34,7 @@ export function cvDocumentTexts(document) {
     entry.bullets.forEach((text, bullet) => add(`${at}.bullets[${bullet}]`, text, { bullet: true, claim: true }));
   });
   (document.careerGaps ?? []).forEach((entry, index) => {
-    add(`careerGaps[${index}].label`, entry.label, { setting: true });
+    for (const key of ['activity', 'place', 'description']) add(`careerGaps[${index}].${key}`, entry[key], { setting: true });
     for (const key of ['startDate', 'endDate']) add(`careerGaps[${index}].${key}`, entry[key], { date: true });
   });
   (document.education ?? []).forEach((entry, index) => {

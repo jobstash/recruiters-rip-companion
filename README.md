@@ -137,13 +137,21 @@ If the profile changes while you review the backup, select the file again before
 
 ## Show career gaps in generated CVs — optional
 
-In **Me → CVs**, tick **Career gap detection**. It is off until you tick it. Three choices then appear:
+In **Me → CVs**, tick **Career gap detection**. It is off until you tick it. These choices then appear.
+
+What counts as a gap:
 
 - **From year / To year**: the years to check for gaps. The default is the past ten years.
 - **Minimum months**: how long a period without a job must be to count. Three months is the shortest and the default.
-- **Reason given**: `Career gap period - private reasons`, or **My own wording** with one line you write.
 
-When your AI app next prepares a CV, a period that long between two jobs in your saved CV (or since your last job ended) appears in its own **Career gap** section with those dates and that wording. It is never listed as a job. Documents prepared before you changed the setting are refreshed the next time your AI app prepares them. Untick the checkbox to stop showing gaps.
+How each gap is listed, with the same four parts as a job:
+
+- **Activity**: what you did, such as `Career break`, `Parental leave` or `Full-time study`. It starts as `Career break`.
+- **Place** (optional): where, such as a city or country.
+- **Time range**: taken from the dates in your CV; you do not type it.
+- **Description** (optional): one line about that time. It starts as `Career gap period - private reasons`.
+
+When your AI app next prepares a CV, a period that long between two jobs in your saved CV (or since your last job ended) is listed in **Experience** among your jobs, where its dates fall, laid out like a job: place and activity, the dates, and your description beneath. It has no separate section. The words are exactly what you entered here: your AI app only works out the dates, and does not add an employer, job title or achievements to a gap or count it as work experience. Documents prepared before you changed the setting are refreshed the next time your AI app prepares them. Untick the checkbox to stop showing gaps.
 
 ## Delete a CV
 

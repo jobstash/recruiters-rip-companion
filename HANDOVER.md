@@ -13,6 +13,7 @@ Preserve `rip.recruiters.companion`, **Recruiters.rip Companion**, **Recruiters 
 | Area | Entry points |
 | --- | --- |
 | Electron lifecycle, permissions and settings IPC | `src/main.mjs`, `src/preload.cjs`, `ui/` |
+| Shell switch and the browser shell used by the container | `src/shell.mjs`, `src/web-shell.mjs`, `ui/web-shell.js`, `ui/web-signin.js`, `src/container-cli.mjs`, `Dockerfile`, `compose.yaml`, `scripts/smoke-container.mjs` |
 | Local persistence and mutation receipts | `src/vault.mjs`, `src/mcp/state.mjs`, `src/mcp/scope.mjs` |
 | Browser identity and native transport | `src/browser-identity.mjs`, `src/install-native.mjs`, `src/native-host.cjs`, `src/platform-runtime.cjs` |
 | Chrome/Firefox panel, page capture and prepared clipboard values | `browser-extension/src/`, `browser-extension/manifest.mjs`, `browser-extension/build.mjs` |

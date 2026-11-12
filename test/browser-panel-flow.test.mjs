@@ -30,7 +30,7 @@ test('Stop is offered only for owned cancellable preparation, never external AI 
 });
 
 test('handoff distinguishes Send, Enter, unknown mode and reading without claiming writing', () => {
-  for (const [mode, expected, absent] of [['desktop', /Send/, /Enter/], ['cli', /Enter/, /Send/], [undefined, /send/, /click Send|press Enter/]]) {
+  for (const [mode, expected, absent] of [['desktop', /Send/, /Enter/], ['cli', /Enter/, /Send/], ['manual', /Paste the copied request into Codex/, /click Send|press Enter/], [undefined, /send/, /click Send|press Enter/]]) {
     const flow = derivePanelFlow({ ...base, application: { ...base.application, handoff: { host: 'codex', requiresSend: true, mode } } });
     assert.equal(flow.kind, 'awaiting-send'); assert.match(flow.message, expected); assert.doesNotMatch(flow.message, absent);
   }

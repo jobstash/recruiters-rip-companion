@@ -315,6 +315,9 @@ summary:hover { color: var(--color-ink); }
 .decisions-field input:focus { border-bottom-color: transparent; background-image: var(--rr-dispersion); background-repeat: no-repeat; background-size: 100% 2px; background-position: 0 100%; box-shadow: var(--shadow-input-focus); }
 .decisions-field input:focus-visible { box-shadow: var(--shadow-focus-ring), var(--shadow-input-focus); }
 .decisions-field input:disabled { border-color: var(--color-facet); color: var(--color-dust); cursor: not-allowed; }
+/* The web shell's file picker (ui/web-shell.js) is the browser's own control, drawn as a ghost button. */
+.decisions-field input[type="file"] { padding: 0; border: 0; font-size: 14px; color: var(--color-ink-2); }
+.decisions-field input[type="file"]::file-selector-button { min-height: 44px; margin-right: var(--spacing-16); padding: 12px var(--spacing-24); border: 1px solid var(--color-ink); border-radius: var(--radius-buttons); background: transparent; color: var(--color-ink); font: 500 12px/1.33 var(--font-geist-mono); letter-spacing: .08em; text-transform: uppercase; cursor: pointer; }
 /* Career gap detection sits under the Me tabs on CVs: one checkbox, its options shown only while it is on. */
 .career-gap { flex: 0 0 100%; display: grid; gap: var(--spacing-8); min-width: 0; }
 .career-gap > * { max-width: var(--reading); }
@@ -356,7 +359,11 @@ summary:hover { color: var(--color-ink); }
 .setup-steps li::before { content: counter(step); font: 500 12px/1.33 var(--font-geist-mono); color: var(--color-smoke); }
 .setup-steps li > span:first-child { color: var(--color-ink); }
 .setup-steps code { font: 400 14px/1.6 var(--font-geist-mono); color: var(--color-ink); white-space: nowrap; user-select: all; }
+.setup-steps code.long { white-space: normal; overflow-wrap: anywhere; }
 .step-fallback { display: block; }
+/* One set of screens, three ways to run them. A container cannot reach this computer's apps and folders (host-only);
+   a browser tab has no file manager to open (window-only). */
+:root[data-container] .host-only, :root:not([data-container]) .container-only, :root[data-shell="web"] .window-only { display: none !important; }
 /* A link-styled control for destinations Companion opens natively (the renderer never navigates). */
 button.link, .me-actions button.link { display: inline; min-height: 0; padding: 0; font: inherit; letter-spacing: inherit; text-transform: none; text-decoration: underline; text-underline-offset: .2em; }
 button.link:hover:not(:disabled) { color: var(--color-smoke); }

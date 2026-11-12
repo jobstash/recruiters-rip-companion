@@ -45,7 +45,8 @@ const quoteSh = value => `'${String(value).replaceAll("'", "'\\''")}'`;
 // Pasted into any coding agent. Commands follow https://developers.openai.com/codex/mcp,
 // https://code.claude.com/docs/en/mcp and https://modelcontextprotocol.io/docs/develop/connect-local-servers.
 // Windows gets config-file entries only: its launcher runs through cmd.exe, which shell one-liners would re-quote.
-export function agentSetupPrompt(command, { localOnly = false, platform = process.platform, env = process.env } = {}) {
+export function agentSetupPrompt(command, { localOnly = false, container = null, platform = process.platform, env = process.env } = {}) {
+  if (container) return containerSetupPrompt(command, { localOnly, container });
   const name = mcpServerName(localOnly), invocation = mcpInvocation(command, { platform, env }), windows = platform === 'win32';
   const entry = `"${name}": ${JSON.stringify(invocation)}`;
   const desktopConfig = platform === 'darwin' ? '~/Library/Application Support/Claude/claude_desktop_config.json'
@@ -73,6 +74,38 @@ export function agentSetupPrompt(command, { localOnly = false, platform = proces
     `Any other agent, such as Cursor: add the same command as a stdio MCP server named ${name}.`,
     '',
     `Then fully quit and reopen each app you changed, and check it works there by calling the ${name} tool career_profile_read.`,
+  ].join('\n');
+}
+
+// Companion in a container: the AI app runs on the host and starts the launcher inside the container through `docker exec`.
+// The host's operating system is unknown from in there, so every config location is named.
+function containerSetupPrompt(command, { localOnly, container }) {
+  const name = mcpServerName(localOnly), args = ['exec', '-i', container, command];
+  const line = ['docker', ...args.map(value => /^[A-Za-z0-9_./-]+$/.test(value) ? value : quoteSh(value))].join(' ');
+  return [
+    'Set up the recruiters.rip MCP server on this computer.',
+    '',
+    `It is a local stdio server named ${name}. It runs inside the Docker container ${container} on this computer and is started with:`,
+    line,
+    '',
+    'Add it to each of these apps that is installed here. Do not remove or change any other MCP server.',
+    '',
+    'Codex (the CLI, IDE extension and ChatGPT desktop share this setup):',
+    `codex mcp add ${name} -- ${line}`,
+    'If the codex command is not available, add this to ~/.codex/config.toml instead (%USERPROFILE%\\.codex\\config.toml on Windows):',
+    `[mcp_servers.${name}]\ncommand = "docker"\nargs = ${JSON.stringify(args)}`,
+    '',
+    'Claude Code:',
+    `claude mcp add --scope user ${name} -- ${line}`,
+    '',
+    'Claude Desktop: add this entry inside "mcpServers" in claude_desktop_config.json. Create the file if it does not exist. It is in ~/Library/Application Support/Claude on macOS, %APPDATA%\\Claude on Windows and ~/.config/Claude on Linux.',
+    `"${name}": ${JSON.stringify({ command: 'docker', args })}`,
+    '',
+    `Any other agent, such as Cursor: add the same command as a stdio MCP server named ${name}.`,
+    '',
+    'If an app cannot find docker, use the full path printed by: command -v docker',
+    '',
+    `Then fully quit and reopen each app you changed, and check it works there by calling the ${name} tool career_profile_read. If it cannot connect, check the container is running: docker ps --filter name=${container}`,
   ].join('\n');
 }
 

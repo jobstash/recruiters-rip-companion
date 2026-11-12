@@ -50,7 +50,7 @@
     element('install').textContent = status === 'manual-required' || !supported ? 'Install manually' : 'Restart now';
     element('cancel').hidden = !['checking', 'downloading', 'staging'].includes(status);
     element('cancel').disabled = !current;
-    element('source-guide').hidden = !source || supported;
+    element('source-guide').hidden = !source || supported || current?.container === true;
     element('source-guide').disabled = pending || restarting;
     const progress = current?.progress;
     element('progress').hidden = status !== 'downloading';

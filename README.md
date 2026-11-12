@@ -1,6 +1,6 @@
 # Recruiters.rip Companion
 
-Companion keeps your CVs and applications on your computer. Use Codex or Claude to find suitable jobs, tailor your documents and apply for you. Install a ready-made app or build it from the [public source code](https://github.com/jobstash/recruiters-rip-companion).
+Companion keeps your CVs and applications on your computer. Use Codex or Claude to find suitable jobs, tailor your documents and apply for you. Install a ready-made app, build it from the [public source code](https://github.com/jobstash/recruiters-rip-companion), or [run it in a container](#run-in-a-container).
 
 
 ## Start here
@@ -9,7 +9,7 @@ You need Companion, a readable CV, and your own Codex or Claude account. The sam
 
 ### 1. Install Companion
 
-Open [Downloads](https://recruiters.rip/downloads) and choose **Mac**, **Windows** or **Linux**, then follow the steps for your computer. Prefer to build it yourself? Use the [one-command source installation](#install-from-source).
+Open [Downloads](https://recruiters.rip/downloads) and choose **Mac**, **Windows** or **Linux**, then follow the steps for your computer. Prefer to build it yourself? Use the [one-command source installation](#install-from-source), or [run it in a container](#run-in-a-container) and use it from your browser.
 
 | Computer | Install the app |
 | --- | --- |
@@ -171,6 +171,43 @@ irm https://github.com/jobstash/recruiters-rip-companion/releases/latest/downloa
 Review the [repository and installer scripts](https://github.com/jobstash/recruiters-rip-companion/tree/main/scripts) before running them. Source installation builds on your computer; it does not substitute a downloaded installer.
 
 Managed source installs receive automatic updates from published source releases. Each update builds in a separate folder, retains the previous version for recovery and keeps your profile in place. Local source changes pause replacement rather than being overwritten. An ordinary developer clone is not silently adopted or reset; use this installer for managed updates.
+
+## Run in a container
+
+The same Companion, built from this source inside Docker and shown in your browser instead of an app window. You need **Git** and **Docker** with Compose (Docker Desktop includes it); nothing else is installed on your computer. The image is built on your machine from a pinned, patched Node base image. No ready-made image is published.
+
+```sh
+git clone https://github.com/jobstash/recruiters-rip-companion.git
+cd recruiters-rip-companion
+docker compose up -d --build
+docker exec recruiters-companion companion url
+```
+
+Open the address the last command prints. It carries an access code, and that browser then stays signed in. From there the steps in [Start here](#start-here) are the same: connect your account, import your CV, add recruiters.rip to Codex or Claude, review jobs.
+
+What works differently from the app:
+
+| You want to | In the container |
+| --- | --- |
+| Import a CV or restore a backup | Choose the file in the browser; it is uploaded to Companion on your own computer. |
+| Open a CV or letter, save a backup | The browser opens or downloads the file. |
+| Add Codex, Claude or another agent | **Settings → AI apps → Copy prompt**, then paste it into your agent. Its commands start the tools with `docker exec -i recruiters-companion …`, so the container must be running when you use your AI app. Companion cannot open your AI app for you; it copies the message to paste instead. |
+| Add the browser extension | **Settings → Browser extensions** shows one command per browser, such as `docker exec recruiters-companion companion browser chrome \| sh`. Run it in a terminal on your computer: it saves the extension to Downloads and lets the browser reach the container. Then load the folder as described there. Mac and Linux only. |
+| Update | `git pull`, then `docker compose up -d --build`. Run the browser extension command again so the extension folder matches the new version. **Settings → Updates** tells you when a newer version is published. |
+| Stop or remove | `docker compose stop` stops it. `docker compose down` removes the container and keeps your data; adding `-v` deletes your data too. |
+
+Your profile, CVs, jobs and documents live in the Docker volume `companion-data`, not in the source folder, and survive rebuilds. Use **Settings → Backups → Save backup** to keep a copy outside Docker.
+
+<details>
+<summary>Container details and limits</summary>
+
+- **Reach:** Companion listens only on this computer (`127.0.0.1:43117`). The page needs the access code, refuses requests that arrive under any other address or from another website, and the container itself runs without root, without extra privileges and with a read-only file system apart from its data volume.
+- **Another port or name:** the published port and `RECRUITERS_COMPANION_WEB_PORT` must be the same number, and `RECRUITERS_COMPANION_CONTAINER` must equal the container’s name. Without Compose: `docker build -t recruiters-companion .`, then `docker run -d --name recruiters-companion --init -p 127.0.0.1:43117:43117 -v companion-data:/data recruiters-companion`.
+- **Files your AI app exports** are inside the container. The tool result says so and gives the `docker cp` command that copies the file out; **Pipeline → Open CV / Open letter** opens it in the browser.
+- **Not available:** the browser extension for browsers on Windows (use the Windows installer), opening Codex or Claude from Companion, **Open backups**, in-place updates, and locking saved work when the computer sleeps or its screen locks. Do not run the container and the installed app for the same browser extension at once: the most recently set-up one receives the extension.
+- **Without Docker:** `pnpm install --frozen-lockfile && pnpm build && node src/main.mjs` serves the same browser screens from Node on this computer, with no Electron window.
+- **Check a build:** `pnpm smoke:container` builds the image and exercises the browser screens, the AI-app tools over `docker exec` and the browser setup script with throwaway synthetic data.
+</details>
 
 ## Developer setup
 

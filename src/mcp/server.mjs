@@ -70,12 +70,14 @@ function schemaErrorMessage(name, validationErrors) {
   return `${name}: ${location} ${issue.message}. Use the advertised input schema.`;
 }
 
-export function createMcpServer({ tools, assertAvailable, readResource, listResources, notifyActivity = () => {} }) {
+// `environment` adds what an agent must know about where this Companion runs (for example, in a container).
+export function createMcpServer({ tools, assertAvailable, readResource, listResources, notifyActivity = () => {}, environment = '' }) {
   const ajv = new Ajv({ strict: false, allErrors: false });
   addFormats(ajv);
   const registry = new Map(tools.map(tool => [tool.name, { ...tool, validate: ajv.compile(tool.inputSchema) }]));
   if (registry.size !== tools.length) throw new Error('Duplicate local career tool.');
-  const server = new Server({ name: 'recruiters-rip', title: 'Recruiters.rip', version }, { instructions, capabilities: { tools: {}, resources: {}, prompts: {} } });
+  const server = new Server({ name: 'recruiters-rip', title: 'Recruiters.rip', version },
+    { instructions: environment ? `${instructions}\n\n${environment}` : instructions, capabilities: { tools: {}, resources: {}, prompts: {} } });
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: tools.map(({ name, description, inputSchema, readOnly, idempotent = true, openWorld = false }) => ({ name, description, inputSchema,
     annotations: { readOnlyHint: readOnly, destructiveHint: !readOnly, idempotentHint: idempotent, openWorldHint: openWorld } })) }));
   let inFlight = 0;

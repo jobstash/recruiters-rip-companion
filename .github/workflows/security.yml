@@ -41,6 +41,17 @@ jobs:
       - name: Audit the locked dependency graph
         run: docker run --rm companion-headless pnpm audit
 
+  container:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.22.3
+      - name: Build the container from source and exercise its browser screens, AI-app tools and browser setup
+        run: node scripts/smoke-container.mjs
+
   codeql:
     runs-on: ubuntu-24.04
     timeout-minutes: 20

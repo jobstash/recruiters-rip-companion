@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, powerMonitor, Menu, shell, clipboard, dialog, safeStorage } from 'electron';
+import { app, BrowserWindow, ipcMain, powerMonitor, Menu, shell, clipboard, dialog, safeStorage, webShell, webHost } from './shell.mjs';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { readFile, realpath, writeFile, chmod, unlink, mkdir } from 'node:fs/promises';
 import { watch, existsSync } from 'node:fs';
@@ -48,6 +48,19 @@ const packageMetadata = JSON.parse(await readFile(path.join(root, 'package.json'
 const localOnly = packageMetadata.localProduct === true || (!app.isPackaged && process.argv.includes('--local-product'));
 const browserIdentity = localOnly ? BROWSER_IDENTITIES.local : BROWSER_IDENTITIES.production;
 const productOrigin = browserIdentity.productOrigin;
+// In a container the user's desktop, AI apps and browsers are out of reach; those features hand work over instead of doing it.
+const container = webHost?.container ?? null;
+// The web shell has no desktop to act on for the browser extension, so the extension opens or copies this itself.
+const browserTask = task => webShell ? { browserTask: task } : {};
+// An exported file's path is inside the container. An agent on this computer needs to be told, and how to get the file out.
+function exportLocation(result) {
+  const file = result?.export?.path;
+  if (!container || typeof file !== 'string') return result;
+  return { ...result, export: { ...result.export,
+    pathNote: `This path is inside the Companion container ${container}, not on this computer. To use the file here, copy it out with: docker cp '${container}:${file.replaceAll("'", "'\\''")}' . (or read the attached resource link). The candidate can also open it in Companion → Pipeline.` } };
+}
+// What an AI app must know when Companion has no window of its own.
+const shellNote = () => !webShell ? '' : `Companion’s window is a browser tab at ${webHost.origin}/${container ? `, and Companion itself runs in the Docker container ${container}` : ''}. When a tool waits for the candidate (approving an account, choosing a file) or opens something, tell them to look at that tab.${container ? ` If it is not open, the command "docker exec ${container} companion url" prints the address that opens it. File paths in tool results are inside the container.` : ''}`;
 app.setName('Recruiters Companion');
 // Keep the storage directory name stable across the visible brand rename.
 const directory = path.join(app.getPath('userData'), localOnly ? 'local-device' : 'device');
@@ -153,7 +166,9 @@ updateScheduler = createUpdateScheduler({
   suspended: () => sleeping || quitDraining, onChange: () => emit(),
 });
 function updateState() {
-  return { ...updates.state(), automation: updateScheduler.state(), blocked: !updateIdle(false) };
+  // A container is replaced, never updated in place.
+  const replaced = container ? { container: true, automaticSupported: false, automaticReason: 'This copy runs in a container. To update, get the latest source and rebuild the container.' } : {};
+  return { ...updates.state(), ...replaced, automation: updateScheduler.state(), blocked: !updateIdle(false) };
 }
 function updateIdle(automatic, { admitted = false } = {}) {
   if ((!admitted && updateInstalling) || quitDraining || sleeping || restoringBackup || pendingApproval || initializing || !vaultOpened || locked ||
@@ -270,7 +285,7 @@ function status() {
 }
 function setup() {
   const command = mcpCommand(directory);
-  return { command, agentPrompt: agentSetupPrompt(command, { localOnly }) };
+  return { command, agentPrompt: agentSetupPrompt(command, { localOnly, container }) };
 }
 // The skill Claude Code loads is the one the Codex plugin bundles.
 const claudeSkillSource = () => path.join(app.isPackaged ? root.replace(/app\.asar$/, 'app.asar.unpacked') : root, 'src', 'generated', 'recruiters-rip-plugin', 'skills', 'recruiters-rip');
@@ -281,7 +296,8 @@ async function refreshReviewHosts() {
     const info = await applicationAccess().launcher.info();
     if (JSON.stringify(info) !== JSON.stringify(reviewHostInfo)) {
       reviewHostInfo = info;
-      reviewHosts = Object.fromEntries(Object.entries(info).map(([key, value]) => [key, value.available]));
+      // `hosts` are the apps Companion itself can open; a manual host only receives a prompt the user pastes.
+      reviewHosts = Object.fromEntries(Object.entries(info).map(([key, value]) => [key, value.available && value.mode !== 'manual']));
       emit();
     }
   } catch { /* keeps the last known value */ }
@@ -291,10 +307,24 @@ async function refreshReviewHosts() {
 let hostsAdded = { codex: false, claude: false, claudeExtension: false };
 async function refreshAddedHosts() {
   try {
-    const next = { ...await addedHosts({ localOnly }),
-      claudeExtension: await claudeExtensionInstalled({ localOnly }) };
+    const next = container ? { ...await connectedApps(), claudeExtension: false }
+      : { ...await addedHosts({ localOnly }), claudeExtension: await claudeExtensionInstalled({ localOnly }) };
     if (JSON.stringify(next) !== JSON.stringify(hostsAdded)) { hostsAdded = next; emit(); }
   } catch { /* keeps the last known value */ }
+}
+// A container cannot read the apps' settings on this computer. There, "added" means the app has used this profile before.
+async function connectedApps() {
+  const record = path.join(directory, 'connected-apps.json');
+  let saved = {};
+  try { saved = privateJSON(record); } catch { /* No app has connected yet. */ }
+  const known = { codex: saved.codex === true, claude: saved.claude === true, other: saved.other === true };
+  const { live, other } = liveSessions(mcpClients);
+  const next = { codex: known.codex || live.codex, claude: known.claude || live.claude, other: known.other || other.length > 0 };
+  if (JSON.stringify(next) !== JSON.stringify(known)) {
+    await writeFile(record, JSON.stringify(next), { mode: 0o600 });
+    protectPrivatePath(record);
+  }
+  return next;
 }
 // Setup and refreshed skills need a new host session; never restart the user's AI app.
 // The notice clears when that app opens a new recruiters.rip session.
@@ -308,6 +338,7 @@ function localState() {
   if (locked) return { ...publicState, failure, browserConnection, browserIntegration, mcpClients };
   const state = vault.get();
   return { ...publicState, account: state.pairing?.account ?? null, reconnectAccount: state.reconnectAccount ?? null, origin: state.pairing?.origin ?? null, browserConnection, browserIntegration, mcpClients, failure,
+    shell: { web: webShell, container, browserSetup: container ? Object.fromEntries(['chrome', 'firefox'].map(browser => [browser, `docker exec ${container} companion browser ${browser} | sh`])) : null },
     setup: setup(), careerViewVersion: `${state.deviceId}:${sessionEpoch}:${careerViewRevision}`,
     catalogue: jobsCatalogue.state(), hasReviews: Object.keys(state.career?.matching?.scores ?? {}).length > 0,
     decisions: { credentials: decisionCredentialStatus(state) },
@@ -417,7 +448,7 @@ async function connectAccount() {
   const url = new URL('/settings/provider', productOrigin);
   pairingReturn?.close(); pairingReturn = undefined;
   if (!state.pairing) {
-    pairingReturn = await startPairingReturn({ onPair: async payload => {
+    pairingReturn = await startPairingReturn({ host: webHost, onPair: async payload => {
       try { await pair(payload); }
       catch (error) { failure = safeFailure(error).message; emit(); throw error; }
     } });
@@ -425,7 +456,12 @@ async function connectAccount() {
     url.search = new URLSearchParams({ deviceId: state.deviceId, publicKey: state.publicKey, deviceLabel: state.label, companionReturn, companionState }).toString();
   }
   try { await shell.openExternal(url.href); }
-  catch (error) { pairingReturn?.close(); pairingReturn = undefined; throw error; }
+  catch (error) {
+    pairingReturn?.close(); pairingReturn = undefined;
+    // Only an open Companion tab can open the sign-in page and show the approval that follows.
+    if (webShell) fail('UNAVAILABLE', `Open Companion in your browser first${container ? ` (docker exec ${container} companion url prints its address)` : ''}, then connect again.`);
+    throw error;
+  }
   failure = '';
   return { pairingRequired: !state.pairing };
 }
@@ -452,14 +488,18 @@ async function selectSourceFile() {
   assertAvailable(true);
   return result.canceled || !result.filePaths[0] ? null : readSelectedSource(result.filePaths[0]);
 }
-async function openInBrowser(value) {
-  assertWorkAllowed();
+function jobPageUrl(value) {
   let url;
   try { url = new URL(value); } catch { fail('INVALID_INPUT', 'Open a saved HTTP(S) job page.'); }
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.href.length > 4096)
     fail('INVALID_INPUT', 'Open a saved HTTP(S) job page without embedded credentials.');
-  try { await shell.openExternal(url.href); }
-  catch { throw new CareerError('BROWSER_UNAVAILABLE', 'Set a default web browser in system settings, then open this application again.'); }
+  return url.href;
+}
+async function openInBrowser(value) {
+  assertWorkAllowed();
+  const url = jobPageUrl(value);
+  try { await shell.openExternal(url); }
+  catch { throw new CareerError('BROWSER_UNAVAILABLE', webShell ? 'Open Companion in your browser, then open this application again.' : 'Set a default web browser in system settings, then open this application again.'); }
   return { opened: true };
 }
 function applicationAccess() {
@@ -471,7 +511,7 @@ function applicationAccess() {
       try { await localFiles.resolveExport(record.uri); return true; } catch { return false; }
     },
   });
-  const launcher = createApplicationLauncher({ directory: path.join(directory, 'host-integration'), localOnly,
+  const launcher = createApplicationLauncher({ directory: path.join(directory, 'host-integration'), localOnly, manual: Boolean(container),
     protocolAvailable: process.platform === 'linux' ? undefined : async scheme => {
       try { return Boolean((await app.getApplicationInfoForProtocol(`${scheme}://`)).path); } catch { return false; }
     },
@@ -519,11 +559,11 @@ function createSessionServer() {
   ];
   for (const tool of tools) {
     const invoke = tool.invoke;
-    tool.invoke = (input, context) => tool.readOnly
+    tool.invoke = async (input, context) => exportLocation(await (tool.readOnly
       ? workGate.run(() => invoke(input, context))
-      : mutation(() => invoke(input, context));
+      : mutation(() => invoke(input, context))));
   }
-  server = createMcpServer({ tools, assertAvailable: scoped.assertAvailable,
+  server = createMcpServer({ tools, assertAvailable: scoped.assertAvailable, environment: shellNote(),
     readResource: uri => workGate.run(() => localFiles.readResource(uri)),
     listResources: () => workGate.run(() => localFiles.listResources()),
     notifyActivity: name => {
@@ -546,8 +586,9 @@ async function installConnections() {
   try { await unlink(path.join(directory, 'recruiters-mcp')); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   if (app.isPackaged && !localOnly) app.setAsDefaultProtocolClient('recruiters-companion');
   try {
-    const result = await installNative({ executable: runtime.executable, appPath: runtime.appPath, directory, packaged: app.isPackaged, localOnly });
-    browserRegistrations = result.browsers; browserConnection = result.installed ? 'installed' : 'unavailable';
+    // A container cannot write the host browsers' registrations; the user runs the browser setup command on the host instead.
+    const result = await installNative({ executable: runtime.executable, appPath: runtime.appPath, directory, packaged: app.isPackaged, localOnly, register: !container });
+    browserRegistrations = result.browsers; browserConnection = container ? 'manual' : result.installed ? 'installed' : 'unavailable';
   } catch { browserConnection = 'unavailable'; }
   await Promise.all(['chrome', 'firefox'].map(async browser => {
     try { await refreshBrowserExtension(browser); }
@@ -572,6 +613,12 @@ async function refreshBrowserExtension(browser, save = false) {
   catch { fail('HOST_INSTALL_FAILED', app.isPackaged ? 'The bundled browser extension is missing. Reinstall the complete companion.' : 'Build the companion before saving its browser extension.'); }
   if (manifest.version !== packageMetadata.version || (firefox ? manifest.browser_specific_settings?.gecko?.id !== browserIdentity.firefoxExtensionId : manifest.key !== browserIdentity.key))
     fail('HOST_INSTALL_FAILED', 'The bundled browser extension does not match this companion. Rebuild or reinstall the complete companion.');
+  // The browser setup command copies this folder to the host with the same marker a saved folder carries.
+  if (container) {
+    if (save) fail('INVALID_INPUT', 'This settings action is unavailable.');
+    browserExtensions[browser] = { managed: true, version: manifest.version };
+    return null;
+  }
   const record = path.join(directory, 'browser-extension-folders.json');
   let folders = {};
   try { folders = privateJSON(record); } catch { /* Nothing saved yet. */ }
@@ -597,8 +644,8 @@ async function nativeOperation(op, payload, socket = null) {
   if (!Object.hasOwn(keys, op)) fail('INVALID_INPUT', 'This browser operation is unavailable.');
   exact(payload, keys[op]);
   if (op === 'status') return status();
-  if (op === 'open_settings') { showSettings(); return { opened: true }; }
-  if (op === 'open_decisions_settings') { await showDecisionsSettings(); return { opened: true }; }
+  if (op === 'open_settings') { showSettings(); return { opened: true, ...browserTask({ open: `${webHost?.origin}/` }) }; }
+  if (op === 'open_decisions_settings') { await showDecisionsSettings(); return { opened: true, ...browserTask({ open: `${webHost?.origin}/#section=decisions` }) }; }
   if (op === 'pair') return pair(payload);
   assertAvailable(false);
   if (op === 'application_host') return mutation(async () => {
@@ -620,21 +667,25 @@ async function nativeOperation(op, payload, socket = null) {
     if (op === 'application_status') return access.view(await access.workflow.status(payload));
     if (op === 'application_copy_intro') {
       assertWorkAllowed();
-      return access.workflow.copyIntroduction(payload, text => clipboard.writeText(text));
+      let text;
+      const result = access.workflow.copyIntroduction(payload, value => { if (webShell) text = value; else clipboard.writeText(value); });
+      return { ...result, ...browserTask({ copy: text }) };
     }
     if (op === 'application_prepare') return mutation(async () => {
       const { preparationId } = await access.workflow.prepare(payload);
       access.assertAvailable(false);
-      const opened = await access.launcher.open({ host: payload.host, preparationId });
+      const { prompt, ...opened } = await access.launcher.open({ host: payload.host, preparationId });
       access.assertAvailable(false);
       await access.workflow.launched({ preparationId, host: payload.host, mode: opened.mode });
       await access.workflow.setHost({ host: payload.host });
       careerViewRevision++; emit();
-      return { ...await access.view(await access.workflow.status({ bindingId: payload.bindingId })), ...opened, preparationId };
+      return { ...await access.view(await access.workflow.status({ bindingId: payload.bindingId })), ...opened, preparationId, ...(prompt ? browserTask({ copy: prompt }) : {}) };
     });
     if (op === 'application_open_ad') {
       const url = await access.workflow.jobUrl(payload);
-      access.assertAvailable(false); return openInBrowser(url);
+      access.assertAvailable(false);
+      if (webShell) { assertWorkAllowed(); return { opened: true, ...browserTask({ open: jobPageUrl(url) }) }; }
+      return openInBrowser(url);
     }
     if (!['cv', 'cover_letter'].includes(payload.kind) || !['open', 'reveal'].includes(payload.action))
       fail('INVALID_INPUT', 'Choose a current CV or cover-letter PDF to open or show in your file manager.');
@@ -643,6 +694,12 @@ async function nativeOperation(op, payload, socket = null) {
     const current = await access.workflow.document({ bindingId: payload.bindingId, kind: payload.kind });
     access.assertAvailable(false);
     if (current.uri !== record.uri) fail('FORM_CONTEXT_CHANGED', 'The application document changed. Open its current version.');
+    if (webShell) {
+      let open;
+      try { open = await webHost.fileUrl(filename, { download: payload.action === 'reveal' }); }
+      catch { fail('EXPORT_UNAVAILABLE', 'The PDF could not be opened. Prepare the document again.'); }
+      return { opened: true, kind: payload.kind, action: payload.action, ...browserTask({ open }) };
+    }
     if (payload.action === 'reveal') shell.showItemInFolder(filename);
     else {
       const error = await shell.openPath(filename);
@@ -915,6 +972,8 @@ async function settingsOperation(op, input, ownMutation) {
     exact(input, op === 'approval' ? ['id', 'allow'] : []);
     if (op === 'unlock') { await initialize(); await startUpdates(); if (queuedPairing) { const payload = queuedPairing; queuedPairing = undefined; void pair(payload).catch(error => { failure = safeFailure(error).message; emit(); }); } emit(); loadJobs(); return { ok: true, result: localState() }; }
     assertAvailable(false); let result = { completed: true };
+    if (container && ['install-chatgpt', 'install-claude', 'save-extension', 'save-firefox-extension', 'open-chrome-extensions', 'open-firefox-extensions'].includes(op))
+      fail('INVALID_INPUT', 'This settings action is unavailable.');
     if (op === 'approval') { if (!pendingApproval || pendingApproval.id !== input.id || typeof input.allow !== 'boolean') fail('INVALID_INPUT', 'This approval expired.'); pendingApproval.finish(input.allow); }
     else if (op === 'delete-rankings') { result = await deleteRankings(store); careerViewRevision++; loadJobs(true); }
     else if (op === 'jobs-load') loadJobs(true);
@@ -945,6 +1004,8 @@ async function settingsOperation(op, input, ownMutation) {
       const host = op === 'review-codex' ? 'codex' : 'claude';
       const access = applicationAccess();
       result = await access.launcher.review({ host });
+      // A manual host cannot be opened from here: the user pastes the prompt into it.
+      if (result.prompt) { clipboard.writeText(result.prompt); result = { opened: false, host, requiresSend: true, mode: result.mode }; }
       access.assertAvailable(false);
       await access.workflow.setHost({ host });
       await refreshReviewHosts();

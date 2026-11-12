@@ -32,12 +32,14 @@ function returnPage(nonce) {
 </script></body></html>`;
 }
 
-/** A browser return transports a challenge; only onPair can request native approval and activate it. */
-export async function startPairingReturn({ onPair }) {
+/** A browser return transports a challenge; only onPair can request native approval and activate it.
+ *  The desktop app listens on a throwaway loopback port. The web shell (`host`) already serves one, the only port a
+ *  container publishes, so the return page is mounted there instead. */
+export async function startPairingReturn({ onPair, host: shared = null }) {
   const state = randomBytes(32).toString('base64url');
   const expiresAt = Date.now() + 5 * 60_000;
   let origin, host, consumed = false, closed = false;
-  const server = createServer(async (req, res) => {
+  const handle = async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -75,7 +77,19 @@ export async function startPairingReturn({ onPair }) {
       try { await onPair(payload); reply(200, { ok: true }); }
       catch { reply(409, { ok: false }); }
     } catch { if (!res.headersSent) reply(500); else res.end(); }
-  });
+  };
+  if (shared) {
+    origin = shared.origin; host = new URL(origin).host;
+    const unmount = shared.route(async (req, res, url) => {
+      if (url.pathname !== '/pair') return false;
+      await handle(req, res);
+      return true;
+    });
+    const close = () => { if (closed) return; closed = true; clearTimeout(timer); unmount(); };
+    const timer = setTimeout(close, 5 * 60_000); timer.unref();
+    return { companionReturn: `${origin}/pair`, companionState: state, close };
+  }
+  const server = createServer(handle);
   server.requestTimeout = 15_000;
   server.headersTimeout = 10_000;
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });

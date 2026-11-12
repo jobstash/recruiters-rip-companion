@@ -40,6 +40,7 @@ export function derivePanelFlow(state = {}) {
     const name = app.handoff.host === 'codex' ? 'Codex' : 'Claude';
     const instruction = app.handoff.mode === 'cli' ? `In ${name}, review the request and press Enter.`
       : app.handoff.mode === 'desktop' ? `In ${name}, review the request and click Send.`
+      : app.handoff.mode === 'manual' ? `Paste the copied request into ${name} and send it.`
       : `In ${name}, review and send the request.`;
     return result('awaiting-send', instruction);
   }

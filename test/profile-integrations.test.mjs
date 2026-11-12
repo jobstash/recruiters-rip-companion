@@ -125,7 +125,7 @@ async function stopOwned(pid, userData) {
 
 async function generateConnections({ directory, appRoot, env, home }) {
   const context = vm.createContext({ directory, packageMetadata: { version: '3.12.0' }, process: { execPath: process.execPath },
-    app: { isPackaged: false, getAppPath: () => appRoot }, localOnly: false,
+    app: { isPackaged: false, getAppPath: () => appRoot }, localOnly: false, container: null,
     privateDirectory, realpath, path, prepareBridgeRuntime, writeFile, protectPrivatePath, launcherScript,
     setup: () => ({ command: mcpCommand(directory) }), unlink: async file => rm(file), browserRegistrations: {}, browserConnection: 'pending', browserExtensions: {},
     installNative: options => installNative({ ...options, env, home, run: async () => ({ stdout: '' }) }),

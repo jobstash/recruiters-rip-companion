@@ -250,7 +250,7 @@ function mainFixture({ stage = async () => {} } = {}) {
   const workGate = createUpdateWorkGate({ now: () => time });
   time = UPDATE_QUIET_WINDOW;
   const context = vm.createContext({
-    updateInstalling: false, updateInstallTask: undefined, quitDraining: false, sleeping: false, restoringBackup: false,
+    updateInstalling: false, updateInstallTask: undefined, quitDraining: false, sleeping: false, restoringBackup: false, container: null,
     pendingApproval: undefined, initializing: undefined, vaultOpened: true, locked: false, mutations: new Set(), formRequests: new Map(), browserReplies: new Map(),
     workGate, window: { isDestroyed: () => false, isFocused: () => focused }, powerMonitor: { getSystemIdleTime: () => idleSeconds },
     updateScheduler: { state: () => ({ enabled: true }), stop() {}, async settled() {} },
@@ -580,7 +580,7 @@ test('Save to Downloads creates the managed folder; launches refresh only saved 
     let record = null, copied = deferred(), copying = deferred();
     const calls = [], downloads = '/synthetic/Downloads', directory = '/synthetic/profile/device';
     const context = vm.createContext({
-      root: '/synthetic/source', directory, app: { isPackaged: false, getPath: name => { assert.equal(name, 'downloads'); return downloads; } }, localOnly, path,
+      root: '/synthetic/source', directory, app: { isPackaged: false, getPath: name => { assert.equal(name, 'downloads'); return downloads; } }, localOnly, path, container: null,
       packageMetadata: { version: '3.12.0' }, browserIdentity: { key: 'synthetic-key' }, browserExtensions: {}, fail,
       readFile: async () => JSON.stringify({ version: '3.12.0', key: 'synthetic-key' }),
       privateJSON: () => { if (!record) throw Object.assign(new Error('missing'), { code: 'ENOENT' }); return JSON.parse(record); },

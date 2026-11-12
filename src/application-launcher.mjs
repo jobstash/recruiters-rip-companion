@@ -12,14 +12,18 @@ const hosts = ['claude', 'codex'];
 const labels = { claude: 'Claude Desktop', codex: 'ChatGPT desktop (Codex)' };
 export const REVIEW_PROMPT = 'Use the recruiters.rip skill to review the jobs queued for you and show me the best matches.';
 // What the user does when the host session has no recruiters.rip tools: the same restart Settings asks for after Set up.
-const restartAfterSetup = (host, mode) => host === 'codex' ? 'restart Codex'
+const restartAfterSetup = (host, mode) => mode === 'manual' ? 'start a new session'
+  : host === 'codex' ? 'restart Codex'
   : mode === 'cli' ? 'start a new Claude Code session' : 'quit Claude completely and reopen it';
+// A manual host is one Companion cannot open (it runs in a container): the user pastes the request into it.
+const setupInstruction = (host, mode) => mode === 'manual' ? 'add recruiters.rip with the setup prompt in Recruiters Companion Settings → AI apps'
+  : `choose Set up for ${host === 'codex' ? 'Codex' : 'Claude'} in Recruiters Companion Settings → AI apps`;
 
 /** The handoff uses the connection Set up installed for this host: the Codex plugin bundles recruiters-rip and Claude gets the
  *  user-level entry. Both load in every folder, so the request needs no workspace approval. */
 export function preparationPrompt({ host, mode, preparationId, localOnly = false }) {
   const server = host === 'codex' ? 'recruiters-rip' : mcpServerName(localOnly);
-  return `Use the recruiters.rip tools (MCP server ${server}) to call career_application_preparation_read with {"preparationId":"${preparationId}"}, then follow its instructions to prepare and save this application's tailored CV, concise job-specific introduction as its cover letter, both PDFs and an answer for every form question my saved evidence supports, written answers and Yes/No choices alike. Use the original job description and saved career evidence; do not invent facts. Leave submission to me. If no recruiters.rip tools are available here, tell me to choose Set up for ${host === 'codex' ? 'Codex' : 'Claude'} in Recruiters Companion Settings → AI apps, then ${restartAfterSetup(host, mode)} and send this request again; do not substitute guessed content.`;
+  return `Use the recruiters.rip tools (MCP server ${server}) to call career_application_preparation_read with {"preparationId":"${preparationId}"}, then follow its instructions to prepare and save this application's tailored CV, concise job-specific introduction as its cover letter, both PDFs and an answer for every form question my saved evidence supports, written answers and Yes/No choices alike. Use the original job description and saved career evidence; do not invent facts. Leave submission to me. If no recruiters.rip tools are available here, tell me to ${setupInstruction(host, mode)}, then ${restartAfterSetup(host, mode)} and send this request again; do not substitute guessed content.`;
 }
 const validPath = (value, platform) => typeof value === 'string' && (platform === 'win32' ? path.win32 : path).isAbsolute(value) && !/[\x00-\x1f\x7f]/.test(value);
 const quoteSh = value => `'${String(value).replaceAll("'", "'\\''")}'`;
@@ -58,15 +62,15 @@ const legacyWorkspaceConfig = ['.mcp.json', '.codex'];
 // remain in charge. CLI arguments: Codex --cd PATH [PROMPT], Claude [PROMPT].
 // https://developers.openai.com/codex/app/commands
 // https://code.claude.com/docs/en/cli-reference
-export function createApplicationLauncher({ directory, localOnly = false, openExternal, hostAvailable,
+export function createApplicationLauncher({ directory, localOnly = false, openExternal, hostAvailable, manual = false,
   platform = process.platform, env = process.env, discover = discoverHost, launchTerminal = startTerminal, protocolAvailable }) {
   if (!validPath(directory, platform) || typeof openExternal !== 'function'
     || (hostAvailable !== undefined && typeof hostAvailable !== 'function') || typeof discover !== 'function' || typeof launchTerminal !== 'function')
     fail('INVALID_INPUT', 'Application launching needs a local workspace and native link opener.');
   const p = platform === 'win32' ? path.win32 : path;
   const workspace = p.join(directory, 'application-workspace');
-  const describe = async host => hostAvailable
-    ? { available: await hostAvailable(host) === true, mode: 'desktop', label: labels[host], reason: null }
+  const describe = async host => manual ? { available: true, mode: 'manual', label: host === 'codex' ? 'Codex' : 'Claude', reason: null }
+    : hostAvailable ? { available: await hostAvailable(host) === true, mode: 'desktop', label: labels[host], reason: null }
     : discover(host, { platform, env, protocolAvailable });
 
   // The host session opens in this private, empty folder; its tools come from the host's own Set up.
@@ -101,8 +105,9 @@ export function createApplicationLauncher({ directory, localOnly = false, openEx
       const descriptor = await describe(host);
       if (!descriptor.available)
         fail('HOST_UNAVAILABLE', `Install ${labels[host]} or its official CLI and an interactive terminal, sign in, then try again. ${descriptor.reason || ''}`.trim());
-      await prepareWorkspace();
       const prompt = preparationPrompt({ host, mode: descriptor.mode, preparationId, localOnly });
+      if (manual) return { opened: false, host, requiresSend: true, mode: 'manual', prompt };
+      await prepareWorkspace();
       try { await launch(host, descriptor, prompt); }
       catch { fail('HOST_LAUNCH_FAILED', `Could not open ${descriptor.label}. Open it once and sign in, then try again. Your preparation request is saved; no prompt was sent by Companion.`); }
       return { opened: true, host, requiresSend: true, mode: descriptor.mode };
@@ -115,8 +120,9 @@ export function createApplicationLauncher({ directory, localOnly = false, openEx
       const descriptor = await describe(host);
       if (!descriptor.available)
         fail('HOST_UNAVAILABLE', `Install ${labels[host]} or its official CLI and an interactive terminal, sign in, then try again, or copy the prompt instead.`);
-      await prepareWorkspace();
       const prompt = `${REVIEW_PROMPT} If the skill is unavailable, use the recruiters.rip MCP tools, starting with career_match_jobs.`;
+      if (manual) return { opened: false, host, requiresSend: true, mode: 'manual', prompt };
+      await prepareWorkspace();
       try { await launch(host, descriptor, prompt); }
       catch { fail('HOST_LAUNCH_FAILED', `Could not open ${descriptor.label}. Open it once and sign in, then try again, or copy the prompt instead.`); }
       return { opened: true, host, requiresSend: true, mode: descriptor.mode };

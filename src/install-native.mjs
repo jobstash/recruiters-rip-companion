@@ -22,7 +22,8 @@ export function nativeLocations({ directory, identity, platform = process.platfo
   locations.push({ browser: 'firefox', manifest: paths.join(home, ...(platform === 'darwin' ? ['Library', 'Application Support', 'Mozilla', 'NativeMessagingHosts'] : ['.mozilla', 'native-messaging-hosts']), `${identity.nativeHost}.json`) });
   return locations;
 }
-export async function installNative({ executable, appPath, directory, packaged, localOnly = false, localOrigin, platform = process.platform, env = process.env, home = os.homedir(), run = promisify(execFile) }) {
+// `register: false` prepares the launcher without touching browser profiles: a container's host registers it instead.
+export async function installNative({ executable, appPath, directory, packaged, localOnly = false, localOrigin, register = true, platform = process.platform, env = process.env, home = os.homedir(), run = promisify(execFile) }) {
   const identity = localOnly ? BROWSER_IDENTITIES.local : BROWSER_IDENTITIES.production;
   const paths = platform === 'win32' ? path.win32 : path;
   await privateDirectory(directory);
@@ -39,7 +40,7 @@ export async function installNative({ executable, appPath, directory, packaged, 
   await writeFile(launcher, launcherScript({ executable, script: hostScript, args: [configPath], forwardArgs: true, platform }), { mode: 0o700 });
   protectPrivatePath(launcher, { mode: 0o700 });
   const installed = [];
-  for (const location of locations) {
+  for (const location of register ? locations : []) {
     const manifest = JSON.stringify({ name: identity.nativeHost, description: 'Recruiters.rip local job and application companion', path: launcher, type: 'stdio',
       ...(location.browser === 'firefox' ? { allowed_extensions: [identity.firefoxExtensionId] } : { allowed_origins: [`chrome-extension://${identity.extensionId}/`] }) }, null, 2);
     try {

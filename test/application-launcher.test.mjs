@@ -239,3 +239,20 @@ test('Windows terminal preserves native argv after explicit Enter without invoki
   await run('\n');
   assert.deepEqual(JSON.parse(await readFile(result, 'utf8')), { args: ['--cd', workspace, '--', prompt], cwd: workspace });
 });
+
+test('a manual host is never opened: the request is returned for the user to paste', async t => {
+  const launched = [];
+  const { launcher, opened, checked, workspace } = await harness(t, { manual: true, launchTerminal: async (...args) => { launched.push(args); },
+    discover: async () => assert.fail('A container cannot look for apps on the host') });
+  assert.deepEqual(await launcher.info(), { claude: { available: true, label: 'Claude', mode: 'manual', reason: null }, codex: { available: true, label: 'Codex', mode: 'manual', reason: null } });
+  const prepared = await launcher.open({ host: 'claude', preparationId });
+  assert.deepEqual({ ...prepared, prompt: undefined }, { opened: false, host: 'claude', requiresSend: true, mode: 'manual', prompt: undefined });
+  assert.equal(prepared.prompt, preparationPrompt({ host: 'claude', mode: 'manual', preparationId }));
+  // The fallback names what exists in a container: the setup prompt, not a Set up button.
+  assert.match(prepared.prompt, /add recruiters\.rip with the setup prompt in Recruiters Companion Settings → AI apps, then start a new session/);
+  assert.doesNotMatch(prepared.prompt, /choose Set up/);
+  const review = await launcher.review({ host: 'codex' });
+  assert.equal(review.mode, 'manual'); assert.match(review.prompt, /review the jobs queued for you/);
+  assert.deepEqual([opened, launched, checked], [[], [], []]);
+  await assert.rejects(stat(workspace), { code: 'ENOENT' }, 'No host workspace is prepared for an app that cannot be opened');
+});

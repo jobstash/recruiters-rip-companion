@@ -1,3 +1,4 @@
+import { writingTells } from './writing-style.mjs';
 const email = /[^\s@<>|]+@[^\s@<>|]+\.[\p{L}]{2,}/u;
 // Deliberately literal opening-word check, not a grammatical or semantic assessment.
 const actionVerbs = new Set('achieved advised analyzed automated built coached collaborated coordinated created delivered designed developed directed drove established expanded implemented improved increased launched led maintained managed mentored migrated negotiated optimized organized owned planned presented produced reduced resolved shipped streamlined supported trained transformed wrote'.split(' '));
@@ -95,6 +96,7 @@ export function inspectCvQuality({ document, heading = {} }) {
   for (const [opening, matches] of openings) if (matches.length >= 3) {
     for (const item of matches) issues.push({ code: 'repeated_action_verb', field: item.field, message: `${matches.length} bullets begin with “${opening}”; vary the opening verb.` });
   }
+  issues.push(...writingTells(texts));
   for (const item of texts) if (!item.setting) for (const pattern of placeholders) for (const match of item.text.matchAll(pattern)) {
     issues.push({ code: 'placeholder_text', field: item.field, message: `Unfinished placeholder “${match[0]}”; replace it with real content or remove it.` });
   }

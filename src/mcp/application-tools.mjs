@@ -3,6 +3,7 @@ import { applicationContextFingerprint, currentApplicationJob, isApplicationWrit
 import { readCareer, mutateCareer, replayCareer, mutationSchema, fail } from './state.mjs';
 import { assertCleanStatement } from './facts.mjs';
 import { cvDocumentTexts, inspectCvQuality, renderableCv, unsupportedNumbers } from './cv-quality.mjs';
+import { WRITING_STYLE, writingTells } from './writing-style.mjs';
 import { currentAssessment, normalizeQuote } from './matching-tools.mjs';
 import { matchingProfileVersion } from './assessment-policy.mjs';
 import { policyIdFor } from './matching-contract.mjs';
@@ -20,6 +21,7 @@ export const CV_WRITING_GUIDE = [
   'New explanations must inform subsequent evaluation of relevant roles: they may raise or lower a score or resolve eligibility, never earn an automatic adjustment. Fact changes invalidate old ranking context via profileVersion. Do not rescore in the background merely because an answer was collected; when needed, reassess affected roles against current evidence, and perform full reevaluation when requested. Do not force score changes for irrelevant evidence or merely relabel old judgments.',
   'Aim the headline at the target role. Write a 2–4 sentence summary connecting the candidate’s strongest relevant scope to the employer’s needs. List experience in reverse-chronological order with 3–6 outcome-first bullets for recent relevant roles; condense older roles or move them to an "Earlier experience" additional section. Use the advert’s terminology where it truthfully describes the candidate. Plan before writing: use context.assessment.requirements (or, without one, the advert’s essential requirements) to choose the strongest evidence per requirement. Every highlight and experience bullet is {text, support}: support.cv holds verbatim CV quotes, support.facts holds saved fact IDs. Write only what the cited evidence supports: shorten, combine or adopt the advert’s truthful terminology, but never move a metric to another role, turn leadership into hands-on work, turn exposure into expertise or make an unknown positive. When no outcome is evidenced, state the supported responsibility plainly instead of inventing a metric. Group skills and put the most relevant first. Keep headings plain and ATS-safe. Use implied first person ("Led …"), never "I" and never third-person narration.',
   'Cover letter: 220–380 words, specific to the company’s problem, no generic enthusiasm. Never invent employers, titles, dates, credentials or metrics. Do not ask the user to approve wording.',
+  WRITING_STYLE,
 ].join('\n');
 
 const text = maxLength => ({ type: 'string', minLength: 1, maxLength, pattern: '\\S' });
@@ -278,7 +280,7 @@ export function createApplicationTools({ store, platform, documents, exportDocum
         return { applicationId: target.id, cvVersion: draft.version, layout: { pages: layout.pages ?? null, fits: layout.fits }, issues };
       });
     });
-  mutate('career_application_letter_save', 'Save the tailored cover letter as ordered paragraphs (salutation and sign-off included). Numbers must come from the CV, facts or profile.',
+  mutate('career_application_letter_save', 'Save the tailored cover letter as ordered paragraphs (salutation and sign-off included). Numbers must come from the CV, facts or profile. Returns non-blocking notes on wording that reads as AI-written; fix them silently.',
     { applicationId: uuid, paragraphs: strings(12, 1500, 2) }, ['applicationId', 'paragraphs'], (career, args) => {
       const app = application(career, args.applicationId);
       const items = args.paragraphs.map((text, index) => ({ field: `paragraphs[${index}]`, text }));
@@ -289,7 +291,8 @@ export function createApplicationTools({ store, platform, documents, exportDocum
       if (app.coverLetter) app.coverLetterHistory.push(app.coverLetter);
       app.coverLetter = letter;
       app.updatedAt = now();
-      return { applicationId: app.id, letterVersion: letter.version };
+      const issues = writingTells(items).map(issue => `${issue.field}: ${issue.message}`);
+      return { applicationId: app.id, letterVersion: letter.version, ...(issues.length ? { issues } : {}) };
     });
 
   add('career_application_export', 'Export the current CV or cover letter as PDF (default) or TXT. PDF text is read back and checked before the file is written.',

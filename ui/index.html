@@ -177,8 +177,8 @@
 <section id="introduction-settings" class="setup-section" aria-labelledby="introductions-title">
 <h2 id="introductions-title">Introductions</h2>
 <div class="settings-content">
-<p>Your AI app can find people who could introduce you to a company that’s hiring: people you’ve worked with on GitHub, and the people they’ve worked with.</p>
-<p>It uses public GitHub activity only. Link your GitHub account so recruiters.rip knows which work is yours.</p>
+<p>Your AI app can find people who could introduce you at a company that’s hiring: people you’ve worked with on GitHub, and people they’ve worked with.</p>
+<p>It looks only at public GitHub activity. Link your GitHub account so recruiters.rip knows which work is yours.</p>
 <p id="github-status" role="status" aria-live="polite"></p>
 <button id="connect-github" class="ghost" type="button" disabled>Link GitHub</button>
 <p id="github-ask" class="caption" hidden>Ask your AI app: “Who could introduce me to this company?”</p>
@@ -209,7 +209,7 @@
 <p id="other-connections" class="caption" aria-live="polite" hidden></p>
 <div class="app-block">
 <div class="app-head"><h3 class="app-name">Setup prompt for your agent</h3></div>
-<p class="caption">Paste into Codex CLI, Claude Code, Cursor or any agent to add recruiters.rip on this computer.</p>
+<p class="caption">Paste it into Codex, Claude Code, Cursor or another agent, and it adds recruiters.rip on this computer.</p>
 <pre id="agent-prompt" class="command agent-prompt" tabindex="0" aria-label="Setup prompt"></pre>
 <div class="actions"><button id="copy-agent-prompt" class="ghost" type="button">Copy prompt</button></div>
 </div>
@@ -217,7 +217,7 @@
 </section>
 <section id="browser-settings" class="setup-section" aria-labelledby="browser-title">
 <h2 id="browser-title">Browser extensions</h2>
-<div class="settings-content"><p>Optional. Save jobs and fill application forms from your browser.</p>
+<div class="settings-content"><p>Optional. Use it to save jobs and fill in application forms in your browser.</p>
 <div class="browser-setup">
 <h3>Chrome <span id="chrome-native-status" class="caption" role="status"></span></h3>
 <ol class="setup-steps">
@@ -241,7 +241,7 @@
 <section id="decisions" class="setup-section" aria-labelledby="decisions-title">
 <h2 id="decisions-title">Form filling</h2>
 <div class="settings-content">
-<p>Optional. With an OpenAI API key, OpenAI helps choose form answers from your saved details. OpenAI bills you for it separately; you don’t need it to review jobs in Codex or Claude.</p>
+<p>Optional. With your own OpenAI API key, OpenAI helps pick form answers from your saved details. OpenAI bills you for this, and you don’t need it to review jobs with Codex or Claude.</p>
 <p id="decisions-key-status" class="decisions-key-status" role="status" aria-live="polite">Unlock your saved work to use help with forms.</p>
 <form id="decisions-form" autocomplete="off">
 <div id="decisions-key-saved" class="actions" hidden>
@@ -273,9 +273,9 @@
 <section class="setup-section" aria-labelledby="backups-title">
 <h2 id="backups-title">Backups</h2>
 <div class="settings-content">
-<p>Save a copy of your profile, CVs, saved documents and jobs. You can restore it here, including on another computer.</p>
+<p>A backup is a copy of your profile, CVs, saved documents and jobs. You can restore it here or on another computer.</p>
 <div class="actions"><button id="backup" class="primary" type="button" disabled>Save backup</button><button id="backup-choose" class="ghost" type="button" disabled>Restore backup</button><button id="backup-open-folder" class="text window-only" type="button" disabled>Open backups</button></div>
-<p class="caption">Backup files aren’t password-protected. Keep them private. Sign-in and API keys aren’t included.</p>
+<p class="caption">Backup files have no password, so keep them private. They don’t include your sign-in or API keys.</p>
 <p id="backup-availability" role="status">Checking your saved work…</p>
 <p id="backup-status" role="status" aria-live="polite" aria-atomic="true"></p>
 <p id="backup-error" role="alert" hidden></p>
@@ -290,7 +290,7 @@
 <p id="backup-profile-name"></p>
 <dl id="backup-counts" class="backup-counts"></dl>
 <ul id="backup-warnings" class="backup-warnings" hidden></ul>
-<p id="backup-consequence">This replaces this app’s current profile, CVs, saved documents, jobs and applications. Your sign-in and API keys stay the same. A backup of your current profile is saved first; find it in Open backups.</p>
+<p id="backup-consequence">Restoring replaces the profile, CVs, saved documents, jobs and applications in this app. Your sign-in and API keys stay the same. Companion backs up your current profile first<span class="window-only">; you’ll find it in Open backups</span>.</p>
 <div class="actions"><button id="backup-cancel" class="ghost" type="button">Cancel</button><button id="backup-restore" class="primary" type="button" aria-describedby="backup-consequence">Restore profile</button></div>
 </div>
 </section>
@@ -302,26 +302,28 @@
 <div class="settings-content"><ol id="help-steps" class="help-steps">
 <li>In Settings, choose <strong>Connect account</strong>. Sign in in the browser, choose <strong>Connect account → Open Companion</strong>, then approve the named account back here.</li>
 <li>In Me, choose <strong>Import CV</strong> and select a PDF, Word document (.docx) or text file.</li>
-<li>In Settings → AI apps, choose <strong>Get Codex</strong> or <strong>Get Claude</strong> if you need to install one. Sign in there, then choose <strong>Set up</strong> in Companion.</li>
-<li>Restart that app so it loads recruiters.rip: quit Claude completely and reopen it, restart Codex, or start a new Claude Code session.</li>
-<li>Open Jobs and choose <strong>Continue in Codex</strong> or <strong>Continue in Claude</strong>. Send the message in that app, or press <strong>Enter</strong> in the text window that opens. Its reviews appear under <strong>Reviewed</strong>.</li>
-</ol><p class="caption">Companion refreshes recruiters.rip skills for configured Claude and Codex apps every time it starts, including after an update. No need to choose Set up again after a normal upgrade. Start a new conversation to load changed instructions; an open conversation may keep the previous skill.</p></div>
+<li class="host-only">In Settings → AI apps, choose <strong>Get Codex</strong> or <strong>Get Claude</strong> if you need to install one. Sign in there, then choose <strong>Set up</strong> in Companion.</li>
+<li class="host-only">Restart that app so it loads recruiters.rip: quit Claude completely and reopen it, restart Codex, or start a new Claude Code session.</li>
+<li class="host-only">Open Jobs and choose <strong>Continue in Codex</strong> or <strong>Continue in Claude</strong>. Send the message in that app, or press <strong>Enter</strong> in the text window that opens. Its reviews appear under <strong>Reviewed</strong>.</li>
+<li class="container-only">In Settings → AI apps, choose <strong>Copy prompt</strong> and paste it into Codex, Claude Code or another agent. It adds recruiters.rip for you. Then restart that app or start a new session.</li>
+<li class="container-only">Open Jobs and choose <strong>Copy prompt</strong>, paste the message into your AI app and send it. Its reviews appear under <strong>Reviewed</strong>.</li>
+</ol><p class="caption host-only">You don’t need to choose Set up again after an update. Each time Companion starts, it updates what Codex and Claude know about recruiters.rip. A conversation that’s already open may keep the old instructions, so start a new one.</p></div>
 </section>
 <section class="setup-section" aria-labelledby="help-flow-title">
 <h2 id="help-flow-title">In your AI app</h2>
-<div class="settings-content"><p>Keep Companion open. To start from a conversation you already have, send:</p><pre id="help-prompt" class="command" tabindex="0">Use recruiters.rip to find jobs that fit my CV. Ask about any missing preferences and explain which roles fit and why.</pre><p>New recruiters.rip jobs need a membership. Codex or Claude uses your own account and any required plan, billed separately. A browser extension and extra API key are not needed to review jobs.</p><details><summary>My AI app cannot find recruiters.rip</summary><p>Choose Set up in Settings → AI apps, then quit the app completely and reopen it (Claude Code: start a new session). Enable recruiters.rip if the app asks. If Continue in Codex or Continue in Claude does not open the app, copy the message into it yourself.</p></details></div>
+<div class="settings-content"><p>Keep Companion open. To start from a conversation you already have, send:</p><pre id="help-prompt" class="command" tabindex="0">Use recruiters.rip to find jobs that fit my CV. Ask about any missing preferences and explain which roles fit and why.</pre><p>New jobs need a recruiters.rip subscription. Codex or Claude runs on your own account, and its provider bills you for any plan it needs. You don’t need the browser extension or an API key to review jobs.</p><details><summary>My AI app can’t find recruiters.rip</summary><p class="host-only">Choose Set up in Settings → AI apps, then quit the app completely and reopen it (in Claude Code, start a new session). Turn on recruiters.rip if the app asks. If Continue in Codex or Continue in Claude doesn’t open the app, copy the message into it yourself.</p><p class="container-only">Check that the Companion container is running, and that the docker command works where your AI app runs. Then paste the setup prompt from Settings → AI apps into the app again and start a new session.</p></details></div>
 </section>
 <section class="setup-section" aria-labelledby="help-documents-title">
 <h2 id="help-documents-title">Open your CV and letter</h2>
-<div class="settings-content"><ol class="help-steps"><li>Ask your AI to create and save a tailored CV and cover letter for a job.</li><li>Open Jobs in Companion and select that job.</li><li>Under <strong>Job and documents</strong>, choose <strong>Open CV</strong> or <strong>Open letter</strong>. Check them, then choose <strong>Open job</strong> to apply.</li></ol><p>The same saved documents are available when you select the application in Pipeline. Both PDFs are saved together in a folder for the company and job title, named with your name: <strong>Your name - CV.pdf</strong> and <strong>Your name - COVER LETTER.pdf</strong>. If they are missing, ask your AI to create and save both PDFs.</p></div>
+<div class="settings-content"><ol class="help-steps"><li>Ask your AI to create and save a tailored CV and cover letter for a job.</li><li>Open Jobs in Companion and select that job.</li><li>Under <strong>Job and documents</strong>, choose <strong>Open CV</strong> or <strong>Open letter</strong>. Check them, then choose <strong>Open job</strong> to apply.</li></ol><p>You can open the same documents from the application in Pipeline. Both PDFs are saved in one folder named after the company and job title, as <strong>Your name - CV.pdf</strong> and <strong>Your name - COVER LETTER.pdf</strong>. If they’re missing, ask your AI to create and save them.</p></div>
 </section>
 <section class="setup-section" aria-labelledby="help-extension-title">
 <h2 id="help-extension-title">Apply from your browser</h2>
-<div class="settings-content"><p>Add the extension in Settings → Browser extensions, then keep Companion open.</p><ol class="help-steps"><li>Open a job ad or application form and choose the <strong>recruiters.rip</strong> toolbar icon. It reads the page and gets any saved answers ready.</li><li>Choose <strong>Prepare application</strong>. Codex or Claude opens with a request for your CV, introduction and answers. Click <strong>Send</strong> there, or press <strong>Enter</strong> in the text window. To change app, use <strong>Options</strong> in the extension.</li><li>When it is ready, click an empty answer box and press <strong>⌘V</strong> on Mac or <strong>Ctrl+V</strong> on Windows and Linux. <strong>Show CV</strong> shows the file to upload; <strong>Copy intro</strong> copies your introduction for a cover letter or message box.</li><li>Check the form, then submit it yourself.</li></ol><p>Saved answers work without an API key. A job you have already prepared is reused, not written again.</p><details><summary>The extension cannot prepare this page</summary><ul class="help-steps"><li><strong>No job found on this page:</strong> open the job ad or application form itself, then choose <strong>Read page</strong>.</li><li><strong>Choose the job you want to apply for:</strong> select a job. It opens in a new tab; choose the toolbar icon there.</li><li><strong>Companion is not open:</strong> open it, then choose <strong>Retry</strong>. Not installed? Choose <strong>Get Companion</strong>.</li><li><strong>Locked:</strong> unlock your saved data in Companion, then read the page again.</li><li><strong>Update Companion:</strong> install the update in Settings → Updates, then read the page again.</li><li><strong>Import your CV:</strong> in Me, choose <strong>Import CV</strong>.</li><li><strong>Codex or Claude is unavailable:</strong> choose the other app under <strong>Options</strong>, or set it up in Settings → AI apps.</li><li><strong>Extra form help is unavailable:</strong> choose <strong>Use saved answers</strong>.</li><li><strong>The job or your saved details changed:</strong> choose <strong>Refresh answers</strong> or <strong>Update application</strong>.</li></ul></details></div>
+<div class="settings-content"><p>Add the extension in Settings → Browser extensions, then keep Companion open.</p><ol class="help-steps"><li>Open a job ad or application form and choose the <strong>recruiters.rip</strong> toolbar icon. It reads the page and gets any saved answers ready.</li><li>Choose <strong>Prepare application</strong>. <span class="host-only">Codex or Claude opens with a request for your CV, introduction and answers. Click <strong>Send</strong> there, or press <strong>Enter</strong> in the text window.</span><span class="container-only">The extension copies a request for your CV, introduction and answers. Paste it into Codex or Claude and send it.</span> To switch AI app, use <strong>Options</strong> in the extension.</li><li>When it is ready, click an empty answer box and press <strong>⌘V</strong> on Mac or <strong>Ctrl+V</strong> on Windows and Linux. <strong>Show CV</strong> shows the file to upload; <strong>Copy intro</strong> copies your introduction for a cover letter or message box.</li><li>Check the form, then submit it yourself.</li></ol><p>Saved answers work without an API key. If you’ve already prepared a job, the extension reuses that work.</p><details><summary>The extension cannot prepare this page</summary><ul class="help-steps"><li><strong>No job found on this page:</strong> open the job ad or application form itself, then choose <strong>Read page</strong>.</li><li><strong>Choose the job you want to apply for:</strong> select a job. It opens in a new tab; choose the toolbar icon there.</li><li><strong>Companion is not open:</strong> open it, then choose <strong>Retry</strong>. Not installed? Choose <strong>Get Companion</strong>.</li><li><strong>Locked:</strong> unlock your saved data in Companion, then read the page again.</li><li><strong>Update Companion:</strong> install the update in Settings → Updates, then read the page again.</li><li><strong>Import your CV:</strong> in Me, choose <strong>Import CV</strong>.</li><li><strong>Codex or Claude is unavailable:</strong> choose the other app under <strong>Options</strong>, or set it up in Settings → AI apps.</li><li><strong>Extra form help is unavailable:</strong> choose <strong>Use saved answers</strong>.</li><li><strong>The job or your saved details changed:</strong> choose <strong>Refresh answers</strong> or <strong>Update application</strong>.</li></ul></details></div>
 </section>
 <section class="setup-section" aria-labelledby="help-backups-title">
 <h2 id="help-backups-title">Backups</h2>
-<div class="settings-content"><p>In Settings → Backups, choose <strong>Save backup</strong> to keep a private copy of your work. To recover one, choose <strong>Restore backup</strong>, select the file, check the preview and choose <strong>Restore profile</strong>.</p><p>Restoring replaces your current profile, not your sign-in or API keys. Companion saves the previous profile first; find it in <strong>Open backups</strong>. Backup files are not password-protected.</p><button id="help-backups" class="text" type="button">View backups</button><details><summary>Delete a CV instead</summary><p>Open Me → CVs, select the CV, choose <strong>Delete CV</strong> and confirm. This removes the CV from this computer’s profile. Other CVs, applications and backups stay unchanged.</p></details></div>
+<div class="settings-content"><p>In Settings → Backups, choose <strong>Save backup</strong> to keep a private copy of your work. To recover one, choose <strong>Restore backup</strong>, select the file, check the preview and choose <strong>Restore profile</strong>.</p><p>Restoring replaces your current profile. Your sign-in and API keys stay as they are. Companion saves the previous profile first<span class="window-only">, and you’ll find it in <strong>Open backups</strong></span>. Backup files have no password.</p><button id="help-backups" class="text" type="button">View backups</button><details><summary>Delete a CV</summary><p>Open Me → CVs, select the CV, choose <strong>Delete CV</strong> and confirm. The CV is removed from your profile on this computer. Your other CVs, applications and backups stay as they are.</p></details></div>
 </section>
 <section class="setup-section" aria-labelledby="help-links-title">
 <h2 id="help-links-title">Links</h2>

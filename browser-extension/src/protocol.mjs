@@ -54,16 +54,28 @@ export function applicationView(result) {
     writing: (Array.isArray(result.writing) ? result.writing : []).slice(0, 64).map(field => ({ fieldId: text(field.fieldId, 200), label: text(field.label) || 'Written answer', ready: field.ready === true })),
     handoff: host(result.handoff?.host) && ['awaiting_agent', 'agent_read'].includes(result.handoff?.state)
       ? { host: result.handoff.host, state: result.handoff.state, requiresSend: result.handoff.requiresSend === true,
-        ...(['desktop', 'cli'].includes(result.handoff.mode) ? { mode: result.handoff.mode } : {}) } : null,
+        ...(['desktop', 'cli', 'manual'].includes(result.handoff.mode) ? { mode: result.handoff.mode } : {}) } : null,
     answerVersion: text(result.answerVersion, 200), jobUrl, preferredHost: host(result.preferredHost),
     ...(result.hostInfo && typeof result.hostInfo === 'object' ? {
       hostInfo: Object.fromEntries(['claude', 'codex'].filter(key => typeof result.hostInfo[key]?.available === 'boolean').map(key => [key, {
         available: result.hostInfo[key].available, label: text(result.hostInfo[key].label),
-        mode: ['desktop', 'cli'].includes(result.hostInfo[key].mode) ? result.hostInfo[key].mode : null,
+        mode: ['desktop', 'cli', 'manual'].includes(result.hostInfo[key].mode) ? result.hostInfo[key].mode : null,
         reason: text(result.hostInfo[key].reason),
       }])),
     } : {}),
   };
+}
+
+// A Companion without a desktop (it runs in a container) hands back what the browser must do in its place:
+// open one web page, or copy one text. Anything else is ignored.
+export function browserTask(result) {
+  const task = result?.browserTask;
+  if (!task || typeof task !== 'object' || Array.isArray(task)) return null;
+  if (typeof task.open === 'string' && task.open.length <= 4096) {
+    try { const url = new URL(task.open); if (['https:', 'http:'].includes(url.protocol) && !url.username && !url.password) return { open: url.href }; } catch { /* Not a page. */ }
+    return null;
+  }
+  return typeof task.copy === 'string' && task.copy.length > 0 && task.copy.length <= 20000 ? { copy: task.copy } : null;
 }
 
 // Companion-initiated read-only attachment checks arrive on the same port as

@@ -89,7 +89,8 @@ const restartLine = (host, mode) => host === 'codex' ? 'Start a new Codex conver
 const setupSteps = [['paired', 'Connect account'], ['hasCv', 'Import CV'], ['ai', 'Add Codex or Claude'], ['hasReviews', 'Start a job search']];
 let setupSignature = '';
 function renderSetup(current) {
-  const ai = Boolean(current?.review?.added?.codex || current?.review?.added?.claude || current?.mcpClients?.some(Boolean));
+  const added = current?.review?.added ?? {};
+  const ai = Boolean(added.codex || added.claude || added.other || current?.mcpClients?.some(Boolean));
   const hosts = current?.review?.hosts ?? {}, preferred = current?.review?.preferredHost;
   const searchHost = hosts[preferred] ? preferred : ['codex', 'claude'].find(host => hosts[host]) ?? null;
   const done = current ? { paired: current.paired, hasCv: current.hasCv, ai, hasReviews: current.hasReviews } : null;
@@ -143,13 +144,21 @@ function renderIntegrations(current) {
     message.textContent = error?.message || (restart[host] ? restartLine(host, info?.mode) : '');
   }
   $('claude-extension').hidden = !(added.claude && added.claudeExtension && hosts.claude?.mode !== 'cli');
-  $('other-connections').hidden = !other.length;
-  $('other-connections').textContent = other.length ? `Also in use now: ${other.join(', ')}` : '';
+  // In a container the per-app rows are hidden, so every live session is named here.
+  const container = Boolean(current.shell?.container);
+  const inUse = container ? [live.codex && 'Codex', live.claude && 'Claude Code', ...other].filter(Boolean) : other;
+  $('other-connections').hidden = !inUse.length;
+  $('other-connections').textContent = inUse.length ? `${container ? 'In use now' : 'Also in use now'}: ${inUse.join(', ')}` : '';
   // Only a live extension connection or a failed browser registration earns a line; otherwise the steps say what to do.
   for (const browser of ['chrome', 'firefox']) {
     const integration = current.browserIntegration;
     $(`${browser}-native-status`).textContent = integration?.connected?.includes(browser) ? 'Connected'
-      : current.browserConnection && current.browserConnection !== 'pending' && !integration?.registered?.[browser] ? 'Unavailable. Reopen Companion.' : '';
+      : ['installed', 'unavailable'].includes(current.browserConnection) && !integration?.registered?.[browser] ? 'Unavailable. Reopen Companion.' : '';
+    // A container cannot open this computer's browsers or folders: the steps show the command and the address instead.
+    if (container) {
+      $(`${browser}-browser-setup`).textContent = current.shell.browserSetup?.[browser] ?? '';
+      $(`${browser}-extensions-manual`).hidden = false;
+    }
   }
 }
 async function refresh() {
@@ -158,6 +167,7 @@ async function refresh() {
     const current = await invoke('state');
     if (request !== stateRequest) return;
     state = current;
+    document.documentElement.toggleAttribute('data-container', Boolean(state.shell?.container));
     if (noticeKind === 'state-unavailable') notice('');
     const locked = state.execution.state === 'locked';
     window.backupsUI?.refresh(current);
@@ -256,6 +266,10 @@ for (const [id, op, message] of [
   ['delete-rankings', 'delete-rankings', 'Job reviews cleared.'],
   ['unlock', 'unlock', 'Your saved work is open.'],
 ]) $(id).addEventListener('click', () => { void action(op, message); });
+for (const browser of ['chrome', 'firefox']) $(`copy-${browser}-browser-setup`).addEventListener('click', async () => {
+  try { await navigator.clipboard.writeText($(`${browser}-browser-setup`).textContent); notice('Copied. Paste it into a terminal on this computer.', 'copy-browser-setup'); }
+  catch { notice('Select the command and copy it.', 'error'); }
+});
 // GitHub linking is done on the website through the account sign-in. Only middleware's synchronized copy of the link counts,
 // so the row reads the platform status rather than a local flag, and re-reads it when the window regains focus after linking.
 let github = { paired: false, state: 'unknown', login: null };

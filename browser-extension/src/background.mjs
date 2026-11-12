@@ -1,5 +1,5 @@
 import { PRODUCT_ORIGIN, NATIVE_HOST, BUILD_ID } from './config.mjs';
-import { createNativeClient, safeDeviceRequest, externalSenderAllowed, deviceResult, applicationView, reviewIdentity } from './protocol.mjs';
+import { createNativeClient, safeDeviceRequest, externalSenderAllowed, deviceResult, applicationView, reviewIdentity, browserTask } from './protocol.mjs';
 import { captureJobs, captureApplicationContext, inspectForm, checkFormBindings, armSmartPaste, disarmSmartPaste } from './page.mjs';
 import { createPageAccess, preparedPageSender } from './page-access.mjs';
 import { installManagedUpdates } from './managed-update.mjs';
@@ -24,7 +24,9 @@ chrome.runtime.onConnectExternal?.addListener(port => {
     busy = true;
     try {
       const { op, payload } = safeDeviceRequest(message, PRODUCT_ORIGIN);
-      const result = deviceResult(op, await native.request(op, payload));
+      const reply = await native.request(op, payload);
+      if (op === 'open_settings') await handOver(reply);
+      const result = deviceResult(op, reply);
       if (!closed) port.postMessage({ version: 1, id: message.id, ok: true, result });
     } catch {
       if (!closed) { try { port.postMessage({ version: 1, id: message?.id, ok: false, error: { code: 'device_unavailable', message: 'Open the companion to review this operation.' } }); } catch { closed = true; } }
@@ -42,6 +44,15 @@ let pollTimer = null, pollEpoch = 0, pollInFlight = false, pollsRemaining = 0;
 const answerAttempts = new Set();
 const panels = new Set();
 const publish = () => { for (const panel of panels) { try { panel.postMessage(state); } catch { panels.delete(panel); } } if (!panels.size) stopPolling(); };
+// A Companion without a desktop (it runs in a container) cannot open pages or copy text on this computer,
+// so it hands that back and the extension does it here. Returns whether there was anything to do.
+// Only a page can write the clipboard, so the text goes to the open panels once and is never kept in state.
+async function handOver(result) {
+  const task = browserTask(result);
+  if (task?.open) await chrome.tabs.create({ url: task.open });
+  if (task?.copy) for (const panel of panels) { try { panel.postMessage({ ...state, copy: { text: task.copy } }); } catch { panels.delete(panel); } }
+  return Boolean(task);
+}
 function stopPolling() { clearTimeout(pollTimer); pollTimer = null; ++pollEpoch; }
 function clearApplication() {
   stopPolling(); answerAttempts.clear(); pollsRemaining = 0;
@@ -324,10 +335,12 @@ async function act(message) {
       if (result.bindingId !== bindingId) throw new Error('The application changed. Choose Read page again.');
       setApplication(result);
       state.applicationHost = host;
-      state.notice = result.opened === true && result.requiresSend === true && ['cli', 'desktop'].includes(result.mode)
-        ? result.mode === 'cli' ? `In the ${host === 'codex' ? 'Codex' : 'Claude'} window that opened, check the message, then press Enter to start.`
-          : `In ${host === 'codex' ? 'Codex' : 'Claude'}, check the message and click Send to start.`
-        : `Continue in ${host === 'codex' ? 'Codex' : 'Claude'} to review your message.`;
+      const name = host === 'codex' ? 'Codex' : 'Claude';
+      state.notice = await handOver(result) ? `Request copied. Paste it into ${name} and send it.`
+        : result.opened === true && result.requiresSend === true && ['cli', 'desktop'].includes(result.mode)
+        ? result.mode === 'cli' ? `In the ${name} window that opened, check the message, then press Enter to start.`
+          : `In ${name}, check the message and click Send to start.`
+        : `Continue in ${name} to review your message.`;
       pollsRemaining = 240;
     } else if (action === 'copy-intro') {
       requireWorkflow();
@@ -336,17 +349,19 @@ async function act(message) {
       const result = await native.request('application_copy_intro', { bindingId: state.application.bindingId });
       if (generation !== token) return;
       if (result?.copied !== true) throw new Error('Companion did not confirm copying the introduction. Try again.');
+      await handOver(result);
       state.notice = 'Introduction copied.';
     } else if (action === 'prepare-saved') {
       await prepare(token, false, false);
     } else if (action === 'application-document') {
       if (!state.application || !['cv', 'cover_letter'].includes(payload.kind) || !['open', 'reveal'].includes(payload.action) ||
         !state.application.documents.some(doc => doc.kind === payload.kind && doc.ready)) throw new Error('That document is not ready. Continue in Codex or Claude to finish it.');
-      await native.request('application_document', { bindingId: state.application.bindingId, kind: payload.kind, action: payload.action });
-      if (generation === token) state.notice = `${payload.kind === 'cv' ? 'CV' : 'Letter'}${payload.action === 'reveal' ? ' folder' : ''} opened.`;
+      const result = await native.request('application_document', { bindingId: state.application.bindingId, kind: payload.kind, action: payload.action });
+      const label = payload.kind === 'cv' ? 'CV' : 'Letter', downloaded = await handOver(result) && payload.action === 'reveal';
+      if (generation === token) state.notice = downloaded ? `${label} saved to your downloads.` : `${label}${payload.action === 'reveal' ? ' folder' : ''} opened.`;
     } else if (action === 'application-open-ad') {
       if (!state.application?.jobUrl) throw new Error('No job advert link was found. Open the original advert and click Read page.');
-      await native.request('application_open_ad', { bindingId: state.application.bindingId });
+      await handOver(await native.request('application_open_ad', { bindingId: state.application.bindingId }));
       if (generation === token) state.notice = 'Job ad opened. Choose Read page on that tab to read the full description.';
     } else if (action === 'application-answers') {
       const key = answerKey();
@@ -369,9 +384,9 @@ async function act(message) {
       if (saved?.scope !== 'future' || saved.source !== 'page') throw new Error('There is no saved answer to undo.');
       await queued(() => saveAnswer(payload.fieldId, null, 'page'));
     } else if (action === 'settings') {
-      await native.request('open_settings', {}); state.notice = 'Companion settings opened.';
+      await handOver(await native.request('open_settings', {})); state.notice = 'Companion settings opened.';
     } else if (action === 'configure') {
-      await native.request('open_decisions_settings', {}); state.notice = 'Form filling settings opened in Companion.';
+      await handOver(await native.request('open_decisions_settings', {})); state.notice = 'Form filling settings opened in Companion.';
     } else if (action === 'install') {
       await chrome.tabs.create({ url: new URL('/downloads', PRODUCT_ORIGIN).href });
       state.notice = 'Install and open Companion, then return here and choose Read page.';

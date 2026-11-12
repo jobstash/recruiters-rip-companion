@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
 import { BROWSER_IDENTITIES } from '../src/browser-identity.mjs';
 import { createManifest } from '../browser-extension/manifest.mjs';
-import { safeDeviceRequest, externalSenderAllowed, deviceResult, createNativeClient, safeNativeCommand, applicationView, reviewIdentity } from '../browser-extension/src/protocol.mjs';
+import { safeDeviceRequest, externalSenderAllowed, deviceResult, createNativeClient, safeNativeCommand, applicationView, reviewIdentity, browserTask } from '../browser-extension/src/protocol.mjs';
 import { captureJobs, captureApplicationContext, inspectForm, checkFormBindings, armSmartPaste, disarmSmartPaste } from '../browser-extension/src/page.mjs';
 import { createPageAccess, preparedPageSender } from '../browser-extension/src/page-access.mjs';
 import { installManagedUpdates } from '../browser-extension/src/managed-update.mjs';
@@ -772,7 +772,7 @@ const applicationMetadata = (overrides = {}) => ({
   ...overrides,
 });
 async function backgroundFixture(page = pastePage(), options = {}) {
-  const calls = [], injections = [], timers = new Map();
+  const calls = [], injections = [], timers = new Map(), opened = options.opened ?? (() => ({ opened: true }));
   let nextTimer = 0, application = applicationMetadata({ applicationId: null, ...options.application });
   let resolveApplication = async () => application, applicationStatus = async () => application;
   let launchApplication = async payload => (application = { ...application, handoff: { host: payload.host, state: 'awaiting_agent', requiresSend: true, mode: 'desktop' }, preferredHost: payload.host, opened: true, requiresSend: true, mode: 'desktop' });
@@ -798,7 +798,7 @@ async function backgroundFixture(page = pastePage(), options = {}) {
   const context = vm.createContext({
     [options.firefox ? 'browser' : 'chrome']: chrome, crypto: { randomUUID }, URL, PRODUCT_ORIGIN: origin, NATIVE_HOST: 'synthetic', BUILD_ID: 'test-build',
     captureJobs, captureApplicationContext, inspectForm, checkFormBindings, armSmartPaste, disarmSmartPaste,
-    safeDeviceRequest, externalSenderAllowed, deviceResult, applicationView, preparedPageSender, reviewIdentity, installManagedUpdates,
+    safeDeviceRequest, externalSenderAllowed, deviceResult, applicationView, preparedPageSender, reviewIdentity, installManagedUpdates, browserTask,
     setTimeout(fn, ms) {
       if (ms === 5000) { const id = ++nextTimer; timers.set(id, fn); return id; }
       return setTimeout(fn, 0);
@@ -829,7 +829,7 @@ async function backgroundFixture(page = pastePage(), options = {}) {
         if (op === 'application_prepare') return launchApplication(payload);
         if (op === 'application_host') { preferredHost = payload.host; return { host: preferredHost }; }
         if (op === 'application_copy_intro') return copyIntro(payload);
-        if (op === 'application_document' || op === 'application_open_ad') return { opened: true };
+        if (op === 'application_document' || op === 'application_open_ad' || op === 'open_settings') return opened(op, payload);
         throw new Error(`Unexpected request: ${op}`);
       } };
     },
@@ -1652,6 +1652,43 @@ test('handoff notices use only the confirmed host mode and never imply active ge
     assert.doesNotMatch(fixture.state().notice, /generating|writing|ready/i);
     if (!mode) assert.doesNotMatch(fixture.state().notice, /click Send|press Enter/);
   }
+});
+
+test('a Companion without a desktop hands the request, pages and documents to the browser instead of opening them', async () => {
+  const ready = { state: 'ready', documents: [{ kind: 'cv', label: 'CV', ready: true }, { kind: 'cover_letter', label: 'Cover letter', ready: false }], introduction: { ready: true } };
+  const links = { application_document: 'http://127.0.0.1:43117/files/abc/CV.pdf', application_open_ad: 'https://jobs.example.test/role', open_settings: 'http://127.0.0.1:43117/' };
+  const fixture = await backgroundFixture(pastePage(), { application: ready, opened: op => ({ opened: true, browserTask: { open: links[op] } }) }), panel = fixture.connectPanel();
+  const copied = () => panel.sent.filter(message => message.copy).map(message => message.copy.text);
+
+  fixture.copyIntro(async () => ({ copied: true, browserTask: { copy: 'Synthetic introduction.' } }));
+  await fixture.act({ action: 'copy-intro' });
+  assert.deepEqual(copied(), ['Synthetic introduction.']);
+  assert.equal(fixture.state().copy, undefined, 'Handed-over text is delivered once and never kept in extension state');
+
+  await fixture.act({ action: 'application-document', payload: { kind: 'cv', action: 'reveal' } });
+  assert.equal(fixture.state().notice, 'CV saved to your downloads.');
+  await fixture.act({ action: 'application-open-ad' });
+  await fixture.act({ action: 'settings' });
+  assert.deepEqual(plain(fixture.createdTabs), Object.values(links).map(url => ({ url })));
+
+  fixture.application(applicationMetadata({ state: 'needs_documents' }));
+  await fixture.act({ action: 'detect', payload: { tabId: 7 } });
+  fixture.launchApplication(async payload => applicationMetadata({ opened: false, requiresSend: true, mode: 'manual',
+    handoff: { host: payload.host, state: 'awaiting_agent', requiresSend: true, mode: 'manual' }, browserTask: { copy: 'Synthetic preparation request.' } }));
+  await fixture.act({ action: 'application-prepare' });
+  assert.match(fixture.state().notice, /^Request copied\. Paste it into (Codex|Claude) and send it\.$/);
+  assert.equal(fixture.state().application.handoff.mode, 'manual');
+  assert.deepEqual(copied(), ['Synthetic introduction.', 'Synthetic preparation request.']);
+});
+
+test('only a web page or plain text can be handed to the browser', () => {
+  assert.deepEqual(browserTask({ browserTask: { open: 'http://127.0.0.1:43117/files/abc/CV.pdf' } }), { open: 'http://127.0.0.1:43117/files/abc/CV.pdf' });
+  assert.deepEqual(browserTask({ browserTask: { copy: 'text' } }), { copy: 'text' });
+  for (const task of [undefined, null, 'https://example.test', [], {}, { open: 'javascript:alert(1)' }, { open: 'file:///etc/passwd' }, { open: 'chrome://settings' },
+    { open: 'https://user:secret@example.test/' }, { open: `https://example.test/${'a'.repeat(5000)}` }, { open: 7 }, { copy: '' }, { copy: 'a'.repeat(20001) }, { copy: {} },
+    { open: 'javascript:alert(1)', copy: 'text' }])
+    assert.equal(browserTask({ browserTask: task }), null);
+  assert.equal(browserTask({ opened: true }), null);
 });
 
 test('background rejects edits from a replaced question, snapshot or application context', async () => {

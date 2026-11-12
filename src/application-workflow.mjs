@@ -298,7 +298,7 @@ export function createApplicationWorkflow({ store, assertAvailable = () => {}, v
     });
   }
   async function launched({ preparationId, host, mode }) {
-    if (!['claude', 'codex'].includes(host) || !['desktop', 'cli'].includes(mode)) fail('INVALID_INPUT', 'Choose an available Claude or Codex desktop or CLI host.');
+    if (!['claude', 'codex'].includes(host) || !['desktop', 'cli', 'manual'].includes(mode)) fail('INVALID_INPUT', 'Choose an available Claude or Codex desktop or CLI host.');
     return mutation('application_launched', { preparationId, host, mode }, career => {
       Object.assign(getPreparation(career, preparationId), { host, mode });
       return { preparationId };

@@ -1,0 +1,29 @@
+# Recruiters.rip Companion in a container, built from this source.
+#
+#   docker compose up -d --build                        build and start
+#   docker exec recruiters-companion companion url      print the address that opens it in your browser
+#
+# AI apps and the browser extension reach it through `docker exec`, so the container keeps this name.
+# Your profile, CVs and saved jobs live in the companion-data volume and survive rebuilds.
+services:
+  companion:
+    build: .
+    image: recruiters-companion:local
+    container_name: recruiters-companion
+    init: true
+    restart: unless-stopped
+    ports:
+      # This computer only. Companion checks the address it is opened at, so keep both numbers equal.
+      - "127.0.0.1:43117:43117"
+    volumes:
+      - companion-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  companion-data:

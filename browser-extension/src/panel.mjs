@@ -22,6 +22,10 @@ function connect() {
   let first = true;
   port.onMessage.addListener(value => {
     state = value; render();
+    // Companion in a container cannot reach this computer's clipboard, so the panel copies for it.
+    if (typeof state.copy?.text === 'string') void navigator.clipboard.writeText(state.copy.text).catch(() => {
+      $('error').hidden = false; $('error').textContent = 'Clipboard access was denied. Click this panel, then try again.';
+    });
     if (state.buildId !== BUILD_ID) return;
     if (first && !state.busy) void chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
       if (tab?.id !== state.tabId || !state.page) send('detect', { tabId: tab?.id });

@@ -8,7 +8,7 @@ import { createDocumentFiles, validExport, exportTypes, documentURI, documentNam
 import { CAREER_SCHEMA, fail, hash, upgradeCareer, normalizeIntroductions } from './mcp/state.mjs';
 import { BLOCK_KINDS } from './mcp/blocklist.mjs';
 import { FACT_KINDS } from './mcp/facts.mjs';
-import { assertCareerGapSetting } from './mcp/career-gap.mjs';
+import { readCareerGapSetting } from './mcp/career-gap.mjs';
 import { applicationContextFingerprint } from './application-workflow.mjs';
 import { replayProgress } from './application-progress.mjs';
 
@@ -66,7 +66,10 @@ function draft(value, kind) {
     }
     if (doc.highlights !== undefined) array(doc.highlights, 'CV highlights').forEach(claim);
     if (doc.careerGaps !== undefined) for (const item of array(doc.careerGaps, 'CV career gaps')) {
-      object(item, 'CV career gap'); for (const key of ['label', 'startDate', 'endDate']) text(item[key], key);
+      object(item, 'CV career gap');
+      // 3.12.29–3.12.30 saved one `label` line where an entry now has an activity, and optionally a place and description.
+      for (const key of [item.activity === undefined && item.label !== undefined ? 'label' : 'activity', 'startDate', 'endDate']) text(item[key], key);
+      for (const key of ['place', 'description']) if (item[key] !== undefined) text(item[key], key);
     }
     for (const key of ['education', 'skills', 'languages', 'additional']) if (doc[key] !== undefined)
       for (const item of array(doc[key], key)) {
@@ -192,7 +195,7 @@ export function validateBackupCareer(career) {
     });
   }
   for (const key of ['prescan', 'prescanInclusion', 'prescanPublicationRange']) if (career[key] !== undefined && career[key] !== null && typeof career[key] !== 'string') object(career[key], key);
-  if (career.careerGap !== undefined) try { assertCareerGapSetting(career.careerGap); } catch { invalid('the career gap setting is unsupported'); }
+  if (career.careerGap !== undefined) try { readCareerGapSetting(career.careerGap); } catch { invalid('the career gap setting is unsupported'); }
   return career;
 }
 

@@ -248,7 +248,7 @@ export function createApplicationTools({ store, platform, documents, exportDocum
       return context(career, application(career, args.applicationId));
     });
 
-  add('career_application_cv_save', 'Save the tailored CV as a structured document. Every highlight and experience bullet is {text, support}: support.cv quotes the saved CV verbatim, support.facts cites saved fact IDs, and the claim\'s numbers must appear in that cited evidence. Employers must appear in the saved CV or as a fact\'s employer; other numbers must come from the CV, facts or profile. careerGaps (periods only) is accepted only when career_application_context returns careerGap; Companion writes each entry in the candidate\'s wording under a "Career gap" section. Returns layout and non-blocking quality notes to fix silently.',
+  add('career_application_cv_save', 'Save the tailored CV as a structured document. Every highlight and experience bullet is {text, support}: support.cv quotes the saved CV verbatim, support.facts cites saved fact IDs, and the claim\'s numbers must appear in that cited evidence. Employers must appear in the saved CV or as a fact\'s employer; other numbers must come from the CV, facts or profile. careerGaps (periods only) is accepted only when career_application_context returns careerGap; Companion lists each one among the roles in Experience, in date order, in the candidate\'s own words. Returns layout and non-blocking quality notes to fix silently.',
     object({ ...mutationSchema, applicationId: uuid, cv: cvSchema, presentation: presentationSchema }, ['requestId', 'revision', 'applicationId', 'cv']), false, async args => {
       guard(args);
       const replay = replayCareer(store, args, 'career_application_cv_save', args);

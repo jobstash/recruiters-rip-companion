@@ -321,12 +321,14 @@ summary:hover { color: var(--color-ink); }
 /* Career gap detection sits under the Me tabs on CVs: one checkbox, its options shown only while it is on. */
 .career-gap { flex: 0 0 100%; display: grid; gap: var(--spacing-8); min-width: 0; }
 .career-gap > * { max-width: var(--reading); }
-.career-gap-options { display: grid; grid-template-columns: repeat(3, minmax(0, 128px)) minmax(0, 1fr); align-items: end; gap: var(--spacing-16); padding-bottom: var(--spacing-8); }
-.career-gap-options select { width: 100%; min-width: 0; min-height: 44px; padding: 12px 0; border: 0; border-bottom: 1px solid var(--color-ink); border-radius: 0; background: var(--color-canvas); color: var(--color-ink); font: 400 18px/1.4 var(--font-geist); letter-spacing: normal; text-transform: none; cursor: pointer; }
-.career-gap-options select:disabled { border-color: var(--color-facet); color: var(--color-dust); cursor: not-allowed; }
-.career-gap-options select:focus { border-bottom-color: transparent; background-image: var(--rr-dispersion); background-repeat: no-repeat; background-size: 100% 2px; background-position: 0 100%; box-shadow: var(--shadow-input-focus); }
-.career-gap-options select:focus-visible { box-shadow: var(--shadow-focus-ring), var(--shadow-input-focus); }
-#career-gap-text-field { grid-column: 1 / -1; }
+.career-gap-options { display: grid; gap: var(--spacing-16); padding-bottom: var(--spacing-8); }
+.career-gap-row { display: grid; align-items: end; gap: var(--spacing-16); }
+.career-gap-detect { grid-template-columns: repeat(3, minmax(0, 128px)); }
+/* The entry's parts in the order a job shows them: what, where, when, then one line about it. */
+.career-gap-entry { grid-template-columns: repeat(2, minmax(0, 1fr)) minmax(0, 208px); }
+.career-gap-entry > p { margin: 0; }
+.career-gap-fixed { display: block; min-height: 44px; padding: 12px 0; border-bottom: 1px solid var(--color-facet); color: var(--color-smoke); font: 400 18px/1.4 var(--font-geist); letter-spacing: normal; text-transform: none; }
+#career-gap-description-field { grid-column: 1 / -1; }
 #career-gap-note { overflow-wrap: anywhere; }
 .me-actions { display: grid; gap: var(--spacing-16); padding-bottom: var(--spacing-24); }
 .setup-next { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--spacing-24); padding-bottom: var(--spacing-16); border-bottom: 1px solid var(--color-facet); }
@@ -393,8 +395,9 @@ dialog::backdrop { background: color-mix(in oklab, var(--color-void) 80%, transp
   .setup-section { grid-template-columns: minmax(0, 1fr); gap: var(--spacing-24); }
   .setup-next { grid-template-columns: minmax(0, 1fr); gap: var(--spacing-16); }
   .me-actions button { padding-inline: var(--spacing-8); }
-  .career-gap-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .career-gap-options label[for="career-gap-months"], .career-gap-options label[for="career-gap-mode"] { grid-column: 1 / -1; }
+  .career-gap-detect { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .career-gap-detect label[for="career-gap-months"] { grid-column: 1 / -1; }
+  .career-gap-entry { grid-template-columns: minmax(0, 1fr); }
   .career-reader-content dl { grid-template-columns: minmax(0, 1fr); gap: var(--spacing-8); }
   .career-reader-content dd + dt { margin-top: var(--spacing-8); }
   .career-card .career-record { gap: var(--spacing-8); padding: var(--spacing-16) var(--spacing-8) var(--spacing-16) var(--spacing-16); }

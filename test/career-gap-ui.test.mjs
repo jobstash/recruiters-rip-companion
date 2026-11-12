@@ -5,7 +5,7 @@ import vm from 'node:vm';
 
 const script = await readFile(new URL('../ui/career-gap.js', import.meta.url), 'utf8');
 const turn = () => new Promise(resolve => setImmediate(resolve));
-const setting = (overrides = {}) => ({ enabled: false, mode: 'private', text: '', minMonths: 3, fromYear: 2016, toYear: 2026, ...overrides });
+const setting = (overrides = {}) => ({ enabled: false, activity: 'Career break', place: '', description: 'Career gap period - private reasons', minMonths: 3, fromYear: 2016, toYear: 2026, ...overrides });
 
 function fixture(invoke) {
   const calls = [];
@@ -15,7 +15,7 @@ function fixture(invoke) {
       addEventListener: (event, callback) => listeners.set(event, callback),
       dispatch: event => listeners.get(event)?.() };
   };
-  const nodes = new Map(['career-gap', ...['enabled', 'options', 'from', 'to', 'months', 'mode', 'text-field', 'text', 'note', 'error'].map(name => `career-gap-${name}`)]
+  const nodes = new Map(['career-gap', ...['enabled', 'options', 'from', 'to', 'months', 'activity', 'place', 'description', 'note', 'error'].map(name => `career-gap-${name}`)]
     .map(id => [id, control()]));
   const tabs = ['sources', 'facts', 'preferences'].map(kind => Object.assign(control(), { dataset: { careerKind: kind } }));
   const companion = { invoke: async (operation, input) => {
@@ -31,7 +31,7 @@ function fixture(invoke) {
     refresh: value => context.window.careerGapUI.refresh(value), clear: () => context.window.careerGapUI.clear() };
 }
 
-test('detection is unticked by default and its years, minimum length and reason stay hidden', () => {
+test('detection is unticked by default and its years, minimum length and entry stay hidden', () => {
   const ui = fixture();
   assert.equal(ui.node().hidden, true, 'nothing shows before saved work is open');
   ui.refresh(setting());
@@ -49,9 +49,9 @@ test('ticking the checkbox reveals the options and saves detection on with the s
   await ui.edit('enabled', node => { node.checked = true; });
   assert.deepEqual(ui.calls, [['career-gap-set', setting({ enabled: true })]]);
   assert.equal(ui.node('options').hidden, false);
-  assert.deepEqual([ui.node('from').value, ui.node('to').value, ui.node('months').value, ui.node('mode').value], ['2016', '2026', '3', 'private']);
-  assert.equal(ui.node('text-field').hidden, true);
-  assert.match(ui.node('note').textContent, /^On\. A gap of 3 months or more between jobs in 2016–2026 gets a “Career gap” entry in generated CVs: “Career gap period - private reasons”\./);
+  assert.deepEqual(['from', 'to', 'months', 'activity', 'place', 'description'].map(name => ui.node(name).value),
+    ['2016', '2026', '3', 'Career break', '', 'Career gap period - private reasons']);
+  assert.equal(ui.node('note').textContent, 'On. A gap of 3 months or more between jobs in 2016–2026 is listed in Experience among your jobs in generated CVs: “Career break” · its dates from your CV · “Career gap period - private reasons”. Earlier documents update the next time your AI prepares them.');
   await ui.edit('months', node => { node.value = '6'; });
   await ui.edit('from', node => { node.value = '2019'; });
   assert.deepEqual(ui.calls.at(-1), ['career-gap-set', setting({ enabled: true, minMonths: 6, fromYear: 2019 })]);
@@ -68,18 +68,24 @@ test('unticking hides the options again and saves detection off even when a hidd
   assert.equal(ui.node('error').hidden, true);
 });
 
-test('own wording needs text before it is saved, and invalid years or months are explained, not sent', async () => {
+test('the entry is the candidate’s activity, place and description; a missing activity or invalid years or months are explained, not sent', async () => {
   const ui = fixture();
   ui.refresh(setting({ enabled: true }));
-  await ui.edit('mode', node => { node.value = 'custom'; });
-  assert.equal(ui.node('text-field').hidden, false);
+  await ui.edit('activity', node => { node.value = '   '; });
   assert.equal(ui.calls.length, 0);
-  assert.equal(ui.node('error').textContent, 'Write the wording to show for a career gap.');
-  assert.match(ui.node('note').textContent, /“Career gap period - private reasons”/, 'the note keeps describing what is saved');
-  await ui.edit('text', node => { node.value = '  Cared for a parent '; });
-  assert.deepEqual(ui.calls, [['career-gap-set', setting({ enabled: true, mode: 'custom', text: 'Cared for a parent' })]]);
+  assert.equal(ui.node('error').textContent, 'Write the activity to show for a career gap, such as Career break.');
+  assert.match(ui.node('note').textContent, /“Career break” · its dates from your CV/, 'the note keeps describing what is saved');
+  await ui.edit('activity', node => { node.value = '  Parental leave '; });
+  await ui.edit('place', node => { node.value = ' Lisbon, Portugal '; });
+  await ui.edit('description', node => { node.value = ' Cared for a newborn '; });
+  assert.deepEqual(ui.calls.at(-1), ['career-gap-set', setting({ enabled: true, activity: 'Parental leave', place: 'Lisbon, Portugal', description: 'Cared for a newborn' })]);
+  assert.equal(ui.calls.length, 3, 'each committed part saves at once');
   assert.equal(ui.node('error').hidden, true);
-  assert.match(ui.node('note').textContent, /“Cared for a parent”/);
+  assert.match(ui.node('note').textContent, /: “Parental leave” · “Lisbon, Portugal” · its dates from your CV · “Cared for a newborn”\./);
+  await ui.edit('description', node => { node.value = ''; });
+  assert.deepEqual(ui.calls.at(-1)[1].description, '', 'the description is optional');
+  assert.match(ui.node('note').textContent, /: “Parental leave” · “Lisbon, Portugal” · its dates from your CV\./);
+  const sent = ui.calls.length;
   for (const [name, value, message] of [['months', '2', 'A career gap is at least 3 months. Enter 3 to 120.'], ['months', '4.5', 'A career gap is at least 3 months. Enter 3 to 120.'],
     ['from', '2030', 'The first year must not be after the last year.'], ['to', '1900', 'Enter the years to check, from 1950 to 2100.']]) {
     const previous = ui.node(name).value;
@@ -87,7 +93,7 @@ test('own wording needs text before it is saved, and invalid years or months are
     assert.equal(ui.node('error').textContent, message);
     ui.node(name).value = previous;
   }
-  assert.equal(ui.calls.length, 1);
+  assert.equal(ui.calls.length, sent);
 });
 
 test('a failed save restores what is stored and says so; polling never overwrites typing', async () => {

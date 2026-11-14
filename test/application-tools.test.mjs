@@ -53,6 +53,7 @@ async function fixture(t, options = {}) {
       const work = queue.then(async () => {
         const copy = structuredClone(state);
         await change(copy);
+        await options.beforeCommit?.(copy);
         state = copy;
       });
       queue = work.catch(() => {});
@@ -78,7 +79,7 @@ async function fixture(t, options = {}) {
   const create = (args = { job: pastedJob }) => call('application_create', mutation(args));
   const saveCv = (applicationId, cv, extra = {}) => call('application_cv_save', { applicationId, ...binding(), cv, ...extra });
   const saveLetter = (applicationId, paragraphs) => call('application_letter_save', { applicationId, ...binding(), paragraphs });
-  const exportDraft = (applicationId, kind, format) => call('application_export', mutation({ applicationId, kind, ...(format ? { format } : {}) }));
+  const exportDraft = (applicationId, kind, format) => call('application_export', { applicationId, kind, ...(format ? { format } : {}) });
   return { store, files, state: () => state.career, tools, call, mutation, create, saveCv, saveLetter, exportDraft, requests, exported, catalogue, facts, ready, binding, sources: { cvSource, archived, note } };
 }
 
@@ -111,6 +112,15 @@ const pdfText = async bytes => {
   const parser = new PDFParse({ data: Uint8Array.from(bytes) });
   try { return (await parser.getText({ pageJoiner: '' })).text; } finally { await parser.destroy(); }
 };
+
+function pauseAt(arrivals = 1) {
+  const started = Promise.withResolvers(), resumed = Promise.withResolvers();
+  let count = 0;
+  return { started: started.promise, release: resumed.resolve, async wait() {
+    if (++count === arrivals) started.resolve();
+    await resumed.promise;
+  } };
+}
 
 test('a pasted advert creates an application and its context carries everything needed to write', async t => {
   const f = await fixture(t);
@@ -208,9 +218,7 @@ test('a plain CV saves with layout and notes, keeps history, and exports readabl
     const app = f.state().applications[applicationId];
     assert.equal(app.cv.version, result.cvVersion);
     assert.deepEqual(app.cv.presentation, presentation);
-    const args = f.mutation({ applicationId, kind: 'cv' });
-    const exported = await f.call('application_export', args);
-    assert.deepEqual(await f.call('application_export', args), exported, 'an exact replay does not republish');
+    const exported = await f.exportDraft(applicationId, 'cv');
     const bytes = await readFile(exported.export.path);
     assert.equal(bytes.subarray(0, 5).toString(), '%PDF-');
     assert.equal(exported.export.sha256, digest(bytes));
@@ -396,6 +404,13 @@ test('tool schemas accept a structured CV and reject malformed documents and rem
   }
   const letterSchema = ajv.compile(f.tools.get('career_application_letter_save').inputSchema);
   assert.equal(letterSchema({ applicationId, ...f.binding(), paragraphs: letter }), true);
+  const exportSchema = ajv.compile(f.tools.get('career_application_export').inputSchema);
+  assert.equal(exportSchema({ applicationId, kind: 'cv' }), true);
+  assert.equal(exportSchema({ applicationId, kind: 'cover_letter', format: 'pdf' }), true);
+  assert.equal(exportSchema({ applicationId, kind: 'cv', format: 'txt' }), true);
+  assert.equal(exportSchema({ applicationId }), false);
+  assert.equal(exportSchema({ applicationId, kind: 'cv', requestId: randomUUID() }), false);
+  assert.equal(exportSchema({ applicationId, kind: 'cv', revision: 0 }), false);
   for (const field of ['requestId', 'revision', 'contextFingerprint', 'requirements', 'evidence']) {
     assert.equal(validate({ ...args, [field]: 'removed' }), false);
     assert.equal(letterSchema({ applicationId, ...f.binding(), paragraphs: letter, [field]: 'removed' }), false);
@@ -451,7 +466,7 @@ test('blocking a saved application stops drafts, context and receipt replays wit
   await f.call('application_cv_save', cvArgs);
   const letterArgs = { applicationId, ...f.binding(), paragraphs: letter };
   await f.call('application_letter_save', letterArgs);
-  const exportArgs = f.mutation({ applicationId, kind: 'cover_letter', format: 'txt' });
+  const exportArgs = { applicationId, kind: 'cover_letter', format: 'txt' };
   await f.call('application_export', exportArgs);
   let entry;
   await f.store.update(state => { entry = addBlock(state.career, { id: 'node:9001', kind: 'company' }); });
@@ -509,7 +524,7 @@ test('a concurrent career edit during layout prevents a stale CV save', async t 
   await waiting;
   await f.store.update(state => { state.career.profile.location = 'Paris'; state.career.revision++; });
   release({ fits: true, pages: 1 });
-  await assert.rejects(pending, { code: 'REVISION_CONFLICT' });
+  await assert.rejects(pending, { code: 'APPLICATION_CONTEXT_CHANGED' });
   assert.equal(f.state().applications[applicationId].cv, null);
 });
 
@@ -529,10 +544,10 @@ test('tailoring requires a ready master and preserves its content and version', 
 });
 
 
-test('source membership and ready master version changes invalidate export and old receipts', async t => {
+test('source membership and ready master version changes invalidate existing exports', async t => {
   const f = await fixture(t), { applicationId } = await f.create();
   await f.saveCv(applicationId, tailoredCv(f.facts));
-  const args = f.mutation({ applicationId, kind: 'cv', format: 'txt' });
+  const args = { applicationId, kind: 'cv', format: 'txt' };
   await f.call('application_export', args);
   await readyMaster(f.store);
   await assert.rejects(f.call('application_export', args), { code: 'APPLICATION_CONTEXT_CHANGED' });
@@ -564,3 +579,221 @@ test('full HTML advert text and plain tailored wording retain original whitespac
   assert.ok((await readFile(exported.export.path, 'utf8')).includes('data  services'));
 });
 
+
+test('six applications save both drafts and export real PDFs concurrently despite unrelated writes', { timeout: 30000 }, async t => {
+  const saving = pauseAt(6), exporting = pauseAt(6);
+  t.after(() => { saving.release(); exporting.release(); });
+  const f = await fixture(t, { documents: { ...documents,
+    async measureCareerCvLayout(input) {
+      const layout = await documents.measureCareerCvLayout(input);
+      await saving.wait();
+      return layout;
+    },
+    async validateCareerPdfText(input) {
+      const result = await documents.validateCareerPdfText(input);
+      if (!input.pageNumberFooter) await exporting.wait();
+      return result;
+    },
+  } });
+  const ids = [];
+  for (let index = 0; index < 6; index++) ids.push((await f.create({ job: { ...pastedJob,
+    company: `Concurrent Employer ${index}`, url: `https://example.test/concurrent/${index}` } })).applicationId);
+  const revision = f.state().revision, receipts = Object.keys(f.state().receipts).length;
+  const cvSaves = Promise.all(ids.map(id => f.saveCv(id, tailoredCv())));
+  cvSaves.catch(() => {});
+  const letterWork = Promise.all(ids.map(async id => {
+    const saved = await f.saveLetter(id, letter);
+    assert.equal(saved.letterVersion, 1);
+    return f.exportDraft(id, 'cover_letter');
+  }));
+  await saving.started;
+  await letterWork;
+  assert.ok(ids.every(id => f.state().applications[id].cv === null));
+  assert.ok(ids.every(id => f.state().applications[id].exports.length === 1), 'letters export while every CV layout is paused');
+  await f.call('application_progress_set', f.mutation({ applicationId: ids[0], stage: 'applied' }));
+  saving.release();
+  assert.ok((await cvSaves).every(saved => saved.cvVersion === 1));
+  const cvExports = Promise.all(ids.map(id => f.exportDraft(id, 'cv')));
+  cvExports.catch(() => {});
+  await exporting.started;
+  await f.call('application_progress_set', f.mutation({ applicationId: ids[0], stage: 'interviewing' }));
+  await f.exportDraft(ids[0], 'cover_letter');
+  exporting.release();
+  assert.ok((await cvExports).every(result => result.export.textValidation.passed));
+  assert.equal(f.state().revision, revision + 27);
+  assert.equal(Object.keys(f.state().receipts).length, receipts + 2, 'document operations do not create mutation receipts');
+  assert.equal(f.exported.length, 13);
+  for (const id of ids) {
+    const app = f.state().applications[id];
+    assert.equal(app.cv.version, 1);
+    assert.equal(app.coverLetter.version, 1);
+    assert.deepEqual(app.cvHistory, []);
+    assert.deepEqual(app.coverLetterHistory, []);
+    for (const kind of ['cv', 'cover_letter']) {
+      const record = app.exports.findLast(item => item.kind === kind);
+      assert.equal(record.documentVersion, 1);
+      const bytes = await readFile(record.path);
+      assert.equal(bytes.subarray(0, 5).toString(), '%PDF-');
+      assert.equal(digest(bytes), record.sha256);
+      assert.equal((await f.files.readResource(record.uri)).blob, bytes.toString('base64'));
+    }
+  }
+});
+
+for (const kind of ['cv', 'cover_letter']) {
+  test(`overlapping ${kind} saves preserve the winner instead of replacing it`, { timeout: 15000 }, async t => {
+    const paused = pauseAt(kind === 'cv' ? 2 : 1);
+    t.after(paused.release);
+    const f = await fixture(t, { documents: { ...documents,
+      async measureCareerCvLayout(input) {
+        const layout = await documents.measureCareerCvLayout(input);
+        await paused.wait();
+        return layout;
+      },
+    } });
+    const { applicationId } = await f.create();
+    const queued = kind === 'cover_letter' ? f.store.update(() => paused.wait()) : null;
+    if (queued) await paused.started;
+    const save = wording => kind === 'cv'
+      ? f.saveCv(applicationId, { ...tailoredCv(), summary: wording })
+      : f.saveLetter(applicationId, ['Dear hiring team,', wording]);
+    const results = Promise.allSettled([save('First draft wording.'), save('Second draft wording.')]);
+    await paused.started;
+    paused.release();
+    await queued;
+    const settled = await results;
+    assert.equal(settled.filter(result => result.status === 'fulfilled').length, 1);
+    assert.equal(settled.find(result => result.status === 'rejected').reason.code, 'VERSION_CONFLICT');
+    const app = f.state().applications[applicationId], draft = kind === 'cv' ? app.cv : app.coverLetter;
+    assert.equal(draft.version, 1);
+    const winner = settled.findIndex(result => result.status === 'fulfilled');
+    assert.equal(kind === 'cv' ? draft.document.summary : draft.paragraphs[1], winner === 0 ? 'First draft wording.' : 'Second draft wording.');
+    assert.deepEqual(kind === 'cv' ? app.cvHistory : app.coverLetterHistory, []);
+  });
+
+  test(`a replaced ${kind} draft cannot export after rendering or while waiting for the file lock`, { timeout: 15000 }, async t => {
+    const rendered = pauseAt();
+    t.after(rendered.release);
+    const f = await fixture(t, { documents: { ...documents,
+      async validateCareerPdfText(input) {
+        const result = await documents.validateCareerPdfText(input);
+        await rendered.wait();
+        return result;
+      },
+    } });
+    const { applicationId } = await f.create();
+    const save = () => kind === 'cv' ? f.saveCv(applicationId, tailoredCv()) : f.saveLetter(applicationId, letter);
+    await save();
+    const pending = f.exportDraft(applicationId, kind);
+    const rejected = assert.rejects(pending, { code: 'VERSION_CONFLICT' });
+    await rendered.started;
+    await save();
+    rendered.release();
+    await rejected;
+    assert.equal(f.exported.length, 0);
+
+    const locked = pauseAt();
+    t.after(locked.release);
+    const transaction = f.files.withExportTransaction(() => locked.wait());
+    await locked.started;
+    const waiting = assert.rejects(f.exportDraft(applicationId, kind, 'txt'), { code: 'VERSION_CONFLICT' });
+    await save();
+    locked.release();
+    await transaction;
+    await waiting;
+    assert.equal(f.exported.length, 0);
+    assert.deepEqual(f.state().applications[applicationId].exports, []);
+    assert.deepEqual(await f.files.listResources(), []);
+  });
+}
+
+const contextChanges = [
+  ['facts', async (f) => f.store.update(state => {
+    state.career.facts[f.facts.Italian].answer = 'Professional';
+    state.career.revision++;
+  }), 'APPLICATION_CONTEXT_CHANGED'],
+  ['master', async (f) => readyMaster(f.store), 'APPLICATION_CONTEXT_CHANGED'],
+  ['job', async (f) => f.create({ job: { ...pastedJob, description: 'Lead a changed platform team.' } }), 'APPLICATION_CONTEXT_CHANGED'],
+  ['block', async (f) => f.store.update(state => {
+    state.career.blocklist = { company: { kind: 'company', value: 'example-employer' } };
+    state.career.revision++;
+  }), 'JOB_BLOCKED'],
+  ['source', async (f) => f.store.update(state => {
+    state.career.sources[sourceId].archived = true;
+    state.career.revision++;
+  }), 'MASTER_NOT_READY'],
+];
+for (const [label, change, code] of contextChanges) {
+  test(`${label} changes reject a rendered CV save and PDF export without writing stale files`, { timeout: 15000 }, async t => {
+    for (const operation of ['save', 'export']) await t.test(operation, async t => {
+      const paused = pauseAt();
+      t.after(paused.release);
+      let active = false;
+      const f = await fixture(t, { documents: { ...documents,
+        async measureCareerCvLayout(input) {
+          const layout = await documents.measureCareerCvLayout(input);
+          if (active && operation === 'save') await paused.wait();
+          return layout;
+        },
+        async validateCareerPdfText(input) {
+          const result = await documents.validateCareerPdfText(input);
+          if (active && operation === 'export') await paused.wait();
+          return result;
+        },
+      } });
+      const { applicationId } = await f.create();
+      await f.saveCv(applicationId, tailoredCv());
+      const previous = await f.exportDraft(applicationId, 'cv'), bytes = await readFile(previous.export.path);
+      active = true;
+      const pending = operation === 'save' ? f.saveCv(applicationId, tailoredCv()) : f.exportDraft(applicationId, 'cv');
+      const rejected = assert.rejects(pending, { code });
+      await paused.started;
+      await change(f, applicationId);
+      paused.release();
+      await rejected;
+      const app = f.state().applications[applicationId];
+      assert.equal(app.cv.version, 1);
+      assert.deepEqual(app.cvHistory, []);
+      assert.equal(app.exports.length, 1);
+      assert.equal(f.exported.length, 1);
+      assert.deepEqual(await readFile(previous.export.path), bytes);
+    });
+  });
+}
+
+test('an export commit failure rolls back its file and lets another application export', async t => {
+  let rejectCommit = false;
+  const f = await fixture(t, { beforeCommit() {
+    if (rejectCommit) throw Object.assign(new Error('Synthetic storage failure'), { code: 'STORAGE_LIMIT' });
+  } });
+  const first = await f.create(), second = await f.create({ job: { ...pastedJob, url: 'https://example.test/rollback/second' } });
+  await Promise.all([f.saveLetter(first.applicationId, letter), f.saveLetter(second.applicationId, letter)]);
+  const previous = await f.exportDraft(first.applicationId, 'cover_letter', 'txt'), bytes = await readFile(previous.export.path);
+  await f.saveLetter(first.applicationId, ['Dear hiring team,', 'Replacement draft text.']);
+  const before = structuredClone(f.state());
+  rejectCommit = true;
+  await assert.rejects(f.exportDraft(first.applicationId, 'cover_letter', 'txt'), { code: 'STORAGE_LIMIT' });
+  rejectCommit = false;
+  assert.deepEqual(f.state(), before);
+  assert.deepEqual(await readFile(previous.export.path), bytes);
+  const result = await f.exportDraft(second.applicationId, 'cover_letter', 'txt');
+  assert.equal((await f.files.readResource(result.export.uri)).text, await readFile(result.export.path, 'utf8'));
+  assert.equal(f.state().applications[first.applicationId].exports.length, 1);
+});
+
+test('a letter queued behind a career edit rejects its captured stale context', async t => {
+  const paused = pauseAt();
+  t.after(paused.release);
+  const f = await fixture(t), { applicationId } = await f.create();
+  const editing = f.store.update(async state => {
+    await paused.wait();
+    state.career.facts[f.facts.Italian].answer = 'Professional';
+    state.career.revision++;
+  });
+  await paused.started;
+  const rejected = assert.rejects(f.saveLetter(applicationId, letter), { code: 'APPLICATION_CONTEXT_CHANGED' });
+  paused.release();
+  await editing;
+  await rejected;
+  assert.equal(f.state().applications[applicationId].coverLetter, null);
+});

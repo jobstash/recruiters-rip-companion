@@ -1,4 +1,4 @@
-import { rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
@@ -54,10 +54,6 @@ export function terminalLaunch({ host, descriptor, workspace, prompt, platform }
   return { command: descriptor.terminal.command, args: descriptor.terminal.args, source };
 }
 
-// Companion 3.12.14 and earlier wrote a workspace-scoped MCP server here. Claude asks the user to approve such a project server
-// before loading it, so the leftover would only add an approval prompt beside the installed connection.
-const legacyWorkspaceConfig = ['.mcp.json', '.codex'];
-
 // Both documented desktop links prefill only; normal host trust/send prompts
 // remain in charge. CLI arguments: Codex --cd PATH [PROMPT], Claude [PROMPT].
 // https://developers.openai.com/codex/app/commands
@@ -68,17 +64,19 @@ export function createApplicationLauncher({ directory, localOnly = false, openEx
     || (hostAvailable !== undefined && typeof hostAvailable !== 'function') || typeof discover !== 'function' || typeof launchTerminal !== 'function')
     fail('INVALID_INPUT', 'Application launching needs a local workspace and native link opener.');
   const p = platform === 'win32' ? path.win32 : path;
-  const workspace = p.join(directory, 'application-workspace');
+  const workspaces = p.join(directory, 'application-workspaces');
   const describe = async host => manual ? { available: true, mode: 'manual', label: host === 'codex' ? 'Codex' : 'Claude', reason: null }
     : hostAvailable ? { available: await hostAvailable(host) === true, mode: 'desktop', label: labels[host], reason: null }
     : discover(host, { platform, env, protocolAvailable });
 
-  // The host session opens in this private, empty folder; its tools come from the host's own Set up.
-  async function prepareWorkspace() {
+  // Every host session gets fresh scratch space, even for the same preparation. Host Set up supplies the tools.
+  async function prepareWorkspace(name) {
     try {
       await privateDirectory(directory);
+      await privateDirectory(workspaces);
+      const workspace = await mkdtemp(p.join(workspaces, `${name}-`));
       await privateDirectory(workspace);
-      for (const name of legacyWorkspaceConfig) await rm(p.join(workspace, name), { recursive: true, force: true });
+      return workspace;
     } catch {
       fail('HOST_SETUP_FAILED', 'Companion could not prepare its application workspace. Check local storage permissions and try again.');
     }
@@ -107,8 +105,8 @@ export function createApplicationLauncher({ directory, localOnly = false, openEx
         fail('HOST_UNAVAILABLE', `Install ${labels[host]} or its official CLI and an interactive terminal, sign in, then try again. ${descriptor.reason || ''}`.trim());
       const prompt = preparationPrompt({ host, mode: descriptor.mode, preparationId, localOnly });
       if (manual) return { opened: false, host, requiresSend: true, mode: 'manual', prompt };
-      await prepareWorkspace();
-      try { await launch(host, descriptor, prompt); }
+      const workspace = await prepareWorkspace(`preparation-${preparationId.toLowerCase()}`);
+      try { await launch(host, descriptor, prompt, workspace); }
       catch { fail('HOST_LAUNCH_FAILED', `Could not open ${descriptor.label}. Open it once and sign in, then try again. Your preparation request is saved; no prompt was sent by Companion.`); }
       return { opened: true, host, requiresSend: true, mode: descriptor.mode };
     },
@@ -122,14 +120,14 @@ export function createApplicationLauncher({ directory, localOnly = false, openEx
         fail('HOST_UNAVAILABLE', `Install ${labels[host]} or its official CLI and an interactive terminal, sign in, then try again, or copy the prompt instead.`);
       const prompt = `${REVIEW_PROMPT} If the skill is unavailable, use the recruiters.rip MCP tools, starting with career_match_jobs.`;
       if (manual) return { opened: false, host, requiresSend: true, mode: 'manual', prompt };
-      await prepareWorkspace();
-      try { await launch(host, descriptor, prompt); }
+      const workspace = await prepareWorkspace('review');
+      try { await launch(host, descriptor, prompt, workspace); }
       catch { fail('HOST_LAUNCH_FAILED', `Could not open ${descriptor.label}. Open it once and sign in, then try again, or copy the prompt instead.`); }
       return { opened: true, host, requiresSend: true, mode: descriptor.mode };
     },
   };
-  async function launch(host, descriptor, prompt) {
-    if (descriptor.mode === 'desktop') return openExternal(hostUrl(host, prompt).href);
+  async function launch(host, descriptor, prompt, workspace) {
+    if (descriptor.mode === 'desktop') return openExternal(hostUrl(host, prompt, workspace).href);
     const invocation = terminalLaunch({ host, descriptor, workspace, prompt, platform });
     let args = invocation.args;
     if (invocation.source) {
@@ -142,7 +140,7 @@ export function createApplicationLauncher({ directory, localOnly = false, openEx
     }
     await launchTerminal(invocation.command, args, { cwd: workspace, env: hostEnvironment(env) });
   }
-  function hostUrl(host, prompt) {
+  function hostUrl(host, prompt, workspace) {
     const url = new URL(host === 'claude' ? 'claude://code/new' : 'codex://threads/new');
     url.searchParams.set(host === 'claude' ? 'q' : 'prompt', prompt);
     url.searchParams.set(host === 'claude' ? 'folder' : 'path', workspace);

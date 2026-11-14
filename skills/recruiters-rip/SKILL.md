@@ -165,6 +165,17 @@ Customize the bio and letter to this employer’s domain and needs. Lead with cr
 
 Save the CV with `career_application_cv_save({applicationId, masterVersion, cv, presentation?})` and the letter with `career_application_letter_save({applicationId, masterVersion, paragraphs})`. Supply plain content, not source hashes, citations, evidence objects or requirement records. The document version protects intervening edits.
 
+Export with `career_application_export({applicationId, kind: "cv" | "cover_letter", format?: "pdf" | "txt"})` after the corresponding save succeeds. CV saves, letter saves and exports do not take a profile revision or request ID. Do not call `request_id` for these operations, guess revisions, spread guesses across workers, or sleep and retry in a loop.
+
+### Parallel document preparation
+
+- Complete the shared master and known career updates first. The coordinator creates or selects the applications, deduplicates their IDs, and assigns each application to exactly one worker. Workers prepare only their assigned applications; they do not rewrite the shared master, preferences or profile.
+- Send each worker a complete brief in its initial assignment: the actual application IDs, the requested CV/letter/PDF deliverables, the current writing/Humanizer instructions, and the requirement to read each full `career_application_context`. Never launch with a placeholder, “see above,” or instructions that will supposedly arrive later.
+- Prefer passing plain document content directly to the MCP save tools. If scratch files are needed, give every worker its own directory before it writes anything. Use a harness-provided private worker directory or create a unique directory and pass its actual path in the brief. The parent workspace, current directory and a generic `scratchpad` are not assumed private. Never reuse a sibling’s payload filenames, move its files or clean up its directory.
+- For every assigned application: read its context, write and save the tailored CV and letter, export both, then report the returned document versions and export results. A worker finishes its whole assignment or reports the exact unfinished application IDs and reason. Saved prose without its required exports is not done.
+- A real `VERSION_CONFLICT` concerns that document; reread that application and reconcile the changed draft. `APPLICATION_CONTEXT_CHANGED` or `MASTER_NOT_READY` means relevant career/master/job content changed; read it and genuinely update the affected writing. Never manufacture a newer version or repeatedly retry unchanged input. Tell the coordinator about a shared update or duplicate ownership rather than competing with another writer.
+- The coordinator handles shared career changes and browser submission. Document workers never submit or control the same browser page concurrently. Check the saved results, finish any reported gaps, and continue the user’s apply request without a new approval.
+
 ### Humanizer and final edit
 
 Read the bundled [Humanizer instructions](references/humanizer.md) in full before drafting. Its [MIT license](references/HUMANIZER-LICENSE) is included. Apply the complete process: draft, identify unnatural patterns, rewrite, and compare the result with the facts.

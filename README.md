@@ -375,7 +375,15 @@ Read `career_application_context` for the selected job, current master, original
 
 The bio, letter and “why us”/fit responses connect the employer’s mission with the candidate’s actual achievements and transferable experience. The skill writes them without handing them back for the candidate to compose, using a specific, enthusiastic forward-looking voice. It does not invent past engagement, membership, employment, credentials or metrics.
 
-Save a plain CV with `career_application_cv_save({applicationId,masterVersion,cv,presentation?})` and a letter with `career_application_letter_save({applicationId,masterVersion,paragraphs})`. No separate request-ID lookup or source proof is required for those saves. Tailoring does not overwrite the master. Export the current documents with `career_application_export`; document preparation alone never authorizes submission.
+Save a plain CV with `career_application_cv_save({applicationId,masterVersion,cv,presentation?})` and a letter with `career_application_letter_save({applicationId,masterVersion,paragraphs})`. Export with `career_application_export({applicationId,kind,format?})`. These document operations require neither a profile revision nor a separate request-ID lookup. Tailoring does not overwrite the master; document preparation alone never authorizes submission.
+
+### Concurrent document preparation
+
+Different applications can save and export concurrently. Rendering happens outside the write transaction; the short commit checks the relevant career/master/job context and the selected CV or letter version. Another application saving a document or progress does not invalidate this operation. A real same-document replacement or changed career context still prevents stale output.
+
+The coordinator finishes shared master/profile work first, creates or selects applications and gives each application one worker owner. Every worker gets its complete brief before starting and reports both saved documents and required exports. Workers never guess revisions, spin in retry loops or rewrite the shared master while others are producing documents.
+
+Every independent host launch gets a private folder under `application-workspaces`: `preparation-<preparationId>-<unique suffix>` for application preparation, or `review-<unique suffix>` for a job review. Even concurrent launches of the same preparation use different folders. Existing session folders are not deleted or moved; saved application state comes from Companion. Subagents within one host conversation still need their own scratch directories: the coordinator allocates and names those in the assignment, or workers use direct MCP payloads without scratch files. Browser submission has one owner.
 
 The full [Humanizer skill](https://github.com/blader/humanizer) and its MIT license remain bundled under `skills/recruiters-rip/references/`. Its draft, critique and rewrite process applies to the master, tailored CV, bio and letter while preserving facts and exact supported job terminology.
 

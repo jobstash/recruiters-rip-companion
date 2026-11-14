@@ -83,6 +83,10 @@ export function masterEvidenceFingerprint(career) {
 }
 export const MASTER_CV_POLICY_ID = hash({ guide: CV_WRITING_GUIDE, schema: cvDocumentSchema, evidence: documentEvidenceSchema });
 const documentClaims = document => [...(document?.highlights ?? []).map(claim => ({ ...claim })), ...(document?.experience ?? []).flatMap(role => role.bullets.map(claim => ({ ...claim, roleId: role.roleId })))];
+function textLeaves(value) {
+  if (typeof value === 'string') return value.trim() ? [value] : [];
+  return value && typeof value === 'object' ? Object.values(value).flatMap(textLeaves) : [];
+}
 /** User edits are authoritative changes, while removals are publication omissions, not assertions that an event never occurred. */
 export function masterEditConstraints(career) {
   const versions = [...(career.masterCv?.history ?? []), ...(career.masterCv?.current ? [career.masterCv.current] : [])], claims = {}, sections = {};
@@ -102,6 +106,8 @@ export function masterEditConstraints(career) {
         const content = document => field === 'sections' ? Object.fromEntries(['skills', 'education', 'languages', 'certifications', 'additional'].map(key => [key, document?.[key] ?? []])) : document?.[field] ?? '';
         if (hash(content(previous?.document)) !== hash(content(version.document))) sections[field] = {
           text: field === 'sections' ? JSON.stringify(content(version.document)) : content(version.document), support: version.evidence?.[field] ?? {},
+          currentTexts: textLeaves(content(version.document)),
+          previousTexts: [...new Set([...(sections[field]?.previousTexts ?? []), ...textLeaves(content(previous?.document))])],
           supersededSupport: [...(sections[field]?.supersededSupport ?? []), ...(previous?.evidence?.[field] ? [previous.evidence[field]] : [])] };
       }
     }
@@ -142,8 +148,9 @@ export function assertPublishableText(career, value, field = 'document') {
 }
 function assertCurrentUserEvidence(career, support, { roleId, claim, claimId, field }) {
   const constraints = masterEditConstraints(career), rule = constraints.claims[claimId], current = career.masterCv?.current;
-  const unchanged = claim !== undefined && (documentClaims(current?.document).some(item => item.text === claim && (!roleId || item.roleId === roleId) && hash(item.support) === hash(support)) ||
-    ['headline', 'summary'].some(field => current?.document?.[field] === claim && hash(current.evidence?.[field]) === hash(support)));
+  const unchanged = claim !== undefined && (claimId
+    ? documentClaims(current?.document).some(item => item.id === claimId && item.text === claim && item.roleId === roleId && hash(item.support) === hash(support))
+    : ['headline', 'summary'].includes(field) && current?.document?.[field] === claim && hash(current.evidence?.[field]) === hash(support));
   if (unchanged && !rule?.removed) return;
   if (rule && (rule.removed || claim !== rule.text)) fail('USER_EDIT_CONFLICT', 'Keep this user-edited claim exactly as saved, or omit it. A removed claim cannot be restored by tailoring.');
   for (const item of Object.values(constraints.claims)) if (claim && (!roleId || !item.roleId || roleId === item.roleId) && ((item.removed && claim === item.text) || (claim !== item.text && item.previousTexts.includes(claim))))
@@ -153,11 +160,13 @@ function assertCurrentUserEvidence(career, support, { roleId, claim, claimId, fi
   const section = ['headline', 'summary'].includes(field) ? field
     : /^(sections|skills\[|education\[|languages\[|certifications\[|additional\[)/.test(field ?? '') ? 'sections' : null;
   const sectionRule = section && constraints.sections[section];
-  const sectionRules = sectionRule && !(support.facts ?? []).some(id => (sectionRule.support.facts ?? []).includes(id)) ? [sectionRule] : [];
-  for (const item of [...Object.values(constraints.claims), ...sectionRules]) {
+  if (sectionRule && claim && sectionRule.previousTexts.includes(claim) && !sectionRule.currentTexts.includes(claim))
+    fail('USER_EDIT_CONFLICT', 'This section wording was replaced by the candidate. Preserve their current wording and qualifications when tailoring.');
+  const qualifiedSection = sectionRule && (support.facts ?? []).some(id => (sectionRule.support.facts ?? []).includes(id));
+  for (const item of [...Object.values(constraints.claims), ...(sectionRule ? [sectionRule] : [])]) {
     if (roleId && item.roleId && item.roleId !== roleId) continue;
     for (const superseded of item.supersededSupport) {
-      if ((support.sources ?? []).some(ref => (superseded.sources ?? []).some(prior => overlaps(ref, prior))) ||
+      if ((!(item === sectionRule && qualifiedSection) && (support.sources ?? []).some(ref => (superseded.sources ?? []).some(prior => overlaps(ref, prior)))) ||
           (support.facts ?? []).some(id => (superseded.facts ?? []).includes(id) && !(item.support.facts ?? []).includes(id)))
         fail('USER_EDIT_CONFLICT', 'This evidence was superseded by the candidate’s manual edit. Cite the current user-stated fact and preserve its qualifications instead of reviving an earlier claim.');
     }

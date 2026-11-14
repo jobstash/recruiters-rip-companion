@@ -244,6 +244,35 @@ test('manual bio edits preserve unrelated role evidence for future job tailoring
   assert.doesNotThrow(() => assertDocumentEvidence(f.state(), tailored, evidence));
   assert.throws(() => assertDocumentEvidence(f.state(), { ...current.document, summary: f.document.summary },
     { ...current.evidence, summary: f.evidence.summary }), { code: 'USER_EDIT_CONFLICT' });
+  assert.throws(() => assertDocumentEvidence(f.state(), { ...current.document, summary: f.document.summary }, evidence), { code: 'USER_EDIT_CONFLICT' });
+});
+
+test('unchanged evidence cannot be borrowed from another claim or section to undo a user edit', async () => {
+  const f = await fixture();
+  const original = structuredClone(f.document);
+  original.highlights = [{ id: randomUUID(), text: original.summary, support: f.evidence.summary }];
+  original.experience[0].bullets.push({ ...structuredClone(original.experience[0].bullets[0]), id: randomUUID() });
+  await f.save(original);
+  const edited = structuredClone(original);
+  edited.summary = 'I build dependable services.';
+  edited.experience[0].bullets[0].text = 'Reduced release time by 30%.';
+  await f.manual(edited);
+  const current = f.state().masterCv.current;
+  assert.throws(() => assertDocumentEvidence(f.state(), { ...current.document, summary: original.summary },
+    { ...current.evidence, summary: f.evidence.summary }), { code: 'USER_EDIT_CONFLICT' });
+  const restored = structuredClone(current.document);
+  restored.experience[0].bullets[0] = original.experience[0].bullets[0];
+  assert.throws(() => assertDocumentEvidence(f.state(), restored, current.evidence), { code: 'USER_EDIT_CONFLICT' });
+});
+
+test('current section evidence cannot authorize restoring a removed skill', async () => {
+  const f = await fixture();
+  const original = { ...f.document, skills: [{ label: 'Engineering', items: ['release automation', 'delivery planning'] }] };
+  await f.save(original);
+  await f.manual({ ...original, skills: [{ label: 'Engineering', items: ['release automation'] }] });
+  const current = f.state().masterCv.current;
+  assert.throws(() => assertDocumentEvidence(f.state(), { ...current.document, skills: original.skills },
+    { ...current.evidence, sections: { ...current.evidence.sections, sources: f.refs } }), { code: 'USER_EDIT_CONFLICT' });
 });
 
 test('master export binds current review/version and preserves full contact without duplicates', async () => {

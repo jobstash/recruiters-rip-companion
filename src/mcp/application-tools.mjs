@@ -83,7 +83,7 @@ function context(career, app) {
     .map(draft => ({ formId: draft.formId, snapshot: draft.snapshot, evidenceRevision: draft.evidenceRevision,
       url: draft.url, title: draft.title, fields: draft.fields, writingFields: draft.fields.filter(isApplicationWritingField), actions: draft.actions ?? [],
       contextCurrent: draft.applicationContext === fingerprint && draft.evidence === evidence,
-      instructions: 'Read career_form_read with formId to check Chrome attachment and current answers before staging. If contextCurrent is false, read/prepare the page again in Chrome first. Answer every empty field the evidence supports: prose for writingFields, an exact option value for choices; leave the rest unanswered and never overwrite populated fields.' }));
+      instructions: 'Read career_form_read to check attachment and current answers; refresh the captured page when contextCurrent is false. Write motivation, why-company and fit prose yourself from the candidate and employer context. Stage supported prose and exact choice values. Protected/manual-only means unavailable for automatic staging: use native browser controls for authorized consents and ordinary applicant declarations under the standing delegation. Do not hand those tasks or Submit back to the candidate. Do not invent personal facts or overwrite populated fields blindly.' }));
   return { revision: career.revision, applicationId: app.id, masterVersion: master.version,
     application: app, job: currentApplicationJob(career, app), forms,
     jobText: originalJobText(currentApplicationJob(career, app).description),

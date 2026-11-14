@@ -373,6 +373,8 @@ Manual changes are candidate-authored evidence. Agent regeneration cannot silent
 
 Master PDF/TXT export is separate from application documents and checks current identity, source set, master version and readiness at publication. The native shell saves a file; the web shell offers a guarded browser download. Unsaved or stale content is not represented as a current export.
 
+Guarded file-backed downloads validate and read through the same open file descriptor, then recheck document/session freshness before releasing bytes. A pathname replacement cannot redirect that read to a different file.
+
 ## Job-specific CVs and cover letters
 
 1. Create or reuse the exact application with `career_application_create`. Catalogue jobs, complete captured adverts and pasted originals are supported. Identity follows the exact job/URL, never employer and title alone.

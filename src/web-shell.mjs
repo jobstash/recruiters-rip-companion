@@ -5,8 +5,8 @@ import { createServer } from 'node:http';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { EventEmitter } from 'node:events';
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
-import { createReadStream, createWriteStream } from 'node:fs';
-import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { constants, createReadStream, createWriteStream } from 'node:fs';
+import { mkdir, open, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -331,10 +331,13 @@ export function createWebShell({ argv = process.argv, env = process.env, root = 
       let bytes;
       try {
         file.assertCurrent();
-        const info = await stat(file.filename);
-        file.assertCurrent();
-        if (!info.isFile() || info.size > MAX_UPLOAD_BYTES) throw new Error('File unavailable.');
-        bytes = await readFile(file.filename);
+        const handle = await open(file.filename, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+        try {
+          const info = await handle.stat();
+          file.assertCurrent();
+          if (!info.isFile() || info.size > MAX_UPLOAD_BYTES) throw new Error('File unavailable.');
+          bytes = await handle.readFile();
+        } finally { await handle.close(); }
         file.assertCurrent();
         if (bytes.length > MAX_UPLOAD_BYTES || (file.sha256 && createHash('sha256').update(bytes).digest('hex') !== file.sha256)) throw new Error('File changed.');
       } catch { clearTimeout(file.timer); files.delete(id); reply(res, 409); return; }

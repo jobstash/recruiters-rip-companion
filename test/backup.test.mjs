@@ -14,7 +14,7 @@ import { assertJobNotBlocked } from '../src/mcp/blocklist.mjs';
 import { assertPrivatePath } from '../src/platform-runtime.cjs';
 import { createCareerBrowser, setApplicationProgress } from '../src/career-browser.mjs';
 import { createProfileTools } from '../src/mcp/profile-tools.mjs';
-import { masterCvState, saveManualMaster, sourceSetFingerprint } from '../src/mcp/master-cv.mjs';
+import { masterCvState, saveManualMaster } from '../src/mcp/master-cv.mjs';
 import { readyMaster } from './helpers/ready-master.mjs';
 
 const now = '2026-10-29T10:00:00.000Z';
@@ -542,25 +542,21 @@ test('restoring over the same application rolls back a replaced readable PDF whe
   assert.deepEqual(await readdir(path.dirname(prior.path)), ['Rollback Candidate - COVER LETTER.pdf']);
 });
 
-test('backup roundtrip preserves manual master versions and literal role evidence but cancels pending dialogue authority', async t => {
+test('backup roundtrip preserves manual master versions and answers but cancels pending dialogue authority', async t => {
   const from = await fixture(t), target = await fixture(t);
   await readyMaster(from.vault);
   const first = masterCvState(from.vault.get().career);
   const document = structuredClone(first.master.document);
   document.summary = 'I build reliable services and investigate operational failures.';
-  document.experience[0].bullets[0].text = 'I traced the incident to a failing dependency and restored service.';
-  document.experience[0].bullets[0].support = {};
+  document.experience[0].bullets[0] = 'I traced the incident to a failing dependency and restored service.';
   await saveManualMaster({ store: from.vault, args: { requestId: randomUUID(), revision: first.revision,
     baseVersion: first.master.version, contact: first.contact, document, presentation: first.master.presentation } });
   const tools = new Map(createProfileTools({ store: from.vault }).map(tool => [tool.name, tool]));
-  const roleId = document.experience[0].roleId;
-  const mutation = args => ({ requestId: randomUUID(), revision: from.vault.get().career.revision, ...args });
-  const pending = await tools.get('career_interview_ask').invoke(mutation({
-    target: { kind: 'cv_review', sourceSetFingerprint: sourceSetFingerprint(from.vault.get().career) },
-    questions: ['outcomes', 'growth', 'complex_scenario'].map(facet => ({ kind: 'narrative', roleId, facet,
-      subject: `Backup ${facet}`, prompt: `What happened in this role for ${facet}?` })),
-  }));
-  await tools.get('career_interview_answer').invoke(mutation({ interviewId: pending.interviewId, reply: '1: decline; 2: unknown' }));
+  const pending = await tools.get('career_interview_ask').invoke({
+    questions: ['outcomes', 'growth', 'difficult assignment'].map(subject => ({ kind: 'narrative',
+      subject: `Backup ${subject}`, prompt: `What happened in this role for ${subject}?` })),
+  });
+  await tools.get('career_interview_answer').invoke({ interviewId: pending.interviewId, reply: '1: decline; 2: unknown' });
   const original = from.vault.get().career;
   assert.equal(original.interviews[pending.interviewId].status, 'pending');
   assert.equal(original.masterCv.current.userEdited, true);
@@ -569,32 +565,32 @@ test('backup roundtrip preserves manual master versions and literal role evidenc
   target.choose(path.join(from.directory, saved.filename));
   await target.service.restore(restoreArgs(await target.service.preview()));
   const restored = target.vault.get().career;
-  for (const key of ['sources', 'facts', 'roles', 'cvReview', 'masterCv']) assert.deepEqual(restored[key], original[key]);
+  for (const key of ['sources', 'facts', 'masterCv']) assert.deepEqual(restored[key], original[key]);
   const round = restored.interviews[pending.interviewId];
   assert.equal(round.status, 'cancelled'); assert.deepEqual(round.questions, []);
   assert.deepEqual(round.responses, original.interviews[pending.interviewId].responses);
   assert.deepEqual(round.originalQuestions, original.interviews[pending.interviewId].originalQuestions);
   assert.deepEqual(restored.receipts, {});
-  assert.notEqual(masterCvState(restored).status, 'ready', 'Restored response history is evidence, not completion of unanswered review questions');
+  assert.equal(masterCvState(restored).status, 'ready', 'Unrelated interview questions do not invalidate a structurally complete saved master');
   const reopened = createVault(target.directory); await reopened.open();
   assert.deepEqual(reopened.get().career.masterCv, restored.masterCv);
   const again = await target.service.save();
   assert.deepEqual(parseBackup(await readFile(path.join(target.directory, again.filename), 'utf8')).profiles[0].career.masterCv, restored.masterCv);
 });
 
-test('backup validates master references and ownership while retaining stale deleted-source history', async t => {
+test('backup validates master structure and ownership while retaining stale deleted-source history', async t => {
   const f = await fixture(t); await readyMaster(f.vault);
   const first = masterCvState(f.vault.get().career);
   await saveManualMaster({ store: f.vault, args: { requestId: randomUUID(), revision: first.revision, baseVersion: first.master.version,
     contact: first.contact, document: { ...first.master.document, summary: 'A candidate-authored account of service ownership.' }, presentation: first.master.presentation } });
   const career = f.vault.get().career;
   const decode = value => parseBackup(JSON.stringify({ version: 1, exportedAt: now, career: value }));
-  const badQuote = structuredClone(career);
-  badQuote.masterCv.current.document.experience[0].bullets[0].support.sources[0].quote = 'An achievement not present in this original';
-  assert.throws(() => decode(badQuote), { code: 'INVALID_INPUT' });
-  const badHash = structuredClone(career);
-  badHash.roles[Object.keys(badHash.roles)[0]].sourceRefs[0].contentHash = 'invalid';
-  assert.throws(() => decode(badHash), { code: 'INVALID_INPUT' });
+  const badBullet = structuredClone(career);
+  badBullet.masterCv.current.document.experience[0].bullets[0] = { text: 'Not a plain string' };
+  assert.throws(() => decode(badBullet), { code: 'INVALID_INPUT' });
+  const badSources = structuredClone(career);
+  badSources.masterCv.current.sourceIds = [null];
+  assert.throws(() => decode(badSources), { code: 'INVALID_INPUT' });
   const lostOwnership = structuredClone(career);
   lostOwnership.masterCv.history[0].userEdited = true;
   lostOwnership.masterCv.current.userEdited = false;

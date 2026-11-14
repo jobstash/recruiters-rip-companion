@@ -7,16 +7,14 @@ import os from 'node:os';
 import path from 'node:path';
 import Ajv from 'ajv';
 import addFormats from 'ajv-formats';
-import { createApplicationTools, CV_POLICY_ID } from '../src/mcp/application-tools.mjs';
-import { renderableCv } from '../src/mcp/cv-quality.mjs';
+import { createApplicationTools } from '../src/mcp/application-tools.mjs';
 import { ASSESSMENT_POLICY_ID } from '../src/mcp/matching-contract.mjs';
 import { matchingProfileVersion } from '../src/mcp/assessment-policy.mjs';
 import { createCareerState } from '../src/mcp/state.mjs';
 import { addBlock, removeBlock } from '../src/mcp/blocklist.mjs';
 import { createDocumentFiles } from '../src/mcp/files.mjs';
 import { readyMaster } from './helpers/ready-master.mjs';
-import { sourceSet, assertMasterReady } from '../src/mcp/master-cv.mjs';
-import { applicationContextFingerprint } from '../src/application-workflow.mjs';
+import { assertMasterReady } from '../src/mcp/master-cv.mjs';
 
 // Built from this repository's document engine by build:runtime, so these
 // tests exercise the real layout, PDF rendering and PDF text read-back.
@@ -26,8 +24,6 @@ const digest = value => createHash('sha256').update(value).digest('hex');
 const pastedJob = { title: 'Senior Platform Engineer', company: 'Example Employer', description: 'Build reliable data services for our payments platform. 5+ years required.', url: 'https://example.test/jobs/1', location: 'London' };
 const cvText = 'Jane Candidate\nAcme Corp. | Platform Engineer | London | Mar 2019 – Present\n- Built event-driven data services in TypeScript and Kafka.\n- Cut deployment time from 40 minutes to 8 minutes.\n- Automated releases and owned on-call reliability for payment pipelines.\n- Progressed from individual delivery to platform ownership.\n- Traced a difficult failed deployment to its dependency and restored production service.\n\nGlobex | Backend Developer | 2015 – 2019\n- Developed retail backend systems.\n- Reduced duplicate order handling through a shared service.\n- Grew from assigned fixes to independent service delivery.\n- Resolved a difficult retail outage by tracing duplicate events and restoring processing.\n\nUniversity of Synthetic Studies — BSc Computing\nItalian — Native';
 const sourceId = 'a0000000-0000-4000-8000-000000000001';
-const roleIds = ['a0000000-0000-4000-8000-000000000002', 'a0000000-0000-4000-8000-000000000003', 'a0000000-0000-4000-8000-000000000004'];
-const claimId = text => `${digest(text).slice(0, 8)}-${digest(text).slice(8, 12)}-4000-8000-${digest(text).slice(12, 24)}`;
 
 async function fixture(t, options = {}) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'career-applications-'));
@@ -41,12 +37,9 @@ async function fixture(t, options = {}) {
     facts[fields.subject] = id;
   };
   fact({ kind: 'language', subject: 'Italian', answer: 'Native' });
-  fact({ kind: 'capability', roleId: roleIds[0], subject: 'Managing engineering teams', answer: 'Led it', detail: 'Managed up to 12 engineers', employer: 'Acme Corp.' });
+  fact({ kind: 'capability', subject: 'Managing engineering teams', answer: 'Led it', detail: 'Managed up to 12 engineers', employer: 'Acme Corp.' });
   fact({ kind: 'capability', subject: 'Kubernetes', answer: 'None' });
-  fact({ kind: 'note', roleId: roleIds[2], subject: 'Freelance role identity', answer: 'INITRODE Platform Consultant 2014 2015.', employer: 'Initrode' });
-  fact({ kind: 'note', roleId: roleIds[2], facet: 'outcomes', subject: 'Freelance consulting', answer: 'Advised payments clients on platform architecture and improved release reliability.', employer: 'Initrode' });
-  fact({ kind: 'note', roleId: roleIds[2], facet: 'growth', subject: 'Freelance career growth', answer: 'Grew from advisory assignments to ownership of client delivery.', employer: 'Initrode' });
-  fact({ kind: 'note', roleId: roleIds[2], facet: 'complex_scenario', subject: 'Freelance difficult assignment', answer: 'Resolved a difficult client incident by tracing the failing release and restoring service.', employer: 'Initrode' });
+  fact({ kind: 'note', subject: 'Freelance consulting', answer: 'Advised payments clients on platform architecture and improved release reliability.', employer: 'Initrode' });
   fact({ kind: 'note', subject: 'Side project', answer: 'Volunteered for Hooli open source' });
   fact({ kind: 'yes_no', subject: 'Right to work in the UK', answer: 'Yes' });
   const cvSource = sourceId, archived = randomUUID(), note = randomUUID();
@@ -66,19 +59,8 @@ async function fixture(t, options = {}) {
       return work;
     },
   };
-  const ref = quote => ({ ...sourceSet(career).find(source => source.sourceId === cvSource), quote });
-  const roles = [
-    { id: roleIds[0], employer: 'ACME Corp', title: 'Platform Engineer', location: 'London', startDate: 'Mar 2019', endDate: 'Present', sourceRefs: [ref(cvText.slice(0, cvText.indexOf('Globex')).trim())] },
-    { id: roleIds[1], employer: 'Globex', title: 'Backend Developer', startDate: '2015', endDate: '2019', sourceRefs: [ref(cvText.slice(cvText.indexOf('Globex'), cvText.indexOf('University')).trim())] },
-    { id: roleIds[2], employer: 'INITRODE', title: 'Platform Consultant', startDate: '2014', endDate: '2015', sourceRefs: [], factIds: [facts['Freelance role identity']] },
-  ];
-  const ready = await readyMaster(store, { roles, document: tailoredCv(facts) });
-  const binding = applicationId => {
-    const career = state.career, app = career.applications[applicationId];
-    return { masterVersion: assertMasterReady(career).version, contextFingerprint: applicationContextFingerprint(career, app),
-      requirements: [{ id: 'a0000000-0000-4000-8000-000000000005', phrase: 'data services', priority: 'crucial', kind: 'skill', status: 'supported',
-        support: { sources: [ref('Built event-driven data services in TypeScript and Kafka.')] }, roleIds: [roleIds[0]], rationale: 'Directly evidenced service delivery.' }] };
-  };
+  const ready = await readyMaster(store, { document: tailoredCv() });
+  const binding = () => ({ masterVersion: assertMasterReady(state.career).version });
   const catalogue = { id: 'node:9001', shortUUID: 'short-9001', title: 'Platform Engineer', company: { name: 'Catalogue Employer' }, description: 'Operate data services.', applyUrl: 'https://example.test/apply', location: 'Remote', contentHash: digest('job') };
   const requests = [], exported = [];
   const platform = async (operation, args) => {
@@ -94,29 +76,26 @@ async function fixture(t, options = {}) {
   const call = (name, args = {}) => tools.get(`career_${name}`).invoke(args);
   const mutation = args => ({ requestId: randomUUID(), revision: state.career.revision, ...args });
   const create = (args = { job: pastedJob }) => call('application_create', mutation(args));
-  const saveCv = (applicationId, cv, extra = {}) => call('application_cv_save', mutation({ applicationId, ...binding(applicationId), evidence: ready.evidence, cv, ...extra }));
-  const saveLetter = (applicationId, paragraphs) => call('application_letter_save', mutation({ applicationId, ...binding(applicationId), evidence: paragraphs.map(() => ready.support), paragraphs }));
+  const saveCv = (applicationId, cv, extra = {}) => call('application_cv_save', { applicationId, ...binding(), cv, ...extra });
+  const saveLetter = (applicationId, paragraphs) => call('application_letter_save', { applicationId, ...binding(), paragraphs });
   const exportDraft = (applicationId, kind, format) => call('application_export', mutation({ applicationId, kind, ...(format ? { format } : {}) }));
   return { store, files, state: () => state.career, tools, call, mutation, create, saveCv, saveLetter, exportDraft, requests, exported, catalogue, facts, ready, binding, sources: { cvSource, archived, note } };
 }
 
-const cited = (text, quotes) => ({ id: claimId(text), text, support: { sources: quotes.map(quote => ({ sourceId, contentHash: digest(JSON.stringify(cvText)), quote })) } });
-const fromFacts = (text, ...facts) => ({ id: claimId(text), text, support: { facts } });
-const acmeHeader = 'Acme Corp. | Platform Engineer | London | Mar 2019 – Present';
-const tailoredCv = facts => ({
+const tailoredCv = () => ({
   headline: 'Senior Platform Engineer — payments data services',
   summary: 'Platform engineer building reliable data services for payments. Shortened delivery cycles and keeps production systems dependable.',
-  highlights: [cited('Cut deployment time from 40 minutes to 8 minutes.', ['Cut deployment time from 40 minutes to 8 minutes.'])],
+  highlights: ['Cut deployment time from 40 minutes to 8 minutes.'],
   experience: [
-    { roleId: roleIds[0], employer: 'ACME Corp', role: 'Platform Engineer', location: 'London', startDate: 'Mar 2019', endDate: 'Present',
+    { employer: 'ACME Corp', role: 'Platform Engineer', location: 'London', startDate: 'Mar 2019', endDate: 'Present',
       bullets: [
-        cited('Built event-driven data services in TypeScript and Kafka since 2019.', ['- Built event-driven data services in TypeScript and Kafka.', acmeHeader]),
-        cited('Automated releases, reducing deployment time from 40 minutes to 8 minutes.', ['Cut deployment time from 40 minutes to 8 minutes.']),
-        cited('Owned on-call reliability for payment pipelines.', ['Automated releases and owned on-call reliability for payment pipelines.']),
-        fromFacts('Led a team of 12 engineers.', facts['Managing engineering teams']),
+        'Built event-driven data services in TypeScript and Kafka since 2019.',
+        'Automated releases, reducing deployment time from 40 minutes to 8 minutes.',
+        'Owned on-call reliability for payment pipelines.',
+        'Led a team of 12 engineers.',
       ] },
-    { roleId: roleIds[1], employer: 'Globex', role: 'Backend Developer', startDate: '2015', endDate: '2019', bullets: [cited('Developed retail backend systems.', ['Developed retail backend systems.'])] },
-    { roleId: roleIds[2], employer: 'INITRODE', role: 'Platform Consultant', startDate: '2014', endDate: '2015', bullets: [fromFacts('Advised payments clients on platform architecture.', facts['Freelance consulting'])] },
+    { employer: 'Globex', role: 'Backend Developer', startDate: '2015', endDate: '2019', bullets: ['Developed retail backend systems.'] },
+    { employer: 'INITRODE', role: 'Platform Consultant', startDate: '2014', endDate: '2015', bullets: ['Advised payments clients on platform architecture.'] },
   ],
   education: [{ institution: 'University of Synthetic Studies', qualification: 'BSc Computing' }],
   skills: [{ label: 'Engineering', items: ['TypeScript', 'Kafka', 'Data services'] }],
@@ -146,6 +125,11 @@ test('a pasted advert creates an application and its context carries everything 
     [{ subject: 'Kubernetes', answer: 'None', detail: undefined }, { subject: 'Managing engineering teams', answer: 'Led it', detail: 'Managed up to 12 engineers' }]);
   assert.equal(context.originalSources[0].text, cvText, 'originals remain separate evidence, never master prose');
   assert.equal(context.master.version, 1);
+  assert.equal(context.applicationId, created.applicationId);
+  assert.equal(context.masterVersion, context.master.version);
+  for (const key of ['contextFingerprint', 'requirements', 'requirementsSchema', 'roles', 'review', 'masterEvidenceFingerprint', 'sourceSetFingerprint'])
+    assert.equal(Object.hasOwn(context, key), false);
+  assert.equal(Object.hasOwn(context.master, 'sourceIds'), false);
   assert.equal(context.profile.email, 'jane@example.test');
   assert.equal(Object.hasOwn(context.profile, 'preferences'), false);
   assert.deepEqual(context.presentation.current, { template: 'classic', paper: 'A4' });
@@ -174,7 +158,6 @@ test('the context carries the current saved match assessment of a catalogue job,
   const assessment = { overall: 72, band: 'good', decision: 'recommend',
     gates: { direction: 'pass', constraints: 'pass', eligibility: 'pass' },
     dimensions: { direction: 80, capability: 70, scope: 60, preferences: 70 },
-    requirements: [{ requirement: 'Operate data services', importance: 'essential', evidence: 'demonstrated', cvQuote: 'Built event-driven data services in TypeScript and Kafka.' }],
     reason: 'Directly continues the data services work.' };
   await f.store.update(state => {
     state.career.matching = { scores: { 'node:9001': { id: 'node:9001', status: 'assessed', relocation: 'not_required', ...assessment,
@@ -185,48 +168,31 @@ test('the context carries the current saved match assessment of a catalogue job,
   assert.equal((await f.call('application_context', { applicationId })).assessment, null);
 });
 
-test('cv_save rejects invented employers, unsupported numbers and narrated or third-person wording without saving', async t => {
-  const f = await fixture(t);
-  const { applicationId } = await f.create();
-  const revision = f.state().revision;
-  const variant = change => { const cv = tailoredCv(f.facts); change(cv); return cv; };
-  await assert.rejects(f.saveCv(applicationId, variant(cv => { cv.experience[1].employer = 'Initech'; })), { code: 'UNSUPPORTED_ROLE' });
-  await assert.rejects(f.saveCv(applicationId, variant(cv => { cv.experience[1].employer = 'Hooli'; })), { code: 'UNSUPPORTED_ROLE' });
-  await assert.rejects(f.saveCv(applicationId, variant(cv => { cv.experience[0].bullets.push(cited('Improved throughput by 25%.', [acmeHeader])); })), { code: 'UNSUPPORTED_NUMBER' });
-  await assert.rejects(f.saveCv(applicationId, variant(cv => { cv.experience[0].bullets[3].text = 'Led a team of 15 engineers.'; })),
-    error => error.code === 'UNSUPPORTED_NUMBER' && /15/.test(error.message));
-  await assert.rejects(f.saveCv(applicationId, variant(cv => { cv.summary = 'Engineer with 5+ years in payments.'; })),
-    error => error.code === 'UNSUPPORTED_NUMBER' && /5\+/.test(error.message), 'numbers in the job advert are not candidate data');
-  await assert.rejects(f.saveCv(applicationId, variant(cv => { cv.summary = 'She led platform teams across payments.'; })),
-    error => error.code === 'CV_TONE' && /She led/.test(error.message));
-  await assert.rejects(f.saveCv(applicationId, variant(cv => { cv.summary = 'Platform engineer; the candidate builds data services.'; })), { code: 'CV_TONE' });
-  await assert.rejects(f.saveCv(applicationId, variant(cv => { cv.experience[0].bullets[0].text = 'The CV states ownership of data services.'; })),
-    error => error.code === 'UNCLEAR_FACT' && /experience\[0\]\.bullets\[0\]/.test(error.message));
-  await assert.rejects(f.saveCv(applicationId, variant(cv => { cv.highlights = [cited('Led an unknown number of migrations.', [acmeHeader])]; })), { code: 'UNCLEAR_FACT' });
-  await assert.rejects(f.saveCv(applicationId, variant(cv => { cv.headline = 'Platform engineer?'; })), { code: 'UNCLEAR_FACT' });
-  assert.equal(f.state().revision, revision);
-  assert.equal(f.state().applications[applicationId].cv, null);
+test('plain CV saves accept semantic wording and unspecified dates without literal or metric proof', async t => {
+  const f = await fixture(t), { applicationId } = await f.create();
+  const cv = tailoredCv();
+  cv.experience[0].employer = 'Acme Corporation';
+  cv.experience[0].role = 'Platform engineering';
+  cv.experience[0].startDate = '';
+  cv.experience[0].bullets[0] = 'Reduced deployment time by 80%.';
+  cv.summary = 'She led platform teams. According to my profile, I build data services.';
+  assert.equal((await f.saveCv(applicationId, cv)).cvVersion, 1);
+  assert.deepEqual(f.state().applications[applicationId].cv.document, cv);
+  assert.equal((await f.saveLetter(applicationId, [letter[0], 'According to my profile, I reduced deployment time by 80%.'])).letterVersion, 1);
 });
 
-test('cv_save binds every highlight and bullet to its own cited CV quotes and facts', async t => {
-  const f = await fixture(t);
-  const { applicationId } = await f.create();
-  const revision = f.state().revision;
-  const variant = change => { const cv = tailoredCv(f.facts); change(cv); return cv; };
-  await assert.rejects(f.saveCv(applicationId, variant(cv => {
-    cv.experience[0].bullets[0] = cited('Built event-driven data services, cutting deployment time to 8 minutes.', ['Built event-driven data services in TypeScript and Kafka.']);
-  })), { code: 'UNSUPPORTED_NUMBER' }, 'a number elsewhere in the CV does not support a claim that cites other evidence');
-  await assert.rejects(f.saveCv(applicationId, variant(cv => { cv.experience[1].bullets[0] = { ...fromFacts('Led a team of 12 engineers.', f.facts['Managing engineering teams']), id: randomUUID() }; })), { code: 'MISATTRIBUTED_FACT' });
-  await assert.rejects(f.saveCv(applicationId, variant(cv => { cv.experience[0].bullets[0].support.sources[0].quote = 'Built event driven services using TypeScript and Kafka.'; })), { code: 'UNKNOWN_QUOTE' });
-  await assert.rejects(f.saveCv(applicationId, variant(cv => { cv.highlights[0].support.sources[0].quote = 'Hooli | Engineer | 2010 – 2012'; })), { code: 'UNKNOWN_QUOTE' });
-  await assert.rejects(f.saveCv(applicationId, variant(cv => { cv.highlights[0] = fromFacts('Advised payments clients.', randomUUID()); })), { code: 'UNKNOWN_FACT' });
-  assert.equal(f.state().revision, revision);
-  assert.equal(f.state().applications[applicationId].cv, null);
-  const cv = variant(cv => { cv.highlights.push(fromFacts('Led a team of 12 engineers at Acme Corp.', f.facts['Managing engineering teams'])); });
-  assert.equal((await f.saveCv(applicationId, cv)).cvVersion, 1, 'highlights may cite facts from any employer');
+test('masterVersion guards both plain saves without model mutation bookkeeping', async t => {
+  const f = await fixture(t), { applicationId } = await f.create(), masterVersion = f.binding().masterVersion;
+  await readyMaster(f.store);
+  const before = f.state();
+  await assert.rejects(f.call('application_cv_save', { applicationId, masterVersion, cv: tailoredCv() }), { code: 'APPLICATION_CONTEXT_CHANGED' });
+  await assert.rejects(f.call('application_letter_save', { applicationId, masterVersion, paragraphs: letter }), { code: 'APPLICATION_CONTEXT_CHANGED' });
+  assert.deepEqual(f.state(), before);
+  assert.equal((await f.saveCv(applicationId, tailoredCv())).cvVersion, 1);
+  assert.equal((await f.saveLetter(applicationId, letter)).letterVersion, 1);
 });
 
-test('a valid cited CV saves with layout and notes, keeps history, and exports PDFs with claim text but no support', async t => {
+test('a plain CV saves with layout and notes, keeps history, and exports readable PDFs', async t => {
   const f = await fixture(t);
   const { applicationId } = await f.create();
   const saved = await f.saveCv(applicationId, tailoredCv(f.facts));
@@ -234,10 +200,8 @@ test('a valid cited CV saves with layout and notes, keeps history, and exports P
   assert.deepEqual(saved.layout, { pages: 1, fits: true });
   assert.deepEqual(saved.issues, []);
   const stored = f.state().applications[applicationId].cv;
-  assert.equal(stored.policyId, CV_POLICY_ID);
   assert.match(stored.contextFingerprint, /^[0-9a-f]{64}$/);
-  assert.match(CV_POLICY_ID, /^[0-9a-f]{16}$/);
-  assert.deepEqual(stored.document, tailoredCv(f.facts), 'stored drafts keep each claim\'s support');
+  assert.deepEqual(stored.document, tailoredCv(), 'stored drafts keep plain strings');
   for (const template of ['classic', 'modern']) {
     const presentation = { template, paper: template === 'classic' ? 'A4' : 'LETTER' };
     const result = await f.saveCv(applicationId, tailoredCv(f.facts), { presentation });
@@ -253,12 +217,12 @@ test('a valid cited CV saves with layout and notes, keeps history, and exports P
     assert.equal(exported.export.documentVersion, result.cvVersion);
     assert.equal(exported.export.contextFingerprint, app.cv.contextFingerprint);
     assert.equal(exported.export.textValidation.passed, true);
-    const expectedText = documents.renderCareerCvText({ document: renderableCv(app.cv.document), heading: { name: 'Jane Candidate', contact: 'jane@example.test · +44 20 7946 0000 · London · https://example.test/jane' } });
+    const expectedText = documents.renderCareerCvText({ document: app.cv.document, heading: { name: 'Jane Candidate', contact: 'jane@example.test · +44 20 7946 0000 · London · https://example.test/jane' } });
     assert.equal((await documents.validateCareerPdfText({ bytes, expectedText })).passed, true);
     const text = await pdfText(bytes), flat = text.replace(/\s+/g, ' ');
     for (const value of ['Jane Candidate', 'ACME Corp', 'Cut deployment time from 40 minutes to 8 minutes.', 'Led a team of 12 engineers.', 'Advised payments clients on platform architecture.', 'Italian (native)', 'Key achievements'])
       assert.ok(flat.includes(value), value);
-    for (const value of [acmeHeader, f.facts['Managing engineering teams'], f.facts['Freelance consulting'], 'support', '[object Object]'])
+    for (const value of [f.facts['Managing engineering teams'], f.facts['Freelance consulting'], 'support', '[object Object]'])
       assert.equal(flat.includes(value), false, value);
   }
   const app = f.state().applications[applicationId];
@@ -281,7 +245,7 @@ test('the CV header is rendered from the current profile and TXT export equals t
   assert.equal(record.mediaType, 'text/plain');
   assert.equal(record.textValidation, null);
   assert.ok(text.startsWith('Jane Candidate\nSenior Platform Engineer — payments data services\nnew@example.test · +44 20 7946 0000 · London\n'));
-  assert.equal(text, documents.renderCareerCvText({ document: renderableCv(f.state().applications[applicationId].cv.document), heading: { name: 'Jane Candidate', contact: 'new@example.test · +44 20 7946 0000 · London' } }));
+  assert.equal(text, documents.renderCareerCvText({ document: f.state().applications[applicationId].cv.document, heading: { name: 'Jane Candidate', contact: 'new@example.test · +44 20 7946 0000 · London' } }));
 });
 
 test('quality notes are returned for the host without blocking the save', async t => {
@@ -291,7 +255,6 @@ test('quality notes are returned for the host without blocking the save', async 
   const { applicationId } = await f.create();
   const cv = tailoredCv(f.facts);
   cv.experience[1].bullets = [cv.experience[1].bullets[0], structuredClone(cv.experience[1].bullets[0])];
-  cv.experience[1].bullets[1].id = randomUUID();
   const saved = await f.saveCv(applicationId, cv);
   assert.equal(saved.cvVersion, 1);
   assert.ok(saved.issues.some(issue => issue.startsWith('header:') && /email/.test(issue)));
@@ -302,9 +265,6 @@ test('cover letters are checked, saved with history and exported as PDF and TXT'
   const f = await fixture(t);
   const { applicationId } = await f.create();
   await assert.rejects(f.exportDraft(applicationId, 'cover_letter'), { code: 'MISSING_DRAFT' });
-  await assert.rejects(f.saveLetter(applicationId, [letter[0], 'I improved reliability by 30% at Acme Corp.']),
-    error => error.code === 'UNSUPPORTED_NUMBER' && /paragraphs\[1\]: 30%/.test(error.message));
-  await assert.rejects(f.saveLetter(applicationId, [letter[0], 'According to my profile I build data services.']), { code: 'UNCLEAR_FACT' });
   assert.equal((await f.saveLetter(applicationId, letter.slice(0, 3))).letterVersion, 1);
   assert.equal((await f.saveLetter(applicationId, letter)).letterVersion, 2);
   const app = f.state().applications[applicationId];
@@ -419,21 +379,15 @@ test('tool schemas accept a structured CV and reject malformed documents and rem
   addFormats(ajv);
   const validate = ajv.compile(f.tools.get('career_application_cv_save').inputSchema);
   const { applicationId } = await f.create();
-  const args = { ...f.mutation({ applicationId }), ...f.binding(applicationId), evidence: f.ready.evidence, cv: tailoredCv(f.facts), presentation: { template: 'modern', paper: 'LETTER' } };
+  const args = { applicationId, ...f.binding(), cv: tailoredCv(), presentation: { template: 'modern', paper: 'LETTER' } };
   assert.equal(validate(args), true, JSON.stringify(validate.errors));
   const invalid = [
     cv => { delete cv.summary; },
     cv => { cv.sections = []; },
-    cv => { cv.experience[0].bullets[0] = 'Built data services.'; },
-    cv => { cv.highlights[0] = 'Cut deployment time.'; },
-    cv => { delete cv.experience[0].roleId; },
-    cv => { delete cv.experience[0].bullets[0].id; },
-    cv => { delete cv.experience[0].bullets[0].support; },
-    cv => { cv.experience[0].bullets[0].support = {}; },
-    cv => { cv.experience[0].bullets[0].support = { cv: ['Obsolete anonymous quote.'] }; },
-    cv => { cv.experience[0].bullets[0].support = { facts: ['not-a-uuid'] }; },
-    cv => { const id = randomUUID(); cv.experience[0].bullets[0].support = { facts: [id, id] }; },
-    cv => { cv.experience[0].bullets[0].support.notes = 'Extra'; },
+    cv => { cv.experience[0].bullets[0] = { text: 'Built data services.' }; },
+    cv => { cv.highlights[0] = { text: 'Cut deployment time.' }; },
+    cv => { cv.experience[0].roleId = randomUUID(); },
+    cv => { cv.experience[0].startDate = null; },
   ];
   for (const change of invalid) {
     const copy = structuredClone(args);
@@ -441,25 +395,14 @@ test('tool schemas accept a structured CV and reject malformed documents and rem
     assert.equal(validate(copy), false);
   }
   const letterSchema = ajv.compile(f.tools.get('career_application_letter_save').inputSchema);
+  assert.equal(letterSchema({ applicationId, ...f.binding(), paragraphs: letter }), true);
+  for (const field of ['requestId', 'revision', 'contextFingerprint', 'requirements', 'evidence']) {
+    assert.equal(validate({ ...args, [field]: 'removed' }), false);
+    assert.equal(letterSchema({ applicationId, ...f.binding(), paragraphs: letter, [field]: 'removed' }), false);
+  }
   assert.equal(letterSchema({ requestId: randomUUID(), revision: 0, applicationId: randomUUID(), paragraphs: ['Only one paragraph.'] }), false);
 });
 
-test('superseded follow-up answers and suggested question metrics are not evidence', async t => {
-  const f = await fixture(t);
-  await f.store.update(state => {
-    const fact = Object.values(state.career.facts).find(item => item.subject === 'Managing engineering teams');
-    fact.question = 'Did you manage 99 engineers?';
-    fact.context = 'The vacancy describes a 77-person organisation.';
-    fact.followUps = [{ question: 'How many engineers did you personally manage?', answer: 'Managed 18 engineers.' }];
-  });
-  await readyMaster(f.store);
-  const { applicationId } = await f.create();
-  const cv = tailoredCv(f.facts);
-  for (const count of [18, 99, 77]) {
-    cv.experience[0].bullets[3].text = `Managed ${count} engineers.`;
-    await assert.rejects(f.saveCv(applicationId, cv), { code: 'UNSUPPORTED_NUMBER' });
-  }
-});
 
 test('creating the same exact job reuses drafts; a changed original invalidates their export', async t => {
   const f = await fixture(t), created = await f.create();
@@ -504,9 +447,9 @@ test('blocking a saved application stops drafts, context and receipt replays wit
   const f = await fixture(t);
   const createArgs = f.mutation({ jobId: 'node:9001' });
   const { applicationId } = await f.call('application_create', createArgs);
-  const cvArgs = f.mutation({ applicationId, ...f.binding(applicationId), evidence: f.ready.evidence, cv: tailoredCv(f.facts) });
+  const cvArgs = { applicationId, ...f.binding(), cv: tailoredCv() };
   await f.call('application_cv_save', cvArgs);
-  const letterArgs = f.mutation({ applicationId, ...f.binding(applicationId), evidence: letter.map(() => f.ready.support), paragraphs: letter });
+  const letterArgs = { applicationId, ...f.binding(), paragraphs: letter };
   await f.call('application_letter_save', letterArgs);
   const exportArgs = f.mutation({ applicationId, kind: 'cover_letter', format: 'txt' });
   await f.call('application_export', exportArgs);
@@ -518,7 +461,7 @@ test('blocking a saved application stops drafts, context and receipt replays wit
     assert.throws(() => f.call(name, { applicationId }), { code: 'JOB_BLOCKED' });
   for (const [name, args] of [['application_create', createArgs], ['application_cv_save', cvArgs],
     ['application_letter_save', letterArgs], ['application_export', exportArgs],
-    ['application_letter_save', f.mutation({ applicationId, paragraphs: ['Dear team,', 'New draft'] })]])
+    ['application_letter_save', { applicationId, ...f.binding(), paragraphs: ['Dear team,', 'New draft'] }]])
     await assert.rejects(f.call(name, args), { code: 'JOB_BLOCKED' });
   assert.deepEqual(f.state().applications[applicationId], before);
   assert.equal(f.exported.length, exported, 'no blocked export is published');
@@ -556,6 +499,20 @@ test('a block arriving during layout cannot save the already-rendered CV', async
   assert.equal(f.state().applications[applicationId].cv, null);
 });
 
+test('a concurrent career edit during layout prevents a stale CV save', async t => {
+  let release, started;
+  const waiting = new Promise(resolve => { started = resolve; });
+  const measured = new Promise(resolve => { release = resolve; });
+  const f = await fixture(t, { documents: { measureCareerCvLayout: async () => { started(); return measured; } } });
+  const { applicationId } = await f.create();
+  const pending = f.saveCv(applicationId, tailoredCv());
+  await waiting;
+  await f.store.update(state => { state.career.profile.location = 'Paris'; state.career.revision++; });
+  release({ fits: true, pages: 1 });
+  await assert.rejects(pending, { code: 'REVISION_CONFLICT' });
+  assert.equal(f.state().applications[applicationId].cv, null);
+});
+
 test('tailoring requires a ready master and preserves its content and version', async t => {
   const f = await fixture(t), { applicationId } = await f.create();
   const original = structuredClone(f.state().masterCv);
@@ -567,21 +524,10 @@ test('tailoring requires a ready master and preserves its content and version', 
   assert.throws(() => f.call('application_context', { applicationId }), { code: 'MASTER_NOT_READY' });
   await assert.rejects(f.exportDraft(applicationId, 'cv', 'txt'), { code: 'MASTER_NOT_READY' });
   const before = f.state();
-  await assert.rejects(f.call('application_letter_save', f.mutation({ applicationId, masterVersion: 1, contextFingerprint: '0'.repeat(64), requirements: [], paragraphs: letter, evidence: [] })), { code: 'MASTER_NOT_READY' });
+  await assert.rejects(f.call('application_letter_save', { applicationId, masterVersion: 1, paragraphs: letter }), { code: 'MASTER_NOT_READY' });
   assert.deepEqual(f.state(), before);
 });
 
-test('requirements preserve original case and wording and cannot misattribute role evidence', async t => {
-  const f = await fixture(t), { applicationId } = await f.create();
-  const requirement = f.binding(applicationId).requirements[0];
-  for (const phrase of ['Data services', 'reliable service delivery', 'invented requirement']) {
-    await assert.rejects(f.saveCv(applicationId, tailoredCv(f.facts), { requirements: [{ ...requirement, phrase }] }), { code: 'UNKNOWN_JOB_PHRASE' });
-  }
-  await assert.rejects(f.saveCv(applicationId, tailoredCv(f.facts), { requirements: [{ ...requirement, roleIds: [roleIds[1]] }] }), { code: 'MISATTRIBUTED_FACT' });
-  const cv = tailoredCv(f.facts);
-  cv.experience[0].bullets[0].text = 'Built event-driven systems in TypeScript and Kafka.';
-  await assert.rejects(f.saveCv(applicationId, cv), { code: 'JOB_PHRASE_MISSING' });
-});
 
 test('source membership and ready master version changes invalidate export and old receipts', async t => {
   const f = await fixture(t), { applicationId } = await f.create();
@@ -595,51 +541,26 @@ test('source membership and ready master version changes invalidate export and o
   await assert.rejects(f.exportDraft(applicationId, 'cv', 'txt'), { code: 'MASTER_NOT_READY' });
 });
 
-test('pending clarification blocks export, not honest known missing requirements', async t => {
+test('pending application clarification blocks export', async t => {
   const f = await fixture(t), { applicationId } = await f.create();
-  const requirements = [{ id: randomUUID(), phrase: '5+ years required.', priority: 'crucial', kind: 'experience', status: 'missing', roleIds: [], rationale: 'The saved record does not establish this specific duration.' }];
-  await f.saveCv(applicationId, tailoredCv(f.facts), { requirements });
+  await f.saveCv(applicationId, tailoredCv());
   await f.exportDraft(applicationId, 'cv', 'txt');
-  await f.store.update(state => { const id = randomUUID(); state.career.interviews ??= {}; state.career.interviews[id] = { id, status: 'pending', target: { kind: 'application', applicationId }, questions: [] }; });
+  await f.store.update(state => { const id = randomUUID(); state.career.interviews ??= {}; state.career.interviews[id] = { id, status: 'pending', applicationId, questions: [] }; });
   await assert.rejects(f.exportDraft(applicationId, 'cv', 'txt'), { code: 'APPLICATION_CLARIFICATION_PENDING' });
 });
 
-test('visible HTML advert phrases retain original case and whitespace in supported claims', async t => {
+test('full HTML advert text and plain tailored wording retain original whitespace', async t => {
   const f = await fixture(t);
   const { applicationId } = await f.create({ job: { ...pastedJob, description: '<p>Use <b>data  services</b> &amp; Kafka.</p>' } });
   const context = await f.call('application_context', { applicationId });
   assert.ok(context.jobText.includes('data  services & Kafka.'));
   assert.equal(context.job.description, '<p>Use <b>data  services</b> &amp; Kafka.</p>');
-  const requirement = { ...f.binding(applicationId).requirements[0], phrase: 'data  services' };
-  const cv = tailoredCv(f.facts);
-  cv.experience[0].bullets[0].text = 'Built event-driven data  services in TypeScript and Kafka.';
-  await f.saveCv(applicationId, cv, { requirements: [requirement] });
+  const cv = tailoredCv();
+  cv.experience[0].bullets[0] = 'Built event-driven data  services in TypeScript and Kafka.';
+  await f.saveCv(applicationId, cv);
   const saved = f.state().applications[applicationId].cv;
-  assert.ok(saved.document.experience[0].bullets[0].text.includes(requirement.phrase));
-  await assert.rejects(f.saveCv(applicationId, cv, { requirements: [{ ...requirement, phrase: 'data services' }] }), { code: 'UNKNOWN_JOB_PHRASE' });
+  assert.ok(saved.document.experience[0].bullets[0].includes('data  services'));
   const exported = await f.exportDraft(applicationId, 'cv', 'txt');
   assert.ok((await readFile(exported.export.path, 'utf8')).includes('data  services'));
 });
 
-test('matching employer labels never authorize moving a fact to another stable role', async t => {
-  const f = await fixture(t);
-  await f.store.update(state => { state.career.facts[f.facts['Managing engineering teams']].employer = 'Globex'; });
-  await readyMaster(f.store);
-  const { applicationId } = await f.create(), cv = tailoredCv(f.facts);
-  cv.experience[1].bullets[0] = { ...fromFacts('Led a team of 12 engineers.', f.facts['Managing engineering teams']), id: randomUUID() };
-  await assert.rejects(f.saveCv(applicationId, cv), { code: 'MISATTRIBUTED_FACT' });
-});
-
-test('fact-backed role review uses distinct facet evidence, never its identity fact', async t => {
-  const f = await fixture(t), career = f.state(), role = career.roles[roleIds[2]];
-  const used = [];
-  for (const facet of ['outcomes', 'growth', 'complex_scenario']) {
-    const ids = career.cvReview.roles[role.id][facet].support.facts;
-    assert.equal(ids.length, 1);
-    assert.equal(career.facts[ids[0]].roleId, role.id);
-    assert.equal(career.facts[ids[0]].facet, facet);
-    assert.equal(role.factIds.includes(ids[0]), false);
-    used.push(...ids);
-  }
-  assert.equal(new Set(used).size, 3);
-});

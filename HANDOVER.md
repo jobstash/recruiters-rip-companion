@@ -20,8 +20,8 @@ Preserve `rip.recruiters.companion`, **Recruiters.rip Companion**, **Recruiters 
 | Durable captured jobs | `src/mcp/job-tools.mjs`, with integrations in matching, application tools and `src/career-browser.mjs` |
 | Form snapshots, agent answers and preparation | `src/mcp/form-tools.mjs`, `src/browser-forms.mjs`, `src/decisions/form-mapping.mjs` |
 | Matching rubric and policy fingerprints | `src/mcp/matching-contract.mjs`, `src/mcp/matching-tools.mjs` |
-| Evidence-bound CVs and document exports | `src/mcp/application-tools.mjs`, `src/documents/` |
-| Outcomes review, role evidence and editable master | `src/mcp/master-cv.mjs`, `src/mcp/profile-tools.mjs`, `src/mcp/interview.mjs`, `src/master-cv-settings.mjs`, `ui/master-cv.js` |
+| Plain CVs, cover letters and document exports | `src/mcp/application-tools.mjs`, `src/documents/` |
+| Automatic CV onboarding and editable master | `src/mcp/master-cv.mjs`, `src/mcp/profile-tools.mjs`, `src/mcp/interview.mjs`, `src/master-cv-settings.mjs`, `ui/master-cv.js` |
 | CV writing and Humanizer process | `src/mcp/cv-writing-policy.mjs`, `skills/recruiters-rip/SKILL.md`, `skills/recruiters-rip/references/humanizer.md` |
 | Public release updates | `src/updates.mjs`, `src/update-install.cjs`, `ui/updates.js` |
 | Packaging and release metadata | `scripts/package-local.mjs`, `scripts/after-pack.cjs`, `scripts/release-metadata.mjs`, `src/package-release.mjs` |
@@ -32,7 +32,7 @@ Career records use plain private JSON, not keychain storage or at-rest encryptio
 
 Claude/Codex handles job assessments, questions and new application text. Optional OpenAI Decisions requests choose known form values through Chrome or Firefox Read page; they never assess jobs. Keep requests bounded and context/credential-bound. Never run live inference in tests or invent unknown answers or membership.
 
-The current career schema remains 2. Sources, role identities, review checkpoints and master versions are separate records. Do not reset existing careers to introduce these lazy additions. Role-scoped facts use the stable employment-episode ID; genuinely global facts remain unscoped. CV claims retain exact source/hash/quote references and current fact IDs; rendered documents omit evidence metadata. Master user edits, removals and publication restrictions constrain tailored copies. Review completion, document readiness and current export validity are derived, never stored as an unconditional ready flag.
+The current career schema remains 2. CV documents contain plain strings; there is no per-claim provenance or role-verification system. The skill automatically prepares an absent or outdated master during onboarding, using original CVs and ordinary saved facts. Internal original-CV IDs detect additions/removals, and document versions protect concurrent edits. Preserve original files, saved wording and answers during updates. Browser/private-file permissions and freshness checks remain separate from CV writing.
 
 ## Captured jobs
 

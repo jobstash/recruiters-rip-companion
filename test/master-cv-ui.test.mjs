@@ -7,13 +7,12 @@ import vm from 'node:vm';
 const script = await readFile(new URL('../ui/master-cv.js', import.meta.url), 'utf8');
 const html = await readFile(new URL('../ui/index.html', import.meta.url), 'utf8');
 const turn = () => new Promise(resolve => setImmediate(resolve));
-const support = { sources: [{ sourceId: randomUUID(), contentHash: 'a'.repeat(64), quote: 'Reduced outages.' }] };
 function saved(overrides = {}) {
-  return { identity: 'synthetic-session', revision: 4, status: 'ready', review: { complete: true, pendingRoles: 0, pendingQuestions: 0 },
+  return { identity: 'synthetic-session', revision: 4, status: 'ready',
     contact: { name: 'Example Candidate', email: 'candidate@example.invalid', phone: '+1 555 0100', location: 'Example City', linkedinUrl: 'https://linkedin.com/in/example', links: ['https://example.invalid'] },
     master: { version: 2, presentation: { template: 'classic', paper: 'A4' }, document: {
-      headline: 'Engineer', summary: 'Built services.', highlights: [{ id: randomUUID(), text: 'Reduced outages.', support }],
-      experience: [{ roleId: randomUUID(), employer: 'Example', role: 'Engineer', startDate: '2020', endDate: '2024', location: 'Example City', bullets: [{ id: randomUUID(), text: 'Reduced outages.', support }] }],
+      headline: 'Engineer', summary: 'Built services.', highlights: ['Reduced outages.'],
+      experience: [{ employer: 'Example', role: 'Engineer', startDate: '2020', endDate: '2024', location: 'Example City', bullets: ['Reduced outages.'] }],
       skills: [{ label: 'Engineering', items: ['Systems'] }], education: [{ institution: 'Example University', qualification: 'Degree', startDate: '2010', endDate: '2014', details: 'Engineering' }],
       languages: [{ language: 'English', proficiency: 'Fluent' }], certifications: ['Example qualification'], additional: [{ title: 'Community', items: ['Mentoring'] }],
       careerGaps: [{ activity: 'Career break', place: 'Example City', startDate: '2024', endDate: '2025', description: 'Family care' }],
@@ -56,7 +55,6 @@ function fixture(initial = saved(), handler) {
         remote = { ...remote, revision: remote.revision + 1, contact: structuredClone(input.contact), master: { version: (remote.master?.version ?? 0) + 1, document: structuredClone(input.document), presentation: structuredClone(input.presentation) } };
         return { ok: true, result: structuredClone(remote) };
       }
-      if (operation === 'master-cv-prompt') return { ok: true, result: { copied: true } };
       if (operation === 'master-cv-export') return { ok: true, result: { exported: true, filename: `Example CV.${input.format}` } };
       throw new Error(`Unexpected operation ${operation}`);
     },
@@ -65,7 +63,7 @@ function fixture(initial = saved(), handler) {
   const node = name => nodes.get(`master-cv-${name}`);
   const field = path => [...node('fields').querySelectorAll('[data-field]'), ...node('conflict-fields').querySelectorAll('[data-field]')].find(input => input.dataset.field === path);
   return { calls, window, tabs, nodes, node, field, get active() { return active; },
-    async refresh(value = remote) { remote = structuredClone(value); window.masterCvUI.refresh({ execution: { state: 'ready' }, hasCv: true, careerViewVersion: String(remote.revision), masterCv: { identity: remote.identity, version: remote.master?.version ?? 0, revision: remote.revision, status: remote.status } }); await turn(); },
+    async refresh(value = remote, state = {}) { remote = structuredClone(value); window.masterCvUI.refresh({ execution: { state: 'ready' }, hasCv: true, careerViewVersion: String(remote.revision), masterCv: { identity: remote.identity, version: remote.master?.version ?? 0, revision: remote.revision, status: remote.status }, ...state }); await turn(); },
     edit(path, value) { const input = field(path); assert.ok(input, path); input.value = value; input.dispatch(input.tagName === 'SELECT' ? 'change' : 'input'); },
     add(path) { const control = node('fields').querySelectorAll('[data-add]').find(control => control.dataset.add === path); assert.ok(control, path); control.click(); },
     async save() { node('form').dispatch('submit'); await turn(); },
@@ -73,7 +71,7 @@ function fixture(initial = saved(), handler) {
   };
 }
 
-test('all authored sections and full contact are editable; saving preserves IDs, support and readonly breaks', async () => {
+test('all authored sections and full contact are editable; saving preserves plain text and readonly breaks', async () => {
   const original = saved(), ui = fixture(original);
   await ui.refresh();
   for (const [path, value] of [['contact.name', 'Edited Candidate'], ['contact.email', 'new@example.invalid'], ['contact.phone', ''], ['contact.location', 'New City'], ['contact.linkedinUrl', 'https://linkedin.com/in/edited'], ['contact.links.0.first', 'https://edited.example.invalid'], ['document.headline', 'Senior engineer'], ['document.summary', 'Edited bio.'], ['document.highlights.0.first', 'Restored service.'], ['document.experience.0.first', 'Edited employer'], ['document.experience.0.role', 'Lead'], ['document.experience.0.startDate', '2019'], ['document.experience.0.endDate', '2025'], ['document.experience.0.location', 'Remote'], ['document.experience.0.bullets.0.first', 'Improved recovery.'], ['document.skills.0.first', 'Technical'], ['document.skills.0.items.0.first', 'Reliability'], ['document.education.0.first', 'Edited university'], ['document.education.0.details', 'Research'], ['document.languages.0.proficiency', 'Native'], ['document.certifications.0.first', 'Edited certification'], ['document.additional.0.first', 'Volunteering'], ['document.additional.0.items.0.first', 'Coaching'], ['presentation.template', 'modern'], ['presentation.paper', 'LETTER']]) ui.edit(path, value);
@@ -83,15 +81,14 @@ test('all authored sections and full contact are editable; saving preserves IDs,
   const input = ui.calls.find(([op]) => op === 'master-cv-save')[1];
   assert.equal(input.baseVersion, 2); assert.equal(input.revision, 4);
   assert.equal(input.contact.phone, null);
-  assert.equal(input.document.experience[0].roleId, original.master.document.experience[0].roleId);
-  assert.equal(input.document.experience[0].bullets[0].id, original.master.document.experience[0].bullets[0].id);
-  assert.deepEqual(input.document.experience[0].bullets[0].support, support);
+  assert.deepEqual(input.document.highlights, ['Restored service.']);
+  assert.deepEqual(input.document.experience[0], { employer: 'Edited employer', role: 'Lead', startDate: '2019', endDate: '2025', location: 'Remote', bullets: ['Improved recovery.'] });
   assert.deepEqual(input.document.careerGaps, original.master.document.careerGaps);
   assert.deepEqual(input.presentation, { template: 'modern', paper: 'LETTER' });
   assert.equal(ui.node('save').disabled, true); assert.equal(ui.node('pdf').disabled, false);
 });
 
-test('entries and bullets can be added, reordered and removed without replacing role identity', async () => {
+test('plain entries and bullets can be added, reordered and removed', async () => {
   const ui = fixture(); await ui.refresh();
   ui.add('document.experience'); ui.edit('document.experience.1.first', 'Second employer'); ui.edit('document.experience.1.role', 'Second role');
   ui.add('document.experience.1.bullets'); ui.edit('document.experience.1.bullets.0.first', 'Second outcome.');
@@ -108,9 +105,22 @@ test('entries and bullets can be added, reordered and removed without replacing 
   ui.add('document.additional.1.items'); ui.edit('document.additional.1.items.0.first', 'Community tools');
   await ui.save();
   const input = ui.calls.find(([op]) => op === 'master-cv-save')[1];
-  assert.match(input.document.experience[1].roleId, /^[a-f\d-]{36}$/);
-  assert.deepEqual(input.document.experience[1].bullets[0].support, {});
-  assert.equal(input.document.experience[1].bullets[0].text, 'First outcome.');
+  assert.deepEqual(input.document.experience[1], { employer: 'Second employer', role: 'Second role', location: '', startDate: '2025', endDate: 'Present', bullets: ['First outcome.'] });
+  assert.deepEqual(input.document.highlights, ['Reduced outages.', 'Mentored colleagues.']);
+});
+
+test('unknown employment dates stay empty while role wording and multiline bullets remain editable', async () => {
+  const ui = fixture(); await ui.refresh();
+  ui.edit('document.experience.0.role', 'Software engineer / team lead');
+  ui.edit('document.experience.0.startDate', '');
+  ui.edit('document.experience.0.endDate', '');
+  ui.edit('document.experience.0.bullets.0.first', 'Handled the outage.\nRestored service for customers.');
+  assert.equal(ui.field('document.experience.0.bullets.0.first').tagName, 'TEXTAREA');
+  await ui.save();
+  const role = ui.calls.find(([op]) => op === 'master-cv-save')[1].document.experience[0];
+  assert.equal(role.role, 'Software engineer / team lead');
+  assert.equal(role.startDate, ''); assert.equal(role.endDate, '');
+  assert.deepEqual(role.bullets, ['Handled the outage.\nRestored service for customers.']);
 });
 
 test('polling and delayed save acknowledgements preserve newer typing', async () => {
@@ -179,15 +189,44 @@ test('an old read cannot repopulate the editor after a lock', async () => {
   assert.equal(ui.node('fields').children.length, 0); assert.equal(ui.node('form').hidden, true);
 });
 
-test('readiness and pending review are persisted facts; prompt copy does not invent progress', async () => {
-  const original = saved({ status: 'stale', review: { complete: false, pendingRoles: 2, pendingQuestions: 3 } });
-  const ui = fixture(original); await ui.refresh();
-  assert.match(ui.node('readiness').textContent, /Review needed/); assert.match(ui.node('review').textContent, /2 roles and 3 questions/);
+test('stale masters continue onboarding without a prompt action, launch or invented progress', async () => {
+  const original = saved({ status: 'stale' });
+  const ui = fixture(original); await ui.refresh(original, { mcpClients: [] });
+  assert.match(ui.node('readiness').textContent, /Update needed/);
+  assert.match(ui.node('review').textContent, /onboarding in your current or next conversation/);
+  assert.doesNotMatch(ui.node('review').textContent, /copy|paste|running|in progress|pending review/i);
+  assert.equal(ui.node('prompt'), undefined);
+  assert.deepEqual(ui.calls.map(([operation]) => operation), ['master-cv-read']);
   assert.equal(ui.node('pdf').disabled, true); assert.equal(ui.node('txt').disabled, true);
-  ui.node('prompt').click(); await turn();
-  assert.match(ui.node('status').textContent, /copied/); assert.match(ui.node('readiness').textContent, /Review needed/);
   ui.edit('document.summary', 'Manual draft'); await ui.save();
   assert.equal(ui.node('pdf').disabled, true);
+  assert.equal(ui.field('document.summary').value, 'Manual draft');
+});
+
+test('onboarding status changes preserve manual typing and focus while keeping export unavailable', async () => {
+  const original = saved(), ui = fixture(original); await ui.refresh();
+  ui.edit('document.summary', 'Keep my wording.');
+  const field = ui.field('document.summary'); field.focus();
+  const stale = { ...original, revision: original.revision + 1, status: 'stale' };
+  await ui.refresh(stale);
+  assert.equal(ui.field('document.summary'), field); assert.equal(ui.active, field);
+  assert.equal(field.value, 'Keep my wording.');
+  assert.equal(ui.node('conflict').hidden, true); assert.equal(ui.node('save').disabled, false);
+  assert.equal(ui.node('pdf').disabled, true); assert.equal(ui.node('txt').disabled, true);
+  assert.match(ui.node('review').textContent, /onboarding/);
+  await ui.save();
+  assert.equal(ui.calls.find(([op]) => op === 'master-cv-save')[1].document.summary, 'Keep my wording.');
+});
+
+test('an incomplete draft stays editable and completes onboarding without a separate interview prompt', async () => {
+  const ui = fixture(saved({ status: 'draft' })); await ui.refresh();
+  assert.match(ui.node('readiness').textContent, /Draft/);
+  assert.match(ui.node('review').textContent, /onboarding in your current or next conversation/);
+  assert.doesNotMatch(ui.node('review').textContent, /pending review|copy|paste|running/i);
+  assert.match(ui.node('export-note').textContent, /Complete the headline, bio and required role fields/);
+  assert.equal(ui.node('pdf').disabled, true);
+  ui.edit('document.summary', 'Completed bio.'); await ui.save();
+  assert.equal(ui.field('document.summary').value, 'Completed bio.');
 });
 
 test('PDF and TXT exports are version bound and cancellation is not success', async () => {
@@ -201,11 +240,21 @@ test('PDF and TXT exports are version bound and cancellation is not success', as
   assert.deepEqual(exports.map(({ revision, baseVersion, format }) => ({ revision, baseVersion, format })), [{ revision: 4, baseVersion: 2, format: 'pdf' }, { revision: 4, baseVersion: 2, format: 'txt' }]);
 });
 
-test('empty state offers original import and review; a manual blank draft has version zero', async () => {
-  const ui = fixture(saved({ master: null, status: 'missing', review: { complete: false, pendingRoles: 0, pendingQuestions: 0 } })); await ui.refresh();
+test('missing master joins onboarding without a special task and still permits a version-zero manual draft', async () => {
+  const missing = saved({ master: null, status: 'missing' });
+  const ui = fixture(missing); await ui.refresh(missing, { mcpClients: [] });
   assert.equal(ui.node('empty').hidden, false); assert.equal(ui.node('form').hidden, true);
+  assert.match(ui.node('readiness').textContent, /No master CV yet/);
+  assert.match(ui.node('review').textContent, /onboarding in your current or next conversation/);
+  assert.doesNotMatch(ui.node('review').textContent, /0 roles|copy|paste|running|in progress/i);
+  assert.equal(ui.node('prompt'), undefined);
+  assert.deepEqual(ui.calls.map(([operation]) => operation), ['master-cv-read']);
+  await ui.refresh(missing, { hasCv: false, mcpClients: [] });
+  assert.match(ui.node('empty-note').textContent, /Import an original CV using Import CV above/);
+  assert.doesNotMatch(ui.node('empty-note').textContent, /copy|paste|prompt/i);
   ui.node('start').click(); ui.edit('document.summary', 'My draft'); await ui.save();
   assert.equal(ui.calls.find(([op]) => op === 'master-cv-save')[1].baseVersion, 0);
+  assert.equal(ui.field('document.summary').value, 'My draft');
 });
 
 test('Master CV tabs preserve the source, Facts and Preferences browser and keyboard navigation', async () => {
@@ -261,12 +310,13 @@ test('saving professional links trims values, removes blank rows and deduplicate
   assert.deepEqual(contact.links, ['https://portfolio.example.invalid', 'https://other.example.invalid']);
 });
 
-test('a draft with completed review asks for missing document fields rather than another review', async () => {
+test('an incomplete draft explains which document fields to complete', async () => {
   const original = saved({ status: 'draft' }); original.master.document.headline = '';
   const ui = fixture(original); await ui.refresh();
   assert.equal(ui.node('readiness').textContent, 'Draft · Not ready to export.');
-  assert.equal(ui.node('review').textContent, '');
-  assert.match(ui.node('export-note').textContent, /Career review is complete.*headline, bio and required role fields/);
+  assert.match(ui.node('review').textContent, /completes or updates the master CV as part of onboarding/);
+  assert.doesNotMatch(ui.node('review').textContent, /pending review/);
+  assert.match(ui.node('export-note').textContent, /Complete the headline, bio and required role fields/);
   assert.equal(ui.node('pdf').disabled, true);
 });
 

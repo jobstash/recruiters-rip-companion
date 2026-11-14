@@ -1379,22 +1379,19 @@ test('every undecided job is queued for full assessment; listing-only screening 
   assert.equal('shortlist' in f.store.get().career.matching, false);
 });
 
-test('matching context separates the immutable master from original CV evidence and exposes role identity', async () => {
+test('matching context includes a plain master alongside original CV text and saved facts', async () => {
   const f = fixture();
   await f.store.update(state => {
     const id = 'e0000000-0000-4000-8000-000000000001';
     state.career.sources[id] = { ...state.career.sources.cv, id };
     delete state.career.sources.cv;
-    state.career.facts.recent.roleId = 'e0000000-0000-4000-8000-000000000002';
-    state.career.facts.recent.facet = 'outcomes';
   });
   const ready = await readyMaster(f.store);
   const result = await f.call('career_match_jobs');
   assert.equal(result.candidate.master.version, ready.master.version);
   assert.ok(result.candidate.cv.includes('Built reporting services.'));
-  assert.ok(result.candidate.sourceSet.every(source => typeof source.sourceId === 'string' && /^[a-f0-9]{64}$/.test(source.contentHash)));
-  assert.match(result.candidate.masterEvidenceFingerprint, /^[a-f0-9]{64}$/);
-  assert.equal(result.candidate.review.complete, true);
-  assert.equal(result.candidate.facts.find(fact => fact.subject === 'Reporting services').roleId, 'e0000000-0000-4000-8000-000000000002');
+  for (const key of ['sourceSet', 'masterEvidenceFingerprint', 'review', 'roles']) assert.equal(Object.hasOwn(result.candidate, key), false);
+  assert.equal(Object.hasOwn(result.candidate.master.document.experience[0], 'roleId'), false);
+  assert.equal(typeof result.candidate.master.document.experience[0].bullets[0], 'string');
   assert.equal(result.candidate.master.contact, undefined);
 });

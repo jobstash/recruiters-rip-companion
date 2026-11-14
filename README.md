@@ -39,7 +39,7 @@ Wait for Companion to show that the account is connected. If it stays pending, s
 
 In **Companion → Me**, choose **Import CV** and select a PDF, Word document or text file. Use a document with selectable text, not a scanned image.
 
-When you first ask your AI app to generate a CV, it reviews all your original CVs for achievements, growth and difficult assignments in each role. It reuses what is already known and asks you for missing details. Numbers help when you can substantiate them; qualitative results are fine too.
+Your AI app prepares the master CV automatically as part of onboarding, including when you ask it to find jobs. It reads your original CVs and saved facts, asks only for missing achievements or context, and writes the CV. You do not need to request a master or copy a separate prompt. Numbers help when you can substantiate them; qualitative results are fine too.
 
 The result appears in **Me → Master CV**. Edit your contact details, bio and experience there, then choose **Save changes**. You can export the current master as PDF or text. New CV imports trigger another review without discarding your answers or edits. Copies tailored to individual jobs do not overwrite the master.
 
@@ -351,48 +351,37 @@ The internal read-only browser uses `kind: jobs`; Jobs pages saved reviews by jo
 
 For a paired account, **Open account** opens the website without starting pairing again. The browser sign-in instruction is shown only for an unpaired connection attempt and clears when pairing completes. Contextless “Try asking” copy is removed.
 
-## Career facts and outcomes review
+## Automatic CV preparation
 
-Original CVs remain separate evidence. Ordinary job matching can use them immediately; CV generation starts an outcomes review through `career_cv_review_read`. The checkpoint covers the whole active CV source set, including additions, text changes, archival and deletion. An import is never treated as review completion.
+At the start of a career conversation, the skill reads `onboarding_status`. A missing, unfinished or outdated master is incomplete onboarding. The skill handles it in that conversation, then continues the requested job search or application. There is no extra setup step or review-prompt button.
 
-`career.roles` gives each employment episode a stable ID, including different roles at the same company. `career_cv_review_save` reconciles those roles, exact source references and the complete `reviewedSourceIds` set. For each role, review outcomes, growth and a complex assignment with its action and result. Existing evidence resolves known facets. Missing facts trigger focused harness questions rather than fabricated metrics. Candidates without employment roles can complete review with projects, education and other supported material.
+The AI reads all original CVs and saved facts, looking for each job’s outcomes, growth and difficult assignments. It asks only what is genuinely missing, through `career_interview_ask`, and records actual replies through `career_interview_answer`. Onboarding questions do not require an application. Known answers are reused; unknown, declined and confidential details are respected.
 
-`career_interview_ask` takes a revision/request ID and a target: `{kind:"cv_review",sourceSetFingerprint}` or `{kind:"application",applicationId}`. Narrative review questions carry `roleId` and a facet. `role_identity` clarifies conflicting employers, titles or dates without resolving achievement facets. The host uses elicitation when available, otherwise the returned chat format. `career_interview_answer` persists literal replies, including explicit unknown or declined responses. Cancellation leaves unanswered work unresolved.
-
-Career facts retain current answers, role attribution, question context and publication restrictions. Corrections supersede earlier evidence. Facts for the same subject in different employment episodes remain distinct. Confidential content is not publishable; ask for a separate safe description or range. Explicit publication permission is recorded from the candidate’s actual reply or form selection, never inferred from silence or an ordinary save.
+The skill interprets titles and dates normally. A faithful title paraphrase or equivalent date format does not have to match a source string literally. It must not invent employers, seniority, dates, credentials or results. Unknown dates stay empty. Factual accuracy belongs to the AI’s reading and writing process.
 
 ## Editable master CV
 
-`career_master_cv_read` returns the saved master and derived `missing`, `draft`, `stale` or `ready` status. Readiness requires the current reviewed source set, resolved role facets, valid evidence and the current writing policy. Old content remains readable while it needs review.
+`career_master_cv_read` returns the current document and its version. `career_master_cv_save({baseVersion,document,presentation?})` saves plain content: headline, bio, experience with string bullets, and optional skills, education, languages and other sections. It requires no review-status matrix, source hashes, citation objects, role IDs or per-claim IDs.
 
-`career_master_cv_save` uses career revision, `baseVersion` and `sourceSetFingerprint`. A master contains contact details from the profile, a bio, reverse-chronological experience, and supported optional sections. Claims have stable IDs; experience records carry `roleId`. Master history preserves previous versions.
+**Me → Master CV** lets the user edit contact details and every document section, save changes and export PDF or TXT. The editor preserves typing during refresh, retains edits after a failed save and asks how to merge concurrent changes. The version check prevents an older draft from overwriting a newer edit.
 
-**Me → Master CV** provides a structured editor, not a JSON field. It supports contact and professional links, headline and bio, roles and outcome bullets, skills, education, languages, certifications, other sections and presentation. Saves retain drafts on errors and require explicit merge choices on conflicts. Polling does not overwrite typing. Lock or account changes clear sensitive editor state.
+Newly added, removed or archived original CVs make the master need another look. The skill reads what changed and updates the latest master while preserving the user’s edits. Existing prose and answers are retained when updating from the previous CV format.
 
-Manual changes are candidate-authored evidence. Agent regeneration cannot silently overwrite them, change the selected presentation, or restore removed claims from older originals. Tailored copies also respect current corrections and publication constraints. When an agent proposes a change to protected wording, the candidate applies it in the editor.
-
-Master PDF/TXT export is separate from application documents and checks current identity, source set, master version and readiness at publication. The native shell saves a file; the web shell offers a guarded browser download. Unsaved or stale content is not represented as a current export.
-
-Guarded file-backed downloads validate and read through the same open file descriptor, then recheck document/session freshness before releasing bytes. A pathname replacement cannot redirect that read to a different file.
+Exports keep the ordinary private-file and session protections. File-backed downloads validate and read the same open descriptor, so replacing a pathname cannot redirect the read.
 
 ## Job-specific CVs and cover letters
 
-1. Create or reuse the exact application with `career_application_create`. Catalogue jobs, complete captured adverts and pasted originals are supported. Identity follows the exact job/URL, never employer and title alone.
-2. Read `career_application_context`: current ready master, original sources, role facts, complete job, `jobText`, current bindings and attached forms. `jobText` is the HTML5 visible-text projection; the complete original description remains available.
-3. Inventory every skill, duty, qualification and expected outcome. Each requirement has an exact original `phrase`, priority (`crucial`, `important`, `optional`), kind, status (`supported`, `partial`, `missing`), role IDs, support and rationale. Keep the inventory separate from candidate claims.
-4. Use supported exact job terms in relevant skills or experience without repeating whole advert sentences. For each role, connect its actual outcomes and difficult-assignment evidence to expectations it genuinely meets. Do not move a metric or capability to another role. Ask material uncertainties through the application-targeted interview and reuse the answers later.
-5. Tailor the bio and letter to the employer’s domain and needs with concrete proof. Distinguish demonstrated domain expertise, transferable experience and stated interest. Do not invent enthusiasm, mastery or a progression story. Keep the bio concise and the letter within one readable page or the employer’s explicit limit.
-6. `career_application_cv_save` requires `masterVersion`, `contextFingerprint`, requirements, the structured CV and support for headline, summary and other sections. Claims use `{id,text,support}` with `support.sources: [{sourceId,contentHash,quote}]` and/or `support.facts`. Role claims must cite that episode’s evidence. Letter saves use ordered paragraphs with one support object per paragraph and the same application/master bindings.
-7. Fix evidence, attribution, number and layout failures before export. Pending application interviews prevent final export; a known missing qualification alone does not require a false claim or make every truthful application impossible.
-8. Export current PDFs with `career_application_export`; TXT is available when needed. Stored phrases and TXT retain exact spelling and internal whitespace. PDF line wrapping and extractor normalization can change whitespace, so exact spacing cannot guarantee an ATS score.
+Read `career_application_context` for the selected job, current master, original CVs and facts. The skill compares required and preferred skills, duties and outcomes, then uses supported exact job terms naturally in skills and the relevant experience. It does not submit an evidence inventory to the tools.
 
-The full [Humanizer skill](https://github.com/blader/humanizer) and its MIT license are bundled under `skills/recruiters-rip/references/`. The CV skill requires its complete draft, critique, fact-preservation and rewrite process for the master, tailored CV, bio and letter. The same workflow guide is delivered through MCP to clients without local skills. Style is judged in context; there is no word blacklist or AI-authorship detector. The skill, Humanizer reference and runtime guide participate in the policy fingerprint.
+The bio and letter address this employer’s domain and needs through actual achievements, transferable experience and genuine interest. The skill asks about material uncertainty and saves useful answers for later. It does not invent metrics, expertise or enthusiasm.
 
-Enabled career breaks are generated from the user’s `activity`, optional `place`, `description`, year window and minimum length. They appear inline in Experience with the same layout as roles and retain their identity as breaks. A disabled setting omits them. Generated copies use the master’s current break entries; the agent cannot turn a break into employment.
+Save a plain CV with `career_application_cv_save({applicationId,masterVersion,cv,presentation?})` and a letter with `career_application_letter_save({applicationId,masterVersion,paragraphs})`. No separate request-ID lookup or source proof is required for those saves. Tailoring does not overwrite the master. Export the current documents with `career_application_export`; document preparation alone never authorizes submission.
 
-Application preparation does not authorize submission. If asked to apply, the host uses its actual browser tools, respects permission and authorship requirements, resolves material questions and reports the observed result. Missing or stale documents are rebuilt from the current master, never retagged as current.
+The full [Humanizer skill](https://github.com/blader/humanizer) and its MIT license remain bundled under `skills/recruiters-rip/references/`. Its draft, critique and rewrite process applies to the master, tailored CV, bio and letter while preserving facts and exact supported job terminology.
 
-Browser form prose uses `career_form_answers_save` with evidence for each generated `{id,value,support}` answer and current form bindings. Generated prose is not stored as a user-stated fact. Direct user answers from the extension can still save reusable contact details and general topics; changing career evidence retires generated application writing instead of silently rebinding it. Private backup readers preserve saved historical files without weakening public current-document checks.
+Enabled career breaks appear inline in Experience with the user’s activity, place, dates and description, in the same format as other entries. They remain breaks, not invented jobs.
+
+Form prose uses ordinary `{id,value}` entries with the existing browser-form bindings. Generated prose is not promoted to a user-stated fact. Browser permissions, freshness checks and honest submission reporting remain unchanged.
 
 ### Writing and ATS references
 

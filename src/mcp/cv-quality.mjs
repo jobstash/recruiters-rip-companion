@@ -8,19 +8,10 @@ const placeholders = [
 const wordCount = text => text.match(/\S+/gu)?.length ?? 0;
 
 /**
- * The rendered form of a stored CV draft: highlights and experience bullets are
- * `{text, support}` claims in storage; renderers, measures and checks see text only.
- */
-export function renderableCv(document) {
-  return { ...document, ...(document.highlights ? { highlights: document.highlights.map(claim => claim.text) } : {}),
-    experience: document.experience.map(entry => ({ ...entry, bullets: entry.bullets.map(claim => claim.text) })) };
-}
-
-/**
  * Every authored text field of a renderable CvDocument, in reading order.
- * `bullet` marks list items; `claim` marks evidence-cited highlights and
- * experience bullets; `date` marks structured date fields; `setting` marks
- * the candidate's own career-gap wording, which the host does not author.
+ * `bullet` marks list items; `claim` marks highlights and experience bullets;
+ * `date` marks structured date fields; `setting` marks the candidate's own
+ * career-gap wording, which the host does not author.
  * @returns {Array<{field: string, text: string, bullet?: boolean, claim?: boolean, date?: boolean, setting?: boolean}>}
  */
 export function cvDocumentTexts(document) {
@@ -101,59 +92,3 @@ export function inspectCvQuality({ document, heading = {} }) {
   return issues;
 }
 
-const currency = '(?:USD|EUR|GBP|CAD|AUD|NZD|JPY|CNY|INR|CHF|SEK|NOK|DKK|PLN|BRL|ZAR|SGD|HKD|[$€£¥₹₩₽])';
-const magnitude = '(?:thousand|million|billion|trillion|[kKmMbB])';
-// Units are case-sensitive: MB and Mb, for example, must not become equivalent.
-const unit = '(?:milliseconds?|seconds?|minutes?|hours?|days?|weeks?|months?|years?|users?|customers?|people|employees?|reports?|projects?|teams?|locations?|countries|bps|ms|ns|kg|km|cm|mm|GB|Gb|MB|Mb|KB|kB|TB|Hz|kHz|MHz|GHz|°C|°F|s|h|x|×)';
-const number = '(?:[.,]\\d+|\\d+(?:(?:[.,\'/:\\-]\\d+)|(?: \\d{3}(?!\\d)))*)';
-const numericValue = new RegExp(number, 'u');
-const numericClaim = new RegExp(`(?<![\\p{L}\\p{N}_@.])(?:${currency} *)?[+-]?${number}(?: *${magnitude}(?![\\p{L}\\p{N}_]))?(?: *%| *${unit}(?![\\p{L}\\p{N}_]))?\\+?(?: *${currency}(?![\\p{L}\\p{N}_]))?(?![\\p{L}\\p{N}_]|[.,:/\\-]\\d)`, 'gu');
-
-function normalizeNumber(value) {
-  // Do not parse through Number: large integers must retain their exact digits.
-  if (/^\d{1,3}([ '])\d{3}(?:\1\d{3})*(?:[.,]\d+)?$/u.test(value)) return value.replace(/[ ']/gu, '').replace(',', '.');
-  if (/^[1-9]\d{0,2}(?:,\d{3})+(?:\.\d+)?$/u.test(value)) return value.replace(/,/gu, '');
-  if (/^\d{1,3}(?:\.\d{3})+,\d+$/u.test(value)) return value.replace(/\./gu, '').replace(',', '.');
-  if (/^\d{1,3}(?:\.\d{3}){2,}$/u.test(value)) return value.replace(/\./gu, '');
-  if (/^\d+,\d{1,2}$/u.test(value) || /^\d+,\d{4,}$/u.test(value) || /^0,\d+$/u.test(value)) return value.replace(',', '.');
-  // A lone dot remains decimal; a lone comma followed by three digits is
-  // grouping only when it matches the grouping rule above. Ambiguous or mixed
-  // forms otherwise remain literal rather than silently changing their value.
-  return value;
-}
-
-function numericTokens(text) {
-  const normalized = text.normalize('NFKC').replace(/[\u2010-\u2015\u2212]/gu, '-').replace(/[\u2018\u2019]/gu, "'")
-    .replace(/[^\S\r\n]/gu, ' ').replace(/(?<=\d) *([-/:]) *(?=\d)/gu, '$1');
-  const tokens = [];
-  for (const match of normalized.matchAll(numericClaim)) {
-    const raw = match[0];
-    // Do not extract metrics from prefixed technical identifiers (ISO-27001,
-    // v2.3, B2B) or dotted version literals. Numeric dates remain whole tokens.
-    if (/[\p{L}_][\p{L}\p{N}_]*-$/u.test(normalized.slice(0, match.index))) continue;
-    if (/^\d+(?:\.\d+){2,}$/u.test(raw) && !/^\d{1,2}\.\d{1,2}\.\d{4}$/u.test(raw) && !/^\d{1,3}(?:\.\d{3}){2,}$/u.test(raw)) continue;
-    const token = raw.replace(numericValue, normalizeNumber).replace(/ /gu, '');
-    // Whitespace and typographic dashes are irrelevant; currency, percent,
-    // magnitude and unit spelling remain part of the claim token.
-    tokens.push(token);
-  }
-  return tokens;
-}
-
-/**
- * Return unique normalized numeric expressions absent from supportingTexts.
- * Supply only saved career facts and profile values, never a job
- * advertisement. Matching a token is NOT proof that a claim is true
- * or that the surrounding statement has support. This conservative mechanical
- * guard does not infer unit conversions, locale, spelled-out numbers, semantic
- * equivalence, or associations between a number and a particular achievement.
- * Currency/percent/magnitude/unit qualifiers remain significant; ambiguous
- * formats can require the host to retain the fact's exact numeric wording.
- * @param {string} text
- * @param {string[]} supportingTexts
- * @returns {string[]}
- */
-export function unsupportedNumbers(text, supportingTexts) {
-  const supported = new Set(supportingTexts.flatMap(numericTokens));
-  return [...new Set(numericTokens(text))].filter(token => !supported.has(token));
-}

@@ -6,8 +6,7 @@ import { protectPrivatePath } from './platform-runtime.cjs';
 import { createCareerState, fail, hash } from './mcp/state.mjs';
 import { masterCvState, saveManualMaster, masterExportSnapshot, renderMaster } from './mcp/master-cv.mjs';
 
-export const MASTER_CV_ACTIONS = Object.freeze(['master-cv-read', 'master-cv-save', 'master-cv-export', 'master-cv-prompt']);
-export const MASTER_CV_PROMPT = 'Use recruiters.rip to read career_cv_review_read and review every active original CV. Reuse known role-scoped facts first. For each employment episode, establish outcomes rather than duties, career growth, and a difficult assignment with the candidate’s action and outcome. Ask only missing targeted narrative questions through career_interview_ask with target kind cv_review and the current sourceSetFingerprint, using the stable roleId and facet. Record literal answers through career_interview_answer; do not invent quantities, success, progression, or a decline. Save the complete current source-set review with career_cv_review_save, then read career_master_cv_read and create a concise, evidenced master using career_master_cv_save. Keep all known contact details and a factual bio. Preserve user-edited content: if changes conflict, propose them for the candidate to apply in Companion rather than overwriting their master. Do not tailor to a job or create an application for this task.';
+export const MASTER_CV_ACTIONS = Object.freeze(['master-cv-read', 'master-cv-save', 'master-cv-export']);
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 function exact(input, keys) {
   if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => !keys.includes(key)) || keys.some(key => !Object.hasOwn(input, key)))
@@ -28,7 +27,7 @@ export async function publishMasterFile(filename, bytes, assertCurrent) {
 }
 
 /** One instance per shell; request receipts are deliberately ephemeral and identity-bound. */
-export function createMasterCvSettings({ access, identity, documents, selectDestination, publish = publishMasterFile, copyPrompt, afterSave = () => {}, browserAccess = () => () => {}, snapshot = masterExportSnapshot, render = renderMaster }) {
+export function createMasterCvSettings({ access, identity, documents, selectDestination, publish = publishMasterFile, afterSave = () => {}, browserAccess = () => () => {}, snapshot = masterExportSnapshot, render = renderMaster }) {
   let receiptIdentity;
   const exports = new Map(), saving = new Set();
   function session() {
@@ -51,12 +50,6 @@ export function createMasterCvSettings({ access, identity, documents, selectDest
     const { scoped, currentIdentity, assertCurrent } = session();
     const career = () => scoped.store.get().career ?? createCareerState();
     if (op === 'master-cv-read') return masterCvState(career(), currentIdentity);
-    if (op === 'master-cv-prompt') {
-      assertCurrent();
-      const copied = await copyPrompt(MASTER_CV_PROMPT);
-      assertCurrent();
-      return { copied: copied === true };
-    }
     if (op === 'master-cv-save') {
       assertCurrent();
       if (exports.has(input.requestId)) fail('REQUEST_CONFLICT', 'This request ID was already used for an export. Use a new request ID.');
@@ -77,7 +70,7 @@ export function createMasterCvSettings({ access, identity, documents, selectDest
     const initial = snapshot(career(), input), initialHash = hash(initial);
     const assertSnapshot = () => {
       assertCurrent();
-      if (hash(snapshot(career(), input)) !== initialHash) fail('REVISION_CONFLICT', 'The master CV or its evidence changed. Read the current master CV before exporting.');
+      if (hash(snapshot(career(), input)) !== initialHash) fail('REVISION_CONFLICT', 'The saved CV changed. Reopen the master CV before exporting.');
     };
     assertSnapshot();
     if (prior) return prior.pending;

@@ -2,7 +2,6 @@
 // any rubric, schema, weight or skill change marks earlier assessments stale automatically.
 import { hash } from './state.mjs';
 import { SKILL_DIGEST } from '../generated/skill-digest.mjs';
-import { supportSchema } from './master-cv.mjs';
 
 export const CAREER_DIRECTION_POLICY = 'Evaluate career intent before capability. The saved careerPaths are the directions this user wants: a role is on direction when its actual remit fits any one saved path (its name, titles and why), read together with the user’s goals, preferences, constraints and excludedRoles; never assume a profession, management ambition, progression path or preferred level of responsibility beyond them. Distinguish whether the user could perform the work from whether they want this kind of move. Compare the advertised remit with the best-fitting path using relevant dimensions such as responsibilities, autonomy, decision authority, specialisation, impact and people responsibility where applicable. A deliberate lateral move, career change or lower-scope path is valid and must be assessed against that path, not penalised against the previous career. Mandatory conditions apply to every path; broad interests do not waive narrower requirements. Distinguish the role’s predominant work from incidental duties according to the user’s own preference, and do not substitute adjacent activities or hypothetical future responsibility for a required responsibility. Where the user forbids regression, do not replace that constraint with technical familiarity or attractive job features. Preserve the boundaries of each path: overlapping tasks, technologies, customer contact or ownership language do not by themselves make a role part of that path. Do not invent an exception or a future promotion. A path’s titles are examples of its direction, not a whitelist: titles alone neither establish nor disprove fit; use the full advertised responsibilities. A demonstrated conflict with every saved path or with a ruled-out direction is a direction gate fail, not a recommendation with a disclaimer; a genuinely unresolved decisive direction question is a direction gate flag. Do not ask the user to waive a clear constraint to populate a shortlist. Then assess capability, scope and preferences as separate dimensions. Explain the concrete path-aligned remit that justifies a recommendation. Prestige, pay, location, novelty, skill overlap and scarcity of matches cannot override an explicit conflicting goal. If intent is unstated, do not invent a goal or prohibition; use the available preferences and ask only a material unresolved direction question.';
 
@@ -60,14 +59,6 @@ const requirementSchema = object({
   evidence: { enum: REQUIREMENT_EVIDENCE }, cvQuote: text(300),
   factIds: { type: 'array', items: { type: 'string', format: 'uuid' }, maxItems: 5, uniqueItems: true },
 }, ['requirement', 'importance', 'evidence']);
-export const tailoringRequirementsSchema = { type: 'array', minItems: 1, maxItems: 100, items: object({
-  id: { type: 'string', format: 'uuid' }, phrase: text(2000),
-  priority: { enum: ['crucial', 'important', 'optional'] },
-  kind: { enum: ['skill', 'experience', 'qualification', 'outcome', 'other'] },
-  status: { enum: ['supported', 'partial', 'missing'] }, support: supportSchema,
-  roleIds: { type: 'array', items: { type: 'string', format: 'uuid' }, maxItems: 30, uniqueItems: true },
-  rationale: text(2000),
-}, ['id', 'phrase', 'priority', 'kind', 'status', 'roleIds', 'rationale']) };
 export const assessmentSchema = {
   ...object({
     id: idSchema, status: { enum: ['assessed', 'unavailable'] },

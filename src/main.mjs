@@ -175,7 +175,6 @@ const masterSettings = createMasterCvSettings({
     return selected.canceled ? null : selected.filePath;
   },
   ...(webShell ? { publish: (filename, bytes, assertCurrent) => webHost.publishDownload(bytes, { name: filename, assertCurrent }) } : {}),
-  copyPrompt: text => { clipboard.writeText(text); return !webShell; },
   afterSave: () => { careerViewRevision++; browserForms.cancelAll(); emit(); },
 });
 updates = createUpdateController({
@@ -1109,7 +1108,7 @@ ipcMain.handle('local-settings', async (event, op, input = {}) => {
     if (typeof op !== 'string') fail('INVALID_INPUT', 'Choose a local settings action.');
     if (op === 'state' || op.startsWith('update-')) return await settingsOperation(op, input);
     return await workGate.run(() => {
-      if (['decisions-key-save', 'decisions-key-remove', 'publication-range-set', 'career-gap-set', 'import-cv', 'cv-delete', 'delete-rankings', 'connect-account', 'backup', 'backup-preview', 'backup-restore', 'master-cv-save', 'master-cv-export', 'master-cv-prompt'].includes(op))
+      if (['decisions-key-save', 'decisions-key-remove', 'publication-range-set', 'career-gap-set', 'import-cv', 'cv-delete', 'delete-rankings', 'connect-account', 'backup', 'backup-preview', 'backup-restore', 'master-cv-save', 'master-cv-export'].includes(op))
         return mutation(ownMutation => settingsOperation(op, input, ownMutation));
       return settingsOperation(op, input);
     }, { meaningful: !['career-list', 'career-read', 'career-pipeline', 'account-platform', 'master-cv-read'].includes(op) });

@@ -34,13 +34,7 @@ async function fixture({ validateExport = async () => true, assertAvailable = ()
   const mutation = extra => ({ requestId: randomUUID(), revision: state.career.revision, ...extra });
   const create = input => call('career_application_create', mutation({ job: input ?? job }));
   const resolve = (extra = {}) => workflow.resolve({ requestId: randomUUID(), page: page(), jobs: [], context: { original: { url: advert, title: job.title, text: job.description, complete: true } }, ...extra });
-  const letterArgs = (applicationId, paragraphs) => {
-    const career = state.career, app = career.applications[applicationId];
-    return mutation({ applicationId, paragraphs, masterVersion: assertMasterReady(career).version,
-      contextFingerprint: applicationContextFingerprint(career, app), evidence: paragraphs.map(() => ready.support),
-      requirements: [{ id: randomUUID(), phrase: 'data services', priority: 'important', kind: 'skill', status: 'partial', support: ready.support,
-        roleIds: [ready.roles[0].id], rationale: 'Relevant service delivery; domain depth remains unestablished.' }] });
-  };
+  const letterArgs = (applicationId, paragraphs) => ({ applicationId, paragraphs, masterVersion: assertMasterReady(state.career).version });
   async function documents(applicationId, extra = {}) {
     if (masterCvState(state.career).status !== 'ready') await readyMaster(store);
     await store.update(saved => {
@@ -56,7 +50,7 @@ async function fixture({ validateExport = async () => true, assertAvailable = ()
   async function answer(view, value = 'I build reliable services for this team.') {
     const read = await call('career_form_read', { formId: view.formId });
     return call('career_form_answers_save', mutation({ formId: read.formId, snapshot: read.snapshot, evidenceRevision: read.evidenceRevision,
-      answers: [{ id: read.fields[0].id, value, support: ready.support }] }));
+      answers: [{ id: read.fields[0].id, value }] }));
   }
   return { store, workflow, call, mutation, create, resolve, documents, answer, forms, opened, ready, letterArgs };
 }
@@ -233,8 +227,8 @@ test('a prepared application binds agent-written essays and Yes/No choices, so k
   assert.match(read.instructions, /answer every empty captured field/);
   assert.match(read.instructions, /Yes\/No/);
   await f.call('career_form_answers_save', f.mutation({ formId: read.form.formId, snapshot: read.form.snapshot, evidenceRevision: read.form.evidenceRevision, answers: [
-    { id: 'project', value: 'Built a churn model that moved retention budget.', support: f.ready.support }, { id: 'lead', value: 'Yes' },
-    { id: 'crypto', value: 'Analysed on-chain bridge volumes at Example.', support: f.ready.support }, { id: 'web3', value: 'Yes' }] }));
+    { id: 'project', value: 'Built a churn model that moved retention budget.' }, { id: 'lead', value: 'Yes' },
+    { id: 'crypto', value: 'Analysed on-chain bridge volumes at Example.' }, { id: 'web3', value: 'Yes' }] }));
   const prepared = await f.forms.prepare({ requestId: randomUUID(), ...page(apply, fields), useApi: false });
   assert.deepEqual(prepared.fields.map(item => [item.id, item.value, item.source]), [
     ['project', 'Built a churn model that moved retention budget.', 'agent'], ['lead', 'Yes', 'agent'],
@@ -609,17 +603,20 @@ test('missing and stale masters block preparation, form prose, opening and copyi
   await assert.rejects(f.workflow.openApplication(created, () => assert.fail('Must not open')), { code: 'MASTER_NOT_READY' });
   assert.throws(() => f.workflow.copyIntroduction({ bindingId: view.bindingId }, () => assert.fail('Must not copy')), { code: 'MASTER_NOT_READY' });
   await assert.rejects(f.call('career_form_answers_save', f.mutation({ formId: read.formId, snapshot: read.snapshot, evidenceRevision: read.evidenceRevision,
-    answers: [{ id: 'summary', value: 'Built reliable services.', support: f.ready.support }] })), { code: 'MASTER_NOT_READY' });
+    answers: [{ id: 'summary', value: 'Built reliable services.' }] })), { code: 'MASTER_NOT_READY' });
 });
 
-test('form prose must cite original evidence and never modifies the immutable master', async () => {
+test('plain form prose stages without support and never modifies the master', async () => {
   const f = await fixture(), created = await f.create(), view = await f.resolve();
   const read = await f.call('career_form_read', { formId: view.formId }), before = f.store.get().career.masterCv;
-  await assert.rejects(f.call('career_form_answers_save', f.mutation({ formId: read.formId, snapshot: read.snapshot, evidenceRevision: read.evidenceRevision,
-    answers: [{ id: 'summary', value: 'Built reliable services.' }] })), { code: 'INVALID_INPUT' });
-  await f.answer(view);
+  await f.call('career_form_answers_save', f.mutation({ formId: read.formId, snapshot: read.snapshot, evidenceRevision: read.evidenceRevision,
+    answers: [{ id: 'summary', value: 'Built reliable services.' }] }));
   assert.deepEqual(f.store.get().career.masterCv, before);
-  assert.equal(f.store.get().career.applications[created.applicationId].formAnswers[applicationQuestionKey(field())].support.sources.length, 1);
+  const answer = f.store.get().career.applications[created.applicationId].formAnswers[applicationQuestionKey(field())];
+  assert.equal(answer.value, 'Built reliable services.');
+  assert.equal(Object.hasOwn(answer, 'support'), false);
+  await assert.rejects(f.call('career_form_answers_save', f.mutation({ formId: read.formId, snapshot: read.snapshot, evidenceRevision: read.evidenceRevision,
+    answers: [{ id: 'summary', value: 'Built reliable services.', support: {} }] })), { code: 'INVALID_INPUT' });
 });
 
 test('exact advert text decodes HTML5 entities without case or whitespace normalization', () => {

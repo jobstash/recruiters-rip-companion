@@ -585,8 +585,7 @@ test('facts lead with explanations and preserve actual interview context; applic
   state.career.facts.k8s = { id: 'k8s', kind: 'yes_no', subject: 'Kubernetes in production', answer: 'No', applicationId: 'missing-app' };
   state.career.applications['later-app'] = { id: 'later-app', job: { title: 'Experiment Lead', company: 'Other Employer' } };
   const document = { headline: 'Platform Engineer', summary: 'Builds data services.',
-    experience: [{ roleId: '00000000-0000-4000-8000-000000000001', employer: 'Acme', role: 'Engineer', startDate: '2019', endDate: 'Present', bullets: [
-      { id: '00000000-0000-4000-8000-000000000002', text: 'Built payment pipelines.', support: { sources: [{ sourceId: '00000000-0000-4000-8000-000000000003', contentHash: 'a'.repeat(64), quote: 'CV_SUPPORT_SENTINEL quote' }], facts: ['ab'] } }] }] };
+    experience: [{ employer: 'Acme', role: 'Engineer', startDate: '2019', endDate: 'Present', bullets: ['Built payment pipelines.'] }] };
   state.career.applications.app = { id: 'app', job: { title: 'Senior Engineer', company: 'Example Employer', description: 'Ad', url: 'https://example.test/job' },
     cv: { version: 2, document, presentation: { template: 'classic', paper: 'A4' }, createdAt: '2026-10-14T10:00:00Z' },
     cvHistory: [{ version: 1, document: { ...document, headline: 'Engineer' }, presentation: { template: 'classic', paper: 'A4' }, createdAt: '2026-10-13T10:00:00Z' }],
@@ -616,7 +615,6 @@ test('facts lead with explanations and preserve actual interview context; applic
   assert.equal(detail.title, 'Senior Engineer — Example Employer');
   const sections = Object.fromEntries(detail.sections.slice(1).map(section => [section.heading.split(' — ')[0], section.text]));
   assert.equal(sections.CV, 'Jane Candidate\nPlatform Engineer\njane@example.test · London\n\nSummary\n\nBuilds data services.\n\nExperience\n\nAcme\nEngineer\n2019 – Present\n• Built payment pipelines.\n');
-  assert.equal(JSON.stringify(detail).includes('CV_SUPPORT_SENTINEL'), false);
   assert.match(sections['Earlier CV'], /^Jane Candidate\nEngineer\n/);
   assert.equal(sections['Cover letter'], 'Dear team,\n\nI build payment pipelines.');
 });

@@ -1,5 +1,5 @@
 import { fail } from './state.mjs';
-import { ANSWER_OPTIONS, ROLE_FACETS, assertCleanStatement, factKey } from './facts.mjs';
+import { ANSWER_OPTIONS, factKey } from './facts.mjs';
 
 export const QUESTION_KINDS = Object.freeze(['capability', 'language', 'yes_no', 'choice', 'narrative']);
 const LETTERS = 'abcdef';
@@ -12,7 +12,6 @@ export const questionSchema = Object.freeze({
     options: { type: 'array', items: text(160), minItems: 2, maxItems: 6, uniqueItems: true },
     employer: text(120, 0), allowDetail: { type: 'boolean' },
     context: text(600, 0), factId: { type: 'string', format: 'uuid' }, followUp: text(300),
-    roleId: { type: 'string', format: 'uuid' }, facet: { enum: ROLE_FACETS },
   },
   allOf: [{ if: { properties: { kind: { const: 'choice' } } }, then: { required: ['options'] }, else: { not: { required: ['options'] } } }],
 });
@@ -22,21 +21,17 @@ export function prepareQuestions(questions) {
   const prepared = questions.map(question => {
     const options = question.kind === 'choice' ? question.options.map(option => option.trim()) : [...(ANSWER_OPTIONS[question.kind] ?? [])];
     const resolved = { subject: question.subject.trim(), prompt: question.prompt, kind: question.kind, options,
-      ...(question.roleId ? { roleId: question.roleId } : {}), ...(question.facet ? { facet: question.facet } : {}),
       ...(question.employer?.trim() ? { employer: question.employer.trim() } : {}), ...(question.allowDetail ? { allowDetail: true } : {}),
       ...(question.context !== undefined ? { context: question.context } : {}),
       ...(question.factId ? { factId: question.factId } : {}), ...(question.followUp ? { followUp: question.followUp } : {}) };
-    assertCleanStatement(resolved.subject, 'subject');
-    if (resolved.employer) assertCleanStatement(resolved.employer, 'employer');
-    for (const option of options) assertCleanStatement(option, 'option');
     if (new Set(options.map(option => option.toLocaleLowerCase())).size !== options.length) fail('INVALID_INPUT', `Question "${resolved.subject}" repeats an option.`);
     return resolved;
   });
-  if (new Set(prepared.map(factKey)).size !== prepared.length) fail('INVALID_INPUT', 'Ask about each subject and role once per interview.');
+  if (new Set(prepared.map(factKey)).size !== prepared.length) fail('INVALID_INPUT', 'Ask about each subject, employer and context once per interview.');
   return prepared;
 }
 
-/** Optional fields permit partial replies; omitted permission never clears an existing restriction. */
+/** Optional fields permit partial replies without a separate certification step. */
 export function formRequest(title, questions) {
   const properties = {}, required = [];
   for (const question of questions) {
@@ -44,13 +39,11 @@ export function formRequest(title, questions) {
       ? { type: 'string', title: question.prompt, description: 'Answer in your own words; use skip or decline to decline, unknown if you do not know.', minLength: 1, maxLength: 8000 }
       : { type: 'string', title: question.prompt, enum: question.options };
     if (question.stage !== 'detail' && (question.allowDetail || question.kind === 'capability')) properties[`q${question.number}_detail`] = { type: 'string', title: 'What did you do, where, and what changed?', maxLength: 8000 };
-    properties[`q${question.number}_publication`] = { type: 'string', title: 'May this answer appear in a CV or application?', enum: ['allowed', 'prohibited'] };
-    properties[`q${question.number}_restrictedText`] = { type: 'string', title: 'If prohibited, copy exact text from your answer to keep private (one excerpt per line)', maxLength: 8000 };
   }
   return { mode: 'form', message: title || 'A few quick questions', requestedSchema: { type: 'object', properties, required } };
 }
 
-/** Only explicit whole-answer commands resolve a facet without an account of the work. */
+/** Recognize only explicit whole-answer commands; keep all other wording literal. */
 export function answerResolution(answer) {
   if (/^\s*(?:skip|decline)\s*$/i.test(answer)) return 'declined';
   if (/^\s*unknown\s*$/i.test(answer)) return 'unknown';
@@ -59,21 +52,14 @@ export function answerResolution(answer) {
 /** Only explicitly selected options count; anything missing or outside the options stays unanswered. */
 export function formAnswers(content, questions) {
   return questions.flatMap(question => {
-    const answer = content?.[`q${question.number}`], value = content?.[`q${question.number}_publication`], restricted = content?.[`q${question.number}_restrictedText`];
-    if (answer === undefined) {
-      if (value !== undefined || restricted !== undefined) fail('INVALID_INPUT', 'Include the answer with its publication instruction.');
-      return [];
-    }
+    const answer = content?.[`q${question.number}`];
+    if (answer === undefined) return [];
     if (typeof answer !== 'string' || !answer.trim()) fail('INVALID_INPUT', 'Provide a nonempty answer.');
-    if (value !== undefined && !['allowed', 'prohibited'].includes(value)) fail('INVALID_INPUT', 'Choose allowed or prohibited for publication.');
-    if (restricted !== undefined && (typeof restricted !== 'string' || value !== 'prohibited')) fail('INVALID_INPUT', 'Restricted excerpts require prohibited publication.');
-    const publication = value === undefined ? undefined : { value,
-      ...(restricted?.trim() ? { restrictedText: restricted.split(/\r?\n/).filter(text => text.trim()) } : {}) };
-    if (question.stage === 'detail' || question.kind === 'narrative') return [{ number: question.number, answer, resolution: answerResolution(answer), ...(publication ? { publication } : {}) }];
+    if (question.stage === 'detail' || question.kind === 'narrative') return [{ number: question.number, answer, resolution: answerResolution(answer) }];
     if (!question.options.includes(answer)) fail('INVALID_INPUT', 'Choose one of the offered answers.');
     const detail = content[`q${question.number}_detail`];
     if (detail !== undefined && typeof detail !== 'string') fail('INVALID_INPUT', 'The explanation must be text.');
-    return [{ number: question.number, answer, ...(detail?.trim() ? { detail } : {}), ...(publication ? { publication } : {}) }];
+    return [{ number: question.number, answer, ...(detail?.trim() ? { detail } : {}) }];
   });
 }
 

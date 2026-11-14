@@ -49,7 +49,7 @@ function fixture({ fetchImpl = async () => { throw new Error('Unexpected fetch')
       saved.career.revision++;
     });
   };
-  return { store, service, calls, reads, tools, bind, get support() { return ready.support; }, lock() { locked = true; service.cancelAll(); },
+  return { store, service, calls, reads, tools, bind, lock() { locked = true; service.cancelAll(); },
     rotateKey() { key = 'sk-synthetic-replacement-not-a-real-key'; state.prescanCredentialVersion++; },
     alter(change) { change(state); }, state: () => structuredClone(state) };
 }
@@ -86,7 +86,7 @@ test('saved-only preparation skips configured credentials and API mapping while 
   const draft = await f.tools.get('career_form_read').invoke({ formId: first.formId });
   const prose = 'I want to apply my demonstrated data analysis experience to this role.';
   await f.tools.get('career_form_answers_save').invoke({ requestId: randomUUID(), revision: draft.revision,
-    formId: draft.formId, snapshot: draft.snapshot, evidenceRevision: draft.evidenceRevision, answers: [{ id: 'motivation', value: prose, support: f.support }] });
+    formId: draft.formId, snapshot: draft.snapshot, evidenceRevision: draft.evidenceRevision, answers: [{ id: 'motivation', value: prose }] });
   const result = await f.service.prepare({ ...args, requestId: randomUUID(), formId: first.formId });
   assert.deepEqual(result.fields.map(({ id, value }) => ({ id, value })), [
     { id: 'name', value: 'Synthetic Candidate' }, { id: 'motivation', value: prose },
@@ -160,7 +160,7 @@ test('agent reads captured schema and stages long answers with revision receipts
   const read = await f.tools.get('career_form_read').invoke({ formId: first.formId });
   const before = f.state().career;
   const save = { requestId: randomUUID(), revision: read.revision, formId: read.formId, snapshot: read.snapshot, evidenceRevision: read.evidenceRevision,
-    answers: [{ id: 'motivation', value: 'I want to apply my demonstrated data analysis experience.', support: f.support }] };
+    answers: [{ id: 'motivation', value: 'I want to apply my demonstrated data analysis experience.' }] };
   const receipt = await f.tools.get('career_form_answers_save').invoke(save);
   assert.deepEqual(await f.tools.get('career_form_answers_save').invoke(save), receipt);
   assert.equal(receipt.revision, read.revision + 1);
@@ -191,7 +191,7 @@ test('changed evidence drops staged values and re-preparing the exact snapshot r
   await f.bind(first.formId);
   const read = await f.tools.get('career_form_read').invoke({ formId: first.formId });
   await f.tools.get('career_form_answers_save').invoke({ requestId: randomUUID(), revision: read.revision, formId: read.formId, snapshot: read.snapshot,
-    evidenceRevision: read.evidenceRevision, answers: [{ id: 'q', value: 'Original agent answer', support: f.support }] });
+    evidenceRevision: read.evidenceRevision, answers: [{ id: 'q', value: 'Original agent answer' }] });
   f.alter(state => { state.career.profile.headline = 'New direction'; state.career.evidenceRevision++; });
   const result = await f.service.prepare({ ...args, requestId: randomUUID() });
   assert.equal(result.fields.length, 0);
@@ -437,7 +437,7 @@ test('form tools expose read and staging without a browser mutation capability',
   const read = await tools.get('career_form_read').invoke({ formId: prepared.formId });
   assert.deepEqual(read.actions.map(({ id, kind }) => ({ id, kind })), [{ id: 'action-4', kind: 'submit' }, { id: 'action-7', kind: 'next' }]);
   assert.deepEqual(read.browser, { attached: true });
-  await tools.get('career_form_answers_save').invoke({ requestId: randomUUID(), revision: read.revision, formId: read.formId, snapshot: read.snapshot, evidenceRevision: read.evidenceRevision, answers: [{ id: 'why', value: 'Because the role matches my saved experience.', support: f.support }] });
+  await tools.get('career_form_answers_save').invoke({ requestId: randomUUID(), revision: read.revision, formId: read.formId, snapshot: read.snapshot, evidenceRevision: read.evidenceRevision, answers: [{ id: 'why', value: 'Because the role matches my saved experience.' }] });
   assert.equal((await tools.get('career_form_read').invoke({ formId: read.formId })).answers.why.value, 'Because the role matches my saved experience.');
   assert.deepEqual(calls, [['status', read.formId], ['status', read.formId]]);
   // Without Chrome attached, inspection still returns the saved form truthfully.
@@ -491,7 +491,7 @@ test('a newly blocked job cannot replay saved answer receipts', async () => {
   await f.bind(prepared.formId);
   const read = await f.tools.get('career_form_read').invoke({ formId: prepared.formId });
   const save = { requestId: randomUUID(), revision: read.revision, formId: read.formId, snapshot: read.snapshot, evidenceRevision: read.evidenceRevision,
-    answers: [{ id: 'answer', value: 'Known synthetic experience.', support: f.support }] };
+    answers: [{ id: 'answer', value: 'Known synthetic experience.' }] };
   await f.tools.get('career_form_answers_save').invoke(save);
   f.alter(state => blockFormJob(state, prepared.formId));
   const before = f.state();
@@ -504,7 +504,7 @@ test('queued answer receipt replay rechecks a block committed while waiting for 
   await f.bind(prepared.formId);
   const read = await f.tools.get('career_form_read').invoke({ formId: prepared.formId });
   const save = { requestId: randomUUID(), revision: read.revision, formId: read.formId, snapshot: read.snapshot, evidenceRevision: read.evidenceRevision,
-    answers: [{ id: 'answer', value: 'Known synthetic experience.', support: f.support }] };
+    answers: [{ id: 'answer', value: 'Known synthetic experience.' }] };
   await f.tools.get('career_form_answers_save').invoke(save);
   const entered = deferred(), gate = deferred();
   const block = f.store.update(async state => { entered.resolve(); await gate.promise; blockFormJob(state, prepared.formId); });
@@ -920,7 +920,7 @@ test('a new candidate fact retires the master-bound application prose and docume
   await f.bind(first.formId);
   const draft = await f.tools.get('career_form_read').invoke({ formId: first.formId });
   await f.tools.get('career_form_answers_save').invoke({ requestId: randomUUID(), revision: draft.revision,
-    formId: draft.formId, snapshot: draft.snapshot, evidenceRevision: draft.evidenceRevision, answers: [{ id: 'motivation', value: 'Agent-written answer.', support: f.support }] });
+    formId: draft.formId, snapshot: draft.snapshot, evidenceRevision: draft.evidenceRevision, answers: [{ id: 'motivation', value: 'Agent-written answer.' }] });
   await f.store.update(state => {
     const app = Object.values(state.career.applications)[0];
     app.cv = { version: 1, contextFingerprint: applicationContextFingerprint(state.career, app) };

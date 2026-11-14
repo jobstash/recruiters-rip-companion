@@ -6,7 +6,7 @@ import { factKey, normalizeFact } from './mcp/facts.mjs';
 import { upsertFacts } from './mcp/profile-tools.mjs';
 import { contactCandidates } from './form-contact-candidates.mjs';
 import { applicationContextFingerprint, isApplicationWritingField, pendingApplicationInterviews, reusableApplicationAnswer } from './application-workflow.mjs';
-import { assertPublishableText, masterCvState } from './mcp/master-cv.mjs';
+import { masterCvState } from './mcp/master-cv.mjs';
 import { assertJobNotBlocked } from './mcp/blocklist.mjs';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -139,7 +139,7 @@ function topicValue(field, career) {
     const saved = career.profile?.preferences?.[topic.preference];
     return typeof saved === 'boolean' ? chosen(field, saved ? 'Yes' : 'No', `profile.preferences.${topic.preference}`) : null;
   }
-  const fact = Object.values(career.facts ?? {}).find(fact => !fact.employer && !fact.roleId && !fact.applicationId && fact.publication !== 'prohibited' && factKey(fact) === factKey({ subject: topic.subject }));
+  const fact = Object.values(career.facts ?? {}).find(fact => !fact.employer && !fact.applicationId && fact.publication !== 'prohibited' && factKey(fact) === factKey({ subject: topic.subject }));
   const saved = fact && chosen(field, fact.answer, `fact:${fact.id}`);
   if (saved || !topic.referral) return saved;
   const value = referralDefault(field);
@@ -163,7 +163,7 @@ function knownBank(career) {
   for (const value of career.profile?.roleCapabilities ?? []) add('Demonstrated role capability', value, 'profile.roleCapabilities');
   for (const fact of Object.values(career.facts ?? {})) {
     // Without a verified destination/application binding, scoped evidence cannot become a global answer.
-    if (fact.employer || fact.roleId || fact.applicationId || fact.publication === 'prohibited') continue;
+    if (fact.employer || fact.applicationId || fact.publication === 'prohibited') continue;
     const qualifiers = Object.fromEntries(['question', 'context', 'detail'].filter(key => fact[key] !== undefined).map(key => [key, structuredClone(fact[key])]));
     add(fact.subject, fact.answer, `fact:${fact.id}`, qualifiers);
     if (fact.detail) add(`${fact.subject}: detail`, fact.detail, `fact:${fact.id}`, qualifiers);
@@ -304,13 +304,6 @@ export function createBrowserForms({ store, credentials, assertAvailable, fetchI
       }
       for (const field of nameFields) if (reasons.get(field.id) === 'The name parts are ambiguous. Enter them explicitly.') values.delete(field.id);
       for (const answer of values.values()) delete answer.candidateKind;
-      for (const [id, answer] of values) {
-        try { assertPublishableText(career, answer.value, 'Application answer'); }
-        catch (error) {
-          if (error.code !== 'PUBLICATION_RESTRICTED') throw error;
-          values.delete(id); reasons.set(id, 'This answer contains information marked private. Ask for publication-safe wording.');
-        }
-      }
       current(run);
       // A default referral answer stays replaceable by the user's own answer.
       const missing = snapshot.fields.filter(field => (!values.has(field.id) || values.get(field.id).source === 'default') && answerTarget(field)).map(field => field.id);

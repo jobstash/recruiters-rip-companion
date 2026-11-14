@@ -20,6 +20,9 @@ import { assertMasterReady } from '../src/mcp/master-cv.mjs';
 // tests exercise the real layout, PDF rendering and PDF text read-back.
 const documents = createRequire(import.meta.url)('../src/generated/document-engine.cjs');
 const { PDFParse } = createRequire(import.meta.url)('pdf-parse');
+// Windows exercises actual PowerShell-backed ACL checks for these files.
+// Bound the test without mistaking native filesystem overhead for a latency requirement.
+const nativeIoTimeout = process.platform === 'win32' ? 300_000 : 30_000;
 const digest = value => createHash('sha256').update(value).digest('hex');
 const pastedJob = { title: 'Senior Platform Engineer', company: 'Example Employer', description: 'Build reliable data services for our payments platform. 5+ years required.', url: 'https://example.test/jobs/1', location: 'London' };
 const cvText = 'Jane Candidate\nAcme Corp. | Platform Engineer | London | Mar 2019 – Present\n- Built event-driven data services in TypeScript and Kafka.\n- Cut deployment time from 40 minutes to 8 minutes.\n- Automated releases and owned on-call reliability for payment pipelines.\n- Progressed from individual delivery to platform ownership.\n- Traced a difficult failed deployment to its dependency and restored production service.\n\nGlobex | Backend Developer | 2015 – 2019\n- Developed retail backend systems.\n- Reduced duplicate order handling through a shared service.\n- Grew from assigned fixes to independent service delivery.\n- Resolved a difficult retail outage by tracing duplicate events and restoring processing.\n\nUniversity of Synthetic Studies — BSc Computing\nItalian — Native';
@@ -580,7 +583,7 @@ test('full HTML advert text and plain tailored wording retain original whitespac
 });
 
 
-test('six applications save both drafts and export real PDFs concurrently despite unrelated writes', { timeout: 30000 }, async t => {
+test('six applications save both drafts and export real PDFs concurrently despite unrelated writes', { timeout: nativeIoTimeout }, async t => {
   const saving = pauseAt(6), exporting = pauseAt(6);
   t.after(() => { saving.release(); exporting.release(); });
   const f = await fixture(t, { documents: { ...documents,
@@ -641,7 +644,7 @@ test('six applications save both drafts and export real PDFs concurrently despit
 });
 
 for (const kind of ['cv', 'cover_letter']) {
-  test(`overlapping ${kind} saves preserve the winner instead of replacing it`, { timeout: 15000 }, async t => {
+  test(`overlapping ${kind} saves preserve the winner instead of replacing it`, { timeout: nativeIoTimeout }, async t => {
     const paused = pauseAt(kind === 'cv' ? 2 : 1);
     t.after(paused.release);
     const f = await fixture(t, { documents: { ...documents,
@@ -671,7 +674,7 @@ for (const kind of ['cv', 'cover_letter']) {
     assert.deepEqual(kind === 'cv' ? app.cvHistory : app.coverLetterHistory, []);
   });
 
-  test(`a replaced ${kind} draft cannot export after rendering or while waiting for the file lock`, { timeout: 15000 }, async t => {
+  test(`a replaced ${kind} draft cannot export after rendering or while waiting for the file lock`, { timeout: nativeIoTimeout }, async t => {
     const rendered = pauseAt();
     t.after(rendered.release);
     const f = await fixture(t, { documents: { ...documents,
@@ -724,7 +727,7 @@ const contextChanges = [
   }), 'MASTER_NOT_READY'],
 ];
 for (const [label, change, code] of contextChanges) {
-  test(`${label} changes reject a rendered CV save and PDF export without writing stale files`, { timeout: 15000 }, async t => {
+  test(`${label} changes reject a rendered CV save and PDF export without writing stale files`, { timeout: nativeIoTimeout }, async t => {
     for (const operation of ['save', 'export']) await t.test(operation, async t => {
       const paused = pauseAt();
       t.after(paused.release);

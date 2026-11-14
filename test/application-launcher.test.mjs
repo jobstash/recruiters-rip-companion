@@ -272,7 +272,7 @@ for (const host of ['claude', 'codex']) test(`${host} concurrent CLI launches ex
     const { cwd } = options;
     assert.equal(path.dirname(cwd), workspaces);
     const recorded = JSON.parse(await readFile(path.join(cwd, 'scratch.json'), 'utf8'));
-    assert.equal(recorded.cwd, await realpath(cwd));
+    assert.equal(await realpath(recorded.cwd), await realpath(cwd));
     const prompt = recorded.args.at(-1);
     assert.deepEqual(recorded.args, [...(host === 'codex' ? ['--cd', cwd] : []), '--', prompt]);
     const id = [preparationId, anotherId].find(id => prompt.includes(id));

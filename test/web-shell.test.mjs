@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { renameSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
@@ -375,6 +376,24 @@ test('file offers recheck after reading bytes and private backup links survive r
   assert.equal(response.status, 409);
   assert.equal((await response.text()).includes('%PDF-'), false);
   assert.equal(checks, 3);
+});
+
+test('file delivery reads the validated descriptor when the pathname is replaced', async t => {
+  const f = await harness(t);
+  const file = path.join(f.directory, 'selected.pdf'), original = '%PDF-original-reviewed';
+  await writeFile(file, original);
+  let downloading = false, checks = 0;
+  const url = await f.api.webHost.fileUrl(file, { assertCurrent: () => {
+    if (downloading && ++checks === 2) {
+      renameSync(file, `${file}.old`);
+      writeFileSync(file, '%PDF-replacement-not-reviewed');
+    }
+  } });
+  downloading = true;
+  const response = await fetch(url);
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), original);
+  assert.equal(await readFile(file, 'utf8'), '%PDF-replacement-not-reviewed');
 });
 
 test('master delivery survives same-client SSE reconnect and new-page exports without crossing browser sessions', { timeout: 10000 }, async t => {

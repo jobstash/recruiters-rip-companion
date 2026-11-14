@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import Ajv from 'ajv';
 import addFormats from 'ajv-formats';
 import { PROGRESS_STAGES, applicationProgress, changeProgress } from '../application-progress.mjs';
@@ -114,15 +113,28 @@ export function createApplicationTools({ store, platform, documents, exportDocum
   const save = async (name, args, change) => {
     // Receipt replay must obey today's blocks, not the policy when the receipt was saved.
     guard(args);
-    if (['career_application_cv_save', 'career_application_letter_save'].includes(name)) {
-      const career = readCareer(store);
-      assertTailoringContext(career, application(career, args.applicationId), args);
-    }
     return guard(args, await mutateCareer(store, args, name, args, change));
   };
   const mutate = (name, description, properties, required, change) => add(name, description,
     object({ ...mutationSchema, ...properties }, ['requestId', 'revision', ...required]), false,
     args => save(name, args, career => change(career, args)));
+  const commitDocument = async (before, app, kind, change) => {
+    const fingerprint = applicationContextFingerprint(before, app), masterVersion = assertMasterReady(before).version;
+    const version = (kind === 'cv' ? app.cv : app.coverLetter)?.version ?? 0;
+    let result;
+    await store.update(async state => {
+      const career = state.career, target = application(career, app.id);
+      const master = assertMasterReady(career);
+      if (master.version !== masterVersion || applicationContextFingerprint(career, target) !== fingerprint)
+        fail('APPLICATION_CONTEXT_CHANGED', 'The master, career details or job changed while preparing this document. Read career_application_context and prepare it from the current context.');
+      if (((kind === 'cv' ? target.cv : target.coverLetter)?.version ?? 0) !== version)
+        fail('VERSION_CONFLICT', 'This document changed while it was being prepared. Read career_application_read and preserve the newer draft before saving or exporting again.');
+      const data = await change(career, target);
+      career.revision++;
+      result = structuredClone({ ...data, revision: career.revision });
+    });
+    return guard({ applicationId: app.id }, result);
+  };
 
   add('career_job_read', 'Read an unblocked complete catalogue job or local capture (including listing text marked complete:false).', object({ id: text(100) }), true, async args => {
     assertJobNotBlocked(readCareer(store), args.id);
@@ -188,7 +200,6 @@ export function createApplicationTools({ store, platform, documents, exportDocum
       guard(args);
       const career = readCareer(store), app = application(career, args.applicationId);
       const master = assertTailoringContext(career, app, args);
-      const mutation = { ...args, requestId: randomUUID(), revision: career.revision };
       if (!validCv(args.cv)) fail('INVALID_INPUT', 'Use the plain structured CV schema.');
       // Gap entries come from the current master and candidate settings, not tailored omissions.
       const { careerGaps: _gaps, ...authored } = args.cv;
@@ -200,9 +211,7 @@ export function createApplicationTools({ store, platform, documents, exportDocum
       const layout = await documents.measureCareerCvLayout({ document, heading, presentation });
       const issues = inspectCvQuality({ document, heading }).map(issue => `${issue.field}: ${issue.message}`);
       if (!layout.fits) issues.unshift(`layout: ${layout.error}`);
-      return save('career_application_cv_save', mutation, current => {
-        const target = application(current, app.id);
-        const master = assertTailoringContext(current, target, args);
+      return commitDocument(career, app, 'cv', (current, target) => {
         const draft = { version: (target.cv?.version ?? 0) + 1, document: structuredClone(stored), presentation: structuredClone(presentation),
           masterVersion: master.version,
           contextFingerprint: applicationContextFingerprint(current, target), createdAt: now() };
@@ -213,31 +222,27 @@ export function createApplicationTools({ store, platform, documents, exportDocum
       });
     });
   add('career_application_letter_save', 'Save plain cover-letter paragraphs tailored from the current ready master. Supply applicationId, masterVersion and paragraphs.',
-    object({ ...tailoringBinding, applicationId: uuid, paragraphs: strings(12, 1500, 2) }), false, args => {
-      const current = readCareer(store);
-      return save('career_application_letter_save', { ...args, requestId: randomUUID(), revision: current.revision }, career => {
-        const app = application(career, args.applicationId), master = assertTailoringContext(career, app, args);
-        if (!validParagraphs(args.paragraphs)) fail('INVALID_INPUT', 'Supply bounded letter paragraphs.');
-        const letter = { version: (app.coverLetter?.version ?? 0) + 1, paragraphs: structuredClone(args.paragraphs),
-          masterVersion: master.version, contextFingerprint: applicationContextFingerprint(career, app), createdAt: now() };
-        if (app.coverLetter) app.coverLetterHistory.push(app.coverLetter);
-        app.coverLetter = letter;
-        app.updatedAt = now();
-        return { applicationId: app.id, letterVersion: letter.version };
+    object({ ...tailoringBinding, applicationId: uuid, paragraphs: strings(12, 1500, 2) }), false, async args => {
+      const career = readCareer(store), app = application(career, args.applicationId);
+      const master = assertTailoringContext(career, app, args);
+      if (!validParagraphs(args.paragraphs)) fail('INVALID_INPUT', 'Supply bounded letter paragraphs.');
+      return commitDocument(career, app, 'cover_letter', (current, target) => {
+        const letter = { version: (target.coverLetter?.version ?? 0) + 1, paragraphs: structuredClone(args.paragraphs),
+          masterVersion: master.version, contextFingerprint: applicationContextFingerprint(current, target), createdAt: now() };
+        if (target.coverLetter) target.coverLetterHistory.push(target.coverLetter);
+        target.coverLetter = letter;
+        target.updatedAt = now();
+        return { applicationId: target.id, letterVersion: letter.version };
       });
     });
 
-  add('career_application_export', 'Export the current CV or cover letter as PDF (default) or TXT. PDF text is read back and checked before the file is written.',
-    object({ ...mutationSchema, applicationId: uuid, kind: { enum: ['cv', 'cover_letter'] }, format: { enum: ['pdf', 'txt'] } }, ['requestId', 'revision', 'applicationId', 'kind']), false, async args => {
+  add('career_application_export', 'Export the current CV or cover letter as PDF (default) or TXT. Supply applicationId, kind and optional format; no requestId or revision lookup. PDF text is read back and checked before the file is written.',
+    object({ applicationId: uuid, kind: { enum: ['cv', 'cover_letter'] }, format: { enum: ['pdf', 'txt'] } }, ['applicationId', 'kind']), false, async args => {
       guard(args);
       const career = readCareer(store), app = application(career, args.applicationId);
       const master = assertMasterReady(career);
       assertApplicationClarificationsResolved(career, app.id);
       const draft = args.kind === 'cv' ? app.cv : app.coverLetter;
-      const replay = replayCareer(store, args, 'career_application_export', args);
-      if (replay && replay.export?.masterVersion === master.version &&
-          replay.export.contextFingerprint === applicationContextFingerprint(career, app) && replay.export.documentVersion === draft?.version) return replay;
-      if (replay) fail('APPLICATION_CONTEXT_CHANGED', 'This export receipt belongs to an earlier document or master. Export the current draft with a new requestId.');
       if (!draft) fail('MISSING_DRAFT', `Save the ${args.kind === 'cv' ? 'CV' : 'cover letter'} before exporting it.`);
       if (draft.masterVersion !== master.version || draft.contextFingerprint !== applicationContextFingerprint(career, app))
         fail('APPLICATION_CONTEXT_CHANGED', 'The job or career evidence changed, or this draft has no job binding. Read career_application_context, rewrite and save a current draft, then export again; no need to ask the candidate.');
@@ -263,11 +268,9 @@ export function createApplicationTools({ store, platform, documents, exportDocum
         catch { fail('EXPORT_CORRUPT', 'The generated PDF could not be read back. The draft is saved; fix the document rendering before exporting again.'); }
         if (!textValidation.passed) fail('EXPORT_CORRUPT', `The generated PDF did not preserve its text and reading order. Missing text: ${textValidation.missingTokens.slice(0, 12).join(', ') || 'none; reading order or extra text differs'}.`);
       }
-      // A concurrent change bumps the revision, so the rendered draft is still current here.
-      const result = await withExportTransaction(() => save('career_application_export', args, async current => {
-        const target = application(current, app.id);
-        assertMasterReady(current);
-        if (applicationContextFingerprint(current, target) !== draft.contextFingerprint) fail('APPLICATION_CONTEXT_CHANGED', 'The master or application changed while rendering.');
+      // Render outside both locks; keep file transaction → store queue ordering for commit/rollback.
+      const result = await withExportTransaction(() => commitDocument(career, app, args.kind, async (current, target) => {
+        assertApplicationClarificationsResolved(current, target.id);
         const exported = await exportDocument({ applicationId: app.id, kind: args.kind, documentVersion: draft.version, bytes,
           mediaType: format === 'pdf' ? 'application/pdf' : 'text/plain' });
         const record = { ...exported, kind: args.kind, format, documentVersion: draft.version,

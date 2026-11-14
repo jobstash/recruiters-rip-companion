@@ -172,7 +172,7 @@ async function fixture(t) {
     set: setting => store.update(saved => { setCareerGap(saved.career, setting); }),
     refresh: () => readyMaster(store),
     saveCv: (cv = cvArgs().cv) => call('application_cv_save', { ...cvArgs(), cv }),
-    exportCv: async format => { const { export: record } = await call('application_export', mutation({ applicationId, kind: 'cv', format })); return record; } };
+    exportCv: async format => { const { export: record } = await call('application_export', { applicationId, kind: 'cv', format }); return record; } };
 }
 
 test('disabled gaps stay absent in immutable master tailoring and TXT export', async t => {

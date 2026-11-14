@@ -44,6 +44,6 @@ export async function readyApplication({ store, documents, exportDocument, forma
   await call('career_application_cv_save', payloads.cv);
   await call('career_application_letter_save', payloads.letter);
   const exports = [];
-  for (const kind of ['cv', 'cover_letter']) exports.push(await call('career_application_export', mutation({ applicationId, kind, format })));
+  for (const kind of ['cv', 'cover_letter']) exports.push(await call('career_application_export', { applicationId, kind, format }));
   return { applicationId, context, payloads, exports, call, mutation };
 }

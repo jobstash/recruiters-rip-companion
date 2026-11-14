@@ -1,7 +1,7 @@
 import { createCareerState, fail, hash, mutateCareer, mutationSchema, readCareer } from './state.mjs';
 import { applicationContextFingerprint, applicationQuestionKey, isApplicationWritingField } from '../application-workflow.mjs';
 import { assertJobNotBlocked } from './blocklist.mjs';
-import { keepGenericAnswer } from '../browser-forms.mjs';
+import { assertMasterReady, assertSupport, supportSchema, masterEvidenceFingerprint, masterCvState, cvReviewState } from './master-cv.mjs';
 
 const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const text = (value, max) => typeof value === 'string' && value.length <= max && Boolean(value.trim());
@@ -51,7 +51,8 @@ export function validateFormSnapshot(args) {
   return snapshot;
 }
 export const formFingerprint = snapshot => hash(snapshot);
-export const formEvidence = career => hash({ evidenceRevision: career.evidenceRevision ?? 0, profile: career.profile ?? {}, facts: career.facts ?? {}, sources: career.sources ?? {} });
+export const formEvidence = career => hash({ master: masterCvState(career).master, review: cvReviewState(career), reviewCheckpoint: career.cvReview ?? null,
+  masterEvidence: masterEvidenceFingerprint(career), evidenceRevision: career.evidenceRevision ?? 0, profile: career.profile ?? {}, facts: career.facts ?? {}, sources: career.sources ?? {} });
 export function validFormValue(field, value) {
   if (!text(value, Math.min(10000, field.maxLength ?? 10000)) || unavailableField(field)) return false;
   if (['select', 'radio'].includes(field.type)) return field.options.some(option => option.value === value && value !== '');
@@ -109,16 +110,17 @@ export function createFormTools({ store, browser = null }) {
     },
   }, {
     name: 'career_form_answers_save', readOnly: false,
-    description: 'Stage agent-authored answers for a captured form with its snapshot and evidenceRevision: written answers and, for choice fields, an option\'s exact value. Use only known candidate evidence; unknowns stay unanswered. Protected, populated or unsupported controls cannot be staged. A generic answer (notice period, languages, GitHub, portfolio, compensation) is also kept as the reusable fact the user\'s own answer would be, unless one is saved; no other profile/fact changes, page fill or submission.',
+    description: 'Stage agent-authored answers for a captured form with its snapshot and evidenceRevision. Job-specific prose requires a current ready master, exact application binding and explicit source/fact support. Unknowns stay unanswered; protected and populated controls cannot be staged. Does not create candidate facts, fill or submit a page.',
     inputSchema: object({ ...mutationSchema, formId: string(100), snapshot: string(64), evidenceRevision: { type: 'integer', minimum: 0 },
-      answers: { type: 'array', minItems: 1, maxItems: 64, items: object({ id: string(200), value: string(10000) }) } }),
+      answers: { type: 'array', minItems: 1, maxItems: 64, items: object({ id: string(200), value: string(10000), support: supportSchema }, ['id', 'value']) } }),
     async invoke(args) {
       if (!record(args) || Object.keys(args).some(key => !['requestId', 'revision', 'formId', 'snapshot', 'evidenceRevision', 'answers'].includes(key)) ||
           !text(args.formId, 100) || !text(args.snapshot, 64) || !Number.isSafeInteger(args.evidenceRevision) || args.evidenceRevision < 0 ||
           !Array.isArray(args.answers) || args.answers.length < 1 || args.answers.length > 64 ||
-          args.answers.some(answer => !record(answer) || Object.keys(answer).some(key => !['id', 'value'].includes(key)) || !text(answer.id, 200) || !text(answer.value, 10000)) ||
+          args.answers.some(answer => !record(answer) || Object.keys(answer).some(key => !['id', 'value', 'support'].includes(key)) || !text(answer.id, 200) || !text(answer.value, 10000)) ||
           new Set(args.answers.map(answer => answer.id)).size !== args.answers.length) fail('INVALID_INPUT', 'Provide unique field answers and the current form snapshot and evidenceRevision.');
       const career = readCareer(store);
+      if (args.answers.some(answer => isApplicationWritingField(career.formDrafts?.[args.formId]?.fields.find(field => field.id === answer.id) ?? { label: '', empty: false }))) assertMasterReady(career);
       assertFormNotBlocked(career, career.formDrafts?.[args.formId]);
       const result = await mutateCareer(store, args, 'career_form_answers_save', args, career => {
         const draft = currentForm(career, args.formId);
@@ -126,17 +128,19 @@ export function createFormTools({ store, browser = null }) {
         for (const answer of args.answers) {
           const field = draft.fields.find(field => field.id === answer.id);
           if (!field || !validFormValue(field, answer.value)) fail('INVALID_INPUT', 'An answer targets an unavailable field or is not one of its actual options.');
-          if (isApplicationWritingField(field) && !draft.applicationId) fail('APPLICATION_REQUIRED', 'Create and bind the exact application before saving job-specific writing.');
+          if (isApplicationWritingField(field)) {
+            assertMasterReady(career);
+            if (!draft.applicationId) fail('APPLICATION_REQUIRED', 'Create and bind the exact application before saving job-specific writing.');
+            assertSupport(career, answer.support, { text: answer.value, field: field.label });
+          }
         }
-        // Before binding answers: a new generic fact rebinds the current application context.
-        for (const answer of args.answers) keepGenericAnswer(career, draft.fields.find(field => field.id === answer.id), answer.value);
         for (const answer of args.answers) {
-          Object.defineProperty(draft.answers, answer.id, { value: { value: answer.value, source: 'agent' }, writable: true, enumerable: true, configurable: true });
+          Object.defineProperty(draft.answers, answer.id, { value: { value: answer.value, source: 'agent', ...(answer.support ? { support: structuredClone(answer.support) } : {}) }, writable: true, enumerable: true, configurable: true });
           const app = career.applications?.[draft.applicationId];
           if (app) {
             app.formAnswers ??= {};
             const field = draft.fields.find(field => field.id === answer.id);
-            app.formAnswers[applicationQuestionKey(field)] = { value: answer.value, source: 'agent',
+            app.formAnswers[applicationQuestionKey(field)] = { value: answer.value, source: 'agent', ...(answer.support ? { support: structuredClone(answer.support) } : {}),
               contextFingerprint: applicationContextFingerprint(career, app), updatedAt: new Date().toISOString() };
           }
         }

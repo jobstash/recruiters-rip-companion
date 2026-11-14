@@ -5,8 +5,13 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { request as httpRequest } from 'node:http';
+import { createHash } from 'node:crypto';
 import { createWebShell } from '../src/web-shell.mjs';
 import { startPairingReturn } from '../src/pairing-return.mjs';
+import { createVault } from '../src/vault.mjs';
+import { hash } from '../src/mcp/state.mjs';
+import { applicationContextFingerprint, currentApplicationExport } from '../src/application-workflow.mjs';
+import { readyMaster } from './helpers/ready-master.mjs';
 
 // A started web shell with a stand-in for the main process: `operations[op]` answers the settings bridge.
 async function harness(t, { data, operations = {} } = {}) {
@@ -26,8 +31,11 @@ async function harness(t, { data, operations = {} } = {}) {
   await api.app.whenReady();
   t.after(() => api.webHost.close());
   const origin = api.webHost.origin, token = new URL(api.webHost.accessUrl()).hash.slice('#access='.length);
-  const request = (route, { cookie, body, headers = {}, method = body === undefined ? 'GET' : 'POST' } = {}) => fetch(`${origin}${route}`, { method, redirect: 'manual',
-    headers: { ...(method === 'POST' ? { Origin: origin } : {}), ...(cookie ? { Cookie: cookie } : {}), ...(body !== undefined && !headers['Content-Type'] ? { 'Content-Type': 'application/json' } : {}), ...headers },
+  let activeClient;
+  const request = (route, { cookie, body, headers = {}, signal, method = body === undefined ? 'GET' : 'POST' } = {}) => fetch(`${origin}${route}`, { method, redirect: 'manual', signal,
+    headers: { ...(method === 'POST' ? { Origin: origin } : {}), ...(cookie ? { Cookie: cookie } : {}),
+      ...(activeClient && /^\/(?:files\/|api\/(?:dialog|downloads)\/)/.test(route) ? { 'X-Companion-Client': activeClient } : {}),
+      ...(body !== undefined && !headers['Content-Type'] ? { 'Content-Type': 'application/json' } : {}), ...headers },
     body: body === undefined ? undefined : typeof body === 'string' || body instanceof Uint8Array ? body : JSON.stringify(body) });
   async function signIn() {
     const response = await request('/api/session', { body: { token } });
@@ -40,6 +48,7 @@ async function harness(t, { data, operations = {} } = {}) {
     t.after(() => controller.abort());
     const response = await fetch(`${origin}/api/events?client=${client}`, { headers: { Cookie: cookie }, signal: controller.signal });
     assert.equal(response.status, 200);
+    activeClient = client;
     const reader = response.body.getReader(), decoder = new TextDecoder(), queue = [];
     let buffer = '', waiting;
     void (async () => {
@@ -171,8 +180,9 @@ test('saved and opened files reach the browser as short-lived links; links, text
   assert.deepEqual(await page.invoke('backup'), { ok: true, result: { exported: true } });
   const saved = await page.next('open-file');
   assert.deepEqual({ name: saved.name, download: saved.download }, { name: 'recruiters-backup.json', download: true });
-  // The link is its own key: the browser extension may open it from a browser that never signed in.
-  const download = await f.request(saved.url);
+  // Backups are private to the browser session that requested them.
+  assert.equal((await f.request(saved.url)).status, 401);
+  const download = await f.request(saved.url, { cookie });
   assert.equal(download.headers.get('content-disposition'), "attachment; filename*=UTF-8''recruiters-backup.json");
   assert.equal(await download.text(), '{"synthetic":true}');
 
@@ -234,4 +244,187 @@ test('the account-connection return is served on the web shell’s own port and 
   assert.deepEqual(pairs, [{ synthetic: true }]);
   connection.close();
   assert.equal((await fetch(connection.companionReturn)).status, 404);
+});
+
+test('master bytes download only while the captured browser session and ready snapshot remain current', { timeout: 10000 }, async t => {
+  let f, current = true;
+  const bytes = Buffer.from('Synthetic master CV\n');
+  f = await harness(t, { operations: {
+    'master-cv-export': async () => {
+      await f.api.webHost.publishDownload(bytes, { name: 'Master CV.txt',
+        assertCurrent: () => { if (!current) throw Object.assign(new Error('Changed'), { code: 'REVISION_CONFLICT' }); } });
+      return { exported: true, filename: 'Master CV.txt' };
+    },
+  } });
+  const cookie = await f.signIn(), page = await f.tab(cookie);
+  let settled = false;
+  const exporting = page.invoke('master-cv-export').then(result => { settled = true; return result; });
+  const download = await page.next('open-file');
+  assert.equal(download.download, true);
+  assert.equal(settled, false, 'An SSE offer is not a completed export');
+  assert.equal((await f.request(`/api/downloads/${download.receipt}`, { cookie, body: { received: true } })).status, 409, 'Acknowledgement without receiving bytes is insufficient');
+  assert.equal((await f.request(download.url)).status, 401, 'Master downloads require a signed-in browser, not just a leaked link');
+  const response = await f.request(download.url, { cookie });
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), bytes.toString());
+  assert.match(response.headers.get('content-disposition'), /^attachment;/);
+  assert.equal(settled, false, 'Server delivery still waits for the browser to consume the response');
+  await f.request(`/api/downloads/${download.receipt}`, { cookie, body: { received: true } });
+  assert.deepEqual(await exporting, { ok: true, result: { exported: true, filename: 'Master CV.txt' } });
+  const staleExport = page.invoke('master-cv-export');
+  const stale = await page.next('open-file');
+  current = false;
+  assert.equal((await f.request(stale.url, { cookie })).status, 409, 'An issued link cannot outlive its ready master');
+  assert.equal((await staleExport).ok, false);
+  assert.equal((await f.request(stale.url, { cookie })).status, 404);
+});
+
+test('master download confirmation cancellation publishes no bytes and no browserless success', { timeout: 10000 }, async t => {
+  let f, published = 0;
+  f = await harness(t, { operations: {
+    'master-cv-export': async () => {
+      const assertAccess = f.api.webHost.captureAccess();
+      assertAccess();
+      const choice = await f.api.dialog.showMessageBox(null, { message: 'Download Master CV.pdf?', buttons: ['Cancel', 'Download'], cancelId: 0 });
+      assertAccess();
+      if (choice.response !== 1) return { exported: false };
+      await f.api.webHost.publishDownload(Buffer.from('%PDF-synthetic'), { name: 'Master CV.pdf', assertCurrent: assertAccess });
+      published++;
+      return { exported: true, filename: 'Master CV.pdf' };
+    },
+  } });
+  const cookie = await f.signIn();
+  const noTab = await f.request('/api/invoke', { cookie, body: { op: 'master-cv-export' } });
+  assert.equal((await noTab.json()).ok, false);
+  const page = await f.tab(cookie), exporting = page.invoke('master-cv-export');
+  const dialog = await page.next('dialog');
+  await f.request(`/api/dialog/${dialog.id}/cancel`, { cookie, method: 'POST' });
+  assert.deepEqual(await exporting, { ok: true, result: { exported: false } });
+  assert.equal(published, 0);
+});
+
+test('file-backed application offers recheck source, master, draft and identity while retaining native cross-browser access', { timeout: 10000 }, async t => {
+  const f = await harness(t);
+  const store = createVault(path.join(f.directory, 'synthetic-vault')); await store.open();
+  await readyMaster(store);
+  const filename = path.join(f.directory, 'Application.pdf'), bytes = Buffer.from('%PDF-synthetic-current-application');
+  await writeFile(filename, bytes);
+  const applicationId = crypto.randomUUID();
+  await store.update(state => {
+    const career = state.career, version = career.masterCv.current.version;
+    const app = { id: applicationId, job: { id: 'synthetic-job', title: 'Engineer', company: 'Synthetic Employer', description: 'Build reliable services.', complete: true },
+      cv: { version: 1, masterVersion: version }, coverLetter: null, exports: [] };
+    career.applications[applicationId] = app;
+    app.cv.contextFingerprint = applicationContextFingerprint(career, app);
+    app.exports.push({ uri: `recruiters://documents/${crypto.randomUUID()}.pdf`, applicationId, kind: 'cv', format: 'pdf',
+      sha256: createHash('sha256').update(bytes).digest('hex'), documentVersion: 1, masterVersion: version,
+      contextFingerprint: app.cv.contextFingerprint, textValidation: { passed: true } });
+  });
+  const baseline = store.get().career;
+  let epoch = 0;
+  for (const change of ['source', 'master', 'draft', 'identity', 'bytes']) {
+    await store.update(state => { state.career = structuredClone(baseline); });
+    await writeFile(filename, bytes);
+    const expected = currentApplicationExport(store.get().career, store.get().career.applications[applicationId], 'cv'), generation = epoch;
+    const url = await f.api.webHost.fileUrl(filename, { sha256: expected.sha256, assertCurrent: () => {
+      const career = store.get().career;
+      if (generation !== epoch || hash(currentApplicationExport(career, career.applications[applicationId], 'cv')) !== hash(expected)) throw new Error('Stale application');
+    } });
+    assert.equal((await fetch(url)).status, 200, 'Native-extension capability links work in a browser that has not signed in');
+    if (change === 'identity') epoch++;
+    else if (change === 'bytes') await writeFile(filename, '%PDF-other-application');
+    else await store.update(state => {
+      if (change === 'source') Object.values(state.career.sources)[0].text += '\nNew source evidence';
+      else if (change === 'master') state.career.masterCv.current.version++;
+      else state.career.applications[applicationId].cv.version++;
+    });
+    const stale = await fetch(url);
+    assert.equal(stale.status, 409, change);
+    assert.equal((await stale.text()).includes('%PDF-'), false);
+  }
+});
+
+test('file offers recheck after reading bytes and private backup links survive reconnect but not identity changes', { timeout: 10000 }, async t => {
+  let f, epoch = 0;
+  f = await harness(t, { operations: { backup: async () => {
+    const generation = epoch;
+    const selected = await f.api.dialog.showSaveDialog(null, { defaultPath: path.join(f.directory, 'private-backup.json'),
+      assertCurrent: () => { if (generation !== epoch) throw new Error('Profile restored'); } });
+    await writeFile(selected.filePath, '{"synthetic":true}');
+    return { exported: true };
+  } } });
+  const cookie = await f.signIn(), page = await f.tab(cookie);
+  await page.invoke('backup');
+  const first = await page.next('open-file');
+  assert.equal((await f.request(first.url, { cookie })).status, 200);
+  epoch++;
+  assert.equal((await f.request(first.url, { cookie })).status, 409);
+  await page.invoke('backup');
+  const second = await page.next('open-file');
+  await f.tab(cookie, page.client);
+  assert.equal((await f.request(second.url, { cookie })).status, 200, 'A same-client authenticated reconnect retains the session');
+  const otherCookie = await f.signIn();
+  assert.equal((await f.request(second.url, { cookie: otherCookie })).status, 401, 'Another authorized session cannot consume a private backup');
+  let checks = 0, downloading = false;
+  const file = path.join(f.directory, 'guarded.pdf'); await writeFile(file, '%PDF-synthetic');
+  const url = await f.api.webHost.fileUrl(file, { assertCurrent: () => {
+    if (downloading && ++checks === 3) throw new Error('Changed during async read');
+  } });
+  downloading = true;
+  const response = await fetch(url);
+  assert.equal(response.status, 409);
+  assert.equal((await response.text()).includes('%PDF-'), false);
+  assert.equal(checks, 3);
+});
+
+test('master delivery survives same-client SSE reconnect and new-page exports without crossing browser sessions', { timeout: 10000 }, async t => {
+  let f;
+  f = await harness(t, { operations: { 'master-cv-export': async () => {
+    await f.api.webHost.publishDownload(Buffer.from('%PDF-synthetic'), { name: 'Master CV.pdf', assertCurrent: () => {} });
+    return { exported: true };
+  } } });
+  const cookie = await f.signIn(), page = await f.tab(cookie);
+  const pending = page.invoke('master-cv-export'), offer = await page.next('open-file');
+  const reconnected = await f.tab(cookie, page.client);
+  assert.equal((await reconnected.next('open-file')).receipt, offer.receipt);
+  const newPage = await f.tab(cookie);
+  assert.equal((await f.request(offer.url, { cookie, headers: { 'X-Companion-Client': newPage.client } })).status, 403);
+  const otherCookie = await f.signIn();
+  assert.equal((await f.request(`/api/events?client=${page.client}`, { cookie: otherCookie })).status, 403);
+  assert.equal((await f.request(offer.url, { cookie: otherCookie, headers: { 'X-Companion-Client': page.client } })).status, 403);
+  const bytes = await f.request(offer.url, { cookie, headers: { 'X-Companion-Client': page.client } });
+  assert.equal(await bytes.text(), '%PDF-synthetic');
+  await f.request(`/api/downloads/${offer.receipt}`, { cookie, headers: { 'X-Companion-Client': page.client }, body: { received: true } });
+  assert.deepEqual(await pending, { ok: true, result: { exported: true } });
+  // Completing an ordinary HTTP request must not close the SSE session.
+  const next = newPage.invoke('master-cv-export'), fresh = await newPage.next('open-file');
+  assert.equal(await (await f.request(fresh.url, { cookie, headers: { 'X-Companion-Client': newPage.client } })).text(), '%PDF-synthetic');
+  await f.request(`/api/downloads/${fresh.receipt}`, { cookie, headers: { 'X-Companion-Client': newPage.client }, body: { received: true } });
+  assert.deepEqual(await next, { ok: true, result: { exported: true } });
+});
+
+test('failed browser consumption and an aborted invoke never report exported or retain pending bytes', { timeout: 10000 }, async t => {
+  let f, interrupted;
+  const finished = new Promise(resolve => { interrupted = resolve; });
+  f = await harness(t, { operations: { 'master-cv-export': async () => {
+    try { await f.api.webHost.publishDownload(Buffer.from('%PDF-synthetic'), { name: 'Master CV.pdf', assertCurrent: () => {} }); }
+    catch (error) { interrupted(); throw error; }
+    return { exported: true };
+  } } });
+  const cookie = await f.signIn(), page = await f.tab(cookie), pending = page.invoke('master-cv-export');
+  const failed = await page.next('open-file');
+  await f.request(`/api/downloads/${failed.receipt}`, { cookie, body: { received: false } });
+  assert.equal((await pending).ok, false);
+  assert.equal((await f.request(failed.url, { cookie })).status, 404);
+  const controller = new AbortController();
+  let disconnected;
+  const abandoned = new Promise(resolve => { disconnected = resolve; });
+  interrupted = disconnected;
+  const request = f.request('/api/invoke', { cookie, body: { op: 'master-cv-export' }, headers: { 'X-Companion-Client': page.client }, signal: controller.signal });
+  const offered = await page.next('open-file');
+  controller.abort();
+  await assert.rejects(request, { name: 'AbortError' });
+  await abandoned;
+  assert.equal((await f.request(offered.url, { cookie })).status, 404);
+  await finished;
 });

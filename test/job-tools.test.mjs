@@ -10,6 +10,7 @@ import { ASSESSMENT_POLICY_ID } from '../src/mcp/matching-contract.mjs';
 import { publicationInWindow } from '../src/mcp/publication-range.mjs';
 import { addBlock, removeBlock } from '../src/mcp/blocklist.mjs';
 import { saveAppliedJobs } from '../src/application-workflow.mjs';
+import { readyMaster } from './helpers/ready-master.mjs';
 
 const sourceUrl = 'https://jobs.example.test/search';
 const full = (suffix = 'a', overrides = {}) => ({ title: 'Reporting engineer', company: 'Example',
@@ -172,6 +173,12 @@ test('listing captures are readable in Jobs but cannot be used as full originals
 
 test('complete imports work offline end to end before assessment, without invented dates or feed access', async () => {
   const f = fixture();
+  await f.store.update(state => {
+    const sourceId = 'f0000000-0000-4000-8000-000000000001';
+    state.career.sources[sourceId] = { ...state.career.sources.cv, id: sourceId };
+    delete state.career.sources.cv;
+  });
+  await readyMaster(f.store);
   const captured = await f.capture([full('a', { company: undefined }), full('old', { publishedAt: '2020-01-01' })]);
   const [id, oldId] = captured.jobs.map(job => job.id);
   const initial = await f.browser.list({ kind: 'jobs' });

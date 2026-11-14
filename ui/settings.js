@@ -19,7 +19,11 @@ $('notice-close').addEventListener('click', () => notice(''));
 window.showCompanionNotice = notice;
 // The topbar wraps at narrow widths, so the toast anchors to its measured height rather than a constant.
 new ResizeObserver(([entry]) => document.documentElement.style.setProperty('--topbar-height', `${entry.borderBoxSize[0].blockSize}px`)).observe(document.querySelector('.topbar'));
-async function invoke(op, input = {}) { const response = await window.companion.invoke(op, input); if (!response.ok) throw new Error(response.error.message); return response.result; }
+async function invoke(op, input = {}) {
+  const response = await window.companion.invoke(op, input);
+  if (!response.ok) throw Object.assign(new Error(response.error.message), { code: response.error.code });
+  return response.result;
+}
 const views = ['me', 'jobs', 'pipeline', 'setup', 'help'];
 function showView(next) {
   view = next;
@@ -184,6 +188,7 @@ async function refresh() {
       window.decisionsUI?.clear();
       window.updatesUI?.clear();
       window.careerGapUI?.clear();
+      window.masterCvUI?.clear();
       window.helpUI.clear();
       return;
     }
@@ -206,6 +211,7 @@ async function refresh() {
     window.careerBrowser?.setContext({ review: state.review, publicationRange: state.publicationRange, paired: state.paired, catalogue: state.catalogue });
     window.updatesUI?.refresh(state.updates);
     window.careerGapUI?.refresh(state.careerGap);
+    window.masterCvUI?.refresh(state);
     window.helpUI.refresh(state);
     if (requestedSection) { const section = requestedSection; requestedSection = null; openSettings(section); }
     stateNotice(state.failure || state.review?.errors?.map(error => error.message).join(' ') || '', 'error');
@@ -217,6 +223,7 @@ async function refresh() {
     }
     renderSetup(null);
     window.backupsUI?.unavailable();
+    window.masterCvUI?.unavailable();
     $('codex-status').textContent = ''; $('claude-status').textContent = '';
     stateNotice('Could not reach Companion. Choose Retry in Me, or reopen Companion. Your saved work is unchanged.', 'state-unavailable');
   }

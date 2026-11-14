@@ -18,6 +18,25 @@ import { ASSESSMENT_POLICY_ID, deriveDecision } from '../src/mcp/matching-contra
 import { assertPrivatePath, protectPrivatePath } from '../src/platform-runtime.cjs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { readyMaster } from './helpers/ready-master.mjs';
+import { assertMasterReady, masterCvState } from '../src/mcp/master-cv.mjs';
+import { applicationContextFingerprint } from '../src/application-workflow.mjs';
+
+async function bindDocumentFixtures(store) {
+  if (masterCvState(store.get().career).status !== 'ready') await readyMaster(store);
+  await store.update(state => {
+    const career = state.career, master = assertMasterReady(career);
+    for (const app of Object.values(career.applications)) {
+      for (const key of ['cv', 'coverLetter']) app[key] = { ...(app[key] ?? { version: 1 }),
+        masterVersion: master.version, contextFingerprint: applicationContextFingerprint(career, app) };
+    }
+  });
+}
+function exportBinding(career, applicationId, kind, exported) {
+  const app = career.applications[applicationId], draft = kind === 'cv' ? app.cv : app.coverLetter;
+  return { ...exported, kind, format: exported.mediaType === 'text/plain' ? 'txt' : 'pdf',
+    masterVersion: draft.masterVersion, contextFingerprint: draft.contextFingerprint, documentVersion: draft.version };
+}
 
 async function exposePath(filename, directory = false) {
   if (process.platform !== 'win32') return chmod(filename, directory ? 0o755 : 0o644);
@@ -153,8 +172,12 @@ test('complete CSV export uses native MCP resources alongside existing PDF expor
     state.career.profile.name = 'Synthetic Candidate';
     state.career.applications.synthetic = { id: 'synthetic', job: { title: 'Engineer', company: 'Example' }, exports: [] };
   });
+  await bindDocumentFixtures(f.store);
+  await f.store.update(state => {
+    for (const row of Object.values(state.career.matching.scores)) if (row.profileVersion === '0:0') row.profileVersion = `${state.career.evidenceRevision}:0`;
+  });
   const pdf = await files.exportDocument({ applicationId: 'synthetic', kind: 'cv', bytes: pdfBytes, mediaType: 'application/pdf' });
-  await f.store.update(state => { state.career.applications.synthetic.exports.push(pdf); });
+  await f.store.update(state => { state.career.applications.synthetic.exports.push(exportBinding(state.career, 'synthetic', 'cv', pdf)); });
   const before = f.store.get();
   const tools = createMatchingTools({ store: f.scoped.store, platform: () => assert.fail('Export must not contact platform'),
     exportDocument: files.exportDocument });
@@ -374,8 +397,9 @@ test('plain-text CV resources retain Unicode and enforce private-file integrity'
     state.career.profile.name = 'Zoë Candidate';
     state.career.applications.synthetic = { id: 'synthetic', job: { title: 'Engineer', company: 'Example' }, exports: [] };
   });
+  await bindDocumentFixtures(f.store);
   const exported = await files.exportDocument({ applicationId: 'synthetic', kind: 'cv', mediaType: 'text/plain', bytes: Buffer.from(text) });
-  await f.store.update(state => { state.career.applications.synthetic.exports.push(exported); });
+  await f.store.update(state => { state.career.applications.synthetic.exports.push(exportBinding(state.career, 'synthetic', 'cv', exported)); });
   assert.match(exported.uri, /^recruiters:\/\/documents\/[a-f0-9-]{36}\.txt$/);
   assert.equal(path.basename(exported.path), 'Zoë Candidate - CV.txt');
   const resource = await files.readResource(exported.uri);
@@ -433,11 +457,13 @@ async function readableDocuments(t, names = {}) {
       job: { id, company: names.company ?? 'Example', title: names.title ?? 'Engineer' },
       cv: { version: 1 }, coverLetter: { version: 1 }, exports: [] };
   });
+  await bindDocumentFixtures(f.store);
   const files = createDocumentFiles({ directory, store: f.store, assertAvailable() {} });
   const publish = (applicationId, kind, bytes = Buffer.from('%PDF-1.7\nSame real synthetic document bytes\n%%EOF')) =>
     files.withExportTransaction(async () => {
+      await bindDocumentFixtures(f.store);
       const exported = await files.exportDocument({ applicationId, kind, mediaType: 'application/pdf', bytes });
-      await f.store.update(state => { state.career.applications[applicationId].exports.push(exported); });
+      await f.store.update(state => { state.career.applications[applicationId].exports.push(exportBinding(state.career, applicationId, kind, exported)); });
       await files.cleanupExports();
       return exported;
     });
@@ -500,7 +526,7 @@ test('generated names are cross-platform safe and bounded without inventing cand
   for (const value of ['', '...', '/:*?']) assert.throws(() => documentName(value), { code: 'INVALID_INPUT' });
   await f.store.update(state => { state.career.profile.name = ''; });
   await assert.rejects(f.publish('second', 'cv'), { code: 'INVALID_INPUT' });
-  assert.equal(await f.files.resolveExport(cv.uri), cv.path);
+  await assert.rejects(f.files.resolveExport(cv.uri), { code: 'NOT_FOUND' }, 'a contact change retires the old master-bound export');
   const long = await readableDocuments(t, { company: 'Long employer '.repeat(30), title: 'Long job title '.repeat(30) });
   const first = await long.publish('first', 'cv'), second = await long.publish('second', 'cv');
   assert.ok(Buffer.byteLength(first.path) <= 248);
@@ -554,4 +580,13 @@ test('case-only candidate renames preserve the current PDF bytes, URI and listin
     const a = await lstat(old.path), b = await lstat(current.path);
     assert.equal(a.dev, b.dev); assert.equal(a.ino, b.ino);
   }
+});
+
+test('managed application resources refuse a stale master and pending clarification', async t => {
+  const f = await readableDocuments(t), cv = await f.publish('first', 'cv');
+  await f.store.update(state => { const id = randomUUID(); state.career.interviews ??= {}; state.career.interviews[id] = { id, status: 'pending', target: { kind: 'application', applicationId: 'first' } }; });
+  await assert.rejects(f.files.readResource(cv.uri), { code: 'NOT_FOUND' });
+  assert.equal((await f.files.listResources()).some(item => item.uri === cv.uri), false);
+  await f.store.update(state => { state.career.interviews = {}; Object.values(state.career.sources)[0].archived = true; });
+  await assert.rejects(f.files.resolveExport(cv.uri), { code: 'NOT_FOUND' });
 });

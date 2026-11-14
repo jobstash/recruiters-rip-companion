@@ -436,7 +436,7 @@ export function createCareerBrowser({ store, files, openPath }) {
         fail('DOCUMENT_UNAVAILABLE', 'The saved PDF is missing, damaged or unavailable. Your saved draft is unchanged.');
       }
       let error;
-      try { error = await openPath(filename); }
+      try { error = await openPath(filename, selection); }
       catch { error = true; }
       if (error) fail('DOCUMENT_UNAVAILABLE', 'The saved PDF could not be opened. Check your default PDF app and try again.');
       return { opened: true };

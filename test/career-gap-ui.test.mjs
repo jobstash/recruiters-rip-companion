@@ -17,7 +17,7 @@ function fixture(invoke) {
   };
   const nodes = new Map(['career-gap', ...['enabled', 'options', 'from', 'to', 'months', 'activity', 'place', 'description', 'note', 'error'].map(name => `career-gap-${name}`)]
     .map(id => [id, control()]));
-  const tabs = ['sources', 'facts', 'preferences'].map(kind => Object.assign(control(), { dataset: { careerKind: kind } }));
+  const tabs = ['master', 'sources', 'facts', 'preferences'].map(kind => Object.assign(control(), { dataset: { careerKind: kind } }));
   const companion = { invoke: async (operation, input) => {
     calls.push([operation, structuredClone(input)]);
     return invoke ? invoke(operation, input) : { ok: true, result: input };
@@ -119,6 +119,8 @@ test('the setting belongs to the CVs tab and disappears when saved work locks', 
   const ui = fixture();
   ui.refresh(setting({ enabled: true }));
   ui.tab('facts');
+  assert.equal(ui.node().hidden, true);
+  ui.tab('master');
   assert.equal(ui.node().hidden, true);
   ui.tab('sources');
   assert.equal(ui.node().hidden, false);

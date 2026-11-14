@@ -11,6 +11,8 @@ import { createMatchingTools } from '../src/mcp/matching-tools.mjs';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { createDocumentFiles } from '../src/mcp/files.mjs';
+import { applicationContextFingerprint } from '../src/application-workflow.mjs';
+import { readyMaster } from './helpers/ready-master.mjs';
 
 function fixture() {
   const state = { privateKey: 'PRIVATE_KEY_SENTINEL', career: createCareerState() };
@@ -583,8 +585,8 @@ test('facts lead with explanations and preserve actual interview context; applic
   state.career.facts.k8s = { id: 'k8s', kind: 'yes_no', subject: 'Kubernetes in production', answer: 'No', applicationId: 'missing-app' };
   state.career.applications['later-app'] = { id: 'later-app', job: { title: 'Experiment Lead', company: 'Other Employer' } };
   const document = { headline: 'Platform Engineer', summary: 'Builds data services.',
-    experience: [{ employer: 'Acme', role: 'Engineer', startDate: '2019', endDate: 'Present', bullets: [
-      { text: 'Built payment pipelines.', support: { cv: ['CV_SUPPORT_SENTINEL quote'], facts: ['ab'] } }] }] };
+    experience: [{ roleId: '00000000-0000-4000-8000-000000000001', employer: 'Acme', role: 'Engineer', startDate: '2019', endDate: 'Present', bullets: [
+      { id: '00000000-0000-4000-8000-000000000002', text: 'Built payment pipelines.', support: { sources: [{ sourceId: '00000000-0000-4000-8000-000000000003', contentHash: 'a'.repeat(64), quote: 'CV_SUPPORT_SENTINEL quote' }], facts: ['ab'] } }] }] };
   state.career.applications.app = { id: 'app', job: { title: 'Senior Engineer', company: 'Example Employer', description: 'Ad', url: 'https://example.test/job' },
     cv: { version: 2, document, presentation: { template: 'classic', paper: 'A4' }, createdAt: '2026-10-14T10:00:00Z' },
     cvHistory: [{ version: 1, document: { ...document, headline: 'Engineer' }, presentation: { template: 'classic', paper: 'A4' }, createdAt: '2026-10-13T10:00:00Z' }],
@@ -690,7 +692,7 @@ async function rendererFixture(browser, wide, operations = {}) {
     node.dataset.careerKind = kind;
     return [kind, node];
   };
-  const categories = Object.fromEntries(['sources', 'facts', 'preferences'].map(category));
+  const categories = Object.fromEntries(['master', 'sources', 'facts', 'preferences'].map(category));
   const jobCategories = Object.fromEntries(['jobs', 'blocks'].map(category));
   const stageCounts = [];
   // The Jobs tab list: two jobs views, then blocks; each tab carries its own count.
@@ -732,6 +734,20 @@ async function rendererFixture(browser, wide, operations = {}) {
     settle: () => new Promise(resolve => setImmediate(resolve)),
     titles: (prefix = 'career') => rows(prefix).map(button => byClass(button, 'career-record-title').textContent) };
 }
+
+test('the master editor tab never enters the source-record list API', async () => {
+  const { browser } = fixture();
+  const ui = await rendererFixture(browser, true);
+  await ui.window.careerBrowser.refresh();
+  ui.categories.master.fire('click');
+  await ui.settle();
+  assert.equal(ui.calls.some(call => call.args?.kind === 'master'), false);
+  for (const kind of ['facts', 'preferences', 'sources']) {
+    ui.categories[kind].fire('click');
+    await ui.settle();
+    assert.equal(ui.calls.some(call => call.operation === 'career-list' && call.args.kind === kind), true);
+  }
+});
 
 for (const wide of [false, true]) test(`Jobs paging and stage changes keep the reader column and pagination stable in ${wide ? 'wide' : 'narrow'} mode`, async () => {
   const { state, browser } = fixture();
@@ -1234,7 +1250,7 @@ test('the Jobs list column keeps Previous/Next on its own last grid row regardle
     assert.equal(html.includes(removed) || css.includes(removed), false, removed);
   assert.deepEqual([...html.matchAll(/data-view="([a-z]+)">([^<]+)</g)].map(match => match[2]), ['Me', 'Jobs', 'Pipeline', 'Settings', 'Help']);
   const me = html.match(/<div class="tabs" role="tablist" aria-label="Saved career records">[\s\S]*?<\/div>/)[0];
-  assert.deepEqual([...me.matchAll(/data-career-kind="([^"]+)"/g)].map(match => match[1]), ['sources', 'facts', 'preferences']);
+  assert.deepEqual([...me.matchAll(/data-career-kind="([^"]+)"/g)].map(match => match[1]), ['master', 'sources', 'facts', 'preferences']);
   assert.match(html, /<section id="view-pipeline" class="career-view pipeline-view" aria-label="Pipeline" hidden>/);
   assert.match(html, /<script src="pipeline.js" defer><\/script>\s*<script src="career-browser.js" defer><\/script>/);
   assert.match(css, /^#career-browser \{ grid-template-rows: auto auto minmax\(0, 1fr\); \}$/m);
@@ -1359,21 +1375,38 @@ async function savedPdfFixture(t) {
   const { state, store } = fixture();
   state.deviceId = 'synthetic-document-reader';
   const files = createDocumentFiles({ directory, store, assertAvailable() {} });
+  state.career.profile.name = 'Synthetic Candidate';
+  const ready = await readyMaster({ get: store.get, async update(change) {
+    const next = structuredClone(state);
+    await change(next);
+    Object.assign(state, next);
+  } });
   const job = catalogueJob('local:exact', currentDate(), { title: 'Engineer', company: 'Same employer',
     url: 'https://jobs.example.test/roles/exact', applyUrl: 'https://jobs.example.test/roles/exact' });
   state.career.matching = { jobs: { [job.id]: job }, scores: {} };
-  state.career.profile.name = 'Synthetic Candidate';
   state.career.applications.exact = { id: 'exact', job: { ...job }, exports: [] };
+  const binding = { masterVersion: ready.master.version,
+    contextFingerprint: applicationContextFingerprint(state.career, state.career.applications.exact) };
+  state.career.applications.exact.cv = { version: 1, ...binding, document: ready.document };
   const pdf = await files.exportDocument({ applicationId: 'exact', kind: 'cv', bytes: Buffer.from('%PDF-1.7\nsynthetic saved CV\n%%EOF'), mediaType: 'application/pdf' });
-  const exported = { ...pdf, kind: 'cv', format: 'pdf', documentVersion: 1, createdAt: '2025-01-02T12:00:00.000Z' };
-  state.career.applications.exact = { id: 'exact', job: { ...job }, exports: [exported] };
+  const exported = { ...pdf, ...binding, createdAt: '2025-01-02T12:00:00.000Z' };
+  state.career.applications.exact.exports.push(exported);
+  const saveLetter = async (text, createdAt) => {
+    const app = state.career.applications.exact;
+    const binding = { masterVersion: ready.master.version, contextFingerprint: applicationContextFingerprint(state.career, app) };
+    app.coverLetter = { version: 1, ...binding, paragraphs: [text] };
+    const letter = await files.exportDocument({ applicationId: 'exact', kind: 'cover_letter',
+      bytes: Buffer.from(`%PDF-1.7\n${text}\n%%EOF`), mediaType: 'application/pdf' });
+    app.exports.push({ ...letter, ...binding, createdAt });
+    return letter;
+  };
   const opened = [];
   const browser = createCareerBrowser({ store, files, openPath: async filename => { opened.push(filename); return ''; } });
   const args = async (kind = 'jobs', id = job.id) => {
     const detail = await browser.read({ kind, id });
     return { kind, id, document: 'cv', token: detail.documents.find(item => item.kind === 'cv').token };
   };
-  return { state, store, files, browser, opened, pdf, job, exported, args };
+  return { state, store, files, browser, opened, pdf, job, exported, args, saveLetter };
 }
 
 test('saved PDFs bind to the exact job and application, expose no paths and open through private resources', async t => {
@@ -1394,6 +1427,9 @@ test('saved PDFs bind to the exact job and application, expose no paths and open
     await assert.rejects(f.browser.openDocument({ ...args, ...extra }), { code: 'INVALID_INPUT' });
   assert.deepEqual(await f.browser.openDocument(args), { opened: true });
   assert.deepEqual(await f.browser.openDocument(await f.args('applications', 'exact')), { opened: true });
+  assert.deepEqual(f.opened, [f.pdf.path, f.pdf.path]);
+  f.state.deviceId = 'synthetic-document-reader-reset';
+  await assert.rejects(f.browser.openDocument(args), { code: 'DOCUMENT_UNAVAILABLE' });
   assert.deepEqual(f.opened, [f.pdf.path, f.pdf.path]);
 });
 
@@ -1465,8 +1501,7 @@ test('selection and file validity are rechecked after asynchronous resolution, w
 test('selected detail groups exact job and document actions once, preserves counts and narrow selection', async t => {
   const f = await savedPdfFixture(t);
   f.state.career.applications.exact.job.applyUrl = 'https://jobs.example.test/roles/exact/apply';
-  const letter = await f.files.exportDocument({ applicationId: 'exact', kind: 'cover_letter', bytes: Buffer.from('%PDF-1.7\nsynthetic letter for grouped actions\n%%EOF'), mediaType: 'application/pdf' });
-  f.state.career.applications.exact.exports.push({ ...letter, kind: 'cover_letter', format: 'pdf', createdAt: '2025-02-03T12:00:00.000Z' });
+  const letter = await f.saveLetter('synthetic letter for grouped actions', '2025-02-03T12:00:00.000Z');
   const pages = { jobs: await f.browser.list({ kind: 'jobs' }) };
   let application = await f.browser.read({ kind: 'applications', id: 'exact' });
   let job = await f.browser.read({ kind: 'jobs', id: f.job.id });
@@ -1539,8 +1574,7 @@ test('selected detail groups exact job and document actions once, preserves coun
 
 test('CV and letter select separate saved PDFs and shell failures are not reported as opened', async t => {
   const f = await savedPdfFixture(t);
-  const letter = await f.files.exportDocument({ applicationId: 'exact', kind: 'cover_letter', bytes: Buffer.from('%PDF-1.7\nsynthetic saved letter\n%%EOF'), mediaType: 'application/pdf' });
-  f.state.career.applications.exact.exports.push({ ...letter, kind: 'cover_letter', format: 'pdf', createdAt: '2025-01-03T12:00:00.000Z' });
+  const letter = await f.saveLetter('synthetic saved letter', '2025-01-03T12:00:00.000Z');
   const detail = await f.browser.read({ kind: 'applications', id: 'exact' });
   const args = { kind: 'applications', id: 'exact', document: 'cover_letter', token: detail.documents[1].token };
   await assert.rejects(f.browser.openDocument({ ...args, document: 'cv' }), { code: 'DOCUMENT_CHANGED' });

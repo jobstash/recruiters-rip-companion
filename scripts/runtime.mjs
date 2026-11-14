@@ -27,10 +27,13 @@ await build({
 for (const name of ['NotoSans-Regular.ttf', 'OFL.txt'])
   await copyFile(path.join(root, 'src', 'documents', 'assets', name), path.join(generated, 'assets', name));
 await copyFile(path.join(root, 'src', 'mcp', 'local-runner.cjs'), path.join(generated, 'mcp-host.cjs'));
-// Skill text is model-facing matching policy; its digest feeds the assessment policy fingerprint.
+// Every shipped model-facing policy input participates in the fingerprint.
+// A changed CV/Humanizer policy must not leave an older skill-labelled result appearing current.
 const skill = path.join(root, 'skills', 'recruiters-rip');
 const skillDigest = createHash('sha256').update(await readFile(path.join(skill, 'SKILL.md'), 'utf8') + '\0' +
-  await readFile(path.join(skill, 'agents', 'openai.yaml'), 'utf8')).digest('hex');
+  await readFile(path.join(skill, 'agents', 'openai.yaml'), 'utf8') + '\0' +
+  await readFile(path.join(skill, 'references', 'humanizer.md'), 'utf8') + '\0' +
+  await readFile(path.join(root, 'src', 'mcp', 'cv-writing-policy.mjs'), 'utf8')).digest('hex');
 await writeFile(path.join(generated, 'skill-digest.mjs'), `export const SKILL_DIGEST = '${skillDigest}';\n`);
 await packageMcp();
 console.log('Built local MCP bridge, Codex plugin with skill and document engine.');

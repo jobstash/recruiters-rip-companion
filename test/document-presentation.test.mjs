@@ -82,6 +82,24 @@ for (const template of ['classic', 'modern']) {
   }
 }
 
+test('TXT retains exact phrase spacing and PDFs retain spelling through extractor whitespace normalization', async () => {
+  const { PDFParse } = createRequire(import.meta.url)('pdf-parse');
+  const phrase = 'React  Native';
+  const sentence = `Built ${phrase} tools for the support team.`;
+  const input = { document: { ...sample(), summary: sentence, skills: [{ label: 'Tools', items: [phrase] }] }, heading };
+  assert.ok(documents.renderCareerCvText(input).includes(sentence));
+  for (const bytes of [
+    await documents.renderCareerCvPdf(input),
+    await documents.renderCareerPdf(heading.name, [sentence]),
+  ]) {
+    const parser = new PDFParse({ data: Uint8Array.from(bytes) });
+    try {
+      const extracted = await parser.getText();
+      assert.ok(extracted.text.includes(phrase.replace(/\s+/g, ' ')), extracted.text);
+    } finally { await parser.destroy(); }
+  }
+});
+
 test('non-Latin text falls back to the embedded font and still round-trips', async () => {
   const document = { ...sample(), summary: 'Ingegnera di piattaforma. Работала с распределёнными системами.' };
   const input = { document, heading: { name: 'Jane Candidate' }, presentation: { template: 'classic', paper: 'A4' } };

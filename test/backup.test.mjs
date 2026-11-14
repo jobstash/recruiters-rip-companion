@@ -8,11 +8,14 @@ import path from 'node:path';
 import { createVault } from '../src/vault.mjs';
 import { createBackups, parseBackup, MAX_BACKUP_BYTES } from '../src/backup.mjs';
 import { createCareerState, hash, mutateCareer } from '../src/mcp/state.mjs';
-import { createDocumentFiles } from '../src/mcp/files.mjs';
+import { createDocumentFiles, createBackupDocumentReader } from '../src/mcp/files.mjs';
 import { createScopedAccess } from '../src/mcp/scope.mjs';
 import { assertJobNotBlocked } from '../src/mcp/blocklist.mjs';
 import { assertPrivatePath } from '../src/platform-runtime.cjs';
 import { createCareerBrowser, setApplicationProgress } from '../src/career-browser.mjs';
+import { createProfileTools } from '../src/mcp/profile-tools.mjs';
+import { masterCvState, saveManualMaster, sourceSetFingerprint } from '../src/mcp/master-cv.mjs';
+import { readyMaster } from './helpers/ready-master.mjs';
 
 const now = '2026-10-29T10:00:00.000Z';
 const pdf = Buffer.from('%PDF-1.7\nSynthetic portable document bytes\n%%EOF');
@@ -44,7 +47,8 @@ async function fixture(t, options = {}) {
     exclusive: async action => { assert.equal(restoring, false); restoring = true; try { return await action(); } finally { restoring = false; } },
     onRestored: () => { epoch++; restored++; }, ...options });
   const files = createDocumentFiles({ directory, store: vault, assertAvailable });
-  return { directory, vault, service, files, choose: file => { selected = file; }, destination: file => { destination = file; }, lock: value => { locked = value; }, bump: () => { epoch++; }, epoch: () => epoch, restored: () => restored,
+  const backupFiles = createBackupDocumentReader({ directory, store: vault, assertAvailable });
+  return { directory, vault, service, files, backupFiles, choose: file => { selected = file; }, destination: file => { destination = file; }, lock: value => { locked = value; }, bump: () => { epoch++; }, epoch: () => epoch, restored: () => restored,
     scoped: () => createScopedAccess(vault, { epoch: () => epoch, assertAvailable: () => { assertAvailable(); if (restoring) throw Object.assign(new Error('Restoring'), { code: 'LOCAL_BUSY' }); } }) };
 }
 async function seed(fixture, name) {
@@ -103,8 +107,10 @@ test('portable backup round-trips originals, saved files, user history and block
   assert.equal(path.basename(reference.path), 'Synthetic candidate - COVER LETTER.pdf');
   assert.ok(reference.path.includes(path.join('Synthetic employer', 'Engineer')));
   assert.notEqual(reference.uri, Object.values(original.applications)[0].exports[0].uri);
-  assert.deepEqual(Buffer.from((await target.files.readResource(reference.uri)).blob, 'base64'), pdf);
-  assert.equal(await target.files.resolveExport(reference.uri), reference.path);
+  assert.deepEqual((await target.backupFiles.read(reference.uri)).bytes, pdf);
+  assert.deepEqual(await readFile(reference.path), pdf);
+  await assert.rejects(target.files.readResource(reference.uri), { code: 'NOT_FOUND' });
+  await assert.rejects(target.files.resolveExport(reference.uri), { code: 'NOT_FOUND' });
   assert.throws(() => assertJobNotBlocked(after.career, application.job.id, application.job), { code: 'JOB_BLOCKED' });
   assert.throws(() => stale.store.update(state => { state.career.profile.name = 'Late old writer'; }), { code: 'IDENTITY_CHANGED' });
   const reopened = createVault(target.directory); await reopened.open(); assert.deepEqual(reopened.get(), after);
@@ -158,7 +164,7 @@ test('archives are selectable and do not replace existing identity archives', as
   await target.service.restore({ restoreId: preview.restoreId, profileId: preview.profiles[1].id });
   const after = target.vault.get(); assert.equal(after.career.profile.name, 'Archived profile'); assert.deepEqual(after.identityArchives, {});
   assert.deepEqual(after.career.sources, archived.career.sources);
-  assert.deepEqual(Buffer.from((await target.files.readResource(Object.values(after.career.applications)[0].exports[0].uri)).blob, 'base64'), pdf);
+  assert.deepEqual((await target.backupFiles.read(Object.values(after.career.applications)[0].exports[0].uri)).bytes, pdf);
 });
 
 test('current version-one JSON restores career and archives honestly without reading its foreign file paths', async t => {
@@ -220,7 +226,10 @@ test('foreign paths in valid portable JSON are discarded and files bind only to 
   Object.values(payload.profiles[0].career.applications)[0].exports[0].path = '/arbitrary/foreign/file.pdf';
   const selected = path.join(target.directory, 'foreign-path.json'); await writeFile(selected, JSON.stringify(payload)); target.choose(selected);
   await target.service.restore(restoreArgs(await target.service.preview()));
-  const file = Object.values(target.vault.get().career.applications)[0].exports[0]; assert.equal(file.path.startsWith(target.directory), true); assert.equal(await target.files.resolveExport(file.uri), file.path);
+  const file = Object.values(target.vault.get().career.applications)[0].exports[0];
+  assert.equal(file.path.startsWith(target.directory), true);
+  assert.deepEqual((await target.backupFiles.read(file.uri)).bytes, await readFile(file.path));
+  await assert.rejects(target.files.resolveExport(file.uri), { code: 'NOT_FOUND' });
 });
 
 test('a backup with the former flat role lists restores with its career paths and without those lists', async t => {
@@ -382,7 +391,7 @@ test('a late commit guard removes imported files while retaining an existing ide
     } }) } });
   await assert.rejects(service.restore(restoreArgs(await service.preview())), { code: 'LOCAL_LOCKED' });
   assert.deepEqual(target.vault.get(), state); assert.deepEqual(await target.files.listResources(), before);
-  assert.deepEqual(Buffer.from((await target.files.readResource(retained.uri)).blob, 'base64'), pdf);
+  assert.deepEqual((await target.backupFiles.read(retained.uri)).bytes, pdf);
 });
 
 test('restoration uses the local revision sequence instead of an imported near-overflow counter', async t => {
@@ -455,7 +464,7 @@ test('save aborts before publishing if identity changes while collecting documen
   await assert.rejects(readFile(destination), { code: 'ENOENT' });
 });
 
-test('legacy backup bytes rebind both document kinds for same-title jobs without old versions overwriting current files', async t => {
+test('portable backups retain saved PDFs for same-title jobs without old versions overwriting newer files', async t => {
   const from = await fixture(t), career = await seed(from, 'Portable Candidate');
   const first = Object.values(career.applications)[0], secondId = randomUUID();
   const second = { ...structuredClone(first), id: secondId, job: { ...first.job, id: 'local:second', url: 'https://example.test/second' }, exports: [] };
@@ -469,18 +478,13 @@ test('legacy backup bytes rebind both document kinds for same-title jobs without
     });
   }
   const saved = await from.service.save(), payload = JSON.parse(await readFile(path.join(from.directory, saved.filename), 'utf8'));
-  const oldURIs = new Map(payload.files.map(file => [file.uri, `recruiters://exports/${file.sha256}.pdf`]));
-  for (const file of payload.files) file.uri = oldURIs.get(file.uri);
-  for (const app of Object.values(payload.profiles[0].career.applications)) for (const ref of app.exports) {
-    ref.uri = oldURIs.get(ref.uri); ref.path = '/foreign/untrusted.pdf';
-    for (const field of ['resourceId', 'folderNumber', 'companyLimit', 'jobLimit', 'applicationId', 'candidateName', 'company', 'jobTitle']) delete ref[field];
-  }
+  for (const app of Object.values(payload.profiles[0].career.applications)) for (const ref of app.exports) ref.path = '/foreign/untrusted.pdf';
   const staleBytes = Buffer.from('%PDF-1.7\nOld letter must never win\n%%EOF');
-  const sha256 = createHash('sha256').update(staleBytes).digest('hex'), staleURI = `recruiters://exports/${sha256}.pdf`;
+  const sha256 = createHash('sha256').update(staleBytes).digest('hex'), resourceId = randomUUID(), staleURI = `recruiters://documents/${resourceId}.pdf`;
   payload.files.push({ uri: staleURI, sha256, mediaType: 'application/pdf', bytes: staleBytes.length, base64: staleBytes.toString('base64') });
-  payload.profiles[0].career.applications[first.id].exports.push({ uri: staleURI, sha256, mediaType: 'application/pdf', bytes: staleBytes.length,
-    kind: 'cover_letter', format: 'pdf', documentVersion: 1 });
-  const target = await fixture(t), selected = path.join(target.directory, 'legacy-documents.json');
+  const newerLetter = payload.profiles[0].career.applications[first.id].exports.find(ref => ref.kind === 'cover_letter');
+  payload.profiles[0].career.applications[first.id].exports.push({ ...newerLetter, uri: staleURI, resourceId, sha256, bytes: staleBytes.length, documentVersion: 1 });
+  const target = await fixture(t), selected = path.join(target.directory, 'portable-documents.json');
   await writeFile(selected, JSON.stringify(payload)); target.choose(selected);
   await target.service.restore(restoreArgs(await target.service.preview()));
   const restored = target.vault.get().career, folders = [];
@@ -492,9 +496,10 @@ test('legacy backup bytes rebind both document kinds for same-title jobs without
     for (const ref of current) {
       assert.equal(path.basename(ref.path), `Portable Candidate - ${ref.kind === 'cv' ? 'CV' : 'COVER LETTER'}.pdf`);
       assert.match(ref.uri, /^recruiters:\/\/documents\/[a-f0-9-]{36}\.pdf$/);
-      const content = Buffer.from((await target.files.readResource(ref.uri)).blob, 'base64').toString();
+      const content = (await target.backupFiles.read(ref.uri)).bytes.toString();
       assert.ok(content.includes(`Current ${app.id} ${ref.kind}`));
-      assert.equal(await target.files.resolveExport(ref.uri), ref.path);
+      assert.equal((await readFile(ref.path)).toString(), content);
+      await assert.rejects(target.files.resolveExport(ref.uri), { code: 'NOT_FOUND' });
     }
   }
   assert.notEqual(folders[0], folders[1]);
@@ -503,11 +508,14 @@ test('legacy backup bytes rebind both document kinds for same-title jobs without
   assert.equal(restored.applications[first.id].exports.at(-1).unavailable, true);
   await assert.rejects(target.files.readResource(staleURI), { code: 'NOT_FOUND' });
   assert.deepEqual(restored.sources, career.sources);
-  assert.equal((await target.files.listResources()).length, 4);
+  assert.deepEqual(await target.files.listResources(), [], 'Retained backup bytes do not authorize live publication');
   const roundtrip = await target.service.save(), next = await fixture(t);
   next.choose(path.join(target.directory, roundtrip.filename));
   await next.service.restore(restoreArgs(await next.service.preview()));
-  assert.equal((await next.files.listResources()).length, 4);
+  const nextFiles = Object.values(next.vault.get().career.applications).flatMap(app => app.exports.filter(ref => ref.uri));
+  assert.equal(nextFiles.length, 4);
+  for (const ref of nextFiles) assert.ok((await next.backupFiles.read(ref.uri)).bytes.toString().includes(`Current ${ref.applicationId} ${ref.kind}`));
+  assert.deepEqual(await next.files.listResources(), []);
 });
 
 test('restoring over the same application rolls back a replaced readable PDF when the vault commit fails', async t => {
@@ -529,6 +537,129 @@ test('restoring over the same application rolls back a replaced readable PDF whe
   await assert.rejects(service.restore(restoreArgs(await service.preview())), { code: 'LOCAL_LOCKED' });
   assert.deepEqual(target.vault.get(), before);
   assert.deepEqual(await readFile(prior.path), priorBytes);
-  assert.equal(await target.files.resolveExport(prior.uri), prior.path);
+  assert.deepEqual((await target.backupFiles.read(prior.uri)).bytes, priorBytes);
+  await assert.rejects(target.files.resolveExport(prior.uri), { code: 'NOT_FOUND' });
   assert.deepEqual(await readdir(path.dirname(prior.path)), ['Rollback Candidate - COVER LETTER.pdf']);
+});
+
+test('backup roundtrip preserves manual master versions and literal role evidence but cancels pending dialogue authority', async t => {
+  const from = await fixture(t), target = await fixture(t);
+  await readyMaster(from.vault);
+  const first = masterCvState(from.vault.get().career);
+  const document = structuredClone(first.master.document);
+  document.summary = 'I build reliable services and investigate operational failures.';
+  document.experience[0].bullets[0].text = 'I traced the incident to a failing dependency and restored service.';
+  document.experience[0].bullets[0].support = {};
+  await saveManualMaster({ store: from.vault, args: { requestId: randomUUID(), revision: first.revision,
+    baseVersion: first.master.version, contact: first.contact, document, presentation: first.master.presentation } });
+  const tools = new Map(createProfileTools({ store: from.vault }).map(tool => [tool.name, tool]));
+  const roleId = document.experience[0].roleId;
+  const mutation = args => ({ requestId: randomUUID(), revision: from.vault.get().career.revision, ...args });
+  const pending = await tools.get('career_interview_ask').invoke(mutation({
+    target: { kind: 'cv_review', sourceSetFingerprint: sourceSetFingerprint(from.vault.get().career) },
+    questions: ['outcomes', 'growth', 'complex_scenario'].map(facet => ({ kind: 'narrative', roleId, facet,
+      subject: `Backup ${facet}`, prompt: `What happened in this role for ${facet}?` })),
+  }));
+  await tools.get('career_interview_answer').invoke(mutation({ interviewId: pending.interviewId, reply: '1: decline; 2: unknown' }));
+  const original = from.vault.get().career;
+  assert.equal(original.interviews[pending.interviewId].status, 'pending');
+  assert.equal(original.masterCv.current.userEdited, true);
+  assert.equal(original.masterCv.history.length, 1);
+  const saved = await from.service.save();
+  target.choose(path.join(from.directory, saved.filename));
+  await target.service.restore(restoreArgs(await target.service.preview()));
+  const restored = target.vault.get().career;
+  for (const key of ['sources', 'facts', 'roles', 'cvReview', 'masterCv']) assert.deepEqual(restored[key], original[key]);
+  const round = restored.interviews[pending.interviewId];
+  assert.equal(round.status, 'cancelled'); assert.deepEqual(round.questions, []);
+  assert.deepEqual(round.responses, original.interviews[pending.interviewId].responses);
+  assert.deepEqual(round.originalQuestions, original.interviews[pending.interviewId].originalQuestions);
+  assert.deepEqual(restored.receipts, {});
+  assert.notEqual(masterCvState(restored).status, 'ready', 'Restored response history is evidence, not completion of unanswered review questions');
+  const reopened = createVault(target.directory); await reopened.open();
+  assert.deepEqual(reopened.get().career.masterCv, restored.masterCv);
+  const again = await target.service.save();
+  assert.deepEqual(parseBackup(await readFile(path.join(target.directory, again.filename), 'utf8')).profiles[0].career.masterCv, restored.masterCv);
+});
+
+test('backup validates master references and ownership while retaining stale deleted-source history', async t => {
+  const f = await fixture(t); await readyMaster(f.vault);
+  const first = masterCvState(f.vault.get().career);
+  await saveManualMaster({ store: f.vault, args: { requestId: randomUUID(), revision: first.revision, baseVersion: first.master.version,
+    contact: first.contact, document: { ...first.master.document, summary: 'A candidate-authored account of service ownership.' }, presentation: first.master.presentation } });
+  const career = f.vault.get().career;
+  const decode = value => parseBackup(JSON.stringify({ version: 1, exportedAt: now, career: value }));
+  const badQuote = structuredClone(career);
+  badQuote.masterCv.current.document.experience[0].bullets[0].support.sources[0].quote = 'An achievement not present in this original';
+  assert.throws(() => decode(badQuote), { code: 'INVALID_INPUT' });
+  const badHash = structuredClone(career);
+  badHash.roles[Object.keys(badHash.roles)[0]].sourceRefs[0].contentHash = 'invalid';
+  assert.throws(() => decode(badHash), { code: 'INVALID_INPUT' });
+  const lostOwnership = structuredClone(career);
+  lostOwnership.masterCv.history[0].userEdited = true;
+  lostOwnership.masterCv.current.userEdited = false;
+  assert.throws(() => decode(lostOwnership), { code: 'INVALID_INPUT' });
+  const missing = structuredClone(career);
+  missing.sources = {};
+  const restored = decode(missing).profiles[0].career;
+  assert.deepEqual(restored.masterCv, missing.masterCv);
+  assert.equal(masterCvState(restored).status, 'stale');
+});
+
+test('stale application PDFs survive private backup custody without regaining publication or form authority', async t => {
+  const from = await fixture(t), career = await seed(from), appId = Object.keys(career.applications)[0];
+  await from.vault.update(state => {
+    const app = state.career.applications[appId];
+    app.coverLetter.contextFingerprint = 'old application writing context';
+    app.coverLetter.masterVersion = 1;
+    app.exports[0].contextFingerprint = 'old application writing context';
+    app.exports[0].masterVersion = 1;
+    state.career.formDrafts.old.collection = { snapshot: 'old collection', identity: 'old session', missing: [],
+      formSnapshot: 'old form', evidence: 'old evidence', applicationContext: 'old application writing context' };
+  });
+  const original = from.vault.get().career;
+  assert.equal(Object.hasOwn(from.files, 'readBackup'), false);
+  assert.equal(Object.hasOwn(from.files, 'read'), false);
+  await assert.rejects(from.files.readResource(original.applications[appId].exports[0].uri), { code: 'NOT_FOUND' });
+  const saved = await from.service.save(), filename = path.join(from.directory, saved.filename);
+  const payload = JSON.parse(await readFile(filename, 'utf8'));
+  assert.equal(payload.files.length, 1);
+  assert.deepEqual(Buffer.from(payload.files[0].base64, 'base64'), pdf);
+  const target = await fixture(t); target.choose(filename);
+  await target.service.restore(restoreArgs(await target.service.preview()));
+  const restored = target.vault.get().career, record = restored.applications[appId].exports[0];
+  assert.deepEqual((await target.backupFiles.read(record.uri)).bytes, pdf);
+  assert.equal(restored.applications[appId].coverLetter.contextFingerprint, 'old application writing context');
+  assert.deepEqual(restored.applications[appId].coverLetterHistory, original.applications[appId].coverLetterHistory);
+  assert.deepEqual(restored.formDrafts.old.answers, original.formDrafts.old.answers);
+  assert.equal(restored.formDrafts.old.collection, undefined);
+  assert.equal(restored.formDrafts.old.evidence, '');
+  await assert.rejects(target.files.readResource(record.uri), { code: 'NOT_FOUND' });
+  assert.deepEqual(await target.files.listResources(), []);
+  const again = await target.service.save();
+  assert.equal(JSON.parse(await readFile(path.join(target.directory, again.filename), 'utf8')).files.length, 1);
+});
+
+test('private backup reader rejects unregistered, cross-application, corrupt and racing document records', async t => {
+  const f = await fixture(t), career = await seed(f), appId = Object.keys(career.applications)[0], exported = career.applications[appId].exports[0];
+  const baseline = f.vault.get();
+  let state = structuredClone(baseline), checks = 0, changing = null;
+  const reader = createBackupDocumentReader({ directory: f.directory, store: { get: () => structuredClone(state) },
+    assertAvailable: () => { if (changing && ++checks === 2) changing(); } });
+  assert.deepEqual((await reader.read(exported.uri)).bytes, pdf);
+  await assert.rejects(reader.read(`recruiters://documents/${randomUUID()}.pdf`), { code: 'NOT_FOUND' });
+  state.career.applications[appId].exports[0].applicationId = randomUUID();
+  await assert.rejects(reader.read(exported.uri), { code: 'EXPORT_CORRUPT' });
+  state = structuredClone(baseline);
+  state.career.applications[appId].exports[0].sha256 = 'a'.repeat(64);
+  await assert.rejects(reader.read(exported.uri), { code: 'EXPORT_CORRUPT' });
+  state = structuredClone(baseline); checks = 0;
+  changing = () => { state.deviceId = 'different-device'; };
+  await assert.rejects(reader.read(exported.uri), { code: 'IDENTITY_CHANGED' });
+  state = structuredClone(baseline); checks = 0;
+  changing = () => { state.career.applications[appId].exports[0].documentVersion++; };
+  await assert.rejects(reader.read(exported.uri), { code: 'EXPORT_CORRUPT' });
+  state = structuredClone(baseline); changing = null;
+  await writeFile(exported.path, '%PDF-1.7\nReplaced historical document\n%%EOF');
+  await assert.rejects(reader.read(exported.uri), { code: 'EXPORT_CORRUPT' });
 });

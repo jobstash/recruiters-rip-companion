@@ -27,7 +27,9 @@ function fixture() {
       return { jobs: [job], total: 1, nextOffset: null, publicationWindow: { range: args.publicationRange, since: args.since, until: args.until } };
     } }),
   ].map(tool => [tool.name, tool]));
-  return { store, applicationId, call: (name, args = {}) => tools.get(name).invoke(args) };
+  return { store, applicationId, call: (name, args = {}) => tools.get(name).invoke(
+    name === 'career_interview_ask' || name === 'career_interview_answer'
+      ? { requestId: randomUUID(), revision: store.get().career.revision, ...args } : args) };
 }
 
 test('listing-specific answers invalidate old assessments and reach the next evaluation with the original question and explanation', async () => {
@@ -46,7 +48,7 @@ test('listing-specific answers invalidate old assessments and reach the next eva
   assert.equal(recommended.recommendations[0].overall, 70);
 
   const question = 'Have you directly managed engineering managers?';
-  const interview = await f.call('career_interview_ask', { applicationId: f.applicationId, questions: [
+  const interview = await f.call('career_interview_ask', { target: { kind: 'application', applicationId: f.applicationId }, questions: [
     { subject: 'Managing engineering managers', prompt: question, kind: 'capability', context: 'The role includes developing engineering managers.' },
   ] });
   const partial = await f.call('career_interview_answer', { interviewId: interview.interviewId, reply: '1a' });

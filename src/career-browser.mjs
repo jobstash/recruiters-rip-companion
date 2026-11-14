@@ -1,6 +1,5 @@
 import { createRequire } from 'node:module';
 import { cvHeading } from './mcp/application-tools.mjs';
-import { renderableCv } from './mcp/cv-quality.mjs';
 import { createMatchingTools } from './mcp/matching-tools.mjs';
 import { fail, hash, readCareer } from './mcp/state.mjs';
 import { reviewInclusion } from './mcp/review-queue.mjs';
@@ -80,7 +79,7 @@ function draftSections(kind, draft, career, historical = false) {
   if (kind === 'cv' && record(draft.document)) {
     // Use the same profile header and reading order as exported CVs.
     renderCv ??= createRequire(import.meta.url)('./generated/document-engine.cjs').renderCareerCvText;
-    wording = renderCv({ document: renderableCv(draft.document), heading: cvHeading(career.profile ?? {}) });
+    wording = renderCv({ document: draft.document, heading: cvHeading(career.profile ?? {}) });
   } else if (kind === 'cover_letter' && Array.isArray(draft.paragraphs)) {
     wording = draft.paragraphs.filter(item => typeof item === 'string').join('\n\n');
   }

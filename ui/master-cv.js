@@ -84,14 +84,9 @@
     add.dataset.add = path; group.append(add);
     return group;
   }
-  function strings(parent, target, key, title, path) {
+  function strings(parent, target, key, title, path, multiline = false) {
     list(parent, target, key, title, () => '', (row, value, index, itemPath, values) => {
-      field(row, values, index, `${title} ${index + 1}`, `${itemPath}.first`);
-    }, path);
-  }
-  function claims(parent, target, key, title, path) {
-    list(parent, target, key, title, () => ({ id: crypto.randomUUID(), text: '', support: {} }), (row, claim, index, itemPath) => {
-      field(row, claim, 'text', `${title} ${index + 1}`, `${itemPath}.first`, { multiline: true });
+      field(row, values, index, `${title} ${index + 1}`, `${itemPath}.first`, { multiline });
     }, path);
   }
   function renderFields() {
@@ -108,12 +103,12 @@
     const bio = section(container, 'Headline and bio');
     field(bio, doc, 'headline', 'Headline', 'document.headline');
     field(bio, doc, 'summary', 'Bio', 'document.summary', { multiline: true });
-    claims(container, doc, 'highlights', 'Highlight', 'document.highlights');
-    list(container, doc, 'experience', 'Role', () => ({ roleId: crypto.randomUUID(), employer: '', role: '', location: '', startDate: '', endDate: '', bullets: [] }), (row, role, index, path) => {
+    strings(container, doc, 'highlights', 'Highlight', 'document.highlights', true);
+    list(container, doc, 'experience', 'Role', () => ({ employer: '', role: '', location: '', startDate: '', endDate: '', bullets: [] }), (row, role, index, path) => {
       const grid = node('div', undefined, 'master-cv-grid'); row.append(grid);
       for (const [key, label] of [['employer', 'Employer'], ['role', 'Role title'], ['location', 'Location'], ['startDate', 'Start date'], ['endDate', 'End date']])
         field(grid, role, key, label, key === 'employer' ? `${path}.first` : `${path}.${key}`);
-      claims(row, role, 'bullets', 'Outcome or contribution', `${path}.bullets`);
+      strings(row, role, 'bullets', 'Outcome or contribution', `${path}.bullets`, true);
     }, 'document.experience');
     if (doc.careerGaps?.length) {
       const gaps = section(container, 'Career breaks');
@@ -144,18 +139,17 @@
     const status = saved?.status;
     el('readiness').textContent = !online ? baseline ? 'Companion unavailable. Your edits are still here.' : 'Unlock or retry to see your master CV.'
       : !saved ? reading ? 'Loading master CV…' : 'Master CV unavailable. Choose Retry.'
-        : ({ missing: 'No master CV yet.', draft: 'Draft · Not ready to export.', stale: 'Review needed · Your original CVs or career details changed.', ready: 'Ready · Career review complete.' }[status] || 'Review status unavailable.');
-    const review = saved?.review;
-    el('review').textContent = review && !review.complete ? `${review.pendingRoles} role${review.pendingRoles === 1 ? '' : 's'} and ${review.pendingQuestions} question${review.pendingQuestions === 1 ? '' : 's'} pending review. Copy the prompt and send it in your connected AI app.` : '';
+        : ({ missing: 'No master CV yet.', draft: 'Draft · Not ready to export.', stale: 'Update needed · Your original CVs changed.', ready: 'Ready to export.' }[status] || 'Master CV status unavailable.');
+    const onboarding = online && ['missing', 'draft', 'stale'].includes(status);
+    el('review').textContent = onboarding ? 'Your connected AI app completes or updates the master CV as part of onboarding in your current or next conversation.' : '';
     el('status').textContent = pending === 'save' ? 'Saving…' : pending === 'export' ? 'Exporting…'
       : incoming ? 'Saved CV changed. Review the section choices before continuing to edit or save. Your unsaved changes are still here.'
         : [message, dirty ? 'Unsaved changes' : !message && baseline?.master ? 'Saved' : ''].filter(Boolean).join(' ');
     el('error').textContent = failure; el('error').hidden = !failure;
     el('retry').hidden = online && !failure;
     el('retry').disabled = reading || Boolean(pending);
-    el('prompt').disabled = !online || Boolean(pending);
     el('empty').hidden = !baseline || Boolean(draft);
-    el('empty-note').textContent = hasCv ? 'Ask your connected AI app to review all your original CVs and prepare a master CV. You can also write a draft here.' : 'Import an original CV using Import CV above, then copy the review prompt to your connected AI app. You can also write a draft here.';
+    el('empty-note').textContent = hasCv ? 'Your original CVs are ready for your AI app. You can also write a draft here.' : 'Import an original CV using Import CV above. You can also write a draft here.';
     el('start').disabled = !online;
     el('form').hidden = !draft;
     el('fields').inert = Boolean(incoming);
@@ -165,8 +159,8 @@
     for (const format of ['pdf', 'txt']) el(format).disabled = !online || dirty || Boolean(pending) || Boolean(incoming) || status !== 'ready' || !baseline?.master;
     el('export-note').textContent = dirty ? 'Save your changes before exporting.'
       : status === 'ready' ? 'Export the saved master CV. Tailoring a job application does not change it.'
-        : review?.complete ? 'Career review is complete. Complete the headline, bio and required role fields, then save before exporting.'
-          : 'Complete the career review in your AI app before exporting.';
+        : status === 'draft' ? 'Complete the headline, bio and required role fields, then save before exporting.'
+          : 'Your AI app prepares the master CV during onboarding before export is available.';
   }
   // Merge at named section boundaries: never silently replace a section changed on both sides.
   function mergePlan(remote) {
@@ -187,7 +181,7 @@
     if (value === undefined || value === null || value === '') return 'Empty';
     if (typeof value === 'string') return value;
     if (Array.isArray(value)) return value.map(preview).join('\n');
-    return Object.entries(value).filter(([key]) => !['id', 'roleId', 'support'].includes(key)).map(([, part]) => preview(part)).join(' · ');
+    return Object.values(value).map(preview).join(' · ');
   }
   function focusConflict() {
     if (!incoming || root.hidden || conflictFocused) return;
@@ -326,7 +320,6 @@
     failure = ''; message = dirty ? 'Choices applied. Save to keep your edits.' : 'Saved version kept.';
     renderFields(); renderConflict(); renderState();
   });
-  el('prompt').addEventListener('click', () => { void perform('prompt', 'master-cv-prompt', {}, result => result.copied ? 'Review prompt copied. Paste it into your connected AI app and send it.' : window.companion.web ? 'Review prompt sent to your browser. If a copy dialog opens, choose Copy, then paste the prompt into your connected AI app.' : 'The prompt was not copied. Try again.'); });
   for (const format of ['pdf', 'txt']) el(format).addEventListener('click', () => {
     if (el(format).disabled) return;
     void perform('export', 'master-cv-export', { requestId: crypto.randomUUID(), revision: baseline.revision, baseVersion: version(baseline), format }, result => result.exported ? `Exported ${result.filename || format.toUpperCase()}.` : 'Export canceled.');

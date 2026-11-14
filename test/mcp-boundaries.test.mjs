@@ -584,7 +584,7 @@ test('case-only candidate renames preserve the current PDF bytes, URI and listin
 
 test('managed application resources refuse a stale master and pending clarification', async t => {
   const f = await readableDocuments(t), cv = await f.publish('first', 'cv');
-  await f.store.update(state => { const id = randomUUID(); state.career.interviews ??= {}; state.career.interviews[id] = { id, status: 'pending', target: { kind: 'application', applicationId: 'first' } }; });
+  await f.store.update(state => { const id = randomUUID(); state.career.interviews ??= {}; state.career.interviews[id] = { id, status: 'pending', applicationId: 'first' }; });
   await assert.rejects(f.files.readResource(cv.uri), { code: 'NOT_FOUND' });
   assert.equal((await f.files.listResources()).some(item => item.uri === cv.uri), false);
   await f.store.update(state => { state.career.interviews = {}; Object.values(state.career.sources)[0].archived = true; });

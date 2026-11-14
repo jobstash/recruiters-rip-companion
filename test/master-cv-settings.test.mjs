@@ -9,7 +9,7 @@ import { createVault } from '../src/vault.mjs';
 import { createScopedAccess } from '../src/mcp/scope.mjs';
 import { fail } from '../src/mcp/state.mjs';
 import { masterCvState, renderMaster } from '../src/mcp/master-cv.mjs';
-import { createMasterCvSettings, publishMasterFile, MASTER_CV_ACTIONS, MASTER_CV_PROMPT } from '../src/master-cv-settings.mjs';
+import { createMasterCvSettings, publishMasterFile, MASTER_CV_ACTIONS } from '../src/master-cv-settings.mjs';
 import { readyMaster } from './helpers/ready-master.mjs';
 
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
@@ -19,19 +19,18 @@ async function fixture(t, options = {}) {
   const store = createVault(directory); await store.open();
   await readyMaster(store);
   let epoch = 0, locked = false, saves = 0;
-  const copied = [];
   const documents = { renderCareerCvText: value => JSON.stringify(value) };
   const operation = createMasterCvSettings({
     access: () => createScopedAccess(store, { epoch: () => epoch, assertAvailable: () => { if (locked) fail('LOCAL_LOCKED', 'Locked'); } }),
     identity: () => `${store.get().deviceId}:${epoch}`, documents: () => documents,
     selectDestination: async filename => path.join(directory, filename),
-    copyPrompt: text => { copied.push(text); return true; }, afterSave: () => { saves++; }, ...options,
+    afterSave: () => { saves++; }, ...options,
   });
   const args = (format = 'txt') => ({ requestId: randomUUID(), revision: store.get().career.revision, baseVersion: store.get().career.masterCv.current.version, format });
-  return { directory, store, operation, args, copied, documents, saves: () => saves, lock: () => { locked = true; }, rotate: () => { epoch++; } };
+  return { directory, store, operation, args, documents, saves: () => saves, lock: () => { locked = true; }, rotate: () => { epoch++; } };
 }
 
-test('the preload permits only the four master IPC actions and forwards their payloads unchanged', async () => {
+test('the preload permits only read, save and export master actions and rejects the retired prompt action', async () => {
   const source = await readFile(new URL('../src/preload.cjs', import.meta.url), 'utf8');
   const calls = []; let bridge;
   vm.runInNewContext(source, { require: name => {
@@ -40,34 +39,30 @@ test('the preload permits only the four master IPC actions and forwards their pa
       ipcRenderer: { invoke: (...args) => { calls.push(args); return Promise.resolve({ ok: true }); }, on() {}, removeListener() {} } };
   } });
   for (const op of MASTER_CV_ACTIONS) { const input = { marker: op }; await bridge.invoke(op, input); assert.equal(calls.at(-1)[2], input); assert.equal(calls.at(-1)[0], 'local-settings'); }
+  assert.deepEqual(MASTER_CV_ACTIONS, ['master-cv-read', 'master-cv-save', 'master-cv-export']);
+  await assert.rejects(bridge.invoke('master-cv-prompt'), /Unavailable/);
   await assert.rejects(bridge.invoke('master-cv-overwrite'), /Unavailable/);
   assert.equal(calls.length, MASTER_CV_ACTIONS.length);
 });
 
-test('master handlers reject unknown fields, expose real state, and copy an actionable review prompt', async t => {
+test('master handlers reject unknown fields and the retired prompt operation while exposing real state', async t => {
   const f = await fixture(t);
   const state = await f.operation('master-cv-read', {});
   assert.equal(state.status, 'ready'); assert.equal(typeof state.identity, 'string');
-  for (const op of ['master-cv-read', 'master-cv-prompt']) await assert.rejects(f.operation(op, { unexpected: true }), { code: 'INVALID_INPUT' });
+  await assert.rejects(f.operation('master-cv-read', { unexpected: true }), { code: 'INVALID_INPUT' });
+  await assert.rejects(f.operation('master-cv-prompt', {}), { code: 'INVALID_INPUT' });
   await assert.rejects(f.operation('master-cv-export', { ...f.args(), path: '/outside' }), { code: 'INVALID_INPUT' });
   await assert.rejects(f.operation('master-cv-export', { ...f.args(), format: 'docx' }), { code: 'INVALID_INPUT' });
-  assert.deepEqual(await f.operation('master-cv-prompt', {}), { copied: true });
-  assert.deepEqual(f.copied, [MASTER_CV_PROMPT]);
-  for (const name of ['career_cv_review_read', 'career_interview_ask', 'career_interview_answer', 'career_cv_review_save', 'career_master_cv_save']) assert.ok(f.copied[0].includes(name));
-  const browser = await fixture(t, { copyPrompt: () => false });
-  assert.deepEqual(await browser.operation('master-cv-prompt', {}), { copied: false }, 'Browser delivery is not a clipboard acknowledgement');
 });
 
-test('manual saves are CAS/idempotent, create user evidence, preserve history, and broadcast only saved state', async t => {
+test('manual plain-text saves are CAS/idempotent, preserve history, and broadcast only saved state', async t => {
   const f = await fixture(t), before = await f.operation('master-cv-read', {});
   const document = structuredClone(before.master.document);
-  document.experience[0].bullets[0].text = 'I resolved the release incident by isolating a failing worker.';
-  document.experience[0].bullets[0].support = {};
+  document.experience[0].bullets[0] = 'I resolved the release incident by isolating a failing worker.';
   const args = { requestId: randomUUID(), revision: before.revision, baseVersion: before.master.version, contact: before.contact, document, presentation: before.master.presentation };
   const saved = await f.operation('master-cv-save', args);
-  assert.equal(saved.userEdited, true); assert.equal(saved.master.version, before.master.version + 1);
-  const support = saved.master.document.experience[0].bullets[0].support;
-  assert.equal(f.store.get().career.facts[support.facts[0]].answer, document.experience[0].bullets[0].text);
+  assert.equal(saved.master.version, before.master.version + 1);
+  assert.deepEqual(saved.master.document, document);
   assert.deepEqual(f.store.get().career.masterCv.history[0].document, before.master.document);
   assert.deepEqual(await f.operation('master-cv-save', args), saved);
   assert.equal(f.store.get().career.masterCv.history.length, 1);
@@ -103,7 +98,7 @@ test('concurrent export retries share one dialog, and cancellation is final for 
   assert.equal((await readdir(f.directory)).some(file => file.endsWith('.txt')), false);
 });
 
-for (const phase of ['dialog', 'render']) for (const change of ['revision', 'source-added', 'source-removed', 'source-archived', 'source-changed', 'lock', 'identity']) {
+for (const phase of ['dialog', 'render']) for (const change of ['revision', 'source-added', 'source-removed', 'source-archived', 'lock', 'identity']) {
   test(`master export rejects ${change} while awaiting ${phase} without publishing bytes`, async t => {
     const entered = deferred(), continueWork = deferred(); let published = 0;
     const pause = async value => { entered.resolve(); await continueWork.promise; return value; };
@@ -121,7 +116,6 @@ for (const phase of ['dialog', 'render']) for (const change of ['revision', 'sou
       if (change === 'revision') career.revision++;
       else if (change === 'source-removed') delete career.sources[source.id];
       else if (change === 'source-archived') source.archived = true;
-      else if (change === 'source-changed') source.text += '\nChanged original evidence.';
       else { const id = randomUUID(); career.sources[id] = { ...source, id }; }
     });
     continueWork.resolve();

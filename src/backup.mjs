@@ -5,7 +5,7 @@ import path from 'node:path';
 import { privateDirectory } from './vault.mjs';
 import { assertPrivatePath, protectPrivatePath } from './platform-runtime.cjs';
 import { createDocumentFiles, createBackupDocumentReader, validExport, exportTypes, documentURI, documentName } from './mcp/files.mjs';
-import { CAREER_SCHEMA, fail, hash, upgradeCareer, normalizeIntroductions } from './mcp/state.mjs';
+import { CAREER_SCHEMA, fail, hash, upgradeCareer, normalizeIntroductions, simplifyCvStorage } from './mcp/state.mjs';
 import { BLOCK_KINDS } from './mcp/blocklist.mjs';
 import { FACT_KINDS } from './mcp/facts.mjs';
 import { readCareerGapSetting } from './mcp/career-gap.mjs';
@@ -55,38 +55,17 @@ function job(value, { captured = false } = {}) {
     object(value.description, 'job description');
   }
 }
-function support(value, career, roleId) {
-  object(value, 'CV evidence');
-  if (Object.keys(value).some(key => !['sources', 'facts'].includes(key))) invalid('CV evidence contains unsupported fields');
-  let count = 0;
-  for (const key of ['sources', 'facts']) if (value[key] !== undefined && !array(value[key], 'CV evidence').length) invalid('CV evidence lists must not be empty');
-  if (value.sources !== undefined) for (const ref of array(value.sources, 'CV source references')) {
-    object(ref, 'CV source reference'); uuid(ref.sourceId, 'CV source ID'); text(ref.quote, 'CV source quote');
-    if (!validDigest(ref.contentHash) || !ref.quote.trim() || Object.keys(ref).some(key => !['sourceId', 'contentHash', 'quote'].includes(key))) invalid('a CV source reference is invalid');
-    const source = career.sources?.[ref.sourceId];
-    if (source && source.contentHash === ref.contentHash && (source.purpose !== 'cv' || !source.text.includes(ref.quote))) invalid('a CV source quote does not match its identified original');
-    count++;
-  }
-  if (value.facts !== undefined) for (const id of array(value.facts, 'CV fact references')) {
-    uuid(id, 'CV fact ID');
-    if (roleId && career.facts?.[id] && career.facts[id].roleId !== roleId) invalid('a CV claim cites a fact from another role');
-    count++;
-  }
-  if (!count) invalid('CV evidence is empty');
-}
-function draft(value, kind, career) {
+function draft(value, kind) {
   object(value, 'document draft'); counter(value.version, 'document version');
   if (kind === 'cover_letter') strings(value.paragraphs, 'letter paragraphs');
   else {
     const doc = object(value.document, 'CV document');
     text(doc.headline, 'CV headline'); text(doc.summary, 'CV summary');
-    const claim = (item, roleId) => { object(item, 'CV claim'); uuid(item.id, 'CV claim ID'); text(item.text, 'CV claim'); support(item.support, career, roleId); };
     for (const item of array(doc.experience, 'CV experience')) {
       object(item, 'CV experience'); for (const key of ['employer', 'role', 'startDate', 'endDate']) text(item[key], key);
-      uuid(item.roleId, 'CV role ID');
-      for (const bullet of array(item.bullets, 'CV bullets')) claim(bullet, item.roleId);
+      strings(item.bullets, 'CV bullets');
     }
-    if (doc.highlights !== undefined) array(doc.highlights, 'CV highlights').forEach(item => claim(item));
+    if (doc.highlights !== undefined) strings(doc.highlights, 'CV highlights');
     if (doc.careerGaps !== undefined) for (const item of array(doc.careerGaps, 'CV career gaps')) {
       object(item, 'CV career gap');
       // 3.12.29–3.12.30 saved one `label` line where an entry now has an activity, and optionally a place and description.
@@ -149,28 +128,21 @@ export function validateBackupCareer(career) {
       if (source.mediaType === 'application/pdf' ? bytes.subarray(0, 5).toString() !== '%PDF-' : source.mediaType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ? bytes.subarray(0, 2).toString() !== 'PK' : source.mediaType === 'text/plain' ? !validExport(bytes, 'txt') : true) invalid('an original CV has an unsupported or mismatched file type');
     }
   });
+  simplifyCvStorage(career);
   entries(career.facts, 'facts', (fact, id) => {
     if (fact.id !== id) invalid('a fact ID does not match its record');
     if (!FACT_KINDS.includes(fact.kind)) invalid('a fact kind is unsupported');
     for (const key of ['kind', 'subject', 'answer']) text(fact[key], `fact ${key}`);
     optionalText(fact, ['detail', 'employer', 'question', 'context', 'applicationId']);
-    if (fact.roleId !== undefined) uuid(fact.roleId, 'fact role ID');
-    if (fact.facet !== undefined && !['outcomes', 'growth', 'complex_scenario', 'role_identity'].includes(fact.facet)) invalid('a fact review facet is unsupported');
-    if (fact.resolution !== undefined && !['answered', 'declined', 'unknown'].includes(fact.resolution)) invalid('a fact resolution is unsupported');
     if (fact.publication !== undefined && !['allowed', 'prohibited'].includes(fact.publication)) invalid('a fact publication choice is unsupported');
-    for (const origin of [fact.resolutionOrigin, fact.publicationOrigin]) if (origin !== undefined) {
-      object(origin, 'fact response origin');
-      if (origin.kind !== 'interview') invalid('a fact response origin is unsupported');
-      uuid(origin.interviewId, 'fact interview ID'); uuid(origin.responseId, 'fact response ID');
-    }
     if (fact.followUps !== undefined) for (const exchange of array(fact.followUps, 'fact follow-ups')) { object(exchange, 'fact follow-up'); text(exchange.question, 'follow-up question'); text(exchange.answer, 'follow-up answer'); optionalText(exchange, ['context']); }
   });
   entries(career.applications, 'applications', (app, id) => {
     if (app.id !== id) invalid('an application ID does not match its record');
     job(app.job); text(app.job.title, 'job title'); text(app.createdAt, 'application date'); text(app.updatedAt, 'application date');
     for (const [key, history, kind] of [['cv', 'cvHistory', 'cv'], ['coverLetter', 'coverLetterHistory', 'cover_letter']]) {
-      if (app[key] != null) draft(app[key], kind, career);
-      for (const item of array(app[history], history)) draft(item, kind, career);
+      if (app[key] != null) draft(app[key], kind);
+      for (const item of array(app[history], history)) draft(item, kind);
     }
     array(app.exports, 'saved documents').forEach(item => {
       object(item, 'saved document');
@@ -193,18 +165,13 @@ export function validateBackupCareer(career) {
     optionalText(item, ['id', 'title', 'applicationId', 'createdAt', 'contextFingerprint']);
     const question = value => {
       object(value, 'interview question');
-      optionalText(value, ['id', 'kind', 'subject', 'prompt', 'stage', 'employer', 'factId', 'factSnapshot', 'context', 'facet']);
-      if (value.roleId !== undefined) uuid(value.roleId, 'interview role ID');
+      optionalText(value, ['id', 'kind', 'subject', 'prompt', 'stage', 'employer', 'factId', 'context']);
       if (value.options !== undefined) strings(value.options, 'interview options');
     };
     array(item.questions, 'interview questions').forEach(question);
     if (item.originalQuestions !== undefined) array(item.originalQuestions, 'original interview questions').forEach(question);
     if (item.status !== undefined && !['pending', 'completed', 'cancelled'].includes(item.status)) invalid('an interview status is unsupported');
-    if (item.target !== undefined) {
-      object(item.target, 'interview target');
-      if (item.target.kind === 'application') uuid(item.target.applicationId, 'interview application ID');
-      else if (item.target.kind !== 'cv_review' || !validDigest(item.target.sourceSetFingerprint)) invalid('an interview target is invalid');
-    }
+    if (item.applicationId !== undefined) uuid(item.applicationId, 'interview application ID');
     if (item.responses !== undefined) for (const response of array(item.responses, 'interview responses')) {
       object(response, 'interview response'); uuid(response.id, 'interview response ID'); text(response.createdAt, 'interview response date');
       if (!['chat', 'form'].includes(response.channel)) invalid('an interview response channel is unsupported');
@@ -214,12 +181,7 @@ export function validateBackupCareer(career) {
       for (const answer of array(response.answers, 'interview answers')) {
         object(answer, 'interview answer'); integer(answer.number, 'interview question number'); text(answer.answer, 'interview answer');
         question(answer.question); uuid(answer.factId, 'interview answer fact ID');
-        if (!['answered', 'declined', 'unknown'].includes(answer.resolution)) invalid('an interview answer resolution is unsupported');
-        if (answer.publication !== undefined) {
-          object(answer.publication, 'answer publication choice');
-          if (!['allowed', 'prohibited'].includes(answer.publication.value)) invalid('an answer publication choice is unsupported');
-          if (answer.publication.quote !== undefined) text(answer.publication.quote, 'publication choice quote');
-        }
+        if (answer.publication !== undefined && !['allowed', 'prohibited'].includes(answer.publication)) invalid('an answer publication choice is unsupported');
       }
     }
   });
@@ -254,7 +216,7 @@ export function validateBackupCareer(career) {
   for (const key of ['prescan', 'prescanInclusion', 'prescanPublicationRange']) if (career[key] !== undefined && career[key] !== null && typeof career[key] !== 'string') object(career[key], key);
   if (career.careerGap !== undefined) try { readCareerGapSetting(career.careerGap); } catch { invalid('the career gap setting is unsupported'); }
   try { validateMasterCareer(career); }
-  catch { invalid('the saved master CV, role review, or evidence references are invalid'); }
+  catch { invalid('the saved Master CV is invalid'); }
   return career;
 }
 
@@ -275,8 +237,7 @@ function references(career) {
 function invalidateRuntime(career) {
   career.receipts = {};
   delete career.applicationBindings; delete career.applicationPreparations;
-  // A pending dialogue is session authority, not proof. Keep its literal recorded
-  // responses for fact provenance, but never resume the old session after restore.
+  // Keep recorded answers, but never resume an old session after restore.
   for (const interview of Object.values(career.interviews ?? {})) if (interview.status === 'pending' || interview.status === undefined) {
     interview.status = 'cancelled';
     interview.questions = [];

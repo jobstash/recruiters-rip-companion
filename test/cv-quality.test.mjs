@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cvDocumentTexts, inspectCvQuality, renderableCv, unsupportedNumbers } from '../src/mcp/cv-quality.mjs';
+import { cvDocumentTexts, inspectCvQuality } from '../src/mcp/cv-quality.mjs';
 
 const words = count => Array.from({ length: count }, (_, index) => `word${index}`).join(' ');
 const heading = { name: 'Jane Candidate', contact: 'jane@example.test' };
@@ -56,65 +56,3 @@ test('document texts enumerate every authored field and mark dates', () => {
   assert.deepEqual(cvDocumentTexts(cv({ highlights: ['Shipped.'] })).filter(item => item.claim).map(item => item.field), ['highlights[0]', 'experience[0].bullets[0]']);
 });
 
-test('renderable CVs replace cited claims with their text and never mutate the stored draft', () => {
-  const claim = text => ({ id: '00000000-0000-4000-8000-000000000001', text, support: { sources: [{ sourceId: '00000000-0000-4000-8000-000000000002', contentHash: 'a'.repeat(64), quote: 'Built reliable services.' }] } });
-  const stored = Object.freeze(cv({ highlights: [claim('Shipped.')],
-    experience: [{ employer: 'Acme', role: 'Engineer', startDate: '2018', endDate: '2024', bullets: [claim('Built reliable services.')] }] }));
-  const snapshot = structuredClone(stored);
-  assert.deepEqual(renderableCv(stored), cv({ highlights: ['Shipped.'] }));
-  assert.deepEqual(stored, snapshot);
-  assert.equal(Object.hasOwn(renderableCv(cv()), 'highlights'), false);
-});
-
-test('numeric guards compare whole tokens, not substrings or unqualified values', () => {
-  assert.deepEqual(unsupportedNumbers('Improved by 5%, then by 5%; handled 15.', ['Handled 5.']), ['5%', '15']);
-  assert.deepEqual(unsupportedNumbers('Improved by 5%.', ['Improved by 15%.']), ['5%']);
-  assert.deepEqual(unsupportedNumbers('Handled 5.', ['Improved by 5%.']), ['5']);
-  assert.deepEqual(unsupportedNumbers('Improved by 5 %.', ['Improved by 5%.']), []);
-  assert.deepEqual(unsupportedNumbers('Saved $5 and €5 and £5.', ['Saved 5.']), ['$5', '€5', '£5']);
-  assert.deepEqual(unsupportedNumbers('Saved $5.', ['Saved €5.']), ['$5']);
-  assert.deepEqual(unsupportedNumbers('Saved USD 5.', ['Saved USD5.']), []);
-});
-
-test('units, magnitudes, signs, and bounds remain part of numeric claims', () => {
-  assert.deepEqual(unsupportedNumbers('5k; 5M; 5 million; 5ms; 5MB; 5%; 5+; -5; +5.', ['5']),
-    ['5k', '5M', '5million', '5ms', '5MB', '5%', '5+', '-5', '+5']);
-  assert.deepEqual(unsupportedNumbers('Latency 5 ms; capacity 5 MB; team 5 people.', ['Latency 5ms; capacity 5MB; team 5 people.']), []);
-  assert.deepEqual(unsupportedNumbers('Capacity 5MB.', ['Capacity 5Mb.']), ['5MB']);
-  assert.deepEqual(unsupportedNumbers('Temperature 5°C.', ['Temperature 5°F.']), ['5°C']);
-  assert.deepEqual(unsupportedNumbers('Handled 5 million.', ['Handled 5000000.']), ['5million']);
-});
-
-test('grouping, decimals, and unicode spaces normalize without losing distinct values', () => {
-  assert.deepEqual(unsupportedNumbers('Saved $1,234.50.', ['Saved $1234.50.']), []);
-  assert.deepEqual(unsupportedNumbers('Saved €1.234,50.', ['Saved €1234.50.']), []);
-  assert.deepEqual(unsupportedNumbers('Saved €1\u202f234,50.', ['Saved €1234.50.']), []);
-  assert.deepEqual(unsupportedNumbers('Saved CHF 1’234.50.', ["Saved CHF 1234.50."]), []);
-  assert.deepEqual(unsupportedNumbers('Improved by 12,5%.', ['Improved by 12.5%.']), []);
-  assert.deepEqual(unsupportedNumbers('Measured 0,125.', ['Measured 0.125.']), []);
-  assert.deepEqual(unsupportedNumbers('Measured 1.234.', ['Measured 1234.']), ['1.234']);
-  assert.deepEqual(unsupportedNumbers('Measured 12.5%.', ['Measured 125%.']), ['12.5%']);
-  assert.deepEqual(unsupportedNumbers('Processed 9007199254740993.', ['Processed 9007199254740992.']), ['9007199254740993']);
-});
-
-test('numeric dates and ranges remain whole while attached technical literals are not metrics', () => {
-  assert.deepEqual(unsupportedNumbers('B2B, ISO27001, ISO-27001, RFC3339, ES2022, v2.3.4, 3D, 1.2.3.', []), []);
-  assert.deepEqual(unsupportedNumbers('Worked 2018 – 2024; released 2024-01-30.', ['Worked 2018-2024; released 2024-01-30.']), []);
-  assert.deepEqual(unsupportedNumbers('Worked 2018–2025.', ['Worked 2018-2024.']), ['2018-2025']);
-  assert.deepEqual(unsupportedNumbers('Released 01/02/2024.', ['Released 02/01/2024.']), ['01/02/2024']);
-  assert.deepEqual(unsupportedNumbers('Released 30.01.2024.', ['Released 30.01.2024.']), []);
-  assert.deepEqual(unsupportedNumbers('Improved by 5–10%.', ['Improved by 5-10%.']), []);
-  assert.deepEqual(unsupportedNumbers('Measured −5.', ['Measured -5.']), []);
-  assert.deepEqual(unsupportedNumbers('Handled 5.', ['B2B; ISO27001; v5.0.']), ['5']);
-});
-
-test('numeric evidence is read-only and expressions are unique in first-appearance order', () => {
-  const supporting = Object.freeze(['Handled 10 users.', 'Saved $500.']);
-  const snapshot = [...supporting];
-  const text = 'Handled 15 users; saved $600; handled 15 users; saved $500.';
-  const result = unsupportedNumbers(text, supporting);
-  assert.deepEqual(result, ['15users', '$600']);
-  assert.deepEqual(unsupportedNumbers(text, supporting), result);
-  assert.deepEqual(supporting, snapshot);
-  assert.deepEqual(unsupportedNumbers('No numeric claims here.', []), []);
-});

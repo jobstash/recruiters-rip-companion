@@ -11,7 +11,7 @@ import { reviewInclusion, savedPublicationRange } from './review-queue.mjs';
 import { assertJobNotBlocked, blockFilter } from './blocklist.mjs';
 import { completeLocalJobs, localJob, localJobMetadata, localJobOriginal } from './job-tools.mjs';
 import { publicationInWindow, publicationWindowForRange } from './publication-range.mjs';
-import { masterCvState, masterEvidenceFingerprint, sourceSet, cvReviewState } from './master-cv.mjs';
+import { masterCvState } from './master-cv.mjs';
 
 const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
 const object = (properties, required = []) => ({ type: 'object', properties, required, additionalProperties: false });
@@ -142,9 +142,8 @@ export function candidateContext(career) {
     preferences[field] = compact(profile.preferences[field], field === 'notes' ? Infinity : 600);
   const cv = candidateCv(career);
   const facts = Object.values(career.facts ?? {}).sort(compareFacts)
-    .map(({ id, kind, subject, answer, detail, employer, roleId, facet, resolution, question, context, applicationId, followUps }) => ({
-      ...(id ? { id } : {}), kind, subject: compact(subject), answer: compact(answer),
-      ...(roleId ? { roleId } : {}), ...(facet ? { facet } : {}), ...(resolution ? { resolution } : {}),
+    .map(({ id, kind, subject, answer, detail, employer, publication, question, context, applicationId, followUps }) => ({
+      ...(id ? { id } : {}), kind, subject: compact(subject), answer: compact(answer), ...(publication ? { publication } : {}),
       ...(detail ? { detail: compact(detail, Infinity) } : {}), ...(employer ? { employer: compact(employer) } : {}),
       ...(question ? { question: compact(question) } : {}), ...(context ? { context: compact(context) } : {}),
       ...(applicationId ? { applicationId } : {}),
@@ -163,9 +162,7 @@ export function candidateContext(career) {
       asked.length ? `Ask the candidate in one message: ${asked.map(field => ESSENTIAL_PREFERENCES[field]).join(' ')}` : '',
       `Save with career_preferences_update (fields: ${missing.join(', ')}), then continue the review.`].filter(Boolean).join(' '));
   }
-  return { ...professional, ...(cv ? { cv } : {}), facts, preferences,
-    master: masterCvState(career).master, masterEvidenceFingerprint: masterEvidenceFingerprint(career),
-    sourceSet: sourceSet(career), review: cvReviewState(career), roles: Object.values(career.roles ?? {}) };
+  return { ...professional, ...(cv ? { cv } : {}), facts, preferences, master: masterCvState(career).master };
 }
 
 /** Quote comparison tolerant of typography, bullets, spacing and case, never of rewording. */

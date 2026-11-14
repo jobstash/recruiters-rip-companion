@@ -12,7 +12,7 @@ import { validateBackupCareer } from '../src/backup.mjs';
 import { createDocumentFiles } from '../src/mcp/files.mjs';
 import { createCareerState } from '../src/mcp/state.mjs';
 import { readyMaster } from './helpers/ready-master.mjs';
-import { sourceSet, assertMasterReady } from '../src/mcp/master-cv.mjs';
+import { assertMasterReady } from '../src/mcp/master-cv.mjs';
 
 const documents = createRequire(import.meta.url)('../src/generated/document-engine.cjs');
 const now = new Date('2026-11-11T12:00:00Z');
@@ -155,16 +155,11 @@ async function fixture(t) {
   initial.sources[sourceId] = { id: sourceId, name: 'Imported CV', purpose: 'cv', mediaType: 'text/plain', text: cvText, createdAt: now.toISOString() };
   let state = { deviceId: randomUUID(), career: initial };
   const store = { get: () => structuredClone(state), async update(change) { const copy = structuredClone(state); await change(copy); state = copy; } };
-  const ref = quote => ({ ...sourceSet(initial)[0], quote });
-  const roles = [
-    { id: randomUUID(), employer: 'Acme Corp', title: 'Platform Engineer', startDate: 'Mar 2021', endDate: 'Present', sourceRefs: [ref(cvText.slice(0, cvText.indexOf('Globex')).trim())] },
-    { id: randomUUID(), employer: 'Globex', title: 'Backend Developer', startDate: '2015', endDate: 'Jun 2019', sourceRefs: [ref(cvText.slice(cvText.indexOf('Globex')))] },
-  ];
-  const document = { headline: 'Platform Engineer', summary: 'Built dependable data services.', experience: roles.map(role => ({
-    roleId: role.id, employer: role.employer, role: role.title, startDate: role.startDate, endDate: role.endDate,
-    bullets: [{ id: randomUUID(), text: role.sourceRefs[0].quote.split('\n').at(-1), support: { sources: role.sourceRefs } }],
-  })) };
-  const ready = await readyMaster(store, { roles, document });
+  const document = { headline: 'Platform Engineer', summary: 'Built dependable data services.', experience: [
+    { employer: 'Acme Corp', role: 'Platform Engineer', startDate: 'Mar 2021', endDate: 'Present', bullets: ['Built event-driven data services in TypeScript and Kafka.'] },
+    { employer: 'Globex', role: 'Backend Developer', startDate: '2015', endDate: 'Jun 2019', bullets: ['Developed retail backend systems.'] },
+  ] };
+  await readyMaster(store, { document });
   const files = createDocumentFiles({ directory, store, assertAvailable() {} });
   const tools = new Map(createApplicationTools({ store, platform: async () => assert.fail('No platform call expected'), documents,
     exportDocument: files.exportDocument, cleanupExports: files.cleanupExports, withExportTransaction: files.withExportTransaction }).map(tool => [tool.name, tool]));
@@ -172,14 +167,11 @@ async function fixture(t) {
   const mutation = args => ({ requestId: randomUUID(), revision: state.career.revision, ...args });
   const { applicationId } = await call('application_create', mutation({ job: { title: 'Platform Engineer', company: 'Example Employer', description: 'Operate data services.', url: 'https://example.test/jobs/1' } }));
   const cvArgs = () => ({ applicationId, masterVersion: assertMasterReady(state.career).version,
-    contextFingerprint: applicationContextFingerprint(state.career, state.career.applications[applicationId]), evidence: ready.evidence,
-    cv: structuredClone(assertMasterReady(state.career).document),
-    requirements: [{ id: randomUUID(), phrase: 'data services', priority: 'crucial', kind: 'skill', status: 'supported', roleIds: [roles[0].id],
-      support: { sources: roles[0].sourceRefs }, rationale: 'Directly evidenced service delivery.' }] });
+    cv: structuredClone(assertMasterReady(state.career).document) });
   return { tools, call, mutation, applicationId, store, cvArgs, career: () => state.career,
     set: setting => store.update(saved => { setCareerGap(saved.career, setting); }),
     refresh: () => readyMaster(store),
-    saveCv: (cv = cvArgs().cv) => call('application_cv_save', mutation({ ...cvArgs(), cv })),
+    saveCv: (cv = cvArgs().cv) => call('application_cv_save', { ...cvArgs(), cv }),
     exportCv: async format => { const { export: record } = await call('application_export', mutation({ applicationId, kind: 'cv', format })); return record; } };
 }
 
@@ -205,11 +197,11 @@ test('enabled canonical gaps survive master tailoring and PDF export without age
   assert.equal((await f.exportCv('pdf')).textValidation.passed, true);
 });
 
-test('gap setting changes require a current master and retire old exports', async t => {
+test('gap setting changes update the master view and retire old application exports', async t => {
   const f = await fixture(t);
   await f.set(on()); await f.refresh(); await f.saveCv(); await f.exportCv('txt');
   await f.set(on({ activity: 'Family care', place: 'Porto, Portugal', description: 'Cared for a family member full time' }));
-  await assert.rejects(f.exportCv('txt'), { code: 'MASTER_NOT_READY' });
+  await assert.rejects(f.exportCv('txt'), { code: 'APPLICATION_CONTEXT_CHANGED' });
   await f.refresh();
   await assert.rejects(f.exportCv('txt'), { code: 'APPLICATION_CONTEXT_CHANGED' });
   await f.saveCv();

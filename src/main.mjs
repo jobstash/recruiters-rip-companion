@@ -22,6 +22,8 @@ import { createMcpServer, createPlatformTools } from './mcp/server.mjs';
 import { createProfileTools } from './mcp/profile-tools.mjs';
 import { createApplicationTools } from './mcp/application-tools.mjs';
 import { startMcpBroker } from './mcp/broker.mjs';
+import { createMasterCvTools, masterCvState } from './mcp/master-cv.mjs';
+import { createMasterCvSettings, MASTER_CV_ACTIONS } from './master-cv-settings.mjs';
 import { createDocumentFiles, readSelectedSource } from './mcp/files.mjs';
 import { createScopedAccess } from './mcp/scope.mjs';
 import { createMatchingTools, deleteRankings } from './mcp/matching-tools.mjs';
@@ -39,7 +41,7 @@ import { createBrowserForms } from './browser-forms.mjs';
 import { createUpdateController } from './updates.mjs';
 import { createUpdatePreferences, createUpdateScheduler, createUpdateWorkGate, updateAppPath } from './update-scheduler.mjs';
 import { inspectManagedSource } from './source-updates.mjs';
-import { createApplicationWorkflow, createApplicationPreparationTools, saveAppliedJobs } from './application-workflow.mjs';
+import { createApplicationWorkflow, createApplicationPreparationTools, saveAppliedJobs, currentApplicationExport } from './application-workflow.mjs';
 import { createApplicationLauncher, REVIEW_PROMPT } from './application-launcher.mjs';
 import { createJobsCatalogue } from './jobs-catalogue.mjs';
 
@@ -89,9 +91,11 @@ let installationAdmitted = false, releaseInstallation;
 const workGate = createUpdateWorkGate();
 let restoringBackup = false;
 const identityKey = state => JSON.stringify([state.deviceId, state.pairing?.origin, state.pairing?.account?.id]);
+const masterSessionId = randomUUID();
+const masterIdentity = () => `${vault.get().deviceId}:${masterSessionId}:${sessionEpoch}`;
 const store = {
   get() { assertAvailable(false); return vault.get(); },
-  update(change) {
+  update(change, options) {
     assertAvailable(false);
     const generation = sessionEpoch;
     return vault.update(async state => {
@@ -102,7 +106,7 @@ const store = {
       assertAvailable(false);
       if (generation !== sessionEpoch) fail('IDENTITY_CHANGED', 'The profile changed. Reopen it before saving.');
       if (identityKey(state) !== identity) { browserForms?.cancelAll(); sessionEpoch++; }
-    });
+    }, options);
   },
 };
 function assertWorkAllowed() {
@@ -130,7 +134,10 @@ const backups = createBackups({
     return selected.canceled ? null : selected.filePaths[0];
   },
   selectDestination: async defaultPath => {
-    const selected = await dialog.showSaveDialog(window, { title: 'Save backup', defaultPath, filters: [{ name: 'Profile backup', extensions: ['json'] }] });
+    const scoped = createScopedAccess(store, { assertAvailable, epoch: () => sessionEpoch });
+    const selected = await dialog.showSaveDialog(window, { title: 'Save backup', defaultPath, filters: [{ name: 'Profile backup', extensions: ['json'] }],
+      ...(webShell ? { assertCurrent: () => scoped.assertAvailable(false) } : {}) });
+    scoped.assertAvailable(false);
     return selected.canceled ? null : selected.filePath;
   },
   openFolder: async folder => { if (await shell.openPath(folder)) fail('BACKUP_FOLDER_UNAVAILABLE', 'The backups folder could not be opened. Try again.'); },
@@ -151,6 +158,25 @@ const backups = createBackups({
     for (const waiting of browserReplies.values()) waiting.reject(waiting.failure('The profile was restored. Read this page again.'));
     browserReplies.clear(); mcpBridge?.disconnect();
   },
+});
+const masterSettings = createMasterCvSettings({
+  access: () => createScopedAccess(store, { assertAvailable: assertWorkAllowed, epoch: () => sessionEpoch }),
+  identity: masterIdentity, documents: () => documents,
+  browserAccess: () => webShell ? webHost.captureAccess() : () => {},
+  selectDestination: async (filename, format) => {
+    if (webShell) {
+      const choice = await dialog.showMessageBox(window, { title: 'Export master CV', message: `Download ${filename}?`,
+        buttons: ['Cancel', 'Download'], defaultId: 1, cancelId: 0 });
+      return choice.response === 1 ? filename : null;
+    }
+    const selected = await dialog.showSaveDialog(window, { title: 'Export master CV',
+      defaultPath: path.join(app.getPath('downloads'), filename),
+      filters: [{ name: format === 'pdf' ? 'PDF document' : 'Text document', extensions: [format] }] });
+    return selected.canceled ? null : selected.filePath;
+  },
+  ...(webShell ? { publish: (filename, bytes, assertCurrent) => webHost.publishDownload(bytes, { name: filename, assertCurrent }) } : {}),
+  copyPrompt: text => { clipboard.writeText(text); return !webShell; },
+  afterSave: () => { careerViewRevision++; browserForms.cancelAll(); emit(); },
 });
 updates = createUpdateController({
   version: packageMetadata.version, platform: process.platform, arch: process.arch,
@@ -267,7 +293,7 @@ function assertAvailable() {
   if (restoringBackup) fail('LOCAL_BUSY', 'A profile is being restored. Wait for it to finish.');
 }
 function safeFailure(error) {
-  const allowed = new Set(['DEVICE_OFFLINE', 'DEVICE_UNAUTHORIZED', 'DEVICE_REQUEST_FAILED', 'LOCAL_LOCKED', 'LOCAL_BUSY', 'IDENTITY_CHANGED', 'LEGACY_VAULT_LOCKED', 'NOT_FOUND', 'INVALID_INPUT', 'PAIRING_REQUIRED', 'CANCELLED', 'HOST_UNAVAILABLE', 'HOST_INSTALL_FAILED', 'UPDATE_MANUAL_OPEN_FAILED']);
+  const allowed = new Set(['DEVICE_OFFLINE', 'DEVICE_UNAUTHORIZED', 'DEVICE_REQUEST_FAILED', 'LOCAL_LOCKED', 'LOCAL_BUSY', 'IDENTITY_CHANGED', 'LEGACY_VAULT_LOCKED', 'NOT_FOUND', 'INVALID_INPUT', 'PAIRING_REQUIRED', 'CANCELLED', 'HOST_UNAVAILABLE', 'HOST_INSTALL_FAILED', 'UPDATE_MANUAL_OPEN_FAILED', 'VERSION_CONFLICT', 'REVISION_CONFLICT', 'REQUEST_CONFLICT', 'MASTER_NOT_READY', 'USER_EDIT_CONFLICT', 'EXPORT_INVALID', 'EXPORT_UNAVAILABLE']);
   const known = error instanceof CareerError || error?.publicUpdateError === true || allowed.has(error?.code);
   return { code: known ? error.code : 'LOCAL_OPERATION_FAILED', message: known ? error.message : 'This action could not be completed. Reopen the companion and try again.' };
 }
@@ -335,11 +361,13 @@ function noteSessions(clients) {
 function localState() {
   const publicState = status();
   const browserIntegration = { registered: browserRegistrations, connected: [...new Set([...sockets].map(socket => socket.browser))] };
-  if (locked) return { ...publicState, failure, browserConnection, browserIntegration, mcpClients };
+  if (locked || screenLocked || sleeping) return { ...publicState, failure, browserConnection, browserIntegration, mcpClients };
   const state = vault.get();
+  const master = masterCvState(state.career ?? createCareerState(), masterIdentity());
   return { ...publicState, account: state.pairing?.account ?? null, reconnectAccount: state.reconnectAccount ?? null, origin: state.pairing?.origin ?? null, browserConnection, browserIntegration, mcpClients, failure,
     shell: { web: webShell, container, browserSetup: container ? Object.fromEntries(['chrome', 'firefox'].map(browser => [browser, `docker exec ${container} companion browser ${browser} | sh`])) : null },
     setup: setup(), careerViewVersion: `${state.deviceId}:${sessionEpoch}:${careerViewRevision}`,
+    masterCv: { version: master.master?.version ?? 0, revision: master.revision, status: master.status, identity: master.identity },
     catalogue: jobsCatalogue.state(), hasReviews: Object.keys(state.career?.matching?.scores ?? {}).length > 0,
     decisions: { credentials: decisionCredentialStatus(state) },
     publicationRange: savedPublicationRange(state.career ?? {}),
@@ -502,6 +530,16 @@ async function openInBrowser(value) {
   catch { throw new CareerError('BROWSER_UNAVAILABLE', webShell ? 'Open Companion in your browser, then open this application again.' : 'Set a default web browser in system settings, then open this application again.'); }
   return { opened: true };
 }
+function applicationOfferOptions(access, record, selection = () => record) {
+  const expected = hash(record);
+  return { sha256: record.sha256, assertCurrent: () => {
+    access.assertAvailable(false);
+    const career = access.store.get().career, app = career?.applications?.[record.applicationId];
+    const current = app && currentApplicationExport(career, app, record.kind);
+    if (!current || hash(current) !== expected || hash(selection()) !== expected)
+      fail('DOCUMENT_NOT_CURRENT', 'This application or its master CV changed. Open the current document again.');
+  } };
+}
 function applicationAccess() {
   const scoped = createScopedAccess(store, { assertAvailable, epoch: () => sessionEpoch });
   const localFiles = createDocumentFiles({ directory, store: scoped.store, assertAvailable: scoped.assertAvailable });
@@ -547,6 +585,7 @@ function createSessionServer() {
     ...createProfileTools({ store: scoped.store, interaction, selectSourceFile: async () => {
       scoped.assertAvailable(true); const result = await selectSourceFile(); scoped.assertAvailable(true); return result;
     }, extractFile: documents.extractFile }),
+    ...createMasterCvTools({ store: scoped.store, identity: masterIdentity }),
     ...createApplicationTools({ store: scoped.store, platform: scopedPlatform, documents, exportDocument: localFiles.exportDocument, cleanupExports: localFiles.cleanupExports, withExportTransaction: localFiles.withExportTransaction }),
     ...createApplicationPreparationTools({ workflow: applicationFlow, openInBrowser: async url => {
       scoped.assertAvailable(false); const result = await openInBrowser(url); scoped.assertAvailable(false); return result;
@@ -696,7 +735,13 @@ async function nativeOperation(op, payload, socket = null) {
     if (current.uri !== record.uri) fail('FORM_CONTEXT_CHANGED', 'The application document changed. Open its current version.');
     if (webShell) {
       let open;
-      try { open = await webHost.fileUrl(filename, { download: payload.action === 'reveal' }); }
+      const options = applicationOfferOptions(access, record, () => {
+        if (socket.destroyed || !socket.writable || applicationSockets.get(payload.bindingId) !== bound ||
+            access.store.get().career.applicationBindings?.[payload.bindingId]?.applicationId !== record.applicationId)
+          fail('FORM_CONTEXT_CHANGED', 'Read this application page again before opening its document.');
+        return record;
+      });
+      try { open = await webHost.fileUrl(filename, { ...options, download: payload.action === 'reveal' }); }
       catch { fail('EXPORT_UNAVAILABLE', 'The PDF could not be opened. Prepare the document again.'); }
       return { opened: true, kind: payload.kind, action: payload.action, ...browserTask({ open }) };
     }
@@ -860,6 +905,10 @@ async function startNativeBridge() {
 async function settingsOperation(op, input, ownMutation) {
   try {
     if (op === 'state') return { ok: true, result: localState() };
+    if (MASTER_CV_ACTIONS.includes(op)) {
+      assertWorkAllowed();
+      return { ok: true, result: await masterSettings(op, input) };
+    }
     if (['backup', 'backup-preview', 'backup-restore', 'backup-cancel', 'backup-open-folder'].includes(op)) {
       assertWorkAllowed();
       exact(input, op === 'backup-restore' ? ['restoreId', 'profileId'] : []);
@@ -888,7 +937,10 @@ async function settingsOperation(op, input, ownMutation) {
       const scoped = createScopedAccess(store, { assertAvailable, epoch: () => sessionEpoch });
       const localFiles = createDocumentFiles({ directory, store: scoped.store, assertAvailable: scoped.assertAvailable });
       const reader = createCareerBrowser({ store: scoped.store, files: localFiles,
-        openPath: filename => { scoped.assertAvailable(false); return shell.openPath(filename); } });
+        openPath: (filename, selection) => {
+          scoped.assertAvailable(false);
+          return webShell ? webHost.offerFile(filename, { ...applicationOfferOptions(scoped, selection(), selection), sessionBound: true }) : shell.openPath(filename);
+        } });
       const result = await (op === 'career-list' ? reader.list(input) : op === 'career-read' ? reader.read(input)
         : op === 'career-pipeline' ? reader.pipeline(input) : reader.openDocument(input));
       scoped.assertAvailable(false);
@@ -1057,10 +1109,10 @@ ipcMain.handle('local-settings', async (event, op, input = {}) => {
     if (typeof op !== 'string') fail('INVALID_INPUT', 'Choose a local settings action.');
     if (op === 'state' || op.startsWith('update-')) return await settingsOperation(op, input);
     return await workGate.run(() => {
-      if (['decisions-key-save', 'decisions-key-remove', 'publication-range-set', 'career-gap-set', 'import-cv', 'cv-delete', 'delete-rankings', 'connect-account', 'backup', 'backup-preview', 'backup-restore'].includes(op))
+      if (['decisions-key-save', 'decisions-key-remove', 'publication-range-set', 'career-gap-set', 'import-cv', 'cv-delete', 'delete-rankings', 'connect-account', 'backup', 'backup-preview', 'backup-restore', 'master-cv-save', 'master-cv-export', 'master-cv-prompt'].includes(op))
         return mutation(ownMutation => settingsOperation(op, input, ownMutation));
       return settingsOperation(op, input);
-    }, { meaningful: !['career-list', 'career-read', 'career-pipeline', 'account-platform'].includes(op) });
+    }, { meaningful: !['career-list', 'career-read', 'career-pipeline', 'account-platform', 'master-cv-read'].includes(op) });
   } catch (error) { return { ok: false, error: safeFailure(error) }; }
 });
 app.on('open-url', (event, url) => { event.preventDefault(); acceptPairingURL(url); });

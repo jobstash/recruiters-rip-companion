@@ -1,11 +1,12 @@
-import { CareerError, fail, hash, mutateCareer, readCareer } from './mcp/state.mjs';
-import { currentForm, formEvidence, formFingerprint, unavailableField, validFormValue, validateFormSnapshot } from './mcp/form-tools.mjs';
+import { CareerError, fail, hash, mutateCareer, readCareer, replayCareer } from './mcp/state.mjs';
+import { formEvidence, formFingerprint, unavailableField, validFormValue, validateFormSnapshot } from './mcp/form-tools.mjs';
 import { FORM_DECISIONS, mapFormValues } from './decisions/form-mapping.mjs';
 import { CONTACT_FIELDS, patchProfile } from './mcp/profile-fields.mjs';
 import { factKey, normalizeFact } from './mcp/facts.mjs';
 import { upsertFacts } from './mcp/profile-tools.mjs';
 import { contactCandidates } from './form-contact-candidates.mjs';
-import { applicationContextFingerprint, isApplicationWritingField, reusableApplicationAnswer } from './application-workflow.mjs';
+import { applicationContextFingerprint, isApplicationWritingField, pendingApplicationInterviews, reusableApplicationAnswer } from './application-workflow.mjs';
+import { assertPublishableText, masterCvState } from './mcp/master-cv.mjs';
 import { assertJobNotBlocked } from './mcp/blocklist.mjs';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -111,28 +112,6 @@ function answerPlan(target, value) {
     return { ...target, fact: normalizeFact({ kind, subject: target.topic.subject, answer: kind === 'yes_no' ? (answer ? 'Yes' : 'No') : text, question: target.field.label.slice(0, 300) }) };
   } catch { return { field: target.field }; }
 }
-// A user's own answer is not new evidence for answers and documents already bound to the career context.
-function keepBindings(career, change) {
-  const evidence = formEvidence(career), apps = Object.values(career.applications ?? {});
-  const contexts = apps.map(app => applicationContextFingerprint(career, app));
-  change();
-  const next = formEvidence(career), drafts = Object.values(career.formDrafts ?? {});
-  for (const draft of drafts) if (draft.evidence === evidence) draft.evidence = next;
-  apps.forEach((app, index) => {
-    const before = contexts[index], after = applicationContextFingerprint(career, app);
-    if (before === after) return;
-    for (const item of [app.cv, app.coverLetter, ...(app.exports ?? []), ...Object.values(app.formAnswers ?? {})])
-      if (item?.contextFingerprint === before) item.contextFingerprint = after;
-    for (const draft of drafts) if (draft.applicationId === app.id && draft.applicationContext === before) draft.applicationContext = after;
-  });
-}
-/** An agent's answer to a generic question becomes the same reusable fact as the user's own answer, unless one is saved. */
-export function keepGenericAnswer(career, field, value) {
-  const target = answerTarget(field), topic = target?.topic;
-  if (!topic || topic.preference || topic.referral || Object.values(career.facts ?? {}).some(fact => !fact.employer && !fact.applicationId && factKey(fact) === factKey({ subject: topic.subject }))) return;
-  const plan = answerPlan(target, value);
-  if (plan.fact) keepBindings(career, () => upsertFacts(career, [{ fields: plan.fact }]));
-}
 function profileValue(profile, key) {
   if (key === 'requiresSponsorship') return typeof profile.preferences?.requiresSponsorship === 'boolean' ? (profile.preferences.requiresSponsorship ? 'Yes' : 'No') : null;
   if (typeof profile[key] === 'string' && profile[key].trim()) return profile[key];
@@ -160,7 +139,7 @@ function topicValue(field, career) {
     const saved = career.profile?.preferences?.[topic.preference];
     return typeof saved === 'boolean' ? chosen(field, saved ? 'Yes' : 'No', `profile.preferences.${topic.preference}`) : null;
   }
-  const fact = Object.values(career.facts ?? {}).find(fact => !fact.employer && !fact.applicationId && factKey(fact) === factKey({ subject: topic.subject }));
+  const fact = Object.values(career.facts ?? {}).find(fact => !fact.employer && !fact.roleId && !fact.applicationId && fact.publication !== 'prohibited' && factKey(fact) === factKey({ subject: topic.subject }));
   const saved = fact && chosen(field, fact.answer, `fact:${fact.id}`);
   if (saved || !topic.referral) return saved;
   const value = referralDefault(field);
@@ -184,8 +163,8 @@ function knownBank(career) {
   for (const value of career.profile?.roleCapabilities ?? []) add('Demonstrated role capability', value, 'profile.roleCapabilities');
   for (const fact of Object.values(career.facts ?? {})) {
     // Without a verified destination/application binding, scoped evidence cannot become a global answer.
-    if (fact.employer || fact.applicationId) continue;
-    const qualifiers = Object.fromEntries(['question', 'context', 'detail', 'followUps'].filter(key => fact[key] !== undefined).map(key => [key, structuredClone(fact[key])]));
+    if (fact.employer || fact.roleId || fact.applicationId || fact.publication === 'prohibited') continue;
+    const qualifiers = Object.fromEntries(['question', 'context', 'detail'].filter(key => fact[key] !== undefined).map(key => [key, structuredClone(fact[key])]));
     add(fact.subject, fact.answer, `fact:${fact.id}`, qualifiers);
     if (fact.detail) add(`${fact.subject}: detail`, fact.detail, `fact:${fact.id}`, qualifiers);
   }
@@ -250,23 +229,27 @@ export function createBrowserForms({ store, credentials, assertAvailable, fetchI
       const applicationContext = app ? applicationContextFingerprint(career, app) : null;
       const staged = previous?.evidence === evidence && previous.evidenceRevision === (career.evidenceRevision ?? 0) &&
         (!previous.applicationId || previous.applicationContext === applicationContext) ? previous.answers : {};
+      const writingReady = Boolean(app && masterCvState(career).status === 'ready' && !pendingApplicationInterviews(career, app.id).length);
       const bank = knownBank(career), values = new Map(), reasons = new Map(), pending = [];
       for (const original of snapshot.fields) {
         const field = collectibleField(original), reason = unavailableField(field);
         if (reason) { reasons.set(field.id, reason); continue; }
+        const target = answerTarget(field), generic = Boolean(target?.key || target?.topic);
+        const known = topicValue(field, career) ?? directValue(field, career.profile ?? {});
+        if (known) { values.set(field.id, known); continue; }
+        if (!generic && isApplicationWritingField(field) && !writingReady) {
+          reasons.set(field.id, app ? 'Finish the current Master CV review and any pending application questions before using prepared writing.' : 'Bind this page to its saved application before preparing application writing.');
+          continue;
+        }
         const saved = staged?.[field.id], user = saved?.source === 'user';
-        const answer = reusableApplicationAnswer(career, app?.id, field, applicationContext) ?? (app || user || !isApplicationWritingField(field) ? saved : null);
+        const answer = (!generic ? reusableApplicationAnswer(career, app?.id, field, applicationContext) : null) ?? (app || user || generic || !isApplicationWritingField(field) ? saved : null);
         if (answer && validFormValue(field, answer.value)) { values.set(field.id, { value: answer.value, source: answer.source === 'user' ? 'user' : 'agent' }); continue; }
-        const topic = topicValue(field, career);
-        if (topic) { values.set(field.id, topic); continue; }
-        if (isApplicationWritingField(field)) { reasons.set(field.id, 'Ask your connected agent to write this answer for this application.'); continue; }
+        if (!generic && isApplicationWritingField(field)) { reasons.set(field.id, 'Ask your connected agent to write this answer for this application.'); continue; }
         if (otherPersonContact(field)) { reasons.set(field.id, 'This asks about another person. Stage an explicit supported answer with your connected agent or complete manually.'); continue; }
         if (contactKey(field) !== 'requiresSponsorship' && ELIGIBILITY.test(field.label)) {
           reasons.set(field.id, 'Confirm eligibility for this application with your connected agent or complete manually.'); continue;
         }
-        const direct = directValue(field, career.profile ?? {});
-        if (direct) values.set(field.id, direct);
-        else if (!original.manualOnly && candidatesFor(field, bank, career.profile ?? {}).length) pending.push(field);
+        if (!original.manualOnly && candidatesFor(field, bank, career.profile ?? {}).length) pending.push(field);
       }
       if (args.useApi) {
         try {
@@ -321,13 +304,21 @@ export function createBrowserForms({ store, credentials, assertAvailable, fetchI
       }
       for (const field of nameFields) if (reasons.get(field.id) === 'The name parts are ambiguous. Enter them explicitly.') values.delete(field.id);
       for (const answer of values.values()) delete answer.candidateKind;
+      for (const [id, answer] of values) {
+        try { assertPublishableText(career, answer.value, 'Application answer'); }
+        catch (error) {
+          if (error.code !== 'PUBLICATION_RESTRICTED') throw error;
+          values.delete(id); reasons.set(id, 'This answer contains information marked private. Ask for publication-safe wording.');
+        }
+      }
       current(run);
       // A default referral answer stays replaceable by the user's own answer.
       const missing = snapshot.fields.filter(field => (!values.has(field.id) || values.get(field.id).source === 'default') && answerTarget(field)).map(field => field.id);
       const collectionSnapshot = hash({ fingerprint, evidence, identity: run.identity, requestId: args.requestId, answers: run.answersHash });
       await store.update(saved => {
         check(run, saved);
-        saved.career.formDrafts[formId].collection = { snapshot: collectionSnapshot, identity: run.identity, missing };
+        saved.career.formDrafts[formId].collection = { snapshot: collectionSnapshot, identity: run.identity, missing,
+          formSnapshot: fingerprint, evidence, applicationContext };
       });
       current(run);
       return { formId, snapshot: collectionSnapshot, ...(args.useApi ? { api: { configured: Boolean(run.key), used: requests > 0 } } : {}),
@@ -348,19 +339,28 @@ export function createBrowserForms({ store, credentials, assertAvailable, fetchI
     const bound = (career, state) => {
       assertAvailable();
       assertFormJobAllowed(career, args.formId);
-      const draft = currentForm(career, args.formId), binding = draft.collection;
-      if (!binding || binding.snapshot !== args.snapshot || binding.identity !== identity(state))
+      const draft = Object.hasOwn(career.formDrafts ?? {}, args.formId) && career.formDrafts[args.formId], binding = draft?.collection;
+      const app = career.applications?.[draft?.applicationId];
+      if (!binding || binding.snapshot !== args.snapshot || binding.identity !== identity(state) || binding.formSnapshot !== draft.snapshot ||
+          binding.evidence !== formEvidence(career) || binding.applicationContext !== (app ? applicationContextFingerprint(career, app) : null))
         fail('FORM_CONTEXT_CHANGED', 'The form or your saved answers changed. Read the page again before saving.');
       const target = binding.missing.includes(args.fieldId) && answerTarget(draft.fields.find(field => field.id === args.fieldId));
       if (!target) fail('INVALID_INPUT', 'This answer cannot be saved here. Complete it on the page.');
       if (args.value !== null && !validFormValue(target.field, args.value)) fail('INVALID_INPUT', 'Enter a valid answer for this field.');
       return { draft, plan: answerPlan(target, args.value) };
     };
+    assertAvailable();
+    const initial = store.get(), initialIdentity = identity(initial);
+    assertFormJobAllowed(initial.career ?? {}, args.formId);
+    if (initial.career?.formDrafts?.[args.formId]?.collection?.identity !== initialIdentity)
+      fail('FORM_CONTEXT_CHANGED', 'The local identity changed. Read the page again before saving.');
+    const replay = replayCareer(store, { requestId: args.requestId, revision: initial.career.revision }, 'forms_answer_save', args);
+    if (replay) return replay;
     const { plan } = bound(readCareer(store), store.get());
     // Job-specific text typed on the employer's page stays there; so does a pasted default referral answer.
     if (args.source === 'page' && ((!plan.key && !plan.preference && !plan.fact && !(args.value === null && plan.topic)) ||
         (plan.topic?.referral && args.value === referralDefault(plan.field)))) return { fieldId: args.fieldId, scope: 'none' };
-    return mutateCareer(store, { requestId: args.requestId, revision: readCareer(store).revision }, 'forms_answer_save', args, (career, state) => {
+    const result = await mutateCareer(store, { requestId: args.requestId, revision: readCareer(store).revision }, 'forms_answer_save', args, (career, state) => {
       const { draft, plan } = bound(career, state), value = args.value;
       if (!plan.key && !plan.preference && !plan.topic) {
         // IDs are exact members of the bound snapshot, not property paths. Defining an own
@@ -370,18 +370,27 @@ export function createBrowserForms({ store, credentials, assertAvailable, fetchI
         draft.updatedAt = new Date().toISOString();
         return { fieldId: args.fieldId, scope: 'application' };
       }
-      keepBindings(career, () => {
-        if (plan.preference) {
-          career.profile.preferences ??= {};
-          if (value === null) delete career.profile.preferences[plan.preference];
-          else career.profile.preferences[plan.preference] = plan.answer;
-        } else if (plan.key) patchProfile(career, { [plan.key]: value === null ? null : plan.text });
-        else if (value === null) {
-          for (const fact of Object.values(career.facts)) if (factKey(fact) === factKey({ subject: plan.topic.subject })) delete career.facts[fact.id];
-        } else upsertFacts(career, [{ fields: plan.fact }]);
-      });
+      const before = hash({ profile: career.profile, facts: career.facts });
+      if (plan.preference) {
+        career.profile.preferences ??= {};
+        if (value === null) delete career.profile.preferences[plan.preference];
+        else career.profile.preferences[plan.preference] = plan.answer;
+      } else if (plan.key) patchProfile(career, { [plan.key]: value === null ? null : plan.text });
+      else if (value === null) {
+        for (const fact of Object.values(career.facts)) if (factKey(fact) === factKey({ subject: plan.topic.subject })) delete career.facts[fact.id];
+      } else upsertFacts(career, [{ fields: plan.fact }]);
+      if (before !== hash({ profile: career.profile, facts: career.facts })) career.evidenceRevision = (career.evidenceRevision ?? 0) + 1;
+      // Advance only this explicit user-answer collection. Old generated writing keeps its original evidence binding.
+      draft.collection.evidence = formEvidence(career);
+      const app = career.applications?.[draft.applicationId];
+      draft.collection.applicationContext = app ? applicationContextFingerprint(career, app) : null;
       return { fieldId: args.fieldId, scope: 'future' };
     });
+    assertAvailable();
+    const current = store.get();
+    assertFormJobAllowed(current.career ?? {}, args.formId);
+    if (identity(current) !== initialIdentity) fail('FORM_CONTEXT_CHANGED', 'The local identity changed while saving.');
+    return result;
   }
   return { prepare, saveAnswer, cancel, cancelAll };
 }

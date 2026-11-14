@@ -6,9 +6,8 @@ export interface CvDocument {
   /**
    * Periods without work, in the candidate's own words: what they did, optionally where, and one line about it.
    * Never employment, but shown among the roles in date order with the same layout, so the timeline reads unbroken.
-   * `label` is the single line that documents saved by 3.12.29–3.12.30 carry instead.
    */
-  careerGaps?: Array<{ activity?: string; place?: string; description?: string; label?: string; startDate: string; endDate: string }>;
+  careerGaps?: Array<{ activity: string; place?: string; description?: string; startDate: string; endDate: string }>;
   education?: Array<{ institution: string; qualification?: string; startDate?: string; endDate?: string; details?: string }>;
   skills?: Array<{ label: string; items: string[] }>;
   languages?: Array<{ language: string; proficiency: string }>;
@@ -83,7 +82,7 @@ export function buildStructuredCvPresentation(document: CvDocument, heading: CvH
   // same places as a role: the place where an employer stands (or the activity alone), the activity where a job
   // title stands, the dates, and the description as its one bullet.
   for (const entry of document.careerGaps ?? []) {
-    const activity = clean(entry.activity) || clean(entry.label), place = clean(entry.place);
+    const activity = clean(entry.activity), place = clean(entry.place);
     // A gap given only a year began in December at the latest, the same reading that decides whether it counts.
     const start = monthPosition(entry.startDate, 12);
     const earlier = start === null ? -1 : timeline.findIndex(item => !item.gap && item.start !== null && item.start < start);

@@ -73,7 +73,7 @@
    *  `board` replaces the paged list with the Pipeline board (ui/pipeline.js) of every application. */
   function createBrowser({ root, prefix, kind: initialKind, persistentReader = false, deleteRankings = null, stagePanels = [], publication = null, reviewLaunch = null, board = false }) {
     const element = name => document.getElementById(`${prefix}-${name}`);
-    const categoryButtons = [...root.querySelectorAll('[data-career-kind]')];
+    const categoryButtons = [...root.querySelectorAll('[data-career-kind]')].filter(button => button.dataset.careerKind !== 'master');
     const records = element('records');
     const listStatus = element('list-status');
     const listRetry = element('list-retry');

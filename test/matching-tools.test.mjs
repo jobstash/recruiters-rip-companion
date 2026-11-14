@@ -8,6 +8,7 @@ import { salaryEligibility, recentPublication, matchingProfileVersion } from '..
 import { ASSESSMENT_POLICY_ID, RERANK_POLICY, RERANK_SIZE, deriveDecision, fitBand, overallFit } from '../src/mcp/matching-contract.mjs';
 import { publicationInWindow } from '../src/mcp/publication-range.mjs';
 import { addBlock, removeBlock } from '../src/mcp/blocklist.mjs';
+import { readyMaster } from './helpers/ready-master.mjs';
 
 const publishedAt = new Date(Date.now() - 86400000).toISOString();
 const job = (id, date = publishedAt) => ({ id: `node:${id}`, title: `Engineer ${id}`, company: 'Company', publishedAt: date });
@@ -1376,4 +1377,24 @@ test('every undecided job is queued for full assessment; listing-only screening 
   assert.deepEqual([queued.jobIds, queued.scored, queued.pending], [['node:a', 'node:b'], 1, 2]);
   assert.deepEqual(Object.keys(f.store.get().career.matching.scores), ['node:c']);
   assert.equal('shortlist' in f.store.get().career.matching, false);
+});
+
+test('matching context separates the immutable master from original CV evidence and exposes role identity', async () => {
+  const f = fixture();
+  await f.store.update(state => {
+    const id = 'e0000000-0000-4000-8000-000000000001';
+    state.career.sources[id] = { ...state.career.sources.cv, id };
+    delete state.career.sources.cv;
+    state.career.facts.recent.roleId = 'e0000000-0000-4000-8000-000000000002';
+    state.career.facts.recent.facet = 'outcomes';
+  });
+  const ready = await readyMaster(f.store);
+  const result = await f.call('career_match_jobs');
+  assert.equal(result.candidate.master.version, ready.master.version);
+  assert.ok(result.candidate.cv.includes('Built reporting services.'));
+  assert.ok(result.candidate.sourceSet.every(source => typeof source.sourceId === 'string' && /^[a-f0-9]{64}$/.test(source.contentHash)));
+  assert.match(result.candidate.masterEvidenceFingerprint, /^[a-f0-9]{64}$/);
+  assert.equal(result.candidate.review.complete, true);
+  assert.equal(result.candidate.facts.find(fact => fact.subject === 'Reporting services').roleId, 'e0000000-0000-4000-8000-000000000002');
+  assert.equal(result.candidate.master.contact, undefined);
 });

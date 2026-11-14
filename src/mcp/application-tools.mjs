@@ -1,58 +1,40 @@
+import Ajv from 'ajv';
+import addFormats from 'ajv-formats';
 import { PROGRESS_STAGES, applicationProgress, changeProgress } from '../application-progress.mjs';
-import { applicationContextFingerprint, currentApplicationJob, isApplicationWritingField, upsertApplication } from '../application-workflow.mjs';
+import { applicationContextFingerprint, assertApplicationClarificationsResolved, pendingApplicationInterviews, originalJobText, currentApplicationJob, isApplicationWritingField, upsertApplication } from '../application-workflow.mjs';
 import { readCareer, mutateCareer, replayCareer, mutationSchema, fail } from './state.mjs';
 import { assertCleanStatement } from './facts.mjs';
 import { cvDocumentTexts, inspectCvQuality, renderableCv, unsupportedNumbers } from './cv-quality.mjs';
-import { WRITING_STYLE, writingTells } from './writing-style.mjs';
-import { currentAssessment, normalizeQuote } from './matching-tools.mjs';
+import { CV_WRITING_GUIDE } from './cv-writing-policy.mjs';
+export { CV_WRITING_GUIDE } from './cv-writing-policy.mjs';
+import { currentAssessment } from './matching-tools.mjs';
 import { matchingProfileVersion } from './assessment-policy.mjs';
-import { policyIdFor } from './matching-contract.mjs';
+import { policyIdFor, tailoringRequirementsSchema } from './matching-contract.mjs';
 import { SKILL_DIGEST } from '../generated/skill-digest.mjs';
 import { localJobOriginal } from './job-tools.mjs';
 import { formEvidence } from './form-tools.mjs';
 import { assertJobNotBlocked, blockFilter } from './blocklist.mjs';
-import { careerGapContext, careerGapsSchema, resolveCareerGaps } from './career-gap.mjs';
-
-export const CV_WRITING_GUIDE = [
-  'Write to win the interview. The saved CV is the base career record: employers, roles, dates and achievements come from it. Facts are what the candidate has told you since; use them to tailor truthfully.',
-  'Match the saved CV against jobs first; do not require an interview or collect general facts before initial matching. Only while reviewing a specific listing for submission, compare its must-haves with the CV and full facts: original question, context, answer, detail and exchanges. For material gaps, call career_interview_ask with this saved applicationId (usually 1–3 questions, at most 5). Use host reasoning, not keyword overlap, to reuse a related fact with factId. Never ask optional questionnaires or re-question known negative answers.',
-  'Fast choices route the interview; the useful material is one short, specific explanation of the project, personal contribution and result. If a positive answer is shallow, present the pending follow-up returned by career_interview_ask or career_interview_answer rather than stopping at saved. For an existing explanation that lacks material specificity, use factId with one targeted followUp; do not repeat the level question or demand an essay. Preserve the actual original question/context and prior exchanges, never invent historical questions.',
-  'Fact answers: "Led it" supports leadership, not personal implementation or concrete achievements; "Hands-on" supports personal work, not invented outcomes; "Some exposure" supports familiarity only; "None" or "No" is sufficient and must not be re-questioned or claimed as capability. Use actual detail and follow-up answers for concrete examples, never fabricate metrics. Languages: use a saved level or one the CV states, never infer a level from a mere mention.',
-  'New explanations must inform subsequent evaluation of relevant roles: they may raise or lower a score or resolve eligibility, never earn an automatic adjustment. Fact changes invalidate old ranking context via profileVersion. Do not rescore in the background merely because an answer was collected; when needed, reassess affected roles against current evidence, and perform full reevaluation when requested. Do not force score changes for irrelevant evidence or merely relabel old judgments.',
-  'Aim the headline at the target role. Write a 2–4 sentence summary connecting the candidate’s strongest relevant scope to the employer’s needs. List experience in reverse-chronological order with 3–6 outcome-first bullets for recent relevant roles; condense older roles or move them to an "Earlier experience" additional section. Use the advert’s terminology where it truthfully describes the candidate. Plan before writing: use context.assessment.requirements (or, without one, the advert’s essential requirements) to choose the strongest evidence per requirement. Every highlight and experience bullet is {text, support}: support.cv holds verbatim CV quotes, support.facts holds saved fact IDs. Write only what the cited evidence supports: shorten, combine or adopt the advert’s truthful terminology, but never move a metric to another role, turn leadership into hands-on work, turn exposure into expertise or make an unknown positive. When no outcome is evidenced, state the supported responsibility plainly instead of inventing a metric. Group skills and put the most relevant first. Keep headings plain and ATS-safe. Use implied first person ("Led …"), never "I" and never third-person narration.',
-  'Cover letter: 220–380 words, specific to the company’s problem, no generic enthusiasm. Never invent employers, titles, dates, credentials or metrics. Do not ask the user to approve wording.',
-  WRITING_STYLE,
-].join('\n');
+import { careerGapContext } from './career-gap.mjs';
+import { assertMasterReady, assertSupport, assertDocumentEvidence, assertPublishableText, cvDocumentSchema, documentEvidenceSchema, supportSchema, presentationSchema, masterEditConstraints,
+  sourceSet, sourceSetFingerprint, masterEvidenceFingerprint, cvReviewState } from './master-cv.mjs';
 
 const text = maxLength => ({ type: 'string', minLength: 1, maxLength, pattern: '\\S' });
 const uuid = { type: 'string', format: 'uuid' };
 const object = (properties, required = Object.keys(properties)) => ({ type: 'object', properties, required, additionalProperties: false });
 const strings = (maxItems, maxLength, minItems = 0) => ({ type: 'array', items: text(maxLength), maxItems, minItems });
-const presentationSchema = object({ template: { enum: ['classic', 'modern'] }, paper: { enum: ['A4', 'LETTER'] } });
-const support = { ...object({ cv: strings(3, 300, 1), facts: { type: 'array', items: uuid, minItems: 1, maxItems: 5, uniqueItems: true } }, []), minProperties: 1 };
-const claim = maxLength => object({ text: text(maxLength), support });
-const cvSchema = object({
-  headline: text(200), summary: text(1200), highlights: { type: 'array', items: claim(300), maxItems: 6 },
-  experience: { type: 'array', minItems: 1, maxItems: 30, items: object({
-    employer: text(300), role: text(300), location: text(300), startDate: text(40), endDate: text(40),
-    bullets: { type: 'array', items: claim(400), minItems: 1, maxItems: 10 },
-  }, ['employer', 'role', 'startDate', 'endDate', 'bullets']) },
-  careerGaps: careerGapsSchema,
-  education: { type: 'array', maxItems: 20, items: object({
-    institution: text(300), qualification: text(300), startDate: text(40), endDate: text(40), details: text(1000),
-  }, ['institution']) },
-  skills: { type: 'array', maxItems: 10, items: object({ label: text(100), items: strings(40, 100, 1) }) },
-  languages: { type: 'array', maxItems: 20, items: object({ language: text(100), proficiency: { enum: ['native', 'fluent', 'professional', 'conversational', 'basic'] } }) },
-  certifications: strings(30, 300),
-  additional: { type: 'array', maxItems: 6, items: object({ title: text(100), items: strings(20, 400, 1) }) },
-}, ['headline', 'summary', 'experience']);
-export const CV_POLICY_ID = policyIdFor({ guide: CV_WRITING_GUIDE, schema: cvSchema, skill: SKILL_DIGEST });
+const cvSchema = cvDocumentSchema;
+const tailoringBinding = { masterVersion: { type: 'integer', minimum: 1 }, contextFingerprint: text(64), requirements: tailoringRequirementsSchema };
+const ajv = new Ajv({ strict: false }); addFormats(ajv);
+const validRequirements = ajv.compile(tailoringRequirementsSchema);
+const validCv = ajv.compile(cvSchema);
+const validEvidence = ajv.compile(documentEvidenceSchema);
+const validParagraphs = ajv.compile(strings(12, 1500, 2));
+export const CV_POLICY_ID = policyIdFor({ guide: CV_WRITING_GUIDE, schema: cvSchema, evidence: documentEvidenceSchema, requirements: tailoringRequirementsSchema, skill: SKILL_DIGEST });
 const jobSchema = object({ title: text(300), company: text(300), description: text(100000), url: text(2000), applyUrl: text(2000), location: text(300) }, ['title', 'company', 'description']);
 const pagination = { limit: { type: 'integer', minimum: 1, maximum: 50 }, offset: { type: 'integer', minimum: 0, maximum: 10000 } };
 const defaultPresentation = Object.freeze({ template: 'classic', paper: 'A4' });
 const thirdPerson = /\b(?:he|she|they)\s+(?:has|have|led|built|managed|delivered|worked)\b|\bthe candidate\b/i;
-const employerKey = value => value.normalize('NFKD').toLocaleLowerCase('en').replace(/[^\p{L}\p{N}]+/gu, '');
-const factEvidence = fact => [fact.subject, fact.answer, fact.detail ?? '', ...(fact.followUps ?? []).map(exchange => exchange.answer)];
+const factEvidence = fact => [fact.subject, fact.answer, fact.detail ?? ''];
 // ISO dates ("2018-03") support prose that names the year alone.
 const withYears = texts => [...texts, ...texts.flatMap(value => value.match(/\b(?:19|20)\d{2}\b/g) ?? [])];
 const now = () => new Date().toISOString();
@@ -70,7 +52,7 @@ function cvRecord(career) {
 }
 /** The CV header always comes from the current profile, never the draft. */
 export function cvHeading(profile) {
-  const contact = [profile.email, profile.phone, profile.location, ...(profile.links ?? [])]
+  const contact = [...new Set([profile.email, profile.phone, profile.location, profile.linkedinUrl, ...(profile.links ?? [])])]
     .filter(value => typeof value === 'string' && value.trim()).join(' · ');
   return { ...(profile.name?.trim() ? { name: profile.name.trim() } : {}), ...(contact ? { contact } : {}) };
 }
@@ -98,34 +80,64 @@ function assertNumbers(career, items) {
   });
   if (problems.length) fail('UNSUPPORTED_NUMBER', `Leave out numbers that are not in the saved CV, facts or profile (never invent metrics): ${problems.join('; ')}.`);
 }
-function assertKnownEmployers(career, document) {
-  const known = [cvRecord(career), ...Object.values(career.facts).map(fact => fact.employer ?? '')].map(employerKey);
-  document.experience.forEach((entry, index) => {
-    const key = employerKey(entry.employer);
-    if (!key || !known.some(record => record.includes(key))) fail('UNKNOWN_EMPLOYER', `experience[${index}].employer "${entry.employer}" appears neither in the saved CV nor as a fact's employer. Use the employer as the CV writes it; if the candidate stated a role the CV lacks, save a fact with that employer first.`);
-  });
-}
-/** Every highlight and experience bullet cites verbatim CV quotes or saved facts, and its numbers come from that evidence alone. */
-function assertClaimSupport(career, document) {
-  const cv = normalizeQuote(cvRecord(career));
-  const claims = [...(document.highlights ?? []).map((claim, index) => ({ field: `highlights[${index}]`, claim })),
-    ...document.experience.flatMap((entry, index) => entry.bullets.map((claim, bullet) => ({ field: `experience[${index}].bullets[${bullet}]`, claim, entry })))];
-  for (const { field, claim, entry } of claims) {
-    const quotes = claim.support.cv ?? [];
-    for (const quote of quotes) {
-      const normalized = normalizeQuote(quote);
-      if (!normalized || !cv.includes(normalized)) fail('UNKNOWN_QUOTE', `${field}: this quote is not in the saved CV: "${quote.slice(0, 80)}". Quote the CV verbatim.`);
+/** Exact advert wording is classification input, never evidence for a candidate claim. */
+export function assertTailoringRequirements(career, job, requirements) {
+  if (!validRequirements(requirements)) fail('INVALID_REQUIREMENTS', 'Provide the complete exact-phrase requirement inventory using the tailoring requirements schema.');
+  if (!job.description?.trim() || job.complete === false) fail('FULL_AD_REQUIRED', 'Read and save the complete original advert before tailoring.');
+  const jobText = originalJobText(job.description);
+  const ids = new Set(), phrases = new Set();
+  for (const requirement of requirements) {
+    const { id, phrase, status, support, roleIds } = requirement;
+    if (ids.has(id) || phrases.has(phrase)) fail('INVALID_REQUIREMENTS', 'Requirement IDs and exact phrases must be unique.');
+    ids.add(id); phrases.add(phrase);
+    if (!jobText.includes(phrase)) fail('UNKNOWN_JOB_PHRASE', `Requirement "${phrase}" is not an exact substring of context.jobText (the complete original advert text).`);
+    if (status === 'missing') {
+      if (support || roleIds.length) fail('UNSUPPORTED_REQUIREMENT', 'Missing requirements must not claim supporting evidence or roles.');
+      continue;
     }
-    const facts = (claim.support.facts ?? []).map(id => career.facts[id]
-      ?? fail('UNKNOWN_FACT', `${field}: fact ${id} is not saved. Cite fact IDs from career_application_context.`));
-    if (entry) for (const fact of facts) {
-      const owner = employerKey(fact.employer ?? ''), employer = employerKey(entry.employer);
-      if (owner && !owner.includes(employer) && !employer.includes(owner))
-        fail('MISATTRIBUTED_FACT', `${field}: fact "${fact.subject}" belongs to ${fact.employer.trim()}, not ${entry.employer}.`);
+    assertSupport(career, support, { field: `requirements[${id}]` });
+    if (['experience', 'outcome'].includes(requirement.kind) && !roleIds.length)
+      fail('MISATTRIBUTED_FACT', 'Experience and outcome requirements need the exact supporting roleIds.');
+    for (const roleId of roleIds) {
+      if (!career.roles?.[roleId]) fail('UNKNOWN_ROLE', 'Cite stable role IDs from the current master context.');
+      const scoped = {
+        sources: (support.sources ?? []).filter(ref => career.roles[roleId].sourceRefs.some(bound =>
+          bound.sourceId === ref.sourceId && bound.contentHash === ref.contentHash && bound.quote.includes(ref.quote))),
+        facts: (support.facts ?? []).filter(id => career.facts[id]?.roleId === roleId),
+      };
+      if (!scoped.sources.length) delete scoped.sources;
+      if (!scoped.facts.length) delete scoped.facts;
+      if (!scoped.sources && !scoped.facts) fail('MISATTRIBUTED_FACT', 'This requirement has no evidence belonging to the cited role.');
+      assertSupport(career, scoped, { roleId, field: `requirements[${id}]` });
     }
-    const unsupported = unsupportedNumbers(claim.text, withYears([...quotes, ...facts.flatMap(factEvidence)]));
-    if (unsupported.length) fail('UNSUPPORTED_NUMBER', `${field}: ${unsupported.join(', ')} must appear in the cited evidence, not elsewhere in the CV.`);
+    if (roleIds.length) for (const ref of support.sources ?? []) {
+      if (!roleIds.some(roleId => career.roles[roleId].sourceRefs.some(bound =>
+        bound.sourceId === ref.sourceId && bound.contentHash === ref.contentHash && bound.quote.includes(ref.quote))))
+        fail('MISATTRIBUTED_SOURCE', 'Every requirement source quote must belong to a cited role.');
+    }
+    for (const factId of support.facts ?? []) {
+      const roleId = career.facts[factId]?.roleId;
+      if (roleId && !roleIds.includes(roleId)) fail('MISATTRIBUTED_FACT', 'List the owning role of each requirement fact.');
+    }
   }
+}
+function assertRequirementPhrases(document, evidence, requirements) {
+  const overlaps = (left, right) => (left.facts ?? []).some(id => right.facts?.includes(id)) ||
+    (left.sources ?? []).some(ref => right.sources?.some(other => ref.sourceId === other.sourceId && ref.contentHash === other.contentHash &&
+      (ref.quote.includes(other.quote) || other.quote.includes(ref.quote))));
+  for (const requirement of requirements.filter(item => item.status === 'supported')) {
+    const claims = [...(document.highlights ?? []), ...document.experience.filter(entry => !requirement.roleIds.length || requirement.roleIds.includes(entry.roleId)).flatMap(entry => entry.bullets)];
+    const inClaim = claims.some(claim => claim.text.includes(requirement.phrase) && overlaps(claim.support, requirement.support));
+    const inSkills = (document.skills ?? []).some(group => group.items.some(item => item.includes(requirement.phrase))) && overlaps(evidence.sections, requirement.support);
+    if (!inClaim && !inSkills) fail('JOB_PHRASE_MISSING', `Preserve supported job phrase "${requirement.phrase}" exactly in an evidenced relevant skill or achievement, without changing its case or internal whitespace.`);
+  }
+}
+function assertTailoringContext(career, app, args) {
+  const master = assertMasterReady(career);
+  if (args.masterVersion !== master.version || args.contextFingerprint !== applicationContextFingerprint(career, app))
+    fail('APPLICATION_CONTEXT_CHANGED', 'Read career_application_context and tailor a copy of its current master version.');
+  assertTailoringRequirements(career, currentApplicationJob(career, app), args.requirements);
+  return master;
 }
 function catalogueJob(job, jobId) {
   const company = typeof job?.company === 'string' ? job.company : job?.company?.name;
@@ -147,7 +159,8 @@ function summary(app) {
     exports: app.exports.length, createdAt: app.createdAt, updatedAt: app.updatedAt, progress: applicationProgress(app) };
 }
 function context(career, app) {
-  const { name, email, phone, location, links, headline, seniority, roleCapabilities, skills, preferences = {} } = career.profile;
+  const master = assertMasterReady(career);
+  const { name, email, phone, location, links, linkedinUrl, headline, seniority, roleCapabilities, skills, preferences = {} } = career.profile;
   const facts = {};
   for (const fact of Object.values(career.facts).sort((a, b) => a.subject.localeCompare(b.subject, 'en', { sensitivity: 'base' })))
     (facts[fact.kind] ??= []).push(fact);
@@ -163,8 +176,14 @@ function context(career, app) {
       instructions: 'Read career_form_read with formId to check Chrome attachment and current answers before staging. If contextCurrent is false, read/prepare the page again in Chrome first. Answer every empty field the evidence supports: prose for writingFields, an exact option value for choices; leave the rest unanswered and never overwrite populated fields.' }));
   return { revision: career.revision, application: app, job: currentApplicationJob(career, app),
     contextFingerprint: fingerprint, forms,
-    profile: { name, email, phone, location, links, headline, seniority, roleCapabilities, skills }, preferences,
-    cv: cvRecord(career), facts, assessment, ...(careerGap ? { careerGap } : {}),
+    jobText: originalJobText(currentApplicationJob(career, app).description), masterEditConstraints: masterEditConstraints(career),
+    profile: { name, email, phone, location, links, linkedinUrl, headline, seniority, roleCapabilities, skills }, preferences,
+    master: structuredClone(master), sourceSetFingerprint: sourceSetFingerprint(career), masterEvidenceFingerprint: masterEvidenceFingerprint(career),
+    review: cvReviewState(career), roles: Object.values(career.roles ?? {}),
+    originalSources: sourceSet(career).map(ref => ({ ...ref, text: career.sources[ref.sourceId].text })),
+    pendingInterviews: pendingApplicationInterviews(career, app.id),
+    facts, assessment, requirements: app.cv?.contextFingerprint === fingerprint ? app.cv.requirements : null,
+    requirementsSchema: tailoringRequirementsSchema, ...(careerGap ? { careerGap } : {}),
     presentation: {
       templates: [{ id: 'classic', description: 'Serif text with ruled section headings.' }, { id: 'modern', description: 'Sans-serif text in a single column.' }],
       papers: ['A4', 'LETTER'], fontSize: 11, current: app.cv?.presentation ?? defaultPresentation,
@@ -186,6 +205,10 @@ export function createApplicationTools({ store, platform, documents, exportDocum
   const save = async (name, args, change) => {
     // Receipt replay must obey today's blocks, not the policy when the receipt was saved.
     guard(args);
+    if (['career_application_cv_save', 'career_application_letter_save'].includes(name)) {
+      const career = readCareer(store);
+      assertTailoringContext(career, application(career, args.applicationId), args);
+    }
     return guard(args, await mutateCareer(store, args, name, args, change));
   };
   const mutate = (name, description, properties, required, change) => add(name, description,
@@ -244,35 +267,41 @@ export function createApplicationTools({ store, platform, documents, exportDocum
       for (const id of args.applicationIds) delete career.applications[id];
       return { deleted: args.applicationIds.length };
     });
-  add('career_application_context', 'Everything needed to tailor the CV and cover letter: the job, profile, preferences, the saved CV text (the career record), known facts grouped by kind, the current saved match assessment of a catalogue job (or null), presentation options and the writing guide. careerGap appears only when the candidate chose to show career gaps in generated CVs; follow its instruction. Write from this evidence without asking; a required form answer it cannot support blocks only this application.',
+  add('career_application_context', 'Read the current ready immutable master, complete original job, original CV sources separate from master prose, stable roles, facts, source/review fingerprints, exact-phrase tailoring requirements schema, contact details and writing guide. Complete the source review and master first when MASTER_NOT_READY is returned.',
     object({ applicationId: uuid }), true, args => {
       const career = readCareer(store);
       return context(career, application(career, args.applicationId));
     });
 
-  add('career_application_cv_save', 'Save the tailored CV as a structured document. Every highlight and experience bullet is {text, support}: support.cv quotes the saved CV verbatim, support.facts cites saved fact IDs, and the claim\'s numbers must appear in that cited evidence. Employers must appear in the saved CV or as a fact\'s employer; other numbers must come from the CV, facts or profile. careerGaps (periods only) is accepted only when career_application_context returns careerGap; Companion lists each one among the roles in Experience, in date order, in the candidate\'s own words. Returns layout and non-blocking quality notes to fix silently.',
-    object({ ...mutationSchema, applicationId: uuid, cv: cvSchema, presentation: presentationSchema }, ['requestId', 'revision', 'applicationId', 'cv']), false, async args => {
+  add('career_application_cv_save', 'Tailor an immutable copy of the current ready master. Supply masterVersion, contextFingerprint, exact original-advert requirements and evidence for headline, summary and other sections. Claims require id/text/support and experience requires roleId. Original source refs and role-scoped facts—not master prose—support claims. Returns layout and quality notes.',
+    object({ ...mutationSchema, ...tailoringBinding, applicationId: uuid, cv: cvSchema, evidence: documentEvidenceSchema, presentation: presentationSchema },
+      ['requestId', 'revision', 'applicationId', 'cv', 'evidence', ...Object.keys(tailoringBinding)]), false, async args => {
       guard(args);
+      const career = readCareer(store), app = application(career, args.applicationId);
+      const master = assertTailoringContext(career, app, args);
       const replay = replayCareer(store, args, 'career_application_cv_save', args);
       if (replay) return replay;
-      const career = readCareer(store), app = application(career, args.applicationId);
-      // The host authors gap periods only; the stored and rendered wording is the candidate's setting.
-      const careerGaps = resolveCareerGaps(career, args.cv.careerGaps);
-      const { careerGaps: _periods, ...authored } = args.cv;
-      const stored = careerGaps ? { ...authored, careerGaps } : authored;
+      if (!validCv(args.cv) || !validEvidence(args.evidence)) fail('INVALID_INPUT', 'Use the structured CV and document evidence schemas.');
+      // Gap entries are an immutable projection of the candidate's settings and complete canonical career, never tailored omissions.
+      const { careerGaps: _gaps, ...authored } = args.cv;
+      const careerGaps = master.document.careerGaps;
+      const stored = careerGaps ? { ...authored, careerGaps: structuredClone(careerGaps) } : authored;
       const document = renderableCv(stored), items = cvDocumentTexts(document).filter(item => !item.setting);
       assertVoice(items);
-      assertKnownEmployers(career, stored);
-      assertClaimSupport(career, stored);
+      assertDocumentEvidence(career, stored, args.evidence);
+      assertRequirementPhrases(stored, args.evidence, args.requirements);
       assertNumbers(career, items.filter(item => !item.date && !item.claim));
       const heading = cvHeading(career.profile);
+      assertPublishableText(career, Object.values(heading), 'CV contact');
       const presentation = args.presentation ?? app.cv?.presentation ?? defaultPresentation;
       const layout = await documents.measureCareerCvLayout({ document, heading, presentation });
       const issues = inspectCvQuality({ document, heading }).map(issue => `${issue.field}: ${issue.message}`);
       if (!layout.fits) issues.unshift(`layout: ${layout.error}`);
       return save('career_application_cv_save', args, current => {
         const target = application(current, app.id);
+        const master = assertTailoringContext(current, target, args);
         const draft = { version: (target.cv?.version ?? 0) + 1, document: stored, presentation, policyId: CV_POLICY_ID,
+          masterVersion: master.version, requirements: structuredClone(args.requirements), evidence: structuredClone(args.evidence),
           contextFingerprint: applicationContextFingerprint(current, target), createdAt: now() };
         if (target.cv) target.cvHistory.push(target.cv);
         target.cv = draft;
@@ -280,35 +309,50 @@ export function createApplicationTools({ store, platform, documents, exportDocum
         return { applicationId: target.id, cvVersion: draft.version, layout: { pages: layout.pages ?? null, fits: layout.fits }, issues };
       });
     });
-  mutate('career_application_letter_save', 'Save the tailored cover letter as ordered paragraphs (salutation and sign-off included). Numbers must come from the CV, facts or profile. Returns non-blocking notes on wording that reads as AI-written; fix them silently.',
-    { applicationId: uuid, paragraphs: strings(12, 1500, 2) }, ['applicationId', 'paragraphs'], (career, args) => {
-      const app = application(career, args.applicationId);
+  mutate('career_application_letter_save', 'Save evidence-backed cover-letter paragraphs tailored from the ready immutable master. Supply the current masterVersion/contextFingerprint, exact original-advert requirements and one Support per paragraph.',
+    { ...tailoringBinding, applicationId: uuid, paragraphs: strings(12, 1500, 2), evidence: { type: 'array', items: supportSchema, minItems: 2, maxItems: 12 } },
+    ['applicationId', 'paragraphs', 'evidence', ...Object.keys(tailoringBinding)], (career, args) => {
+      const app = application(career, args.applicationId), master = assertTailoringContext(career, app, args);
+      if (!validParagraphs(args.paragraphs) || !Array.isArray(args.evidence) || args.evidence.length !== args.paragraphs.length)
+        fail('INVALID_INPUT', 'Supply bounded letter paragraphs and one evidence Support per paragraph.');
+      args.paragraphs.forEach((text, index) => assertSupport(career, args.evidence[index], { text, field: `paragraphs[${index}]` }));
       const items = args.paragraphs.map((text, index) => ({ field: `paragraphs[${index}]`, text }));
       assertVoice(items);
       assertNumbers(career, items);
       const letter = { version: (app.coverLetter?.version ?? 0) + 1, paragraphs: args.paragraphs,
+        masterVersion: master.version, requirements: structuredClone(args.requirements), evidence: structuredClone(args.evidence),
         contextFingerprint: applicationContextFingerprint(career, app), createdAt: now() };
       if (app.coverLetter) app.coverLetterHistory.push(app.coverLetter);
       app.coverLetter = letter;
       app.updatedAt = now();
-      const issues = writingTells(items).map(issue => `${issue.field}: ${issue.message}`);
-      return { applicationId: app.id, letterVersion: letter.version, ...(issues.length ? { issues } : {}) };
+      return { applicationId: app.id, letterVersion: letter.version };
     });
 
   add('career_application_export', 'Export the current CV or cover letter as PDF (default) or TXT. PDF text is read back and checked before the file is written.',
     object({ ...mutationSchema, applicationId: uuid, kind: { enum: ['cv', 'cover_letter'] }, format: { enum: ['pdf', 'txt'] } }, ['requestId', 'revision', 'applicationId', 'kind']), false, async args => {
       guard(args);
-      const replay = replayCareer(store, args, 'career_application_export', args);
-      if (replay) return replay;
       const career = readCareer(store), app = application(career, args.applicationId);
+      const master = assertMasterReady(career);
+      assertApplicationClarificationsResolved(career, app.id);
       const draft = args.kind === 'cv' ? app.cv : app.coverLetter;
+      const replay = replayCareer(store, args, 'career_application_export', args);
+      if (replay && replay.export?.masterVersion === master.version &&
+          replay.export.contextFingerprint === applicationContextFingerprint(career, app) && replay.export.documentVersion === draft?.version) return replay;
+      if (replay) fail('APPLICATION_CONTEXT_CHANGED', 'This export receipt belongs to an earlier document or master. Export the current draft with a new requestId.');
       if (!draft) fail('MISSING_DRAFT', `Save the ${args.kind === 'cv' ? 'CV' : 'cover letter'} before exporting it.`);
-      if (draft.contextFingerprint !== applicationContextFingerprint(career, app))
+      if (draft.masterVersion !== master.version || draft.contextFingerprint !== applicationContextFingerprint(career, app))
         fail('APPLICATION_CONTEXT_CHANGED', 'The job or career evidence changed, or this draft has no job binding. Read career_application_context, rewrite and save a current draft, then export again; no need to ask the candidate.');
+      assertTailoringRequirements(career, currentApplicationJob(career, app), draft.requirements);
+      if (args.kind === 'cv') {
+        assertDocumentEvidence(career, draft.document, draft.evidence);
+        assertRequirementPhrases(draft.document, draft.evidence, draft.requirements);
+      }
+      else draft.paragraphs.forEach((text, index) => assertSupport(career, draft.evidence?.[index], { text, field: `paragraphs[${index}]` }));
       const format = args.format ?? 'pdf';
       let bytes, expectedText, textValidation = null;
       if (args.kind === 'cv') {
         const input = { document: renderableCv(draft.document), heading: cvHeading(career.profile), presentation: draft.presentation };
+        assertPublishableText(career, Object.values(input.heading), 'CV contact');
         expectedText = documents.renderCareerCvText(input);
         if (format === 'pdf') {
           const layout = await documents.measureCareerCvLayout(input);
@@ -330,10 +374,12 @@ export function createApplicationTools({ store, platform, documents, exportDocum
       // A concurrent change bumps the revision, so the rendered draft is still current here.
       const result = await withExportTransaction(() => save('career_application_export', args, async current => {
         const target = application(current, app.id);
+        assertMasterReady(current);
+        if (applicationContextFingerprint(current, target) !== draft.contextFingerprint) fail('APPLICATION_CONTEXT_CHANGED', 'The master or application changed while rendering.');
         const exported = await exportDocument({ applicationId: app.id, kind: args.kind, documentVersion: draft.version, bytes,
           mediaType: format === 'pdf' ? 'application/pdf' : 'text/plain' });
         const record = { ...exported, kind: args.kind, format, documentVersion: draft.version,
-          contextFingerprint: draft.contextFingerprint, textValidation, createdAt: now() };
+          masterVersion: master.version, contextFingerprint: draft.contextFingerprint, textValidation, createdAt: now() };
         target.exports.push(record);
         target.updatedAt = now();
         return { applicationId: target.id, export: record };

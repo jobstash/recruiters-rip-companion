@@ -4,13 +4,13 @@ import { constants } from 'node:fs';
 import path from 'node:path';
 import { privateDirectory } from './vault.mjs';
 import { assertPrivatePath, protectPrivatePath } from './platform-runtime.cjs';
-import { createDocumentFiles, validExport, exportTypes, documentURI, documentName } from './mcp/files.mjs';
+import { createDocumentFiles, createBackupDocumentReader, validExport, exportTypes, documentURI, documentName } from './mcp/files.mjs';
 import { CAREER_SCHEMA, fail, hash, upgradeCareer, normalizeIntroductions } from './mcp/state.mjs';
 import { BLOCK_KINDS } from './mcp/blocklist.mjs';
 import { FACT_KINDS } from './mcp/facts.mjs';
 import { readCareerGapSetting } from './mcp/career-gap.mjs';
-import { applicationContextFingerprint } from './application-workflow.mjs';
 import { replayProgress } from './application-progress.mjs';
+import { validateMasterCareer } from './mcp/master-cv.mjs';
 
 export const BACKUP_VERSION = 2;
 export const MAX_BACKUP_BYTES = 128 * 1024 * 1024;
@@ -18,6 +18,8 @@ const MAX_NODES = 1_000_000, MAX_PROFILES = 100, MAX_FILES = 2000;
 const legacyExportURI = /^recruiters:\/\/exports\/([a-f0-9]{64})\.(pdf|csv|txt)$/;
 const exportURI = { exec: uri => documentURI.exec(uri) ?? legacyExportURI.exec(uri), test: uri => documentURI.test(uri) || legacyExportURI.test(uri) };
 const validDigest = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+const validUUID = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+const uuid = (value, label) => { if (!validUUID(value)) invalid(`${label} must be a UUID`); };
 const forbidden = new Set(['__proto__', 'prototype', 'constructor']);
 const secrets = new Set(['privateKey', 'publicKey', 'prescanCredentials', 'apiKey', 'accessToken', 'refreshToken']);
 const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -53,18 +55,38 @@ function job(value, { captured = false } = {}) {
     object(value.description, 'job description');
   }
 }
-function draft(value, kind) {
+function support(value, career, roleId) {
+  object(value, 'CV evidence');
+  if (Object.keys(value).some(key => !['sources', 'facts'].includes(key))) invalid('CV evidence contains unsupported fields');
+  let count = 0;
+  for (const key of ['sources', 'facts']) if (value[key] !== undefined && !array(value[key], 'CV evidence').length) invalid('CV evidence lists must not be empty');
+  if (value.sources !== undefined) for (const ref of array(value.sources, 'CV source references')) {
+    object(ref, 'CV source reference'); uuid(ref.sourceId, 'CV source ID'); text(ref.quote, 'CV source quote');
+    if (!validDigest(ref.contentHash) || !ref.quote.trim() || Object.keys(ref).some(key => !['sourceId', 'contentHash', 'quote'].includes(key))) invalid('a CV source reference is invalid');
+    const source = career.sources?.[ref.sourceId];
+    if (source && source.contentHash === ref.contentHash && (source.purpose !== 'cv' || !source.text.includes(ref.quote))) invalid('a CV source quote does not match its identified original');
+    count++;
+  }
+  if (value.facts !== undefined) for (const id of array(value.facts, 'CV fact references')) {
+    uuid(id, 'CV fact ID');
+    if (roleId && career.facts?.[id] && career.facts[id].roleId !== roleId) invalid('a CV claim cites a fact from another role');
+    count++;
+  }
+  if (!count) invalid('CV evidence is empty');
+}
+function draft(value, kind, career) {
   object(value, 'document draft'); counter(value.version, 'document version');
   if (kind === 'cover_letter') strings(value.paragraphs, 'letter paragraphs');
   else {
     const doc = object(value.document, 'CV document');
     text(doc.headline, 'CV headline'); text(doc.summary, 'CV summary');
-    const claim = item => { object(item, 'CV claim'); text(item.text, 'CV claim'); const support = object(item.support, 'CV evidence'); for (const key of ['cv', 'facts']) if (support[key] !== undefined) strings(support[key], 'CV evidence'); };
+    const claim = (item, roleId) => { object(item, 'CV claim'); uuid(item.id, 'CV claim ID'); text(item.text, 'CV claim'); support(item.support, career, roleId); };
     for (const item of array(doc.experience, 'CV experience')) {
       object(item, 'CV experience'); for (const key of ['employer', 'role', 'startDate', 'endDate']) text(item[key], key);
-      for (const bullet of array(item.bullets, 'CV bullets')) claim(bullet);
+      uuid(item.roleId, 'CV role ID');
+      for (const bullet of array(item.bullets, 'CV bullets')) claim(bullet, item.roleId);
     }
-    if (doc.highlights !== undefined) array(doc.highlights, 'CV highlights').forEach(claim);
+    if (doc.highlights !== undefined) array(doc.highlights, 'CV highlights').forEach(item => claim(item));
     if (doc.careerGaps !== undefined) for (const item of array(doc.careerGaps, 'CV career gaps')) {
       object(item, 'CV career gap');
       // 3.12.29–3.12.30 saved one `label` line where an entry now has an activity, and optionally a place and description.
@@ -132,14 +154,23 @@ export function validateBackupCareer(career) {
     if (!FACT_KINDS.includes(fact.kind)) invalid('a fact kind is unsupported');
     for (const key of ['kind', 'subject', 'answer']) text(fact[key], `fact ${key}`);
     optionalText(fact, ['detail', 'employer', 'question', 'context', 'applicationId']);
+    if (fact.roleId !== undefined) uuid(fact.roleId, 'fact role ID');
+    if (fact.facet !== undefined && !['outcomes', 'growth', 'complex_scenario', 'role_identity'].includes(fact.facet)) invalid('a fact review facet is unsupported');
+    if (fact.resolution !== undefined && !['answered', 'declined', 'unknown'].includes(fact.resolution)) invalid('a fact resolution is unsupported');
+    if (fact.publication !== undefined && !['allowed', 'prohibited'].includes(fact.publication)) invalid('a fact publication choice is unsupported');
+    for (const origin of [fact.resolutionOrigin, fact.publicationOrigin]) if (origin !== undefined) {
+      object(origin, 'fact response origin');
+      if (origin.kind !== 'interview') invalid('a fact response origin is unsupported');
+      uuid(origin.interviewId, 'fact interview ID'); uuid(origin.responseId, 'fact response ID');
+    }
     if (fact.followUps !== undefined) for (const exchange of array(fact.followUps, 'fact follow-ups')) { object(exchange, 'fact follow-up'); text(exchange.question, 'follow-up question'); text(exchange.answer, 'follow-up answer'); optionalText(exchange, ['context']); }
   });
   entries(career.applications, 'applications', (app, id) => {
     if (app.id !== id) invalid('an application ID does not match its record');
     job(app.job); text(app.job.title, 'job title'); text(app.createdAt, 'application date'); text(app.updatedAt, 'application date');
     for (const [key, history, kind] of [['cv', 'cvHistory', 'cv'], ['coverLetter', 'coverLetterHistory', 'cover_letter']]) {
-      if (app[key] != null) draft(app[key], kind);
-      for (const item of array(app[history], history)) draft(item, kind);
+      if (app[key] != null) draft(app[key], kind, career);
+      for (const item of array(app[history], history)) draft(item, kind, career);
     }
     array(app.exports, 'saved documents').forEach(item => {
       object(item, 'saved document');
@@ -159,11 +190,37 @@ export function validateBackupCareer(career) {
   if (career.jobs) entries(career.jobs, 'jobs', item => { job(item, { captured: true }); text(item.id, 'job ID'); text(item.title, 'job title'); text(item.updatedAt, 'job date'); });
   if (career.blocklist) entries(career.blocklist, 'blocked jobs', item => { if (!BLOCK_KINDS.includes(item.kind)) invalid('a blocked-job rule is unsupported'); text(item.value, 'blocked-job value'); });
   if (career.interviews) entries(career.interviews, 'interviews', item => {
-    optionalText(item, ['id', 'title', 'applicationId', 'createdAt']);
-    for (const question of array(item.questions, 'interview questions')) {
-      object(question, 'interview question');
-      optionalText(question, ['id', 'kind', 'subject', 'prompt', 'stage', 'employer', 'factId', 'factSnapshot', 'context']);
-      if (question.options !== undefined) strings(question.options, 'interview options');
+    optionalText(item, ['id', 'title', 'applicationId', 'createdAt', 'contextFingerprint']);
+    const question = value => {
+      object(value, 'interview question');
+      optionalText(value, ['id', 'kind', 'subject', 'prompt', 'stage', 'employer', 'factId', 'factSnapshot', 'context', 'facet']);
+      if (value.roleId !== undefined) uuid(value.roleId, 'interview role ID');
+      if (value.options !== undefined) strings(value.options, 'interview options');
+    };
+    array(item.questions, 'interview questions').forEach(question);
+    if (item.originalQuestions !== undefined) array(item.originalQuestions, 'original interview questions').forEach(question);
+    if (item.status !== undefined && !['pending', 'completed', 'cancelled'].includes(item.status)) invalid('an interview status is unsupported');
+    if (item.target !== undefined) {
+      object(item.target, 'interview target');
+      if (item.target.kind === 'application') uuid(item.target.applicationId, 'interview application ID');
+      else if (item.target.kind !== 'cv_review' || !validDigest(item.target.sourceSetFingerprint)) invalid('an interview target is invalid');
+    }
+    if (item.responses !== undefined) for (const response of array(item.responses, 'interview responses')) {
+      object(response, 'interview response'); uuid(response.id, 'interview response ID'); text(response.createdAt, 'interview response date');
+      if (!['chat', 'form'].includes(response.channel)) invalid('an interview response channel is unsupported');
+      if (response.channel === 'chat') text(response.reply, 'interview reply');
+      else object(response.reply, 'interview reply');
+      if (response.cancelled !== undefined && typeof response.cancelled !== 'boolean') invalid('an interview cancellation flag is invalid');
+      for (const answer of array(response.answers, 'interview answers')) {
+        object(answer, 'interview answer'); integer(answer.number, 'interview question number'); text(answer.answer, 'interview answer');
+        question(answer.question); uuid(answer.factId, 'interview answer fact ID');
+        if (!['answered', 'declined', 'unknown'].includes(answer.resolution)) invalid('an interview answer resolution is unsupported');
+        if (answer.publication !== undefined) {
+          object(answer.publication, 'answer publication choice');
+          if (!['allowed', 'prohibited'].includes(answer.publication.value)) invalid('an answer publication choice is unsupported');
+          if (answer.publication.quote !== undefined) text(answer.publication.quote, 'publication choice quote');
+        }
+      }
     }
   });
   if (career.formDrafts) entries(career.formDrafts, 'saved forms', item => {
@@ -196,6 +253,8 @@ export function validateBackupCareer(career) {
   }
   for (const key of ['prescan', 'prescanInclusion', 'prescanPublicationRange']) if (career[key] !== undefined && career[key] !== null && typeof career[key] !== 'string') object(career[key], key);
   if (career.careerGap !== undefined) try { readCareerGapSetting(career.careerGap); } catch { invalid('the career gap setting is unsupported'); }
+  try { validateMasterCareer(career); }
+  catch { invalid('the saved master CV, role review, or evidence references are invalid'); }
   return career;
 }
 
@@ -216,7 +275,13 @@ function references(career) {
 function invalidateRuntime(career) {
   career.receipts = {};
   delete career.applicationBindings; delete career.applicationPreparations;
-  for (const form of Object.values(career.formDrafts ?? {})) { form.evidence = ''; delete form.applicationContext; }
+  // A pending dialogue is session authority, not proof. Keep its literal recorded
+  // responses for fact provenance, but never resume the old session after restore.
+  for (const interview of Object.values(career.interviews ?? {})) if (interview.status === 'pending' || interview.status === undefined) {
+    interview.status = 'cancelled';
+    interview.questions = [];
+  }
+  for (const form of Object.values(career.formDrafts ?? {})) { form.evidence = ''; delete form.applicationContext; delete form.collection; }
   normalizeIntroductions(career);
 }
 const profileName = (career, account, fallback) => (career.profile.name?.trim() || (typeof account?.label === 'string' && account.label.trim()) || fallback).slice(0, 300);
@@ -346,12 +411,12 @@ export function createBackups({ directory, store, selectBackup, selectDestinatio
     for (const [index, item] of entries.entries()) {
       const career = validateBackupCareer(structuredClone(item.career));
       const refs = references(career), missing = new Set();
-      const localFiles = createDocumentFiles({ directory, store: { get: () => ({ deviceId: item.deviceId, career: item.career }) }, assertAvailable });
+      const backupFiles = createBackupDocumentReader({ directory, store: { get: () => ({ deviceId: item.deviceId, career: item.career }) }, assertAvailable });
       for (const ref of refs) {
         if (files.has(ref.uri) || missing.has(ref.uri)) continue;
         try {
-          const saved = await localFiles.readResource(ref.uri), bytes = saved.blob ? Buffer.from(saved.blob, 'base64') : Buffer.from(saved.text, 'utf8');
-          const file = { uri: ref.uri, sha256: digest(bytes), mediaType: saved.mimeType, bytes: bytes.length, base64: bytes.toString('base64') };
+          const { bytes, mediaType } = await backupFiles.read(ref.uri);
+          const file = { uri: ref.uri, sha256: digest(bytes), mediaType, bytes: bytes.length, base64: bytes.toString('base64') };
           size += file.base64.length;
           if (files.size >= MAX_FILES || size > MAX_BACKUP_BYTES) fail('BACKUP_LIMIT', 'The saved document files are too large for one backup. No profile data was changed.');
           files.set(ref.uri, file);
@@ -440,9 +505,6 @@ export function createBackups({ directory, store, selectBackup, selectDestinatio
               for (const ref of app.exports) {
                 for (const field of ['folderNumber', 'companyLimit', 'jobLimit']) delete ref[field];
                 if (!ref.uri || ref.uri.endsWith('.csv')) continue;
-                const draft = ref.kind === 'cv' ? app.cv : app.coverLetter;
-                if (draft && (ref.documentVersion !== draft.version || (draft.contextFingerprint &&
-                  (ref.contextFingerprint !== draft.contextFingerprint || draft.contextFingerprint !== applicationContextFingerprint(career, app))))) continue;
                 const key = `${ref.kind}:${ref.format ?? (ref.uri.endsWith('.txt') ? 'txt' : 'pdf')}`;
                 const previous = current.get(key);
                 if (!previous || (ref.documentVersion ?? 0) >= (previous.documentVersion ?? 0)) current.set(key, ref);

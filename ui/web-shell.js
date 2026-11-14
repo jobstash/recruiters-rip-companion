@@ -6,12 +6,23 @@
 (() => {
   const client = crypto.randomUUID();
   const stateListeners = new Set(), sectionListeners = new Set(), open = new Map();
+  const waitingForStream = new Set(), downloads = new Map();
+  let streamConnected = false;
+  function streamReady() {
+    if (streamConnected) return Promise.resolve(true);
+    return new Promise(resolve => {
+      const finish = ready => { clearTimeout(timer); waitingForStream.delete(finish); resolve(ready); };
+      const timer = setTimeout(() => finish(false), 30_000);
+      waitingForStream.add(finish);
+    });
+  }
   document.documentElement.dataset.shell = 'web';
   // `#section=…` opens one settings section (the browser extension links to Form filling this way).
   let pendingSection = new URLSearchParams(location.hash.slice(1)).get('section');
   if (location.hash) history.replaceState(null, '', '/');
 
   async function invoke(op, input = {}) {
+    if (!await streamReady()) return { ok: false, error: { code: 'LOCAL_OPERATION_FAILED', message: 'Companion is not connected in this browser. Reopen it and try again.' } };
     const response = await fetch('/api/invoke', { method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Companion-Client': client }, body: JSON.stringify({ op, input }) });
     if (response.status === 401) { location.reload(); return { ok: false, error: { code: 'LOCAL_LOCKED', message: 'Open Companion again with its access code.' } }; }
@@ -32,7 +43,8 @@
 
   const node = (tag, className, text) => { const element = document.createElement(tag); if (className) element.className = className; if (text !== undefined) element.textContent = text; return element; };
   const button = (label, className) => { const element = node('button', className, label); element.type = 'button'; return element; };
-  const answer = (id, path = '', init = {}) => fetch(`/api/dialog/${id}${path}`, { method: 'POST', ...init });
+  const answer = (id, path = '', init = {}) => fetch(`/api/dialog/${id}${path}`, { method: 'POST', ...init,
+    headers: { ...init.headers, 'X-Companion-Client': client } });
 
   /** A modal built from the app's own dialog styles. `dismiss` runs when the user closes it without choosing. */
   function modal(id, title, build, dismiss = () => {}) {
@@ -102,7 +114,28 @@
     // This page isolates its browsing context, so the new tab cannot reach back into Companion.
     if (!window.open(url, '_blank')) offerLink('Open this page', url, 'Open');
   }
-  function openFile({ url, name, download }) {
+  function openFile({ url, name, download, receipt }) {
+    if (receipt) {
+      if (downloads.has(receipt)) return;
+      const received = value => fetch(`/api/downloads/${receipt}`, { method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Companion-Client': client }, body: JSON.stringify({ received: value }) });
+      downloads.set(receipt, (async () => {
+        try {
+          const response = await fetch(url, { headers: { 'X-Companion-Client': client } });
+          if (!response.ok) throw new Error('The export is no longer current.');
+          const blob = await response.blob();
+          if (!blob.size) throw new Error('The export was empty.');
+          const objectUrl = URL.createObjectURL(blob), link = node('a');
+          link.href = objectUrl; link.download = name; link.hidden = true;
+          document.body.append(link); link.click(); link.remove();
+          setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+          // This confirms received bytes and browser handoff, not an OS disk-save result.
+          const acknowledgement = await received(true);
+          if (!acknowledgement.ok) throw new Error('The export changed before delivery finished.');
+        } catch { await received(false).catch(() => {}); }
+      })());
+      return;
+    }
     if (download) {
       const link = node('a'); link.href = url; link.download = name; link.hidden = true;
       document.body.append(link); link.click(); link.remove();
@@ -126,8 +159,12 @@
     const source = new EventSource(`/api/events?client=${client}`);
     const on = (event, handle) => source.addEventListener(event, message => { handle(JSON.parse(message.data)); });
     // A reconnect means Companion restarted or the network dropped: reread everything.
-    source.addEventListener('open', () => { for (const listener of stateListeners) listener(); });
-    source.addEventListener('error', () => { if (source.readyState === EventSource.CLOSED) location.reload(); });
+    source.addEventListener('open', () => {
+      streamConnected = true;
+      for (const finish of [...waitingForStream]) finish(true);
+      for (const listener of stateListeners) listener();
+    });
+    source.addEventListener('error', () => { streamConnected = false; if (source.readyState === EventSource.CLOSED) location.reload(); });
     on('state-changed', () => { for (const listener of stateListeners) listener(); });
     on('settings-section', section => { for (const listener of sectionListeners) listener(section); });
     // Named apart from EventSource's own `open` and `error` events.

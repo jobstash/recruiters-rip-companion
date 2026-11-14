@@ -21,6 +21,8 @@ Preserve `rip.recruiters.companion`, **Recruiters.rip Companion**, **Recruiters 
 | Form snapshots, agent answers and preparation | `src/mcp/form-tools.mjs`, `src/browser-forms.mjs`, `src/decisions/form-mapping.mjs` |
 | Matching rubric and policy fingerprints | `src/mcp/matching-contract.mjs`, `src/mcp/matching-tools.mjs` |
 | Evidence-bound CVs and document exports | `src/mcp/application-tools.mjs`, `src/documents/` |
+| Outcomes review, role evidence and editable master | `src/mcp/master-cv.mjs`, `src/mcp/profile-tools.mjs`, `src/mcp/interview.mjs`, `src/master-cv-settings.mjs`, `ui/master-cv.js` |
+| CV writing and Humanizer process | `src/mcp/cv-writing-policy.mjs`, `skills/recruiters-rip/SKILL.md`, `skills/recruiters-rip/references/humanizer.md` |
 | Public release updates | `src/updates.mjs`, `src/update-install.cjs`, `ui/updates.js` |
 | Packaging and release metadata | `scripts/package-local.mjs`, `scripts/after-pack.cjs`, `scripts/release-metadata.mjs`, `src/package-release.mjs` |
 
@@ -30,7 +32,7 @@ Career records use plain private JSON, not keychain storage or at-rest encryptio
 
 Claude/Codex handles job assessments, questions and new application text. Optional OpenAI Decisions requests choose known form values through Chrome or Firefox Read page; they never assess jobs. Keep requests bounded and context/credential-bound. Never run live inference in tests or invent unknown answers or membership.
 
-The current career schema remains 2. Captured jobs and form drafts are lazy additions; do not reset existing careers to introduce them. Facts retain subject/employer identity. CV claims retain internal support citations; rendered documents omit that validation metadata.
+The current career schema remains 2. Sources, role identities, review checkpoints and master versions are separate records. Do not reset existing careers to introduce these lazy additions. Role-scoped facts use the stable employment-episode ID; genuinely global facts remain unscoped. CV claims retain exact source/hash/quote references and current fact IDs; rendered documents omit evidence metadata. Master user edits, removals and publication restrictions constrain tailored copies. Review completion, document readiness and current export validity are derived, never stored as an unconditional ready flag.
 
 ## Captured jobs
 

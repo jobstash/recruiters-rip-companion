@@ -51,15 +51,8 @@ export function assertCareerGapSetting(input) {
   return { enabled, activity, place, description, minMonths, fromYear, toYear };
 }
 
-// 3.12.29 and 3.12.30 saved one line of wording. It becomes the description of a "Career break" entry,
-// so a setting or backup from those versions keeps working.
-const EARLIER_KEYS = 'enabled,fromYear,minMonths,mode,text,toYear';
-const fromEarlierVersion = value => value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).sort().join() === EARLIER_KEYS
-  ? { enabled: value.enabled, minMonths: value.minMonths, fromYear: value.fromYear, toYear: value.toYear, activity: CAREER_GAP_ACTIVITY, place: '',
-    description: value.mode === 'custom' && typeof value.text === 'string' && value.text.trim() ? value.text : CAREER_GAP_PRIVATE_TEXT }
-  : value;
-/** A stored setting in the current shape; throws when it is neither current nor from an earlier version. */
-export const readCareerGapSetting = value => assertCareerGapSetting(fromEarlierVersion(value));
+/** Only the current explicit activity/place/description setting is accepted. */
+export const readCareerGapSetting = value => assertCareerGapSetting(value);
 
 /** The saved setting; with none (or an unreadable one) saved: off, three months, the past ten years. */
 export function savedCareerGap(career, now = new Date()) {

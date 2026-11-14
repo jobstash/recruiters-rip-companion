@@ -112,8 +112,10 @@ async function layoutCareerCvPdf(input: CareerCvInput): Promise<PDFDocument> {
     const lines: string[] = [];
     for (const raw of cleanPdfText(text).split("\n")) {
       let current = "";
-      for (const word of raw.split(/\s+/).filter(Boolean)) {
-        const next = current ? `${current} ${word}` : word;
+      // Preserve authored separators inside a line; a visual line break replaces only its boundary separator.
+      // PDF fonts do not encode tab controls, so tabs use a four-space visual advance. Stored/TXT text stays exact.
+      for (const [, separator, word] of raw.matchAll(/(\s*)(\S+)/gu)) {
+        const next = current ? current + separator.replace(/\t/g, "    ") + word : word;
         if (font.widthOfTextAtSize(next, size) <= width) { current = next; continue; }
         if (current) lines.push(current);
         current = "";
@@ -392,8 +394,8 @@ export async function renderCareerPdf(
     const lines: string[] = [];
     for (const raw of cleanPdfText(text).split("\n")) {
       let current = "";
-      for (const word of raw.split(/\s+/)) {
-        const next = current ? `${current} ${word}` : word;
+      for (const [, separator, word] of raw.matchAll(/(\s*)(\S+)/gu)) {
+        const next = current ? current + separator.replace(/\t/g, "    ") + word : word;
         if (font.widthOfTextAtSize(next, size) > 490) {
           if (current) lines.push(current);
           current = "";

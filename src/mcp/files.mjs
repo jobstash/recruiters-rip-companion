@@ -5,7 +5,9 @@ import path from 'node:path';
 import { privateDirectory, readPrivateFile } from '../vault.mjs';
 import { fail } from './state.mjs';
 import { assertPrivatePath } from '../platform-runtime.cjs';
-import { currentApplicationJob, applicationContextFingerprint } from '../application-workflow.mjs';
+import { currentApplicationJob, applicationContextFingerprint, pendingApplicationInterviews } from '../application-workflow.mjs';
+import { masterCvState } from './master-cv.mjs';
+import { blockFilter } from './blocklist.mjs';
 
 const MAX_SOURCE = 5 * 1024 * 1024, MAX_EXPORT = 12 * 1024 * 1024;
 export const exportTypes = Object.freeze({ pdf: 'application/pdf', csv: 'text/csv', txt: 'text/plain' });
@@ -57,7 +59,13 @@ export async function readSelectedSource(filename) {
     return { buffer, originalname: path.basename(filename), mimetype, size: buffer.length };
   } finally { await file.close(); }
 }
-export function createDocumentFiles({ directory, store, assertAvailable, onCreated = () => {} }) {
+export function createDocumentFiles(options) { return documentStorage(options); }
+
+/** Private backup custody, never a publishing/resource API. Historical files still
+ * need exact saved ownership, private paths and byte integrity, but not readiness. */
+export function createBackupDocumentReader(options) { return documentStorage(options, true); }
+
+function documentStorage({ directory, store, assertAvailable, onCreated = () => {} }, backupOnly = false) {
   let transaction, queue = Promise.resolve();
   const allocated = new Map();
   async function withExportTransaction(action) {
@@ -136,16 +144,21 @@ export function createDocumentFiles({ directory, store, assertAvailable, onCreat
     if (root() !== dir) fail('IDENTITY_CHANGED', 'The local account changed. Open the application again.');
     return path.join(dir, ...parts);
   }
-  function currentRecords() {
+  function currentRecords(readyOnly = true) {
     const records = [];
     const career = store.get().career;
+    const master = career?.masterCv?.current;
+    if (readyOnly && (!career || masterCvState(career).status !== 'ready')) return records;
+    const blocked = blockFilter(career);
     for (const app of Object.values(career?.applications ?? {})) {
+      if (readyOnly && (pendingApplicationInterviews(career, app.id).length || blocked(app.job))) continue;
       const seen = new Set();
       for (const record of [...(app.exports ?? [])].reverse()) {
         const key = `${record.kind}:${record.format}`;
         const draft = record.kind === 'cv' ? app.cv : app.coverLetter;
-        if (draft && (record.documentVersion !== draft.version || (draft.contextFingerprint &&
-          (record.contextFingerprint !== draft.contextFingerprint || draft.contextFingerprint !== applicationContextFingerprint(career, app))))) continue;
+        if (readyOnly && (!draft || draft.masterVersion !== master.version || record.masterVersion !== master.version ||
+          draft.contextFingerprint !== applicationContextFingerprint(career, app) || record.contextFingerprint !== draft.contextFingerprint ||
+          record.documentVersion !== draft.version)) continue;
         if (record.applicationId !== app.id || !documentURI.test(record.uri) || seen.has(key)) continue;
         seen.add(key);
         records.push(record);
@@ -157,6 +170,23 @@ export function createDocumentFiles({ directory, store, assertAvailable, onCreat
     const record = currentRecords().find(item => item.uri === uri);
     if (!record) fail('NOT_FOUND', 'Choose a current document exported for this application.');
     return record;
+  }
+  function backupRecord(uri) {
+    let saved;
+    for (const [applicationId, app] of Object.entries(store.get().career?.applications ?? {})) {
+      for (const record of app.exports ?? []) {
+        if (record.uri !== uri) continue;
+        if (app.id !== applicationId || (documentURI.test(uri) && record.applicationId !== applicationId))
+          fail('EXPORT_CORRUPT', 'The saved document belongs to a different application.');
+        if (saved && JSON.stringify(saved) !== JSON.stringify(record))
+          fail('EXPORT_CORRUPT', 'The saved document has conflicting registrations.');
+        saved = record;
+      }
+    }
+    if (!saved) fail('NOT_FOUND', 'Only a registered saved export can be included in a backup.');
+    if (!Number.isSafeInteger(saved.bytes) || saved.bytes < 1 || saved.bytes > MAX_EXPORT)
+      fail('EXPORT_CORRUPT', 'The saved document size is invalid.');
+    return saved;
   }
   async function allocateFolder(record, app) {
     const key = JSON.stringify([root(), app.id, record.company, record.jobTitle]);
@@ -271,6 +301,24 @@ export function createDocumentFiles({ directory, store, assertAvailable, onCreat
     if (await documentPath(currentRecord(uri)) !== filename) fail('NOT_FOUND', 'The saved document changed. Select its current version.');
     return filename;
   }
+  async function readBackup(uri) {
+    assertAvailable(false);
+    const ranking = rankingURI.exec(uri), document = documentURI.exec(uri);
+    if (!ranking && !document) fail('NOT_FOUND', 'Choose a registered local export for the backup.');
+    const record = backupRecord(uri), registration = JSON.stringify(record), dir = await privateRoot();
+    const extension = document?.[2] ?? 'csv';
+    if (record.mediaType !== exportTypes[extension] || (ranking && record.sha256 !== ranking[1]))
+      fail('EXPORT_CORRUPT', 'The saved export metadata does not match its file identity.');
+    const filename = document ? await documentPath(record) : path.join(dir, `${ranking[1]}.csv`);
+    const bytes = await readExport(filename, record.sha256, extension);
+    if (root() !== dir) fail('IDENTITY_CHANGED', 'The local account changed while reading the backup file.');
+    if (document) await documentPath(record); else await privateRoot();
+    assertAvailable(false);
+    if (root() !== dir) fail('IDENTITY_CHANGED', 'The local account changed while reading the backup file.');
+    if (JSON.stringify(backupRecord(uri)) !== registration || bytes.length !== record.bytes)
+      fail('EXPORT_CORRUPT', 'The saved export changed while reading the backup file.');
+    return { uri, mediaType: record.mediaType, bytes };
+  }
   async function listResources() {
     assertAvailable(false);
     try {
@@ -295,8 +343,8 @@ export function createDocumentFiles({ directory, store, assertAvailable, onCreat
     assertAvailable(true);
     let dir;
     try { dir = await privateRoot(); } catch (error) { if (error.code === 'ENOENT') return; throw error; }
-    const active = new Set(currentRecords().map(record => record.uri));
-    const activePaths = new Set(currentRecords().map(record => path.join(dir, ...documentParts(record))));
+    const active = new Set(currentRecords(false).map(record => record.uri));
+    const activePaths = new Set(currentRecords(false).map(record => path.join(dir, ...documentParts(record))));
     const activeIdentities = new Set();
     for (const filename of activePaths) {
       try {
@@ -331,5 +379,6 @@ export function createDocumentFiles({ directory, store, assertAvailable, onCreat
       if (info.isFile() && !info.isSymbolicLink()) { assertAvailable(true); await unlink(filename); }
     }
   }
+  if (backupOnly) return { read: readBackup };
   return { exportDocument, readResource, resolveExport, listResources, cleanupExports, withExportTransaction, exportDirectory: root };
 }

@@ -1,12 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { createApplicationWorkflow, createApplicationPreparationTools, applicationContextFingerprint, applicationQuestionKey, applicationUrlIdentity } from '../src/application-workflow.mjs';
+import { createApplicationWorkflow, createApplicationPreparationTools, applicationContextFingerprint, applicationQuestionKey, applicationUrlIdentity, originalJobText } from '../src/application-workflow.mjs';
 import { createApplicationTools } from '../src/mcp/application-tools.mjs';
 import { createBrowserForms } from '../src/browser-forms.mjs';
 import { createFormTools, validFormValue, validateFormSnapshot } from '../src/mcp/form-tools.mjs';
 import { createScopedAccess } from '../src/mcp/scope.mjs';
 import { CareerError, createCareerState } from '../src/mcp/state.mjs';
+import { readyMaster } from './helpers/ready-master.mjs';
+import { assertMasterReady, masterCvState } from '../src/mcp/master-cv.mjs';
 
 const role = 'a6bff5dd-1a4e-48ca-9421-f61fb85d1011';
 const advert = `https://example.pinpointhq.com/postings/${role}`;
@@ -14,14 +16,14 @@ const apply = `${advert}/applications/new`;
 const job = { title: 'Platform engineer', company: 'Example', description: 'Build reliable data services.', url: advert };
 const field = (id = 'summary', extra = {}) => ({ id, label: 'Personal summary', type: 'textarea', signature: `sig:${id}`, empty: true, maxLength: 200, ...extra });
 const page = (url = apply, fields = [field()]) => ({ url, title: 'Apply for Platform engineer', fields, actions: [] });
-function fixture({ validateExport = async () => true, assertAvailable = () => {} } = {}) {
+async function fixture({ validateExport = async () => true, assertAvailable = () => {} } = {}) {
   let state = { deviceId: 'synthetic-device', career: createCareerState() }, queue = Promise.resolve();
   state.career.profile.name = 'Synthetic Candidate';
-  state.career.sources.cv = { purpose: 'cv', text: 'Built reliable services at Example.', archived: false };
   const store = { get: () => structuredClone(state), update(change) {
     const next = queue.then(async () => { const copy = structuredClone(state); await change(copy); state = copy; });
     queue = next.catch(() => {}); return next;
   } };
+  const ready = await readyMaster(store);
   const workflow = createApplicationWorkflow({ store, assertAvailable, validateExport });
   const tools = new Map([...createApplicationTools({ store }), ...createFormTools({ store }),
     ...createApplicationPreparationTools({ workflow, openInBrowser: async url => opened.push(url) })].map(tool => [tool.name, tool]));
@@ -32,27 +34,35 @@ function fixture({ validateExport = async () => true, assertAvailable = () => {}
   const mutation = extra => ({ requestId: randomUUID(), revision: state.career.revision, ...extra });
   const create = input => call('career_application_create', mutation({ job: input ?? job }));
   const resolve = (extra = {}) => workflow.resolve({ requestId: randomUUID(), page: page(), jobs: [], context: { original: { url: advert, title: job.title, text: job.description, complete: true } }, ...extra });
+  const letterArgs = (applicationId, paragraphs) => {
+    const career = state.career, app = career.applications[applicationId];
+    return mutation({ applicationId, paragraphs, masterVersion: assertMasterReady(career).version,
+      contextFingerprint: applicationContextFingerprint(career, app), evidence: paragraphs.map(() => ready.support),
+      requirements: [{ id: randomUUID(), phrase: 'data services', priority: 'important', kind: 'skill', status: 'partial', support: ready.support,
+        roleIds: [ready.roles[0].id], rationale: 'Relevant service delivery; domain depth remains unestablished.' }] });
+  };
   async function documents(applicationId, extra = {}) {
+    if (masterCvState(state.career).status !== 'ready') await readyMaster(store);
     await store.update(saved => {
       const app = saved.career.applications[applicationId], fingerprint = applicationContextFingerprint(saved.career, app);
       for (const kind of ['cv', 'cover_letter']) {
-        app[kind === 'cv' ? 'cv' : 'coverLetter'] = { version: 1, contextFingerprint: fingerprint };
+        app[kind === 'cv' ? 'cv' : 'coverLetter'] = { version: 1, masterVersion: assertMasterReady(saved.career).version, contextFingerprint: fingerprint };
         if (kind === 'cover_letter') app.coverLetter.paragraphs = ['Dear Example team,', 'I build reliable services and would like to contribute to your team.'];
         app.exports.push({ kind, format: 'pdf', uri: `recruiters://documents/${kind === 'cv' ? 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' : 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'}.pdf`,
-          documentVersion: 1, contextFingerprint: fingerprint, textValidation: { passed: true }, ...extra });
+          masterVersion: assertMasterReady(saved.career).version, documentVersion: 1, contextFingerprint: fingerprint, textValidation: { passed: true }, ...extra });
       }
     });
   }
   async function answer(view, value = 'I build reliable services for this team.') {
     const read = await call('career_form_read', { formId: view.formId });
     return call('career_form_answers_save', mutation({ formId: read.formId, snapshot: read.snapshot, evidenceRevision: read.evidenceRevision,
-      answers: [{ id: read.fields[0].id, value }] }));
+      answers: [{ id: read.fields[0].id, value, support: ready.support }] }));
   }
-  return { store, workflow, call, mutation, create, resolve, documents, answer, forms, opened };
+  return { store, workflow, call, mutation, create, resolve, documents, answer, forms, opened, ready, letterArgs };
 }
 
 test('agent-led and browser-led entries converge on one application and reuse its current exports', async () => {
-  const f = fixture(), created = await f.create();
+  const f = await fixture(), created = await f.create();
   await f.documents(created.applicationId);
   await f.call('career_application_open', { applicationId: created.applicationId });
   assert.deepEqual(f.opened, [advert]);
@@ -81,9 +91,9 @@ test('agent-led and browser-led entries converge on one application and reuse it
 });
 
 test('current introduction copies the exact saved job-specific paragraphs synchronously without exposing prose in metadata', async () => {
-  const f = fixture(), created = await f.create(), view = await f.resolve(), copied = [];
+  const f = await fixture(), created = await f.create(), view = await f.resolve(), copied = [];
   const paragraphs = ['Dear Example team,', 'I build reliable services and would like to contribute to your data platform.'];
-  await f.call('career_application_letter_save', f.mutation({ applicationId: created.applicationId, paragraphs }));
+  await f.call('career_application_letter_save', f.letterArgs(created.applicationId, paragraphs));
   const before = f.store.get();
   const status = await f.workflow.status({ bindingId: view.bindingId });
   assert.deepEqual(status.introduction, { ready: true });
@@ -98,24 +108,24 @@ test('current introduction copies the exact saved job-specific paragraphs synchr
 
 test('changed career evidence or original advert makes introduction metadata and copying unavailable', async () => {
   for (const change of [
-    state => { state.career.sources.cv.text += ' Changed evidence.'; },
+    state => { Object.values(state.career.sources)[0].text += ' Changed evidence.'; },
     state => { state.career.evidenceRevision++; },
     (state, id) => { state.career.applications[id].job.description = 'A different current role.'; },
     (state, id) => { delete state.career.applications[id].coverLetter.contextFingerprint; },
   ]) {
-    const f = fixture(), created = await f.create(), view = await f.resolve(), copied = [];
+    const f = await fixture(), created = await f.create(), view = await f.resolve(), copied = [];
     await f.documents(created.applicationId);
     await f.store.update(state => change(state, created.applicationId));
     assert.deepEqual((await f.workflow.status({ bindingId: view.bindingId })).introduction, { ready: false });
     const before = f.store.get();
-    assert.throws(() => f.workflow.copyIntroduction({ bindingId: view.bindingId }, text => copied.push(text)), { code: 'INTRODUCTION_NOT_CURRENT' });
+    assert.throws(() => f.workflow.copyIntroduction({ bindingId: view.bindingId }, text => copied.push(text)), error => ['INTRODUCTION_NOT_CURRENT', 'MASTER_NOT_READY'].includes(error.code));
     assert.deepEqual(copied, []);
     assert.deepEqual(f.store.get(), before);
   }
 });
 
 test('empty or oversized introductions are unavailable, never truncated for copying', async () => {
-  const f = fixture(), created = await f.create(), view = await f.resolve();
+  const f = await fixture(), created = await f.create(), view = await f.resolve();
   await f.documents(created.applicationId);
   for (const paragraphs of [null, [], ['Only one paragraph'], ['Dear team,', '  '], ['Dear team,', 'x'.repeat(1501)], Array(13).fill('Paragraph'), ['Dear team,', 42]]) {
     await f.store.update(state => { state.career.applications[created.applicationId].coverLetter.paragraphs = paragraphs; });
@@ -125,7 +135,7 @@ test('empty or oversized introductions are unavailable, never truncated for copy
 });
 
 test('an unknown, unbound or wrong-job binding cannot copy another application’s introduction', async () => {
-  const f = fixture(), first = await f.create(), firstView = await f.resolve();
+  const f = await fixture(), first = await f.create(), firstView = await f.resolve();
   await f.documents(first.applicationId);
   const unrelated = await f.resolve({ page: page('https://example.pinpointhq.com/apply'), context: {} });
   assert.deepEqual(unrelated.introduction, { ready: false });
@@ -133,7 +143,7 @@ test('an unknown, unbound or wrong-job binding cannot copy another application�
   assert.throws(() => f.workflow.copyIntroduction({ bindingId: unrelated.bindingId }, () => assert.fail('Unbound application copied')), { code: 'INTRODUCTION_NOT_CURRENT' });
   const otherJob = { ...job, url: advert.replace(role, '54bab9d0-9c78-4405-8cea-3e1a2ae11b4c') };
   const second = await f.create(otherJob), paragraphs = ['Dear other team,', 'This introduction is for the other exact application.'];
-  await f.call('career_application_letter_save', f.mutation({ applicationId: second.applicationId, paragraphs }));
+  await f.call('career_application_letter_save', f.letterArgs(second.applicationId, paragraphs));
   const secondView = await f.resolve({ page: page(`${otherJob.url}/applications/new`), context: {} });
   const copied = [];
   assert.deepEqual(f.workflow.copyIntroduction({ bindingId: secondView.bindingId }, text => copied.push(text)), { copied: true });
@@ -144,7 +154,7 @@ test('an unknown, unbound or wrong-job binding cannot copy another application�
 });
 
 test('host preference persists without an account, application binding or host launch', async () => {
-  const f = fixture(), before = f.store.get();
+  const f = await fixture(), before = f.store.get();
   assert.deepEqual(await f.workflow.setHost({ host: 'claude' }), { host: 'claude' });
   assert.equal(f.store.get().browserPreferences.applicationHost, 'claude');
   assert.deepEqual(f.store.get().career, before.career);
@@ -158,7 +168,7 @@ test('host preference persists without an account, application binding or host l
 });
 
 test('locked or changed local sessions cannot save host preferences or copy introductions', async () => {
-  const f = fixture(), created = await f.create(), view = await f.resolve();
+  const f = await fixture(), created = await f.create(), view = await f.resolve();
   await f.documents(created.applicationId);
   let locked = false, epoch = 0;
   const assertAvailable = () => { if (locked) throw new CareerError('LOCAL_LOCKED', 'Synthetic locked storage'); };
@@ -176,11 +186,11 @@ test('locked or changed local sessions cannot save host preferences or copy intr
 });
 
 test('web-led complete capture creates once; incomplete capture persists exact context until explicit bind', async () => {
-  const f = fixture();
+  const f = await fixture();
   const complete = await f.resolve({ jobs: [{ ...job, complete: true, applyUrl: apply }] });
   assert.ok(complete.applicationId);
   assert.equal((await f.create()).applicationId, complete.applicationId);
-  const other = fixture();
+  const other = await fixture();
   const view = await other.resolve({ context: { original: { url: advert, title: job.title, text: '', complete: false }, jobLinks: [{ url: advert, title: job.title }] } });
   assert.equal(view.applicationId, null);
   assert.equal(view.state, 'needs_job');
@@ -204,7 +214,7 @@ test('web-led complete capture creates once; incomplete capture persists exact c
 });
 
 test('a prepared application binds agent-written essays and Yes/No choices, so keyless preparation shows them ready', async () => {
-  const f = fixture(), created = await f.create();
+  const f = await fixture(), created = await f.create();
   const yesNo = label => ({ label, type: 'radio', options: [{ value: 'Yes', label: 'Yes' }, { value: 'No', label: 'No' }] });
   const fields = [
     field('project', { label: 'Share a data project you built end-to-end that changed a business decision. Briefly cover the question, your approach (tools, data), and the outcome.' }),
@@ -223,8 +233,8 @@ test('a prepared application binds agent-written essays and Yes/No choices, so k
   assert.match(read.instructions, /answer every empty captured field/);
   assert.match(read.instructions, /Yes\/No/);
   await f.call('career_form_answers_save', f.mutation({ formId: read.form.formId, snapshot: read.form.snapshot, evidenceRevision: read.form.evidenceRevision, answers: [
-    { id: 'project', value: 'Built a churn model that moved retention budget.' }, { id: 'lead', value: 'Yes' },
-    { id: 'crypto', value: 'Analysed on-chain bridge volumes at Example.' }, { id: 'web3', value: 'Yes' }] }));
+    { id: 'project', value: 'Built a churn model that moved retention budget.', support: f.ready.support }, { id: 'lead', value: 'Yes' },
+    { id: 'crypto', value: 'Analysed on-chain bridge volumes at Example.', support: f.ready.support }, { id: 'web3', value: 'Yes' }] }));
   const prepared = await f.forms.prepare({ requestId: randomUUID(), ...page(apply, fields), useApi: false });
   assert.deepEqual(prepared.fields.map(item => [item.id, item.value, item.source]), [
     ['project', 'Built a churn model that moved retention budget.', 'agent'], ['lead', 'Yes', 'agent'],
@@ -236,8 +246,8 @@ test('a prepared application binds agent-written essays and Yes/No choices, so k
   assert.deepEqual(status.writing.map(item => [item.fieldId, item.ready]), [['project', true], ['crypto', true], ['game', false]]);
 });
 
-test('an agent answer to a generic question is kept like the user’s own, without staling documents or assessments', async () => {
-  const f = fixture(), created = await f.create();
+test('agent-authored generic form answers are not promoted into user-stated career facts', async () => {
+  const f = await fixture(), created = await f.create();
   const notice = field('notice', { label: 'What is your current notice period?', type: 'text' });
   const view = await f.resolve({ page: page(apply, [notice]) });
   await f.documents(created.applicationId);
@@ -246,16 +256,15 @@ test('an agent answer to a generic question is kept like the user’s own, witho
   await save('One month');
   await save('Three months');
   const career = f.store.get().career;
-  assert.deepEqual(Object.values(career.facts).map(fact => [fact.subject, fact.answer]), [['Notice period', 'One month']], 'an existing generic fact is never overwritten by the agent');
+  assert.deepEqual(Object.values(career.facts), [], 'agent output is not a new statement by the candidate');
   assert.equal(career.evidenceRevision, evidenceRevision, 'saved assessments stay current');
   assert.equal((await f.workflow.status({ bindingId: view.bindingId })).state, 'ready');
   const elsewhere = await f.forms.prepare({ requestId: randomUUID(), ...page('https://jobs.example.test/other/apply', [notice]), useApi: false });
-  assert.equal(elsewhere.fields[0].value, 'One month');
-  assert.match(elsewhere.fields[0].source, /^fact:/);
+  assert.deepEqual(elsewhere.fields, []);
 });
 
 test('ambiguous saved URLs and same-host titles cannot select another application package', async () => {
-  const f = fixture(), created = await f.create();
+  const f = await fixture(), created = await f.create();
   await f.documents(created.applicationId);
   const unrelated = await f.resolve({ page: page('https://example.pinpointhq.com/apply'), context: {} });
   assert.equal(unrelated.applicationId, null);
@@ -272,7 +281,7 @@ test('ambiguous saved URLs and same-host titles cannot select another applicatio
 });
 
 test('changed original or CV evidence invalidates saved documents and staged answers without deleting history', async () => {
-  const f = fixture(), created = await f.create(), view = await f.resolve();
+  const f = await fixture(), created = await f.create(), view = await f.resolve();
   await f.documents(created.applicationId); await f.answer(view);
   const changed = await f.create({ ...job, description: 'Operate a different payments system.' });
   assert.equal(changed.applicationId, created.applicationId);
@@ -283,14 +292,14 @@ test('changed original or CV evidence invalidates saved documents and staged ans
   await assert.rejects(f.workflow.document({ bindingId: view.bindingId, kind: 'cv' }), { code: 'DOCUMENT_NOT_CURRENT' });
   await assert.rejects(f.call('career_application_open', { applicationId: created.applicationId }), { code: 'DOCUMENT_NOT_CURRENT' });
   await f.documents(created.applicationId);
-  await f.store.update(state => { state.career.sources.cv.text += ' Updated career evidence.'; });
+  await f.store.update(state => { Object.values(state.career.sources)[0].text += ' Updated career evidence.'; });
   status = await f.workflow.status({ bindingId: view.bindingId });
   assert.equal(status.state, 'needs_refresh');
   assert.equal(f.store.get().career.applications[created.applicationId].exports.length, 4);
 });
 
 test('application answers reuse exact normalized questions only', async () => {
-  const f = fixture(), created = await f.create(), view = await f.resolve();
+  const f = await fixture(), created = await f.create(), view = await f.resolve();
   await f.answer(view);
   const nextPage = page(apply, [field('new-dom-id', { label: '  PERSONAL   summary ' })]);
   const rebound = await f.resolve({ page: nextPage });
@@ -313,7 +322,7 @@ test('application answers reuse exact normalized questions only', async () => {
 
 test('legacy drafts, unvalidated exports and missing files never count as current', async () => {
   let exists = true;
-  const f = fixture({ validateExport: async () => exists }), created = await f.create(), view = await f.resolve({ page: page(apply, []) });
+  const f = await fixture({ validateExport: async () => exists }), created = await f.create(), view = await f.resolve({ page: page(apply, []) });
   await f.documents(created.applicationId);
   assert.equal((await f.workflow.status({ bindingId: view.bindingId })).state, 'ready');
   exists = false;
@@ -338,7 +347,7 @@ test('ATS role identities preserve job isolation and maxLength bounds staged for
 });
 
 test('narrative answers require a saved exact job, even when a legacy unbound draft exists', async () => {
-  const f = fixture(), view = await f.resolve({ context: {} });
+  const f = await fixture(), view = await f.resolve({ context: {} });
   await assert.rejects(f.answer(view), { code: 'APPLICATION_REQUIRED' });
   await f.store.update(state => {
     state.career.formDrafts[view.formId].answers.summary = { value: 'Old application prose', source: 'agent' };
@@ -349,7 +358,7 @@ test('narrative answers require a saved exact job, even when a legacy unbound dr
 });
 
 test('recapturing the local original invalidates documents even before application_create is called again', async () => {
-  const f = fixture(), id = `local:${'c'.repeat(64)}`;
+  const f = await fixture(), id = `local:${'c'.repeat(64)}`;
   await f.store.update(state => { state.career.jobs = { [id]: { id, ...job, applyUrl: apply, complete: true, updatedAt: '2026-01-01T00:00:00Z' } }; });
   const created = await f.call('career_application_create', f.mutation({ jobId: id }));
   const view = await f.resolve({ context: {} });
@@ -361,7 +370,7 @@ test('recapturing the local original invalidates documents even before applicati
 });
 
 test('an ambiguous list of links is not resolved by choosing the only previously saved job', async () => {
-  const f = fixture();
+  const f = await fixture();
   await f.create();
   const view = await f.resolve({ page: page('https://example.test/application'), context: { jobLinks: [
     { url: advert, title: job.title }, { url: 'https://example.test/jobs/another', title: job.title },
@@ -371,7 +380,7 @@ test('an ambiguous list of links is not resolved by choosing the only previously
 
 test('status and document lookup reject concurrent evidence changes during file validation', async () => {
   let changed = false, f;
-  f = fixture({ validateExport: async () => {
+  f = await fixture({ validateExport: async () => {
     if (!changed) { changed = true; await f.store.update(state => { state.career.profile.name = 'Changed during validation'; state.career.evidenceRevision++; }); }
     return true;
   } });
@@ -381,11 +390,11 @@ test('status and document lookup reject concurrent evidence changes during file 
   assert.ok((await f.workflow.status({ bindingId: view.bindingId })).documents.every(document => !document.ready));
   await f.documents(created.applicationId);
   changed = false;
-  await assert.rejects(f.workflow.document({ bindingId: view.bindingId, kind: 'cv' }), { code: 'DOCUMENT_NOT_CURRENT' });
+  await assert.rejects(f.workflow.document({ bindingId: view.bindingId, kind: 'cv' }), error => ['DOCUMENT_NOT_CURRENT', 'MASTER_NOT_READY'].includes(error.code));
 });
 
 test('a generic destination claiming a different unsaved advert cannot reuse the first package', async () => {
-  const f = fixture(), generic = 'https://example.test/apply';
+  const f = await fixture(), generic = 'https://example.test/apply';
   const firstJob = { ...job, url: 'https://example.test/jobs/first', applyUrl: generic };
   const first = await f.create(firstJob);
   await f.documents(first.applicationId);
@@ -400,7 +409,7 @@ test('a generic destination claiming a different unsaved advert cannot reuse the
 });
 
 test('equivalent HTML and captured text preserve the saved original, fingerprints and current PDFs', async () => {
-  const f = fixture();
+  const f = await fixture();
   const html = '<p>Build <strong>reliable</strong> data services.</p><p>Work with R&amp;D&nbsp;teams.</p>';
   const text = 'Build reliable data services.\n\nWork with R&D teams.';
   const created = await f.create({ ...job, description: html });
@@ -425,7 +434,7 @@ test('comparison normalization never replaces original markup with purportedly s
     '<<!--ignored-->!--untrusted-->',
     '&lt;img src=x onerror=untrusted()&gt;',
   ]) {
-    const f = fixture(), created = await f.create({ ...job, description });
+    const f = await fixture(), created = await f.create({ ...job, description });
     const career = f.store.get().career, app = career.applications[created.applicationId];
     const fingerprint = applicationContextFingerprint(career, app);
     assert.match(fingerprint, /^[a-f0-9]{64}$/);
@@ -442,7 +451,7 @@ test('comparison normalization never replaces original markup with purportedly s
 });
 
 test('custom-domain localized Pinpoint routes resolve only the exact same-origin role token', async () => {
-  const f = fixture(), original = `https://careers.zebedee.io/en/postings/${role}`;
+  const f = await fixture(), original = `https://careers.zebedee.io/en/postings/${role}`;
   const created = await f.create({ ...job, url: original });
   await f.documents(created.applicationId);
   const view = await f.resolve({ page: page(`${original}/applications/new`, []), context: {} });
@@ -455,7 +464,7 @@ test('custom-domain localized Pinpoint routes resolve only the exact same-origin
 });
 
 test('a saved complete local original resolves without a new page capture or platform request', async () => {
-  const f = fixture(), id = `local:${'d'.repeat(64)}`;
+  const f = await fixture(), id = `local:${'d'.repeat(64)}`;
   await f.store.update(state => { state.career.jobs = { [id]: { id, ...job, complete: true, applyUrl: apply } }; });
   const view = await f.resolve({ context: {} });
   assert.ok(view.applicationId);
@@ -464,7 +473,7 @@ test('a saved complete local original resolves without a new page capture or pla
 });
 
 test('saved different originals sharing a generic apply URL remain ambiguous', async () => {
-  const f = fixture(), generic = 'https://example.test/apply';
+  const f = await fixture(), generic = 'https://example.test/apply';
   await f.store.update(state => {
     state.career.jobs = Object.fromEntries(['first', 'second'].map(id => [id, {
       ...job, id: `local:${id}`, url: `https://example.test/jobs/${id}`, complete: true, applyUrl: generic,
@@ -476,7 +485,7 @@ test('saved different originals sharing a generic apply URL remain ambiguous', a
 });
 
 test('blocked packages reject preparation, open and receipt replay while retaining drafts and bindings', async () => {
-  const f = fixture(), created = await f.create({ ...job, company: 'Flow Traders' });
+  const f = await fixture(), created = await f.create({ ...job, company: 'Flow Traders' });
   await f.documents(created.applicationId);
   const input = { requestId: randomUUID(), page: page(), jobs: [], context: { original: { url: advert, title: job.title, text: job.description, complete: true } } };
   const view = await f.workflow.resolve(input);
@@ -500,7 +509,7 @@ test('blocked packages reject preparation, open and receipt replay while retaini
 });
 
 test('a fresh blocked capture cannot create a browser-led package or overwrite an existing one', async () => {
-  const f = fixture();
+  const f = await fixture();
   await f.store.update(state => { state.career.blocklist = { company: { kind: 'company', value: 'flow-traders' } }; });
   await assert.rejects(f.resolve({ jobs: [{ ...job, company: 'Flow Traders', complete: true }] }), { code: 'JOB_BLOCKED' });
   assert.deepEqual(f.store.get().career.applications, {});
@@ -510,7 +519,7 @@ test('a fresh blocked capture cannot create a browser-led package or overwrite a
 });
 
 test('URL-only preparation bindings become blocked when their known job is blocked', async () => {
-  const f = fixture();
+  const f = await fixture();
   const view = await f.resolve({ context: { original: { url: advert, title: job.title, text: '', complete: false } } });
   const preparation = await f.workflow.prepare({ bindingId: view.bindingId, host: 'claude' });
   await f.store.update(state => {
@@ -526,7 +535,7 @@ test('document validation cannot release readiness or open a package blocked dur
     let active = false, release, started;
     const waiting = new Promise(resolve => { started = resolve; });
     const validated = new Promise(resolve => { release = resolve; });
-    const f = fixture({ validateExport: async () => {
+    const f = await fixture({ validateExport: async () => {
       if (active) { started(); await validated; }
       return true;
     } });
@@ -546,7 +555,7 @@ test('document validation cannot release readiness or open a package blocked dur
 });
 
 test('an allowed bound application stays usable when a blocked role shares its generic form URL', async () => {
-  const f = fixture(), generic = 'https://example.test/apply';
+  const f = await fixture(), generic = 'https://example.test/apply';
   const blocked = await f.create({ ...job, company: 'Blocked Company', url: 'https://example.test/jobs/blocked', applyUrl: generic });
   const allowed = await f.create({ ...job, company: 'Allowed Company', url: 'https://example.test/jobs/allowed', applyUrl: generic });
   await f.documents(allowed.applicationId);
@@ -564,7 +573,7 @@ test('an allowed bound application stays usable when a blocked role shares its g
 
 test('foreign canonical claims cannot bind, release answers or replace an existing destination', async () => {
   for (const trustedJob of [job, { ...job, url: 'https://employer.example/jobs/123', applyUrl: 'https://authorized-ats.example/apply' }]) {
-    const f = fixture(), created = await f.create(trustedJob);
+    const f = await fixture(), created = await f.create(trustedJob);
     const trustedPage = page(trustedJob.applyUrl ?? apply);
     const trusted = await f.resolve({ page: trustedPage, context: {} });
     assert.equal(trusted.applicationId, created.applicationId, 'pre-recorded cross-origin ATS stays authorized');
@@ -587,4 +596,37 @@ test('foreign canonical claims cannot bind, release answers or replace an existi
     await f.call('career_application_open', { applicationId: created.applicationId });
     assert.deepEqual(f.opened, [trustedPage.url]);
   }
+});
+
+test('missing and stale masters block preparation, form prose, opening and copying', async () => {
+  const f = await fixture(), created = await f.create(), view = await f.resolve();
+  await f.documents(created.applicationId);
+  const preparation = await f.workflow.prepare({ bindingId: view.bindingId, host: 'codex' });
+  const read = await f.call('career_form_read', { formId: view.formId });
+  await f.store.update(state => { state.career.masterCv = null; });
+  await assert.rejects(f.workflow.prepare({ bindingId: view.bindingId, host: 'codex' }), { code: 'MASTER_NOT_READY' });
+  await assert.rejects(f.workflow.readPreparation(preparation), { code: 'MASTER_NOT_READY' });
+  await assert.rejects(f.workflow.openApplication(created, () => assert.fail('Must not open')), { code: 'MASTER_NOT_READY' });
+  assert.throws(() => f.workflow.copyIntroduction({ bindingId: view.bindingId }, () => assert.fail('Must not copy')), { code: 'MASTER_NOT_READY' });
+  await assert.rejects(f.call('career_form_answers_save', f.mutation({ formId: read.formId, snapshot: read.snapshot, evidenceRevision: read.evidenceRevision,
+    answers: [{ id: 'summary', value: 'Built reliable services.', support: f.ready.support }] })), { code: 'MASTER_NOT_READY' });
+});
+
+test('form prose must cite original evidence and never modifies the immutable master', async () => {
+  const f = await fixture(), created = await f.create(), view = await f.resolve();
+  const read = await f.call('career_form_read', { formId: view.formId }), before = f.store.get().career.masterCv;
+  await assert.rejects(f.call('career_form_answers_save', f.mutation({ formId: read.formId, snapshot: read.snapshot, evidenceRevision: read.evidenceRevision,
+    answers: [{ id: 'summary', value: 'Built reliable services.' }] })), { code: 'INVALID_INPUT' });
+  await f.answer(view);
+  assert.deepEqual(f.store.get().career.masterCv, before);
+  assert.equal(f.store.get().career.applications[created.applicationId].formAnswers[applicationQuestionKey(field())].support.sources.length, 1);
+});
+
+test('exact advert text decodes HTML5 entities without case or whitespace normalization', () => {
+  const html = '<p>Own <b>Product  Management</b> &amp; caf&eacute; services &#x2014; &#233;.</p><div hidden>Not displayed</div><script>ignore()</script><style>.x{}</style><template>Template only</template>';
+  assert.equal(originalJobText(html), '\nOwn Product  Management & café services — é.\n');
+  assert.equal(originalJobText('Keep  TWO\tspaces &lt; 10'), 'Keep  TWO\tspaces < 10');
+  assert.ok(originalJobText('<p>product <strong>management</strong></p>').includes('product management'));
+  const career = createCareerState(), app = { id: 'synthetic', job: { title: 'Role', company: 'Employer', description: 'Product  Management' } };
+  assert.notEqual(applicationContextFingerprint(career, app), applicationContextFingerprint(career, { ...app, job: { ...app.job, description: 'Product Management' } }));
 });

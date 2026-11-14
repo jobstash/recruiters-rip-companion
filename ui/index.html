@@ -13,6 +13,7 @@
 <script src="decisions.js" defer></script>
 <script src="updates.js" defer></script>
 <script src="career-gap.js" defer></script>
+<script src="master-cv.js" defer></script>
 <script src="backups.js" defer></script>
 <script src="settings.js" defer></script>
 </head>
@@ -55,9 +56,10 @@
 <div id="me-browser" class="career-browser">
 <div class="career-toolbar">
 <div class="tabs" role="tablist" aria-label="Saved career records">
-<button type="button" class="tab" role="tab" data-career-kind="sources" aria-selected="true" disabled>CVs</button>
-<button type="button" class="tab" role="tab" data-career-kind="facts" aria-selected="false" disabled>Facts</button>
-<button type="button" class="tab" role="tab" data-career-kind="preferences" aria-selected="false" disabled>Preferences</button>
+<button id="me-tab-master" type="button" class="tab" role="tab" data-career-kind="master" aria-controls="master-cv" aria-selected="false" tabindex="-1" disabled>Master CV</button>
+<button id="me-tab-sources" type="button" class="tab" role="tab" data-career-kind="sources" aria-controls="me-saved-panes" aria-selected="true" disabled>CVs</button>
+<button id="me-tab-facts" type="button" class="tab" role="tab" data-career-kind="facts" aria-controls="me-saved-panes" aria-selected="false" tabindex="-1" disabled>Facts</button>
+<button id="me-tab-preferences" type="button" class="tab" role="tab" data-career-kind="preferences" aria-controls="me-saved-panes" aria-selected="false" tabindex="-1" disabled>Preferences</button>
 </div>
 <section id="career-gap" class="career-gap" aria-label="Career gap detection" hidden>
 <label class="update-preference" for="career-gap-enabled"><input id="career-gap-enabled" type="checkbox" aria-describedby="career-gap-note" disabled>Career gap detection</label>
@@ -79,7 +81,40 @@
 <p id="career-gap-error" role="alert" hidden></p>
 </section>
 </div>
-<div class="career-panes">
+<section id="master-cv" class="master-cv" role="tabpanel" aria-labelledby="me-tab-master" hidden>
+<header class="master-cv-head">
+<h2>Master CV</h2>
+<p id="master-cv-readiness" role="status" aria-live="polite">Unlock to see your master CV.</p>
+<p id="master-cv-review" class="caption"></p>
+<div class="actions">
+<button id="master-cv-prompt" type="button" class="ghost" disabled>Copy review prompt</button>
+<button id="master-cv-retry" type="button" class="text" hidden>Retry</button>
+</div>
+<p id="master-cv-status" role="status" aria-live="polite"></p>
+<p id="master-cv-error" role="alert" hidden></p>
+</header>
+<div id="master-cv-empty" hidden>
+<p id="master-cv-empty-note"></p>
+<button id="master-cv-start" type="button" class="ghost">Start draft</button>
+</div>
+<section id="master-cv-conflict" class="master-cv-section" aria-labelledby="master-cv-conflict-title" hidden>
+<h3 id="master-cv-conflict-title" tabindex="-1">Saved CV changed</h3>
+<p>Your edits are still here. Choose which version to keep for each changed section. Keeping yours replaces that entire section; other saved sections are kept.</p>
+<div id="master-cv-conflict-fields"></div>
+<button id="master-cv-merge" type="button" class="ghost">Apply choices</button>
+</section>
+<form id="master-cv-form" hidden>
+<div id="master-cv-fields"></div>
+<div class="actions master-cv-save">
+<button id="master-cv-save" type="submit" class="primary" disabled>Save changes</button>
+<button id="master-cv-discard" type="button" class="text" disabled>Discard edits</button>
+<button id="master-cv-pdf" type="button" class="ghost" disabled>Export PDF</button>
+<button id="master-cv-txt" type="button" class="ghost" disabled>Export TXT</button>
+</div>
+<p id="master-cv-export-note" class="caption"></p>
+</form>
+</section>
+<div id="me-saved-panes" class="career-panes" role="tabpanel" aria-labelledby="me-tab-sources">
 <section class="career-list panel" aria-label="Saved records">
 <div class="panel-head"><p id="me-list-status" role="status">Unlock to see your saved work.</p></div>
 <button id="me-list-retry" class="ghost" type="button" hidden>Retry</button>

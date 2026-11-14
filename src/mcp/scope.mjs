@@ -17,14 +17,14 @@ export function createScopedAccess(store, { assertAvailable, epoch }) {
     assertAvailable: check,
     store: {
       get() { check(false); return store.get(); },
-      update(change) {
+      update(change, { beforeCommit } = {}) {
         check(true);
         return store.update(async state => {
           check(true);
           if (state.deviceId !== deviceId) fail('IDENTITY_CHANGED', 'The local account changed. Reconnect before saving.');
           await change(state);
           check(true);
-        });
+        }, { beforeCommit: () => { check(true); beforeCommit?.(); } });
       },
     },
   };

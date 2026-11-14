@@ -17,6 +17,7 @@ import { createApplicationTools } from '../src/mcp/application-tools.mjs';
 import { createApplicationWorkflow, createApplicationPreparationTools } from '../src/application-workflow.mjs';
 import { endpoint, launcherScript, mcpCommand, protectPrivatePath } from '../src/platform-runtime.cjs';
 import { mcpInvocation } from '../src/host-setup.mjs';
+import { readyMaster } from './helpers/ready-master.mjs';
 
 // Real generated launcher -> local-runner -> authenticated broker -> MCP tools.
 // Only the platform response is stubbed; all local records are temporary synthetic data.
@@ -26,10 +27,10 @@ test('local launcher handles LI.FI capture/application and all GitHub endpoint p
   await store.open();
   await store.update(state => {
     state.career.profile.name = 'Synthetic Candidate';
-    state.career.sources.cv = { purpose: 'cv', text: 'Synthetic Candidate built reliable services.', archived: false };
     state.career.publicationRange = 'today';
     state.career.matching = { jobs: {}, scores: {} };
   });
+  await readyMaster(store);
   let linkedSource = { login: 'synthetic-candidate', kind: 'user' };
   const calls = [], target = { login: 'lifinance', kind: 'organization' };
   const platform = async (operation, args) => {

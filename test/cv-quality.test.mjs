@@ -57,7 +57,7 @@ test('document texts enumerate every authored field and mark dates', () => {
 });
 
 test('renderable CVs replace cited claims with their text and never mutate the stored draft', () => {
-  const claim = text => ({ text, support: { cv: ['Built reliable services.'] } });
+  const claim = text => ({ id: '00000000-0000-4000-8000-000000000001', text, support: { sources: [{ sourceId: '00000000-0000-4000-8000-000000000002', contentHash: 'a'.repeat(64), quote: 'Built reliable services.' }] } });
   const stored = Object.freeze(cv({ highlights: [claim('Shipped.')],
     experience: [{ employer: 'Acme', role: 'Engineer', startDate: '2018', endDate: '2024', bullets: [claim('Built reliable services.')] }] }));
   const snapshot = structuredClone(stored);

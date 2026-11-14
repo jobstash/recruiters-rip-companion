@@ -1,4 +1,4 @@
 interface:
   display_name: "Recruiters.rip"
-  short_description: "Structured job assessments and pairwise-ranked matches"
+  short_description: "Find jobs and build evidence-backed, outcomes-led CVs"
   default_prompt: "Use the recruiters.rip skill to find me a job."

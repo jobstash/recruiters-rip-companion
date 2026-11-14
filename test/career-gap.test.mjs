@@ -5,20 +5,18 @@ import { createRequire } from 'node:module';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import Ajv from 'ajv';
-import addFormats from 'ajv-formats';
 import { CAREER_GAP_ACTIVITY, CAREER_GAP_PRIVATE_TEXT, careerGapContext, resolveCareerGaps, savedCareerGap, setCareerGap } from '../src/mcp/career-gap.mjs';
 import { createApplicationTools } from '../src/mcp/application-tools.mjs';
 import { applicationContextFingerprint } from '../src/application-workflow.mjs';
 import { validateBackupCareer } from '../src/backup.mjs';
 import { createDocumentFiles } from '../src/mcp/files.mjs';
 import { createCareerState } from '../src/mcp/state.mjs';
+import { readyMaster } from './helpers/ready-master.mjs';
+import { sourceSet, assertMasterReady } from '../src/mcp/master-cv.mjs';
 
 const documents = createRequire(import.meta.url)('../src/generated/document-engine.cjs');
 const now = new Date('2026-11-11T12:00:00Z');
 const on = (overrides = {}) => ({ enabled: true, activity: CAREER_GAP_ACTIVITY, place: '', description: CAREER_GAP_PRIVATE_TEXT, minMonths: 3, fromYear: 2016, toYear: 2026, ...overrides });
-// What 3.12.29 and 3.12.30 stored: one line of wording instead of an activity, place and description.
-const earlier = (overrides = {}) => ({ enabled: true, mode: 'private', text: '', minMonths: 3, fromYear: 2016, toYear: 2026, ...overrides });
 const career = setting => ({ ...createCareerState(), ...(setting ? { careerGap: setting } : {}) });
 const resolve = (setting, gaps) => resolveCareerGaps(career(setting), gaps, now);
 
@@ -44,19 +42,12 @@ test('saving validates every choice and changes the profile revision only for a 
   for (const invalid of [on({ minMonths: 2 }), on({ minMonths: 121 }), on({ minMonths: 3.5 }), on({ fromYear: 2027, toYear: 2026 }), on({ fromYear: 1949 }),
     on({ toYear: 2101 }), on({ activity: '   ' }), on({ activity: 'x'.repeat(81) }), on({ place: 'x'.repeat(81) }), on({ description: 'x'.repeat(201) }),
     on({ activity: 'two\nlines' }), on({ place: 'two\nlines' }), on({ description: 'two\nlines' }), on({ place: 7 }),
-    on({ enabled: 'yes' }), { ...on(), employer: 'Example LLC' }, { ...on(), role: 'Analyst' }, earlier(), { enabled: true }, null, []])
+    on({ enabled: 'yes' }), { ...on(), employer: 'Example LLC' }, { ...on(), role: 'Analyst' }, { enabled: true }, null, []])
     assert.throws(() => setCareerGap(state, invalid), { code: 'INVALID_INPUT' }, JSON.stringify(invalid));
   assert.deepEqual(state.careerGap, trimmed);
   assert.equal(state.revision, 1);
 });
 
-test('a setting saved by an earlier version keeps detection on, with its wording as the description', () => {
-  assert.deepEqual(savedCareerGap(career(earlier({ minMonths: 6 })), now), on({ minMonths: 6 }));
-  assert.deepEqual(savedCareerGap(career(earlier({ mode: 'custom', text: 'Cared for a parent' })), now), on({ description: 'Cared for a parent' }));
-  assert.deepEqual(resolve(earlier({ mode: 'custom', text: 'Cared for a parent' }), [{ start: '2019', end: '2021' }]),
-    [{ activity: 'Career break', description: 'Cared for a parent', startDate: '2019', endDate: '2021' }]);
-  assert.equal(savedCareerGap(career(earlier({ minMonths: 1 })), now).enabled, false, 'an invalid earlier setting is still unreadable');
-});
 
 test('periods become entries in the candidate’s words, most recent first, and only when long enough and in range', () => {
   assert.deepEqual(resolve(on(), [{ start: '2018-03', end: '2019-01' }, { start: '2025-06', end: 'present' }]), [
@@ -104,16 +95,12 @@ test('only an enabled setting changes application fingerprints and reaches the h
   assert.doesNotMatch(careerGapContext(career(on({ place: '', description: '' }))).instruction, /place "|description "/);
 });
 
-test('backups keep the setting and saved gap entries from this and earlier versions, and reject an unsupported one', () => {
+test('backups keep current gap settings and entries and reject unsupported values', () => {
   const saved = career(on());
   const document = careerGaps => ({ headline: 'Engineer', summary: 'Builds services.', experience: [], careerGaps });
   saved.applications.app = { id: 'app', job: { title: 'Role' }, createdAt: 'now', updatedAt: 'now', cvHistory: [], coverLetterHistory: [], exports: [],
     cv: { version: 1, document: document([{ activity: 'Sabbatical', place: 'Lisbon', description: 'Travelled', startDate: 'Mar 2018', endDate: 'Jan 2019' }, { activity: 'Career break', startDate: '2014', endDate: '2016' }]) } };
   assert.equal(validateBackupCareer(structuredClone(saved)).careerGap.enabled, true);
-  const old = structuredClone(saved);
-  old.careerGap = earlier({ mode: 'custom', text: 'Cared for a parent' });
-  old.applications.app.cv.document = document([{ label: CAREER_GAP_PRIVATE_TEXT, startDate: 'Mar 2018', endDate: 'Jan 2019' }]);
-  assert.equal(validateBackupCareer(old).careerGap.text, 'Cared for a parent', 'a backup made by 3.12.29 or 3.12.30 still restores');
   assert.throws(() => validateBackupCareer({ ...structuredClone(saved), careerGap: on({ minMonths: 1 }) }), /career gap setting is unsupported/);
   for (const [key, value, message] of [['activity', { employer: 'Example LLC' }, /activity must be text/], ['place', 7, /place must be text/], ['description', [], /description must be text/]]) {
     const broken = structuredClone(saved);
@@ -157,97 +144,77 @@ test('open, year-only, oldest and undated cases still land in reading order', ()
   // A role whose dates cannot be read keeps its place; the gap is placed against the roles that can.
   assert.deepEqual(experience(render({ experience: [role('Acme', 'Mar 2021', 'Present'), role('Mystery', 'Spring', 'Summer'), role('Globex', '2015', 'Jun 2019')],
     careerGaps: [{ activity: 'Career break', startDate: 'Jun 2019', endDate: 'Mar 2021' }] })).map(entry => entry[0]), ['Acme', 'Mystery', 'Career break', 'Globex']);
-  // An entry saved by an earlier version carries only its one line, which leads the entry.
-  assert.deepEqual(experience(render({ experience: [role('Acme', 'Mar 2021', 'Present')], careerGaps: [{ label: 'Cared for a parent', startDate: '2019', endDate: '2021' }] })).at(-1),
-    ['Cared for a parent', '2019 – 2021']);
 });
 
-const cvText = 'Jane Candidate\nAcme Corp. | Platform Engineer | London | Mar 2021 – Present\n- Built event-driven data services in TypeScript and Kafka.\n\nGlobex | Backend Developer | 2015 – Jun 2019\n- Developed retail backend systems.';
-const cited = (text, cv) => ({ text, support: { cv } });
-const tailored = (extra = {}) => ({
-  headline: 'Platform Engineer — data services',
-  summary: 'Platform engineer building dependable data services.',
-  experience: [
-    { employer: 'Acme Corp', role: 'Platform Engineer', startDate: 'Mar 2021', endDate: 'Present', bullets: [cited('Built event-driven data services in TypeScript and Kafka.', ['Built event-driven data services in TypeScript and Kafka.'])] },
-    { employer: 'Globex', role: 'Backend Developer', startDate: '2015', endDate: 'Jun 2019', bullets: [cited('Developed retail backend systems.', ['Developed retail backend systems.'])] },
-  ],
-  ...extra,
-});
+const cvText = 'Jane Candidate\nAcme Corp | Platform Engineer | Mar 2021 | Present\nBuilt event-driven data services in TypeScript and Kafka.\n\nGlobex | Backend Developer | 2015 | Jun 2019\nDeveloped retail backend systems.';
 async function fixture(t) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'career-gap-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
-  const initial = createCareerState(), source = randomUUID();
+  const initial = createCareerState(), sourceId = randomUUID();
   Object.assign(initial.profile, { name: 'Jane Candidate', email: 'jane@example.test' });
-  initial.sources[source] = { id: source, name: 'Imported CV', purpose: 'cv', mediaType: 'text/plain', text: cvText, createdAt: now.toISOString() };
+  initial.sources[sourceId] = { id: sourceId, name: 'Imported CV', purpose: 'cv', mediaType: 'text/plain', text: cvText, createdAt: now.toISOString() };
   let state = { deviceId: randomUUID(), career: initial };
   const store = { get: () => structuredClone(state), async update(change) { const copy = structuredClone(state); await change(copy); state = copy; } };
+  const ref = quote => ({ ...sourceSet(initial)[0], quote });
+  const roles = [
+    { id: randomUUID(), employer: 'Acme Corp', title: 'Platform Engineer', startDate: 'Mar 2021', endDate: 'Present', sourceRefs: [ref(cvText.slice(0, cvText.indexOf('Globex')).trim())] },
+    { id: randomUUID(), employer: 'Globex', title: 'Backend Developer', startDate: '2015', endDate: 'Jun 2019', sourceRefs: [ref(cvText.slice(cvText.indexOf('Globex')))] },
+  ];
+  const document = { headline: 'Platform Engineer', summary: 'Built dependable data services.', experience: roles.map(role => ({
+    roleId: role.id, employer: role.employer, role: role.title, startDate: role.startDate, endDate: role.endDate,
+    bullets: [{ id: randomUUID(), text: role.sourceRefs[0].quote.split('\n').at(-1), support: { sources: role.sourceRefs } }],
+  })) };
+  const ready = await readyMaster(store, { roles, document });
   const files = createDocumentFiles({ directory, store, assertAvailable() {} });
   const tools = new Map(createApplicationTools({ store, platform: async () => assert.fail('No platform call expected'), documents,
     exportDocument: files.exportDocument, cleanupExports: files.cleanupExports, withExportTransaction: files.withExportTransaction }).map(tool => [tool.name, tool]));
   const call = (name, args) => tools.get(`career_${name}`).invoke(args);
   const mutation = args => ({ requestId: randomUUID(), revision: state.career.revision, ...args });
   const { applicationId } = await call('application_create', mutation({ job: { title: 'Platform Engineer', company: 'Example Employer', description: 'Operate data services.', url: 'https://example.test/jobs/1' } }));
-  return { tools, call, mutation, applicationId, career: () => state.career,
+  const cvArgs = () => ({ applicationId, masterVersion: assertMasterReady(state.career).version,
+    contextFingerprint: applicationContextFingerprint(state.career, state.career.applications[applicationId]), evidence: ready.evidence,
+    cv: structuredClone(assertMasterReady(state.career).document),
+    requirements: [{ id: randomUUID(), phrase: 'data services', priority: 'crucial', kind: 'skill', status: 'supported', roleIds: [roles[0].id],
+      support: { sources: roles[0].sourceRefs }, rationale: 'Directly evidenced service delivery.' }] });
+  return { tools, call, mutation, applicationId, store, cvArgs, career: () => state.career,
     set: setting => store.update(saved => { setCareerGap(saved.career, setting); }),
-    saveCv: cv => call('application_cv_save', mutation({ applicationId, cv })),
+    refresh: () => readyMaster(store),
+    saveCv: (cv = cvArgs().cv) => call('application_cv_save', mutation({ ...cvArgs(), cv })),
     exportCv: async format => { const { export: record } = await call('application_export', mutation({ applicationId, kind: 'cv', format })); return record; } };
 }
-const gap = { start: '2019-06', end: '2021-03' };
 
-test('a generated CV mentions no gap and accepts no gap periods while detection is off', async t => {
+test('disabled gaps stay absent in immutable master tailoring and TXT export', async t => {
   const f = await fixture(t);
   assert.equal(Object.hasOwn(await f.call('application_context', { applicationId: f.applicationId }), 'careerGap'), false);
-  await assert.rejects(f.saveCv(tailored({ careerGaps: [gap] })), { code: 'CAREER_GAPS_OFF' });
-  await f.saveCv(tailored());
-  const text = await readFile((await f.exportCv('txt')).path, 'utf8');
-  assert.doesNotMatch(text, /Career (gap|break)/);
+  await f.saveCv();
+  assert.doesNotMatch(await readFile((await f.exportCv('txt')).path, 'utf8'), /Career (gap|break)/);
 });
 
-test('with detection on, the gap appears between the two roles in the candidate’s words and survives PDF export', async t => {
+test('enabled canonical gaps survive master tailoring and PDF export without agent-provided periods', async t => {
   const f = await fixture(t);
   await f.set(on());
-  const context = await f.call('application_context', { applicationId: f.applicationId });
-  assert.deepEqual([context.careerGap.activity, context.careerGap.description], ['Career break', CAREER_GAP_PRIVATE_TEXT]);
-  const ajv = new Ajv({ strict: false }); addFormats(ajv);
-  const validate = ajv.compile(f.tools.get('career_application_cv_save').inputSchema);
-  assert.equal(validate(f.mutation({ applicationId: f.applicationId, cv: tailored({ careerGaps: [gap] }) })), true, JSON.stringify(validate.errors));
-  for (const careerGaps of [[{ ...gap, activity: 'Quantitative analyst' }], [{ ...gap, place: 'Example LLC' }], [{ start: 'Jun 2019', end: '2021-03' }], []])
-    assert.equal(validate(f.mutation({ applicationId: f.applicationId, cv: tailored({ careerGaps }) })), false, JSON.stringify(careerGaps));
-
-  await assert.rejects(f.saveCv(tailored({ careerGaps: [{ start: '2021-01', end: '2021-03' }] })), { code: 'CAREER_GAP_TOO_SHORT' });
-  assert.equal(f.career().applications[f.applicationId].cv, null);
-  await f.saveCv(tailored({ careerGaps: [gap] }));
-  assert.deepEqual(f.career().applications[f.applicationId].cv.document.careerGaps,
-    [{ activity: 'Career break', description: CAREER_GAP_PRIVATE_TEXT, startDate: 'Jun 2019', endDate: 'Mar 2021' }]);
-  assert.equal(f.career().applications[f.applicationId].cv.document.experience.length, 2, 'the saved roles are still only the two real ones');
-  const text = await readFile((await f.exportCv('txt')).path, 'utf8');
-  assert.deepEqual(experience(text), [
-    ['Acme Corp', 'Platform Engineer', 'Mar 2021 – Present', '• Built event-driven data services in TypeScript and Kafka.'],
-    ['Career break', 'Jun 2019 – Mar 2021', '• Career gap period - private reasons'],
-    ['Globex', 'Backend Developer', '2015 – Jun 2019', '• Developed retail backend systems.'],
-  ]);
+  await f.refresh();
+  const before = structuredClone(f.career().masterCv);
+  const cv = f.cvArgs().cv;
+  delete cv.careerGaps;
+  await f.saveCv(cv);
+  assert.deepEqual(f.career().masterCv, before);
+  assert.deepEqual(f.career().applications[f.applicationId].cv.document.careerGaps, before.current.document.careerGaps);
+  assert.deepEqual(experience(await readFile((await f.exportCv('txt')).path, 'utf8'))[1],
+    ['Career break', 'Jun 2019 – Mar 2021', '• Career gap period - private reasons']);
   assert.equal((await f.exportCv('pdf')).textValidation.passed, true);
 });
 
-test('changing the entry makes earlier documents stale, and the next CV carries the candidate’s own activity, place and description', async t => {
+test('gap setting changes require a current master and retire old exports', async t => {
   const f = await fixture(t);
-  await f.set(on());
-  await f.saveCv(tailored({ careerGaps: [gap] }));
-  await f.exportCv('txt');
+  await f.set(on()); await f.refresh(); await f.saveCv(); await f.exportCv('txt');
   await f.set(on({ activity: 'Family care', place: 'Porto, Portugal', description: 'Cared for a family member full time' }));
+  await assert.rejects(f.exportCv('txt'), { code: 'MASTER_NOT_READY' });
+  await f.refresh();
   await assert.rejects(f.exportCv('txt'), { code: 'APPLICATION_CONTEXT_CHANGED' });
-  await f.saveCv(tailored({ careerGaps: [gap] }));
+  await f.saveCv();
   assert.deepEqual(experience(await readFile((await f.exportCv('txt')).path, 'utf8'))[1],
     ['Porto, Portugal', 'Family care', 'Jun 2019 – Mar 2021', '• Cared for a family member full time']);
-  assert.equal((await f.exportCv('pdf')).textValidation.passed, true);
-  await f.set(on({ enabled: false }));
-  await assert.rejects(f.exportCv('txt'), { code: 'APPLICATION_CONTEXT_CHANGED' }, 'turning detection off retires documents that show a gap');
-  await assert.rejects(f.saveCv(tailored({ careerGaps: [gap] })), { code: 'CAREER_GAPS_OFF' });
-});
-
-test('a host working from an older profile revision must reread after the candidate changes the setting', async t => {
-  const f = await fixture(t);
-  const stale = f.mutation({ applicationId: f.applicationId, cv: tailored() });
-  await f.set(on());
-  await assert.rejects(f.call('application_cv_save', stale), { code: 'REVISION_CONFLICT' });
+  await f.set(on({ enabled: false })); await f.refresh(); await f.saveCv();
+  assert.doesNotMatch(await readFile((await f.exportCv('txt')).path, 'utf8'), /Family care/);
 });

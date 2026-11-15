@@ -184,17 +184,20 @@ updates = createUpdateController({
   sourceRoot: !localOnly && !app.isPackaged ? root : undefined,
   appPath: binaryInstallationTarget,
   packaged: app.isPackaged && !localOnly, pid: process.pid,
-  acquireInstallAdmission, quit: () => app.quit(), onChange: () => emit(),
+  acquireInstallAdmission, quit: () => app.quit(), onChange: emitUpdate,
 });
 updateScheduler = createUpdateScheduler({
   updates, preferences: createUpdatePreferences(updateDirectory),
   install: installUpdate, canInstall: () => updateIdle(true),
-  suspended: () => sleeping || quitDraining, onChange: () => emit(),
+  suspended: () => sleeping || quitDraining, onChange: emitUpdate,
 });
 function updateState() {
   // A container is replaced, never updated in place.
   const replaced = container ? { container: true, automaticSupported: false, automaticReason: 'This copy runs in a container. To update, get the latest source and rebuild the container.' } : {};
   return { ...updates.state(), ...replaced, automation: updateScheduler.state(), blocked: !updateIdle(false) };
+}
+function emitUpdate() {
+  if (window && !window.isDestroyed()) window.webContents.send('update-changed', updateState());
 }
 function updateIdle(automatic, { admitted = false } = {}) {
   if ((!admitted && updateInstalling) || quitDraining || sleeping || restoringBackup || pendingApproval || initializing || !vaultOpened || locked ||

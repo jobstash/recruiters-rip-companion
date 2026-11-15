@@ -6,6 +6,7 @@
 (() => {
   const client = crypto.randomUUID();
   const stateListeners = new Set(), sectionListeners = new Set(), open = new Map();
+  const updateListeners = new Set();
   const waitingForStream = new Set(), downloads = new Map();
   let streamConnected = false;
   function streamReady() {
@@ -35,6 +36,7 @@
   };
   window.companion = Object.freeze({ web: true, invoke,
     onState: callback => subscribe(stateListeners, callback),
+    onUpdate: callback => subscribe(updateListeners, callback),
     onSettingsSection: callback => {
       const unsubscribe = subscribe(sectionListeners, callback);
       if (unsubscribe && pendingSection) { const section = pendingSection; pendingSection = null; callback(section); }
@@ -166,6 +168,7 @@
     });
     source.addEventListener('error', () => { streamConnected = false; if (source.readyState === EventSource.CLOSED) location.reload(); });
     on('state-changed', () => { for (const listener of stateListeners) listener(); });
+    on('update-changed', value => { for (const listener of updateListeners) listener(value); });
     on('settings-section', section => { for (const listener of sectionListeners) listener(section); });
     // Named apart from EventSource's own `open` and `error` events.
     on('open-link', ({ url }) => openLink(url));

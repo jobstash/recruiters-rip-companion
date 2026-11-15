@@ -22,7 +22,7 @@
     }
     return false;
   }
-  let current, pending = false, preferencePending = false, failure = '', generation = 0;
+  let current, pending = null, preferencePending = null, failure = '', preferenceFailure = '', generation = 0;
   function render() {
     const status = current?.status;
     const automatic = current?.automation?.enabled !== false;
@@ -32,7 +32,7 @@
     const restarting = ['installing', 'launched'].includes(status);
     element('version').textContent = current ? `Installed ${current.version}${source ? ` · ${localSource ? 'Local source build' : 'Source build'}` : ''}${current.latestVersion ? ` · Latest published ${current.latestVersion}` : ''}` : '';
     element('automatic').checked = automatic;
-    element('automatic').disabled = !current || preferencePending || restarting;
+    element('automatic').disabled = !current || Boolean(preferencePending) || current?.automation?.preferencePending === true || restarting;
     element('reason').textContent = current?.automaticReason || (automatic
       ? `Updates ${source ? 'build' : 'download'} in the background. The app restarts after 5 minutes with no recruiters.rip activity.`
       : 'Automatic updates are off. You can still check and install updates here.');
@@ -41,17 +41,17 @@
       : source && status === 'downloading' ? 'Building update from source…'
       : source && status === 'downloaded' ? 'Built and ready to install.' : labels[status];
     element('status').textContent = current ? (waiting ? `Update ${source ? 'built' : 'downloaded'}. Restarting after 5 minutes with no recruiters.rip activity.` : statusLabel ?? 'Update status unavailable.') : '';
-    element('check').disabled = !current || pending || active.has(status) || status === 'downloaded';
+    element('check').disabled = !current || Boolean(pending) || active.has(status) || status === 'downloaded';
     element('download').hidden = (source && !supported) || !newerVersion() || !['available', 'cancelled', 'error'].includes(status) || (automatic && supported && status === 'available');
     element('download').textContent = source ? 'Build update' : 'Download update';
-    element('download').disabled = pending || restarting;
+    element('download').disabled = Boolean(pending) || restarting;
     element('install').hidden = (source && !supported) || (status !== 'downloaded' && !(status === 'manual-required' && current?.error?.code === 'MANUAL_INSTALL_REQUIRED'));
-    element('install').disabled = pending || current?.blocked;
+    element('install').disabled = Boolean(pending) || current?.blocked;
     element('install').textContent = status === 'manual-required' || !supported ? 'Install manually' : 'Restart now';
     element('cancel').hidden = !['checking', 'downloading', 'staging'].includes(status);
     element('cancel').disabled = !current;
     element('source-guide').hidden = !source || supported || current?.container === true;
-    element('source-guide').disabled = pending || restarting;
+    element('source-guide').disabled = Boolean(pending) || restarting;
     const progress = current?.progress;
     element('progress').hidden = status !== 'downloading';
     element('progress').setAttribute('aria-label', source ? 'Source update build progress' : 'Update download progress');
@@ -63,28 +63,34 @@
       element('progress').removeAttribute('value');
       element('progress').removeAttribute('aria-valuetext');
     }
-    const error = failure || (current?.status === 'no-release' ? '' : current?.error?.message) || current?.automation?.error || '';
+    const error = preferenceFailure || failure || (current?.status === 'no-release' ? '' : current?.error?.message) || current?.automation?.error || '';
     element('error').textContent = error;
     element('error').hidden = !error;
   }
   async function perform(op, input = {}) {
     const preference = op === 'update-preferences';
     if (!current || (preference ? preferencePending : pending && op !== 'update-cancel')) return;
-    const token = generation;
-    if (preference) preferencePending = true;
-    else if (op !== 'update-cancel') pending = true;
-    failure = ''; render();
+    const token = { generation };
+    if (preference) { preferencePending = token; preferenceFailure = ''; }
+    else {
+      if (op !== 'update-cancel') pending = token;
+      failure = '';
+    }
+    render();
     try {
       const response = await window.companion.invoke(op, input);
-      if (token !== generation) return;
       if (!response.ok) throw new Error(response.error?.message || 'Update action failed.');
-      current = response.result;
-    } catch (error) { if (token === generation) failure = error.message; }
-    finally {
-      if (token === generation) {
-        if (preference) preferencePending = false; else pending = false;
-        render();
-      }
+      // Pushed state (or another completed action) is newer than this request's snapshot.
+      if (token.generation === generation) { current = response.result; generation++; }
+    } catch (error) {
+      if (preference && preferencePending === token) preferenceFailure = error.message;
+      else if (token.generation === generation || (pending === token &&
+          (op === 'update-source-guide' || (op === 'update-install' && ['downloaded', 'manual-required'].includes(current?.status))))) failure = error.message;
+    } finally {
+      // Cancel and stale replies must not release another request's controls.
+      if (preferencePending === token) preferencePending = null;
+      if (pending === token) pending = null;
+      render();
     }
   }
   for (const action of ['check', 'download', 'install', 'cancel', 'source-guide']) element(action).addEventListener('click', () => { void perform(`update-${action}`); });
@@ -92,8 +98,12 @@
     void perform('update-preferences', { automaticUpdates: element('automatic').checked });
   });
   window.updatesUI = {
-    refresh(value) { current = value; render(); },
-    clear() { generation++; current = null; pending = false; preferencePending = false; failure = ''; render(); },
+    refresh(value) {
+      generation++; current = value;
+      if (active.has(current?.status)) failure = '';
+      render();
+    },
+    clear() { generation++; current = null; pending = null; preferencePending = null; failure = ''; preferenceFailure = ''; render(); },
   };
   window.updatesUI.clear();
 })();

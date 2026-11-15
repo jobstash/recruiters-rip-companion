@@ -5,6 +5,7 @@ import vm from 'node:vm';
 
 const script = await readFile(new URL('../ui/updates.js', import.meta.url), 'utf8');
 const turn = () => new Promise(resolve => setImmediate(resolve));
+const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
 function fixture(invoke = async () => ({ ok: true, result: current() })) {
   const nodes = new Map();
   for (const name of ['version', 'automatic', 'reason', 'status', 'check', 'download', 'install', 'source-guide', 'cancel', 'progress', 'error']) {
@@ -108,6 +109,118 @@ test('late operations cannot repopulate the view after local storage locks', asy
   resolve({ ok: true, result: current({ status: 'available' }) }); await turn();
   assert.equal(ui.node('version').textContent, '');
   assert.equal(ui.node('check').disabled, true);
+});
+
+test('an actual download clears an earlier manual cancellation failure', async () => {
+  const cancelled = 'Synthetic cancelled operation';
+  const ui = fixture(async () => ({ ok: false, error: { message: cancelled } }));
+  ui.refresh(current({ latestVersion: '3.13.0', status: 'available', automation: { enabled: false } }));
+  ui.node('download').dispatch('click'); await turn();
+  assert.equal(ui.node('error').textContent, cancelled);
+  ui.refresh(current({ latestVersion: '3.13.0', status: 'downloading', progress: { received: 25, total: 100 } }));
+  assert.equal(ui.node('error').hidden, true);
+  assert.equal(ui.node('progress').value, 25);
+  assert.equal(ui.node('check').disabled, true);
+});
+
+test('late check results and failures never replace newer pushed progress or terminal state', async () => {
+  for (const failed of [false, true]) {
+    for (const status of ['downloading', 'downloaded']) {
+      const response = deferred(), ui = fixture(() => response.promise);
+      ui.refresh(current()); ui.node('check').dispatch('click');
+      ui.refresh(current({ latestVersion: '3.13.0', status, progress: { received: 75, total: 100 } }));
+      response.resolve(failed ? { ok: false, error: { message: 'Synthetic obsolete cancellation' } }
+        : { ok: true, result: current({ status: 'cancelled' }) });
+      await turn();
+      assert.equal(ui.node('progress').hidden, status !== 'downloading');
+      assert.equal(ui.node('progress').value, 75);
+      assert.equal(ui.node('install').hidden, status !== 'downloaded');
+      assert.equal(ui.node('check').disabled, true);
+      assert.equal(ui.node('error').hidden, true);
+    }
+  }
+});
+
+test('a delayed preference snapshot cannot roll back download progress or backend preference work', async () => {
+  const response = deferred(), ui = fixture(() => response.promise);
+  ui.refresh(current({ status: 'available' }));
+  ui.node('automatic').checked = false; ui.node('automatic').dispatch('change');
+  ui.refresh(current({ status: 'downloading', progress: { received: 80, total: 100 },
+    automation: { enabled: false, preferencePending: true } }));
+  response.resolve({ ok: true, result: current({ status: 'available', automation: { enabled: false } }) }); await turn();
+  assert.equal(ui.node('progress').hidden, false);
+  assert.equal(ui.node('progress').value, 80);
+  assert.equal(ui.node('automatic').checked, false);
+  assert.equal(ui.node('automatic').disabled, true);
+  ui.refresh(current({ status: 'downloading', automation: { enabled: false, preferencePending: false } }));
+  assert.equal(ui.node('automatic').disabled, false);
+});
+
+test('cancel completion does not release the still-pending check controls', async () => {
+  const checking = deferred(), cancelling = deferred(), calls = [];
+  const ui = fixture(op => { calls.push(op); return op === 'update-cancel' ? cancelling.promise : checking.promise; });
+  ui.refresh(current({ latestVersion: '3.13.0' })); ui.node('check').dispatch('click');
+  ui.refresh(current({ latestVersion: '3.13.0', status: 'checking' })); ui.node('cancel').dispatch('click');
+  cancelling.resolve({ ok: true, result: current({ latestVersion: '3.13.0', status: 'cancelled' }) }); await turn();
+  assert.equal(ui.node('check').disabled, true);
+  assert.equal(ui.node('download').disabled, true);
+  ui.node('download').dispatch('click');
+  assert.deepEqual(calls, ['update-check', 'update-cancel']);
+  checking.resolve({ ok: true, result: current() }); await turn();
+  assert.equal(ui.node('check').disabled, false);
+  assert.equal(ui.node('download').hidden, false, 'the late check did not replace cancellation state');
+  assert.equal(ui.node('download').disabled, false);
+});
+
+test('an old response cannot release controls belonging to a new view operation', async () => {
+  for (const preference of [false, true]) {
+    const older = deferred(), newer = deferred();
+    let calls = 0;
+    const ui = fixture(() => (++calls === 1 ? older.promise : newer.promise));
+    const action = () => ui.node(preference ? 'automatic' : 'check').dispatch(preference ? 'change' : 'click');
+    const control = preference ? 'automatic' : 'check';
+    ui.refresh(current()); action();
+    ui.clear(); ui.refresh(current()); action();
+    older.resolve({ ok: false, error: { message: 'Synthetic old request failure' } }); await turn();
+    assert.equal(ui.node(control).disabled, true);
+    assert.equal(ui.node('error').hidden, true);
+    newer.resolve({ ok: true, result: current() }); await turn();
+    assert.equal(ui.node(control).disabled, false);
+  }
+});
+
+test('preference persistence failures survive pushed progress and unrelated manual actions', async () => {
+  const saving = deferred(), failure = 'Synthetic preference persistence failure';
+  let saveCalls = 0;
+  const ui = fixture(op => op === 'update-preferences' && ++saveCalls === 1
+    ? saving.promise : Promise.resolve({ ok: true, result: current({ status: 'downloading' }) }));
+  ui.refresh(current()); ui.node('automatic').checked = false; ui.node('automatic').dispatch('change');
+  ui.refresh(current({ status: 'downloading', progress: { received: 20, total: 100 } }));
+  saving.resolve({ ok: false, error: { message: failure } }); await turn();
+  assert.equal(ui.node('error').textContent, failure);
+  assert.equal(ui.node('automatic').checked, true);
+  ui.refresh(current({ status: 'downloading', progress: { received: 40, total: 100 } }));
+  assert.equal(ui.node('error').textContent, failure);
+  ui.node('cancel').dispatch('click'); await turn();
+  assert.equal(ui.node('error').textContent, failure);
+  ui.node('automatic').dispatch('change'); await turn();
+  assert.equal(ui.node('error').hidden, true);
+});
+
+test('a failed restart remains visible when a newer snapshot still has the verified download', async () => {
+  const installing = deferred(), failure = 'Synthetic restart preparation failure';
+  const ui = fixture(() => installing.promise);
+  ui.refresh(current({ status: 'downloaded' })); ui.node('install').dispatch('click');
+  ui.refresh(current({ status: 'downloaded', blocked: true }));
+  installing.resolve({ ok: false, error: { message: failure } }); await turn();
+  assert.equal(ui.node('error').textContent, failure);
+  assert.equal(ui.node('install').hidden, false);
+  assert.equal(ui.node('install').disabled, true);
+  ui.refresh(current({ status: 'downloaded' }));
+  assert.equal(ui.node('error').textContent, failure);
+  assert.equal(ui.node('install').disabled, false);
+  ui.refresh(current({ status: 'installing' }));
+  assert.equal(ui.node('error').hidden, true);
 });
 
 

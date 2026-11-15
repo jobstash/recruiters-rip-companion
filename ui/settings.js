@@ -2,7 +2,7 @@
 const $ = id => document.getElementById(id);
 let state, busy = false, noticeKind = '', noticeTimer, careerViewVersion, stateRequest = 0, view = null;
 let requestedSection = null, stateNoticeKey = '';
-let stateRefresh = null, stateRefreshPending = false;
+let stateRefresh = null, stateRefreshPending = false, updateEvents = 0;
 const notice = (text, kind = '') => {
   clearTimeout(noticeTimer);
   $('notice-text').textContent = text || '';
@@ -181,7 +181,7 @@ function refresh() {
   return stateRefresh;
 }
 async function refreshState() {
-  const request = ++stateRequest;
+  const request = ++stateRequest, updatesAtRequest = updateEvents;
   try {
     const current = await invoke('state');
     if (request !== stateRequest) return;
@@ -224,7 +224,7 @@ async function refreshState() {
     renderIntegrations(state);
     window.decisionsUI?.refresh(state.decisions);
     window.careerBrowser?.setContext({ review: state.review, publicationRange: state.publicationRange, paired: state.paired, catalogue: state.catalogue });
-    window.updatesUI?.refresh(state.updates);
+    if (updatesAtRequest === updateEvents) window.updatesUI?.refresh(state.updates);
     window.careerGapUI?.refresh(state.careerGap);
     window.masterCvUI?.refresh(state);
     window.helpUI.refresh(state);
@@ -357,6 +357,7 @@ $('approval-cancel').addEventListener('click', () => { void answerApproval(false
 $('approval-allow').addEventListener('click', () => { void answerApproval(true); });
 $('approval-dialog').addEventListener('cancel', event => { event.preventDefault(); void answerApproval(false); });
 window.companion.onState(() => { void refresh(); });
+window.companion.onUpdate(value => { updateEvents++; window.updatesUI?.refresh(value); });
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) { void window.careerBrowser?.activate(); void refresh(); }
 });

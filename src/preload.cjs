@@ -21,6 +21,12 @@ contextBridge.exposeInMainWorld('companion', Object.freeze({
     ipcRenderer.on('state-changed', listener);
     return () => ipcRenderer.removeListener('state-changed', listener);
   },
+  onUpdate(callback) {
+    if (typeof callback !== 'function') return;
+    const listener = (_event, value) => callback(value);
+    ipcRenderer.on('update-changed', listener);
+    return () => ipcRenderer.removeListener('update-changed', listener);
+  },
   onSettingsSection(callback) {
     if (typeof callback !== 'function') return;
     const listener = (_event, section) => { if (section === 'decisions') callback(section); };

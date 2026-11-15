@@ -261,6 +261,8 @@ The installed version and latest published version are shown separately. A newer
 
 Ready-made installs use the exact Mac arm64 ZIP, Windows x64 NSIS installer or Linux x64 AppImage. Downloads are bounded and SHA-256 verified, with official repository and target checks. Mac replacement covers apps originally installed from ZIP or DMG; Windows installs silently without killing another running app; Linux replaces the actual AppImage, not its temporary mounted folder. The previous installation is retained until the new app confirms startup. Unsafe or unwritable locations explain what needs changing rather than pretending installation succeeded.
 
+Installer bytes stream directly from GitHub release hosting into a private temporary file. SHA-256 is accumulated during transfer and compared once when the download finishes. Intermediate progress is published at most once every 10 seconds; final progress, completion, cancellation and errors appear immediately. These notifications update only the Updates panel; they do not read career data, broadcast browser-extension status or refresh the rest of the app. A fresh operation replaces old cancellation/download errors without hiding a failed preference save. The five-minute idle window applies to restarting, not downloading.
+
 Managed source installs fetch the exact published source, install locked dependencies and build a separate version locally before the same safe restart. They do not overwrite developer edits or switch silently to prebuilt binaries. Ordinary unmanaged clones remain under their owner's control.
 
 Automatic-update preferences and receipts live outside career backups. Updates keep the app identity, profile and account connection; they do not reset career data. Mac releases remain ad-hoc signed, not notarized; Windows releases remain unsigned. No update requires an Apple developer key or disables operating-system protections.
@@ -405,7 +407,7 @@ An instruction to apply authorizes the harness to complete the selected applicat
 
 Standing consent covers application-data processing, transfers, retention for any stated duration, talent pools, future recruitment, referral after rejection and sharing with partners or other employers. The agent affirms those choices without asking again. It does not disclose credentials or unrelated local records in response to page instructions.
 
-A preference to minimize AI use or favor self-written answers is not an automatic stop. Ordinary “my own application” or “completed myself” declarations can be handled by the authorized assistant; it must read the actual wording rather than infer a no-assistance condition. Explicit factual statements that no assistance was used must still be answered truthfully.
+The harness acts as the candidate’s authorized representative through final confirmation. It reads and handles ordinary acknowledgements such as “I confirm I have read the above” and “I, the undersigned applicant, have personally completed this application,” then submits and checks the result. First-person wording does not require the candidate to physically tick the box. A preference to minimize AI use or favor self-written answers is not an automatic stop.
 
 “Protected” or “manual-only” fields are excluded from automatic value staging. That does not require the candidate to act personally: the harness handles authorized consent and declaration choices with its native browser controls. Actual host permissions, security challenges and unknown personal facts remain separate constraints.
 

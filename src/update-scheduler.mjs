@@ -88,8 +88,8 @@ export function createUpdateWorkGate({ now = Date.now } = {}) {
 export function createUpdateScheduler({ updates, preferences, install, canInstall, suspended = () => false, onChange = () => {}, now = Date.now,
   setTimer = setTimeout, clearTimer = clearTimeout }) {
   let enabled = true, started = false, stopped = false, timer, operation, preferenceWrite = Promise.resolve();
-  let lastCheckedAt = null, nextCheckAt = null, waitingForIdle = false, error = null, pendingPreferences = 0;
-  const state = () => ({ enabled, lastCheckedAt, nextCheckAt: enabled && !stopped ? nextCheckAt : null, waitingForIdle, error, preferencePending: pendingPreferences > 0 });
+  let lastCheckedAt = null, nextCheckAt = null, waitingForIdle = false, error = null, preferenceError = null, pendingPreferences = 0;
+  const state = () => ({ enabled, lastCheckedAt, nextCheckAt: enabled && !stopped ? nextCheckAt : null, waitingForIdle, error: preferenceError || error, preferencePending: pendingPreferences > 0 });
   const emit = () => onChange(state());
   function waiting(value) { if (waitingForIdle !== value) { waitingForIdle = value; emit(); } }
   function schedule() {
@@ -116,9 +116,10 @@ export function createUpdateScheduler({ updates, preferences, install, canInstal
   function run(action) {
     if (operation) return operation;
     operation = Promise.resolve().then(action).catch(cause => {
-      // Engine errors already have a public status. Lifecycle/preference errors
-      // need their own visible recovery rather than an unhandled timer rejection.
-      error = cause?.publicUpdateError ? cause.message : updates.state().status === 'downloaded'
+      // The controller owns its operation errors and clears them on the next
+      // operation. Copying them here leaves old cancellations beside new work.
+      if (cause?.publicUpdateError || updates.state().error) return;
+      error = updates.state().status === 'downloaded'
         ? 'The app could not prepare to restart. Try Restart now.'
         : 'Automatic updates could not finish. Check now to try again.';
       emit();
@@ -131,7 +132,7 @@ export function createUpdateScheduler({ updates, preferences, install, canInstal
       const view = updates.state();
       if (BUSY.has(view.status) || view.status === 'manual-required') return;
       // Never discard a verified download just because another check is due.
-      if (view.status === 'available' && view.automaticSupported === true) await updates.download();
+      if (view.status === 'available' && view.automaticSupported === true) { error = null; await updates.download(); }
       else if (view.status !== 'downloaded' && (nextCheckAt === null || now() >= nextCheckAt)) await check();
       await pendingInstall();
     });
@@ -141,7 +142,7 @@ export function createUpdateScheduler({ updates, preferences, install, canInstal
     async start() {
       if (started || stopped) return;
       try { enabled = (await preferences.load()).automaticUpdates; }
-      catch { enabled = false; error = 'The update preference could not be read. Choose your preference again.'; }
+      catch { enabled = false; preferenceError = 'The update preference could not be read. Choose your preference again.'; }
       started = true; nextCheckAt = now(); emit();
       return tick();
     },
@@ -161,7 +162,7 @@ export function createUpdateScheduler({ updates, preferences, install, canInstal
       const pending = preferenceWrite.then(async () => {
         if (stopped) fail('LOCAL_BUSY', 'The companion is closing.');
         await preferences.save(value);
-        enabled = value.automaticUpdates; error = null;
+        enabled = value.automaticUpdates; preferenceError = null;
         if (!enabled) waiting(false);
         else if (nextCheckAt === null) nextCheckAt = now();
         emit(); schedule();

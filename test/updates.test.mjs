@@ -5,6 +5,7 @@ import { createRequire } from 'node:module';
 import { mkdtemp, mkdir, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { performance } from 'node:perf_hooks';
 import { createUpdateController, compareVersions, validateAssetUrl, validateRelease, extractUpdateZip } from '../src/updates.mjs';
 
 const REPO = 'https://github.com/jobstash/recruiters-rip-companion';
@@ -162,6 +163,82 @@ test('download verifies digest, publishes bounded progress and keeps all private
   assert.equal(controller.state().status, 'downloaded');
 });
 
+test('burst downloads publish progress every ten seconds, with immediate final bytes', async t => {
+  let now = 0;
+  t.mock.method(performance, 'now', () => now);
+  const times = [...Array(128).fill(0), 9999, 10000, ...Array(128).fill(10000), 19999, 20000, 20001];
+  const content = Buffer.alloc(times.length, 42);
+  const metadata = release('1.3.0', content);
+  const states = [];
+  let index = 0;
+  const { controller, directory } = await fixture(t, { controller: {
+    onChange: state => states.push(state),
+    fetchImpl: async url => url === API ? json(metadata) : new Response(new ReadableStream({
+      pull(stream) {
+        // Polling between announcements must not advance the progress bar either.
+        if (index === 129) assert.equal(controller.state().progress.received, 0);
+        if (index === 259) assert.equal(controller.state().progress.received, 130);
+        if (index === content.length) { stream.close(); return; }
+        now = times[index];
+        stream.enqueue(content.subarray(index, ++index));
+      },
+    }, { highWaterMark: 0 })),
+  } });
+  await controller.check();
+  states.length = 0;
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  await controller.download();
+  assert.deepEqual(states.filter(state => state.progress).map(state => state.progress.received), [0, 130, 260, 261]);
+  assert.deepEqual(states.map(state => state.status), ['downloading', 'downloading', 'downloading', 'downloading', 'downloaded']);
+  assert.equal(states.at(-1).progress, null);
+  const [file] = await readdir(directory);
+  assert.equal(file.endsWith('.zip'), true);
+  assert.deepEqual(await readFile(path.join(directory, file)), content);
+  const count = states.length;
+  now = 15 * 60 * 1000;
+  t.mock.timers.tick(now);
+  assert.equal(states.length, count);
+  assert.equal(controller.state().status, 'downloaded');
+});
+
+test('cancelling a throttled burst immediately publishes cancellation without delayed progress', async t => {
+  let now = 0;
+  t.mock.method(performance, 'now', () => now);
+  const states = [];
+  let index = 0, started, cancelled = false;
+  const ready = new Promise(resolve => { started = resolve; });
+  const { controller, directory } = await fixture(t, { controller: {
+    onChange: state => states.push(state),
+    fetchImpl: async url => url === API ? json(release()) : new Response(new ReadableStream({
+      pull(stream) {
+        if (index === 16) { started(); return; }
+        now = index === 0 ? 10000 : 10001;
+        stream.enqueue(bytes.subarray(index, ++index));
+      },
+      cancel() { cancelled = true; },
+    }, { highWaterMark: 0 })),
+  } });
+  await controller.check();
+  states.length = 0;
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const pending = controller.download();
+  const rejection = assert.rejects(pending, { code: 'CANCELLED' });
+  await ready;
+  assert.deepEqual(states.map(state => state.progress.received), [0, 1]);
+  await controller.cancel();
+  await rejection;
+  assert.equal(cancelled, true);
+  assert.equal(states.at(-1).status, 'cancelled');
+  assert.equal(states.at(-1).progress, null);
+  assert.equal(states.at(-1).error.code, 'CANCELLED');
+  assert.deepEqual(await readdir(directory), []);
+  const count = states.length;
+  now = 15 * 60 * 1000;
+  t.mock.timers.tick(now);
+  assert.equal(states.length, count);
+  assert.equal(controller.state().status, 'cancelled');
+});
+
 test('official checksum asset supplies a missing GitHub digest and rejects contradictory metadata', async t => {
   const metadata = release(); delete metadata.assets[0].digest;
   const checksum = `${digest(bytes)}  ${assetName('1.3.0')}\n`;
@@ -208,12 +285,20 @@ test('known GitHub asset redirect is explicitly followed without credential head
 });
 
 test('checksum, oversized and truncated downloads are rejected and deleted', async t => {
+  t.mock.method(performance, 'now', () => 0);
   for (const content of [Buffer.from('x'.repeat(bytes.length)), bytes.subarray(0, 3), Buffer.concat([bytes, Buffer.from('extra')])]) {
-    const { controller, directory } = await fixture(t, { controller: { fetchImpl: async url => url === API ? json(release()) : new Response(content) } });
+    const states = [];
+    const { controller, directory } = await fixture(t, { controller: {
+      onChange: state => states.push(state),
+      fetchImpl: async url => url === API ? json(release()) : new Response(content),
+    } });
     await controller.check();
     await assert.rejects(controller.download(), error => ['CHECKSUM_MISMATCH', 'SIZE_MISMATCH'].includes(error.code));
     assert.deepEqual(await readdir(directory), []);
     assert.equal(controller.state().status, 'error');
+    assert.equal(states.at(-1).status, 'error');
+    assert.equal(states.at(-1).progress, null);
+    assert.equal(states.some(state => state.status === 'downloaded'), false);
   }
 });
 

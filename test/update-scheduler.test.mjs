@@ -134,6 +134,61 @@ test('check failures remain visible and are not repeated at every idle tick', as
   fixture.scheduler.stop();
 });
 
+test('controller cancellation and download errors have one owner and never linger in scheduler state', async () => {
+  for (const code of ['CANCELLED', 'UPDATE_TIMEOUT', null]) {
+    const cause = Object.assign(new Error('Synthetic controller failure'), code ? { code, publicUpdateError: true } : {});
+    const fixture = schedulerFixture({ releaseStatus: 'available', download: () => {
+      fixture.view.status = code === 'CANCELLED' ? 'cancelled' : 'error';
+      fixture.view.error = { code: code || 'UPDATE_FAILED', message: cause.message };
+      throw cause;
+    } });
+    await fixture.scheduler.start();
+    assert.equal(fixture.view.error.message, cause.message);
+    assert.equal(fixture.scheduler.state().error, null);
+    fixture.view.status = 'downloading'; fixture.view.error = null;
+    await fixture.scheduler.resume();
+    assert.equal(fixture.scheduler.state().error, null);
+    assert.deepEqual(fixture.calls, ['check', 'download']);
+    fixture.scheduler.stop();
+  }
+});
+
+test('a late controller cancellation cannot put an old error beside a newer download', async () => {
+  const pending = deferred(), began = deferred();
+  const fixture = schedulerFixture({ releaseStatus: 'available', download: () => { began.resolve(); return pending.promise; } });
+  const startup = fixture.scheduler.start(); await began.promise;
+  fixture.view.status = 'downloading'; fixture.view.error = null;
+  pending.reject(Object.assign(new Error('Synthetic previous cancellation'), { code: 'CANCELLED', publicUpdateError: true }));
+  await startup;
+  assert.equal(fixture.view.status, 'downloading');
+  assert.equal(fixture.scheduler.state().error, null);
+  fixture.scheduler.stop();
+});
+
+test('restart preparation failures remain visible until another install attempt, not a preference save', async () => {
+  let failInstall = true;
+  const fixture = schedulerFixture({ initialStatus: 'downloaded', install: () => {
+    if (failInstall) throw new Error('Synthetic flush failure');
+    fixture.view.status = 'installing';
+  } });
+  await fixture.scheduler.start();
+  fixture.environment.idle = true; await fixture.fire();
+  const failure = fixture.scheduler.state().error;
+  assert.ok(failure);
+  assert.equal(fixture.view.status, 'downloaded');
+  fixture.environment.idle = false; await fixture.fire();
+  await fixture.scheduler.checkNow();
+  assert.equal(fixture.scheduler.state().error, failure);
+  await fixture.scheduler.setPreferences({ automaticUpdates: false });
+  assert.equal(fixture.scheduler.state().error, failure);
+  await fixture.scheduler.setPreferences({ automaticUpdates: true });
+  assert.equal(fixture.scheduler.state().error, failure);
+  failInstall = false; fixture.environment.idle = true; await fixture.fire();
+  assert.equal(fixture.scheduler.state().error, null);
+  assert.equal(fixture.view.status, 'installing');
+  fixture.scheduler.stop();
+});
+
 test('preferences default on, persist separately, and validate exact local input', async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'rr-update-preferences-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -153,14 +208,24 @@ test('preferences default on, persist separately, and validate exact local input
 });
 
 test('unreadable preferences disable automation instead of silently enabling it', async () => {
-  let checks = 0;
+  let checks = 0, saveFails = true;
   const scheduler = createUpdateScheduler({ updates: { state: () => ({ status: 'idle' }), check: () => { checks++; } },
-    preferences: { load: () => { throw new Error('bad preferences'); }, save: async () => {} }, install: () => {}, canInstall: () => false,
+    preferences: { load: () => { throw new Error('bad preferences'); }, save: async () => { if (saveFails) throw new Error('Synthetic write failure'); } }, install: () => {}, canInstall: () => false,
     setTimer: () => 1, clearTimer: () => {} });
   await scheduler.start();
   assert.equal(checks, 0);
   assert.equal(scheduler.state().enabled, false);
-  assert.notEqual(scheduler.state().error, null);
+  const failure = scheduler.state().error;
+  assert.ok(failure);
+  await scheduler.checkNow();
+  assert.equal(checks, 1);
+  assert.equal(scheduler.state().error, failure, 'checking does not repair an unreadable preference');
+  await assert.rejects(scheduler.setPreferences({ automaticUpdates: true }));
+  assert.equal(scheduler.state().enabled, false);
+  assert.equal(scheduler.state().error, failure);
+  saveFails = false; await scheduler.setPreferences({ automaticUpdates: true });
+  assert.equal(scheduler.state().enabled, true);
+  assert.equal(scheduler.state().error, null);
   scheduler.stop();
 });
 

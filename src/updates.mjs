@@ -3,6 +3,7 @@ import { constants } from 'node:fs';
 import { copyFile as copyBundledFile } from 'node:fs/promises';
 import { spawn, execFile } from 'node:child_process';
 import { createRequire } from 'node:module';
+import { performance } from 'node:perf_hooks';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import yauzl from 'yauzl';
@@ -26,6 +27,7 @@ const MAX_ASSET = 1024 * 1024 * 1024;
 const MAX_EXPANDED = 3 * MAX_ASSET;
 const MAX_CHECKSUMS = 128 * 1024;
 const MAX_RELEASE = 1024 * 1024;
+const DOWNLOAD_PROGRESS_INTERVAL = 10_000;
 const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 const DIGEST = /^sha256:([a-fA-F0-9]{64})$/;
 const ASSET_HOSTS = new Set(['release-assets.githubusercontent.com', 'objects.githubusercontent.com']);
@@ -538,6 +540,7 @@ export function createUpdateController({ version, platform = process.platform, a
     return operate('download an update', ['available', 'cancelled', 'error', 'manual-required'], 15 * 60 * 1000, async signal => {
       requireInitialized();
       if (!release || compareVersions(release.version, version) <= 0) throw fail('INVALID_STATE', 'Check for a newer supported release before downloading.');
+      let lastProgressAt = performance.now();
       update({ status: 'downloading', progress: { received: 0, total: release.asset.size }, error: null });
       const id = randomBytes(16).toString('hex');
       const partial = path.join(directory, `download-${id}.partial`);
@@ -559,7 +562,12 @@ export function createUpdateController({ version, platform = process.platform, a
         await streamBytes(response, { maximum: MAX_ASSET, expected: release.asset.size, signal, chunk: async (bytes, received) => {
           hash.update(bytes);
           await handle.writeFile(bytes);
-          update({ progress: { received, total: release.asset.size } });
+          // Chunk-driven throttling needs no timer that could outlive this download.
+          const now = performance.now();
+          if (received === release.asset.size || now - lastProgressAt >= DOWNLOAD_PROGRESS_INTERVAL) {
+            lastProgressAt = now;
+            update({ progress: { received, total: release.asset.size } });
+          }
         } });
         if (hash.digest('hex') !== expected) throw fail('CHECKSUM_MISMATCH', 'The downloaded update failed its SHA-256 checksum. It was deleted; check the release and try again.');
         await handle.sync();

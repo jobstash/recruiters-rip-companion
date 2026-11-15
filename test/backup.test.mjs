@@ -8,7 +8,7 @@ import path from 'node:path';
 import { createVault } from '../src/vault.mjs';
 import { createBackups, parseBackup, MAX_BACKUP_BYTES } from '../src/backup.mjs';
 import { createCareerState, hash, mutateCareer } from '../src/mcp/state.mjs';
-import { createDocumentFiles, createBackupDocumentReader } from '../src/mcp/files.mjs';
+import { createDocumentFiles, createBackupDocumentReader, documentName } from '../src/mcp/files.mjs';
 import { createScopedAccess } from '../src/mcp/scope.mjs';
 import { assertJobNotBlocked } from '../src/mcp/blocklist.mjs';
 import { assertPrivatePath } from '../src/platform-runtime.cjs';
@@ -55,9 +55,10 @@ async function seed(fixture, name) {
   const career = profile(name);
   await fixture.vault.update(state => { state.career = career; });
   const exported = await fixture.files.exportDocument({ applicationId: Object.keys(career.applications)[0], kind: 'cover_letter', bytes: pdf, mediaType: 'application/pdf' });
-  Object.values(career.applications)[0].exports.push({ ...exported, kind: 'cover_letter', format: 'pdf', documentVersion: 2, textValidation: { passed: true }, createdAt: now });
-  await fixture.vault.update(state => { state.career = career; });
-  return career;
+  await fixture.vault.update(state => {
+    Object.values(state.career.applications)[0].exports.push({ ...exported, kind: 'cover_letter', format: 'pdf', documentVersion: 2, textValidation: { passed: true }, createdAt: now });
+  });
+  return fixture.vault.get().career;
 }
 async function exported(t) {
   const from = await fixture(t); await seed(from);
@@ -104,8 +105,8 @@ test('portable backup round-trips originals, saved files, user history and block
   assert.deepEqual(application.coverLetterHistory, Object.values(original.applications)[0].coverLetterHistory);
   assert.deepEqual(application.progress, Object.values(original.applications)[0].progress);
   assert.equal(reference.path.startsWith(target.directory), true);
-  assert.equal(path.basename(reference.path), 'Synthetic candidate - COVER LETTER.pdf');
-  assert.ok(reference.path.includes(path.join('Synthetic employer', 'Engineer')));
+  assert.equal(path.basename(reference.path), `Synthetic candidate - COVER LETTER - ${reference.resourceId}.pdf`);
+  assert.ok(reference.path.includes(path.join(documentName(reference.company, reference.companyLimit), documentName(reference.jobTitle, reference.jobLimit))));
   assert.notEqual(reference.uri, Object.values(original.applications)[0].exports[0].uri);
   assert.deepEqual((await target.backupFiles.read(reference.uri)).bytes, pdf);
   assert.deepEqual(await readFile(reference.path), pdf);
@@ -118,6 +119,24 @@ test('portable backup round-trips originals, saved files, user history and block
   const safetyPath = path.join(target.directory, 'backups', safetyFiles[0]); assertPrivatePath(safetyPath);
   const safety = parseBackup(await readFile(safetyPath, 'utf8')); assert.equal(safety.profiles[0].career.profile.name, 'Before restore');
   assert.equal((await readFile(filename, 'utf8')).includes('privateKey'), false); assert.equal((await readFile(safetyPath, 'utf8')).includes('synthetic-secret-key'), false);
+});
+
+test('restoring onto the same profile preserves every previously returned file and all export history', async t => {
+  const f = await fixture(t), career = await seed(f), applicationId = Object.keys(career.applications)[0];
+  const original = career.applications[applicationId].exports[0], originalBytes = await readFile(original.path);
+  const laterBytes = Buffer.from('%PDF-1.7\nLater immutable letter bytes\n%%EOF');
+  const later = await f.files.exportDocument({ applicationId, kind: 'cover_letter', documentVersion: 2, bytes: laterBytes, mediaType: 'application/pdf' });
+  await f.vault.update(state => { state.career.applications[applicationId].exports.push(later); });
+  const saved = await f.service.save();
+  f.choose(path.join(f.directory, saved.filename));
+  await f.service.restore(restoreArgs(await f.service.preview()));
+  const records = f.vault.get().career.applications[applicationId].exports;
+  assert.equal(records.length, 2);
+  assert.equal(new Set([original.path, later.path, ...records.map(record => record.path)]).size, 4);
+  assert.deepEqual(await readFile(original.path), originalBytes);
+  assert.deepEqual(await readFile(later.path), laterBytes);
+  assert.deepEqual((await f.backupFiles.read(records[0].uri)).bytes, originalBytes);
+  assert.deepEqual((await f.backupFiles.read(records[1].uri)).bytes, laterBytes);
 });
 
 test('future interview schedules survive vault reopen and portable backup restore, while invalid schedules are rejected', async t => {
@@ -490,14 +509,14 @@ test('portable backups retain saved PDFs for same-title jobs without old version
   const restored = target.vault.get().career, folders = [];
   for (const app of Object.values(restored.applications)) {
     const current = app.exports.filter(ref => ref.uri);
-    assert.equal(current.length, 2);
+    assert.equal(current.length, app.id === first.id ? 3 : 2);
     assert.equal(path.dirname(current[0].path), path.dirname(current[1].path));
     folders.push(path.dirname(current[0].path));
     for (const ref of current) {
-      assert.equal(path.basename(ref.path), `Portable Candidate - ${ref.kind === 'cv' ? 'CV' : 'COVER LETTER'}.pdf`);
+      assert.equal(path.basename(ref.path), `Portable Candidate - ${ref.kind === 'cv' ? 'CV' : 'COVER LETTER'} - ${ref.resourceId}.pdf`);
       assert.match(ref.uri, /^recruiters:\/\/documents\/[a-f0-9-]{36}\.pdf$/);
       const content = (await target.backupFiles.read(ref.uri)).bytes.toString();
-      assert.ok(content.includes(`Current ${app.id} ${ref.kind}`));
+      assert.equal(content, ref.documentVersion === 1 ? staleBytes.toString() : `%PDF-1.7\nCurrent ${app.id} ${ref.kind}\n%%EOF`);
       assert.equal((await readFile(ref.path)).toString(), content);
       await assert.rejects(target.files.resolveExport(ref.uri), { code: 'NOT_FOUND' });
     }
@@ -505,7 +524,9 @@ test('portable backups retain saved PDFs for same-title jobs without old version
   assert.notEqual(folders[0], folders[1]);
   assert.equal(path.basename(folders[0]), 'Engineer');
   assert.equal(path.basename(folders[1]), 'Engineer (2)');
-  assert.equal(restored.applications[first.id].exports.at(-1).unavailable, true);
+  const restoredHistory = restored.applications[first.id].exports.at(-1);
+  assert.equal(restoredHistory.unavailable, undefined);
+  assert.deepEqual((await target.backupFiles.read(restoredHistory.uri)).bytes, staleBytes);
   await assert.rejects(target.files.readResource(staleURI), { code: 'NOT_FOUND' });
   assert.deepEqual(restored.sources, career.sources);
   assert.deepEqual(await target.files.listResources(), [], 'Retained backup bytes do not authorize live publication');
@@ -513,12 +534,14 @@ test('portable backups retain saved PDFs for same-title jobs without old version
   next.choose(path.join(target.directory, roundtrip.filename));
   await next.service.restore(restoreArgs(await next.service.preview()));
   const nextFiles = Object.values(next.vault.get().career.applications).flatMap(app => app.exports.filter(ref => ref.uri));
-  assert.equal(nextFiles.length, 4);
-  for (const ref of nextFiles) assert.ok((await next.backupFiles.read(ref.uri)).bytes.toString().includes(`Current ${ref.applicationId} ${ref.kind}`));
+  assert.equal(nextFiles.length, 5);
+  assert.equal(new Set(nextFiles.map(ref => ref.path)).size, 5);
+  for (const ref of nextFiles) assert.equal((await next.backupFiles.read(ref.uri)).bytes.toString(),
+    ref.documentVersion === 1 ? staleBytes.toString() : `%PDF-1.7\nCurrent ${ref.applicationId} ${ref.kind}\n%%EOF`);
   assert.deepEqual(await next.files.listResources(), []);
 });
 
-test('restoring over the same application rolls back a replaced readable PDF when the vault commit fails', async t => {
+test('failed restore over the same application removes only newly created PDFs', async t => {
   const from = await fixture(t); await seed(from, 'Rollback Candidate');
   const saved = await from.service.save(), target = await fixture(t), original = from.vault.get().career;
   const app = Object.values(original.applications)[0];
@@ -539,7 +562,7 @@ test('restoring over the same application rolls back a replaced readable PDF whe
   assert.deepEqual(await readFile(prior.path), priorBytes);
   assert.deepEqual((await target.backupFiles.read(prior.uri)).bytes, priorBytes);
   await assert.rejects(target.files.resolveExport(prior.uri), { code: 'NOT_FOUND' });
-  assert.deepEqual(await readdir(path.dirname(prior.path)), ['Rollback Candidate - COVER LETTER.pdf']);
+  assert.deepEqual(await readdir(path.dirname(prior.path)), [prior.filename]);
 });
 
 test('backup roundtrip preserves manual master versions and answers but cancels pending dialogue authority', async t => {

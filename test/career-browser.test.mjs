@@ -13,12 +13,42 @@ import { tmpdir } from 'node:os';
 import { createDocumentFiles } from '../src/mcp/files.mjs';
 import { applicationContextFingerprint } from '../src/application-workflow.mjs';
 import { readyMaster } from './helpers/ready-master.mjs';
+import { createVault } from '../src/vault.mjs';
 
 function fixture() {
   const state = { privateKey: 'PRIVATE_KEY_SENTINEL', career: createCareerState() };
   const store = { get: () => structuredClone(state), update: () => assert.fail('Browsing must not write') };
   return { state, store, browser: createCareerBrowser({ store }) };
 }
+
+test('Pipeline projects only cards and isolates cached results across committed snapshots', async t => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'rr-pipeline-projection-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const vault = createVault(directory); await vault.open();
+  await vault.update(state => {
+    state.career.sources.original = { originalBase64: 'PRIVATE_BINARY_SENTINEL', text: 'Original evidence' };
+    state.career.applications.application = { id: 'application', job: { title: 'Engineer', company: 'Company' },
+      createdAt: '2025-01-01T00:00:00.000Z', cvHistory: [{ document: 'PRIVATE_HISTORY_SENTINEL' }] };
+  });
+  const browser = createCareerBrowser({ store: {
+    get: () => vault.get(),
+    select: project => vault.select(project),
+  } });
+  const first = await browser.pipeline(), original = structuredClone(first);
+  assert.equal(first.total, 1);
+  assert.equal(JSON.stringify(first).includes('PRIVATE_'), false);
+  first.columns[0].cards[0].title = 'Caller mutation';
+  assert.deepEqual(await browser.pipeline(), original);
+  await vault.update(state => {
+    // The immutable snapshot, not a manually advanced revision, invalidates the cache.
+    state.career.applications.application.job.title = 'Updated engineer';
+    state.career.applications.application.progress = replayProgress([{ stage: 'applied', at: '2025-01-02' }]);
+  });
+  const next = await browser.pipeline();
+  assert.equal(next.columns[0].cards.length, 0);
+  assert.equal(next.columns[1].cards[0].title, 'Updated engineer');
+  assert.equal(next.columns[1].cards[0].from.steps, 1);
+});
 
 const currentDate = () => new Date(Date.now() - 60000).toISOString();
 const scoredAt = '2026-10-14T12:00:00.000Z';
@@ -645,9 +675,27 @@ async function rendererFixture(browser, wide, operations = {}) {
       this.value = '';
       this.dataset = {};
       this.style = {};
+      this.parentNode = null;
+      this.scrollTop = 0;
     }
-    append(...children) { this.children.push(...children); }
-    replaceChildren(...children) { this.children = children; }
+    append(...children) { for (const child of children) { child.remove(); child.parentNode = this; this.children.push(child); } }
+    replaceChildren(...children) { for (const child of [...this.children]) child.remove(); this.append(...children); }
+    remove() {
+      if (!this.parentNode) return;
+      this.parentNode.children.splice(this.parentNode.children.indexOf(this), 1);
+      this.parentNode = null;
+    }
+    insertBefore(child, before) {
+      if (child === before) return;
+      child.remove();
+      child.parentNode = this;
+      this.children.splice(before ? this.children.indexOf(before) : this.children.length, 0, child);
+    }
+    replaceWith(child) { const parent = this.parentNode; if (parent) { parent.insertBefore(child, this); this.remove(); } }
+    closest(selector) {
+      if (selector === '[hidden]' && this.hidden || selector === '[data-column]' && this.dataset.column) return this;
+      return this.parentNode?.closest(selector) ?? null;
+    }
     get childElementCount() { return this.children.length; }
     setAttribute(name, value) { this.attributes.set(name, value); }
     removeAttribute(name) { this.attributes.delete(name); }
@@ -1904,7 +1952,7 @@ test('the Pipeline board moves cards by keyboard and Set status…, closes inlin
   assert.equal(ui.nodes['pipeline-reader'].hidden, true);
   assert.equal(ui.focused(), open('tangem'));
   ui.window.careerBrowser.clear();
-  assert.equal(ui.nodes['pipeline-list-status'].textContent, 'Unlock to see your saved applications.');
+  assert.equal(ui.nodes['pipeline-records'].children.length, 0);
 });
 
 test('Pipeline schedules optional interview dates, preserves snapshots and clears appointments through the reader', async () => {
@@ -1954,3 +2002,92 @@ test('Pipeline schedules optional interview dates, preserves snapshots and clear
   assert.equal(schedule(), null);
 });
 
+test('Pipeline keyed updates retain lanes, unrelated cards, focus and scroll with every application present', async () => {
+  const { browser } = fixture();
+  const columns = ['prepared', 'applied', 'interviewing', 'offer', 'hired', 'closed'].map(id => ({ id, cards: [] }));
+  columns[0].cards = Array.from({ length: 1200 }, (_,index) => ({
+    id: `app-${index}`, title: `Engineer ${index}`, company: 'Synthetic company', detail: 'Created 1 Nov',
+    stage: 'prepared', from: { stage: 'prepared', round: 0, steps: 0 },
+  }));
+  const ui = await rendererFixture({ ...browser, pipeline: async () => structuredClone({ total: 1200, columns }) }, false);
+  await ui.window.careerBrowser.refresh();
+  const board = ui.nodes['pipeline-records'];
+  const lane = board.children[0];
+  const body = ui.byClass(lane, 'pipeline-lane-body');
+  const cards = board.querySelectorAll('.pipeline-card');
+  const focused = ui.byClass(cards[600], 'pipeline-move');
+  focused.focus(); body.scrollTop = 12000; board.scrollLeft = 80;
+  columns[0].cards[0].detail = 'Created 2 Nov';
+  await ui.window.careerBrowser.refresh();
+  assert.equal(board.children[0], lane);
+  assert.equal(body.scrollTop, 12000);
+  assert.equal(board.scrollLeft, 80);
+  assert.equal(ui.focused(), focused);
+  const updated = board.querySelectorAll('.pipeline-card');
+  assert.equal(updated.length, 1200);
+  assert.notEqual(updated[0], cards[0]);
+  assert.deepEqual(updated.slice(1), cards.slice(1));
+  assert.equal(ui.byClass(lane, 'pipeline-count').textContent, '1200');
+  // An unchanged refresh does not detach or replace even the card that changed previously.
+  await ui.window.careerBrowser.refresh();
+  assert.deepEqual(board.querySelectorAll('.pipeline-card'), updated);
+});
+
+test('Hidden career views defer refresh until activated and coalesce concurrent board reads', async () => {
+  const { browser } = fixture();
+  let release, reads = 0, active = 0, maximum = 0, title = 'Initial role';
+  const ui = await rendererFixture({ ...browser, pipeline: async () => {
+    reads += 1; active += 1; maximum = Math.max(maximum, active);
+    const snapshot = { total: 1, columns: [{ id: 'prepared', cards: [
+      { id: 'application', title, detail: 'Created 1 Nov', stage: 'prepared', from: { stage: 'prepared', steps: 0, round: 0 } },
+    ] }] };
+    if (reads === 1) await new Promise(resolve => { release = resolve; });
+    active -= 1;
+    return snapshot;
+  } }, false);
+  const renderedTitle = () => ui.byClass(ui.nodes['pipeline-records'], 'pipeline-card-role')?.textContent;
+  ui.nodes['pipeline-browser'].hidden = true;
+  ui.nodes['career-browser'].hidden = true;
+  await ui.window.careerBrowser.refresh();
+  await ui.window.careerBrowser.refresh();
+  assert.equal(reads, 0);
+  assert.equal(ui.calls.some(call => call.operation === 'career-list' && call.args.kind === 'jobs'), false);
+  ui.nodes['pipeline-browser'].hidden = false;
+  const activation = ui.window.careerBrowser.activate();
+  assert.equal(reads, 1);
+  title = 'Latest role';
+  const burst = [ui.window.careerBrowser.refresh(), ui.window.careerBrowser.refresh(), ui.window.careerBrowser.refresh()];
+  release();
+  await Promise.all([activation, ...burst]);
+  assert.equal(reads, 2);
+  assert.equal(maximum, 1);
+  assert.equal(renderedTitle(), 'Latest role');
+  ui.nodes['pipeline-browser'].hidden = true;
+  title = 'Updated while hidden';
+  await ui.window.careerBrowser.refresh();
+  assert.equal(reads, 2);
+  assert.equal(renderedTitle(), 'Latest role');
+  ui.nodes['pipeline-browser'].hidden = false;
+  await ui.window.careerBrowser.activate();
+  assert.equal(reads, 3);
+  assert.equal(renderedTitle(), 'Updated while hidden');
+});
+
+test('Pipeline detail refresh preserves a focused unsaved interview date and reader scroll', async () => {
+  const { state, steps, app, browser } = progressFixture();
+  app('editing', steps(['applied', '2025-10-21'], ['interviewing', '2025-10-24']));
+  const ui = await rendererFixture(browser, true);
+  await ui.window.careerBrowser.refresh();
+  ui.byClass(ui.nodes['pipeline-records'], 'pipeline-card-open').fire('click');
+  await ui.settle();
+  const input = () => ui.byClass(ui.nodes['pipeline-reader-content'], 'career-progress-schedule').querySelector('input');
+  input().value = '2099-12-01';
+  input().focus();
+  ui.nodes['pipeline-reader'].scrollTop = 125;
+  state.career.applications.editing.job.title = 'Updated role title';
+  await ui.window.careerBrowser.refresh();
+  await ui.settle();
+  assert.equal(input().value, '2099-12-01');
+  assert.equal(ui.focused(), input());
+  assert.equal(ui.nodes['pipeline-reader'].scrollTop, 125);
+});

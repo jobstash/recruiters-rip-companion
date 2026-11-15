@@ -12,7 +12,7 @@ import { createScopedAccess } from '../src/mcp/scope.mjs';
 import { createProfileTools } from '../src/mcp/profile-tools.mjs';
 import { createFormTools } from '../src/mcp/form-tools.mjs';
 import { createMcpServer, createPlatformTools } from '../src/mcp/server.mjs';
-import { createDocumentFiles, readSelectedSource, documentName } from '../src/mcp/files.mjs';
+import { createDocumentFiles, createBackupDocumentReader, readSelectedSource, documentName } from '../src/mcp/files.mjs';
 import { createMatchingTools } from '../src/mcp/matching-tools.mjs';
 import { ASSESSMENT_POLICY_ID, deriveDecision } from '../src/mcp/matching-contract.mjs';
 import { assertPrivatePath, protectPrivatePath } from '../src/platform-runtime.cjs';
@@ -59,7 +59,7 @@ function fixture() {
   const store = { get: () => structuredClone(state), update(change) { const work = queue.then(async () => { const next = structuredClone(state); await change(next); state = next; }); queue = work.catch(() => {}); return work; } };
   const available = () => { if (locked) fail('LOCAL_LOCKED', 'Local storage is locked.'); };
   const scoped = createScopedAccess(store, { assertAvailable: available, epoch: () => epoch });
-  return { store, scoped, lock() { locked = true; }, reset() { epoch++; state = { deviceId: randomUUID(), career: createCareerState(), pairing: { account: { id: 'second-owner' } } }; }, lockAndUnlock() { epoch++; } };
+  return { store, scoped, lock() { locked = true; }, reset() { epoch++; state = { deviceId: randomUUID(), career: createCareerState(), pairing: { account: { id: 'second-owner' } } }; }, replaceProfile() { epoch++; } };
 }
 
 test('a delayed local file import cannot enter a reset identity with the same revision', async () => {
@@ -75,7 +75,7 @@ test('a delayed local file import cannot enter a reset identity with the same re
   assert.deepEqual(f.store.get().career.sources, {}); assert.equal(f.store.get().career.revision, 0);
 });
 
-test('locking rejects an in-progress mutation before its encrypted transaction can publish', async () => {
+test('unavailable storage rejects an in-progress mutation before its private transaction can publish', async () => {
   const f = fixture(); let release, began;
   const started = new Promise(resolve => { began = resolve; }); const resume = new Promise(resolve => { release = resolve; });
   const pending = f.scoped.store.update(async state => { state.career.profile.name = 'Not committed'; began(); await resume; });
@@ -84,8 +84,8 @@ test('locking rejects an in-progress mutation before its encrypted transaction c
   assert.throws(() => f.scoped.store.get(), { code: 'LOCAL_LOCKED' });
 });
 
-test('a previous socket stays invalid after lock and unlock even if the identity is unchanged', () => {
-  const f = fixture(); f.lockAndUnlock(); assert.throws(() => f.scoped.store.get(), { code: 'IDENTITY_CHANGED' });
+test('a previous socket stays invalid after profile replacement even if the device identity is unchanged', () => {
+  const f = fixture(); f.replaceProfile(); assert.throws(() => f.scoped.store.get(), { code: 'IDENTITY_CHANGED' });
 });
 
 test('public form registry exposes only inspection and staging and rejects removed browser actions', async t => {
@@ -401,7 +401,7 @@ test('plain-text CV resources retain Unicode and enforce private-file integrity'
   const exported = await files.exportDocument({ applicationId: 'synthetic', kind: 'cv', mediaType: 'text/plain', bytes: Buffer.from(text) });
   await f.store.update(state => { state.career.applications.synthetic.exports.push(exportBinding(state.career, 'synthetic', 'cv', exported)); });
   assert.match(exported.uri, /^recruiters:\/\/documents\/[a-f0-9-]{36}\.txt$/);
-  assert.equal(path.basename(exported.path), 'Zoë Candidate - CV.txt');
+  assert.equal(path.basename(exported.path), `Zoë Candidate - CV - ${exported.resourceId}.txt`);
   const resource = await files.readResource(exported.uri);
   assert.equal(resource.text, text);
   assert.equal(resource.mimeType, 'text/plain');
@@ -464,18 +464,17 @@ async function readableDocuments(t, names = {}) {
       await bindDocumentFixtures(f.store);
       const exported = await files.exportDocument({ applicationId, kind, mediaType: 'application/pdf', bytes });
       await f.store.update(state => { state.career.applications[applicationId].exports.push(exportBinding(state.career, applicationId, kind, exported)); });
-      await files.cleanupExports();
       return exported;
     });
   return { ...f, directory, files, publish };
 }
 
-test('readable PDFs share one stable application folder, isolate same-title jobs and retire replaced resources', async t => {
+test('readable immutable PDFs share an application folder and preserve earlier files without publishing stale drafts', async t => {
   const f = await readableDocuments(t);
   const firstCV = await f.publish('first', 'cv'), firstLetter = await f.publish('first', 'cover_letter');
   const secondCV = await f.publish('second', 'cv'), secondLetter = await f.publish('second', 'cover_letter');
-  assert.equal(path.basename(firstCV.path), 'Zoë Candidate - CV.pdf');
-  assert.equal(path.basename(firstLetter.path), 'Zoë Candidate - COVER LETTER.pdf');
+  assert.equal(path.basename(firstCV.path), `Zoë Candidate - CV - ${firstCV.resourceId}.pdf`);
+  assert.equal(path.basename(firstLetter.path), `Zoë Candidate - COVER LETTER - ${firstLetter.resourceId}.pdf`);
   assert.equal(path.dirname(firstCV.path), path.dirname(firstLetter.path));
   assert.equal(path.dirname(secondCV.path), path.dirname(secondLetter.path));
   assert.equal(path.basename(path.dirname(firstCV.path)), 'Engineer');
@@ -486,14 +485,16 @@ test('readable PDFs share one stable application folder, isolate same-title jobs
   await f.store.update(state => { state.career.applications.first.cv.version = 2; });
   await assert.rejects(f.files.resolveExport(firstCV.uri), { code: 'NOT_FOUND' });
   const replacement = await f.publish('first', 'cv', Buffer.from('%PDF-1.7\nReplacement CV\n%%EOF'));
-  assert.equal(replacement.path, firstCV.path);
+  assert.notEqual(replacement.path, firstCV.path);
   assert.notEqual(replacement.uri, firstCV.uri);
-  assert.equal(await f.files.resolveExport(replacement.uri), firstCV.path);
+  assert.equal(await f.files.resolveExport(replacement.uri), replacement.path);
+  assert.equal((await readFile(firstCV.path)).toString(), '%PDF-1.7\nSame real synthetic document bytes\n%%EOF');
+  assert.equal((await readFile(replacement.path)).toString(), '%PDF-1.7\nReplacement CV\n%%EOF');
   await assert.rejects(f.files.readResource(firstCV.uri), { code: 'NOT_FOUND' });
   assert.equal(await f.files.resolveExport(firstLetter.uri), firstLetter.path);
   assert.equal(await f.files.resolveExport(secondCV.uri), secondCV.path);
   assert.equal((await f.files.listResources()).length, 4);
-  assert.deepEqual((await readdir(path.dirname(firstCV.path))).sort(), ['Zoë Candidate - COVER LETTER.pdf', 'Zoë Candidate - CV.pdf']);
+  assert.deepEqual((await readdir(path.dirname(firstCV.path))).sort(), [firstCV.filename, firstLetter.filename, replacement.filename].sort());
   const reopened = createDocumentFiles({ directory: f.directory, store: f.store, assertAvailable() {} });
   assert.equal(await reopened.resolveExport(replacement.uri), replacement.path);
   await f.store.update(state => { state.career.applications.first.exports.at(-1).path = '/private/arbitrary.pdf'; });
@@ -501,7 +502,7 @@ test('readable PDFs share one stable application folder, isolate same-title jobs
   await assert.rejects(reopened.readResource(`recruiters://exports/${replacement.sha256}.pdf`), { code: 'NOT_FOUND' });
 });
 
-test('failed application commit restores the prior readable file without publishing a new resource', async t => {
+test('failed application commit removes only its new file without publishing a resource', async t => {
   const f = await readableDocuments(t), previous = await f.publish('first', 'cv'), before = await readFile(previous.path);
   let replacement;
   await assert.rejects(f.files.withExportTransaction(async () => {
@@ -511,16 +512,106 @@ test('failed application commit restores the prior readable file without publish
   assert.deepEqual(await readFile(previous.path), before);
   assert.equal(await f.files.resolveExport(previous.uri), previous.path);
   await assert.rejects(f.files.resolveExport(replacement.uri), { code: 'NOT_FOUND' });
-  assert.deepEqual(await readdir(path.dirname(previous.path)), ['Zoë Candidate - CV.pdf']);
+  await assert.rejects(readFile(replacement.path), { code: 'ENOENT' });
+  assert.deepEqual(await readdir(path.dirname(previous.path)), [previous.filename]);
+});
+
+test('repeated current exports remain readable with exact immutable bytes across independent factories and filename aliases', async t => {
+  const f = await readableDocuments(t);
+  await f.store.update(state => {
+    const labels = [['Example', 'Engineer'], ['EXAMPLE', 'ENGINEER'], ['Café', 'Développeur'], ['Cafe\u0301', 'De\u0301veloppeur']];
+    for (const [index, [company, title]] of labels.entries()) {
+      const id = `alias-${index}`;
+      state.career.applications[id] = { id, job: { id, company, title }, cv: { version: 1 }, coverLetter: { version: 1 }, exports: [] };
+    }
+  });
+  await bindDocumentFixtures(f.store);
+  const seed = await f.publish('first', 'cv');
+  const requests = [
+    ['first', 'cv'], ['first', 'cv'], ['first', 'cover_letter'], ['second', 'cv'],
+    ...[0, 1, 2, 3].map(index => [`alias-${index}`, 'cv']),
+  ];
+  const published = await Promise.all(requests.map(async ([applicationId, kind], index) => {
+    const files = createDocumentFiles({ directory: f.directory, store: f.store, assertAvailable() {} });
+    const bytes = Buffer.from(`%PDF-1.7\nDistinct concurrent export ${index}\n%%EOF`);
+    const exported = await files.withExportTransaction(async () => {
+      const record = await files.exportDocument({ applicationId, kind, mediaType: 'application/pdf', bytes });
+      await f.store.update(state => { state.career.applications[applicationId].exports.push(exportBinding(state.career, applicationId, kind, record)); });
+      return record;
+    });
+    return { exported, bytes };
+  }));
+  const paths = [seed.path, ...published.map(item => item.exported.path)];
+  assert.equal(new Set(paths.map(filename => filename.normalize('NFC').toLowerCase())).size, paths.length);
+  for (const { exported, bytes } of published) {
+    assert.deepEqual(await readFile(exported.path), bytes);
+    assert.deepEqual(Buffer.from((await f.files.readResource(exported.uri)).blob, 'base64'), bytes);
+    assert.equal(await f.files.resolveExport(exported.uri), exported.path);
+  }
+  for (const { exported } of published.slice(0, 3)) assert.equal(path.dirname(exported.path), path.dirname(seed.path));
+  assert.equal(await f.files.resolveExport(seed.uri), seed.path);
+  assert.equal((await readFile(seed.path)).toString(), '%PDF-1.7\nSame real synthetic document bytes\n%%EOF');
+  const identical = await f.publish('first', 'cv');
+  assert.notEqual(identical.path, seed.path);
+  assert.equal(identical.sha256, seed.sha256);
+  assert.equal(await f.files.resolveExport(seed.uri), seed.path);
+  assert.equal(await f.files.resolveExport(identical.uri), identical.path);
+});
+
+test('rollback cannot remove successful same-folder exports from another factory or asynchronous caller', async t => {
+  const f = await readableDocuments(t), seed = await f.publish('first', 'cv');
+  const other = createDocumentFiles({ directory: f.directory, store: f.store, assertAvailable() {} });
+  let failed, release, signal;
+  const waiting = new Promise(resolve => { signal = resolve; });
+  const resumed = new Promise(resolve => { release = resolve; });
+  const rejected = assert.rejects(f.files.withExportTransaction(async () => {
+    failed = await f.files.exportDocument({ applicationId: 'first', kind: 'cv', mediaType: 'application/pdf', bytes: Buffer.from('%PDF-1.7\nFailed export\n%%EOF') });
+    signal(); await resumed;
+    throw Object.assign(new Error('Synthetic commit failure'), { code: 'STORAGE_LIMIT' });
+  }), { code: 'STORAGE_LIMIT' });
+  await waiting;
+  const successful = await Promise.all([f.files, other].map(async (files, index) => {
+    const kind = index ? 'cover_letter' : 'cv', bytes = Buffer.from(`%PDF-1.7\nSuccessful export ${index}\n%%EOF`);
+    const record = await files.exportDocument({ applicationId: 'first', kind, mediaType: 'application/pdf', bytes });
+    await f.store.update(state => { state.career.applications.first.exports.push(exportBinding(state.career, 'first', kind, record)); });
+    return { record, bytes };
+  }));
+  release(); await rejected;
+  await assert.rejects(readFile(failed.path), { code: 'ENOENT' });
+  for (const { record, bytes } of successful) {
+    assert.equal(path.dirname(record.path), path.dirname(seed.path));
+    assert.deepEqual(await readFile(record.path), bytes);
+    assert.equal(await f.files.resolveExport(record.uri), record.path);
+  }
+  assert.equal(await f.files.resolveExport(seed.uri), seed.path);
+});
+
+test('existing fixed-name exports stay readable and backed up without being moved or overwritten', async t => {
+  const f = await readableDocuments(t), generated = await f.publish('first', 'cv');
+  const legacyPath = path.join(path.dirname(generated.path), 'Zoë Candidate - CV.pdf');
+  await rename(generated.path, legacyPath);
+  await f.store.update(state => {
+    const record = state.career.applications.first.exports[0];
+    delete record.filenameVersion;
+    record.filename = path.basename(legacyPath); record.path = legacyPath;
+  });
+  const before = await readFile(legacyPath), replacement = await f.publish('first', 'cv', Buffer.from('%PDF-1.7\nAnother current export\n%%EOF'));
+  const reopened = createDocumentFiles({ directory: f.directory, store: f.store, assertAvailable() {} });
+  const backup = createBackupDocumentReader({ directory: f.directory, store: f.store, assertAvailable() {} });
+  assert.notEqual(replacement.path, legacyPath);
+  assert.equal(await reopened.resolveExport(generated.uri), legacyPath);
+  assert.deepEqual(await readFile(legacyPath), before);
+  assert.deepEqual((await backup.read(generated.uri)).bytes, before);
+  assert.deepEqual((await backup.read(replacement.uri)).bytes, await readFile(replacement.path));
 });
 
 test('generated names are cross-platform safe and bounded without inventing candidate identity', async t => {
   const f = await readableDocuments(t, { candidate: 'Zoë / Candidate:*?', company: 'CON', title: 'NUL. ' });
   const cv = await f.publish('first', 'cv');
-  assert.equal(path.basename(cv.path), 'Zoë Candidate - CV.pdf');
+  assert.equal(path.basename(cv.path), `Zoë Candidate - CV - ${cv.resourceId}.pdf`);
   assert.equal(path.basename(path.dirname(cv.path)), '_NUL');
   assert.equal(path.basename(path.dirname(path.dirname(cv.path))), '_CON');
-  assert.ok(Buffer.byteLength(cv.path) <= 248);
+  if (process.platform === 'win32') assert.ok(Buffer.byteLength(cv.path) <= 248);
   for (const value of ['con.txt', 'PRN', 'aux', 'COM1', 'lpt9', 'LPT¹']) assert.ok(documentName(value).startsWith('_'));
   assert.ok(Buffer.byteLength(documentName('候補者'.repeat(100))) <= 96);
   for (const value of ['', '...', '/:*?']) assert.throws(() => documentName(value), { code: 'INVALID_INPUT' });
@@ -529,13 +620,26 @@ test('generated names are cross-platform safe and bounded without inventing cand
   await assert.rejects(f.files.resolveExport(cv.uri), { code: 'NOT_FOUND' }, 'a contact change retires the old master-bound export');
   const long = await readableDocuments(t, { company: 'Long employer '.repeat(30), title: 'Long job title '.repeat(30) });
   const first = await long.publish('first', 'cv'), second = await long.publish('second', 'cv');
-  assert.ok(Buffer.byteLength(first.path) <= 248);
-  assert.ok(Buffer.byteLength(second.path) <= 248);
-  assert.equal(path.basename(first.path), 'Zoë Candidate - CV.pdf');
+  if (process.platform === 'win32') {
+    assert.ok(Buffer.byteLength(first.path) <= 248);
+    assert.ok(Buffer.byteLength(second.path) <= 248);
+  }
+  assert.equal(path.basename(first.path), `Zoë Candidate - CV - ${first.resourceId}.pdf`);
   assert.equal(path.basename(path.dirname(second.path)), `${path.basename(path.dirname(first.path))} (2)`);
 });
 
-test('generated cleanup only removes obsolete generated files and refuses linked application directories', async t => {
+test('POSIX exports remain readable from long private profile paths', { skip: process.platform === 'win32' }, async t => {
+  const f = await readableDocuments(t), directory = path.join(f.directory, 'private-profile-'.repeat(8));
+  const files = createDocumentFiles({ directory, store: f.store, assertAvailable() {} });
+  const bytes = Buffer.from('%PDF-1.7\nLong profile path document\n%%EOF');
+  const record = await files.exportDocument({ applicationId: 'first', kind: 'cv', mediaType: 'application/pdf', bytes });
+  await f.store.update(state => { state.career.applications.first.exports.push(exportBinding(state.career, 'first', 'cv', record)); });
+  const reopened = createDocumentFiles({ directory, store: f.store, assertAvailable() {} });
+  assert.equal(await reopened.resolveExport(record.uri), record.path);
+  assert.deepEqual(await readFile(record.path), bytes);
+});
+
+test('exports leave older generated and user files alone and refuse linked application directories', async t => {
   const f = await readableDocuments(t), cv = await f.publish('first', 'cv');
   const original = path.join(f.directory, 'original.pdf'), backup = path.join(f.directory, 'backup.json');
   await writeFile(original, 'Original imported CV'); await writeFile(backup, 'Existing backup');
@@ -544,14 +648,13 @@ test('generated cleanup only removes obsolete generated files and refuses linked
   await writeFile(legacy, '%PDF-1.7\nOld generated file', { mode: 0o600 });
   await writeFile(unrelated, 'Unrelated file');
   const csv = await f.files.exportDocument({ mediaType: 'text/csv', bytes: Buffer.from('"id"\r\n') });
-  const before = f.store.get();
-  await f.files.cleanupExports();
-  await assert.rejects(readFile(legacy), { code: 'ENOENT' });
+  await f.publish('second', 'cv');
+  await f.publish('first', 'cover_letter');
+  assert.equal(await readFile(legacy, 'utf8'), '%PDF-1.7\nOld generated file');
   assert.equal(await readFile(original, 'utf8'), 'Original imported CV');
   assert.equal(await readFile(backup, 'utf8'), 'Existing backup');
   assert.equal(await readFile(unrelated, 'utf8'), 'Unrelated file');
   assert.equal((await f.files.readResource(csv.uri)).text, '"id"\r\n');
-  assert.deepEqual(f.store.get(), before);
   const folder = path.dirname(cv.path), moved = `${folder}-private`;
   await rename(folder, moved);
   try { await symlink(moved, folder, process.platform === 'win32' ? 'junction' : 'dir'); }
@@ -564,7 +667,7 @@ test('generated cleanup only removes obsolete generated files and refuses linked
 test('case-only candidate renames preserve the current PDF bytes, URI and listing', async t => {
   const f = await readableDocuments(t, { candidate: 'Jane Candidate' });
   const old = await f.publish('first', 'cv');
-  const alias = path.join(path.dirname(old.path), 'JANE Candidate - CV.pdf');
+  const alias = path.join(path.dirname(old.path), `JANE Candidate - CV - ${old.resourceId}.pdf`);
   let caseInsensitive = false;
   try { const a = await lstat(old.path), b = await lstat(alias); caseInsensitive = a.dev === b.dev && a.ino === b.ino; }
   catch (error) { if (error.code !== 'ENOENT') throw error; }
@@ -578,7 +681,7 @@ test('case-only candidate renames preserve the current PDF bytes, URI and listin
   assert.deepEqual((await f.files.listResources()).map(item => item.uri), [current.uri]);
   if (caseInsensitive) {
     const a = await lstat(old.path), b = await lstat(current.path);
-    assert.equal(a.dev, b.dev); assert.equal(a.ino, b.ino);
+    assert.equal(a.dev, b.dev); assert.notEqual(a.ino, b.ino);
   }
 });
 

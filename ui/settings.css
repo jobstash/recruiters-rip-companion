@@ -74,7 +74,7 @@ main { flex: 1; min-height: 0; overflow: auto; padding: var(--spacing-32) var(--
 .panel { min-width: 0; background: transparent; border: 1px solid var(--color-facet); }
 .panel-head { display: grid; gap: var(--spacing-8); padding: var(--spacing-8) var(--spacing-24); border-bottom: 1px solid var(--color-facet); }
 
-/* Locked storage remains a task, not a marketing screen. */
+/* Storage-open failure stays an actionable recovery screen. */
 .locked { align-content: center; justify-items: start; gap: var(--spacing-24); min-height: 100%; padding-block: var(--spacing-40); }
 .locked p { max-width: 560px; }
 .mark-large { display: block; margin-bottom: var(--spacing-8); }
@@ -223,10 +223,13 @@ main { flex: 1; min-height: 0; overflow: auto; padding: var(--spacing-32) var(--
 .pipeline-column-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--spacing-8); padding: var(--spacing-16) var(--spacing-8); border-bottom: 1px solid var(--color-ink); font: 500 12px/1.33 var(--font-geist-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--color-ink); }
 .pipeline-count { color: var(--color-smoke); font-variant-numeric: tabular-nums; }
 .pipeline-lane-body { display: grid; align-content: start; gap: var(--spacing-8); min-height: 0; padding: var(--spacing-8); overflow-y: auto; overscroll-behavior-y: contain; }
-.pipeline-cards { display: grid; gap: var(--spacing-8); list-style: none; margin: 0; padding: 0; }
+.pipeline-cards { display: block; list-style: none; margin: 0; padding: 0; }
+.pipeline-cards > .pipeline-card + .pipeline-card { margin-top: var(--spacing-8); }
 .pipeline-empty { padding: var(--spacing-8); font: 400 12px/1.5 var(--font-geist-mono); color: var(--color-smoke); }
 .pipeline-drop-slot { border: 1px dashed var(--color-ink); }
 .pipeline-card { position: relative; display: grid; gap: var(--spacing-8); min-width: 0; padding: var(--spacing-16) var(--spacing-8) var(--spacing-8); border: 1px solid var(--color-facet); background: var(--color-canvas); }
+/* Isolate card layout without paint clipping (focus rings and the selected edge extend beyond the card). */
+.pipeline-card { contain: layout style; }
 .pipeline-card:hover::before, .pipeline-card:has([aria-current="true"])::before { content: ""; position: absolute; top: -1px; bottom: -1px; left: -1px; width: 1px; background: var(--rr-dispersion-v); box-shadow: var(--shadow-edge-glow); pointer-events: none; }
 .pipeline-card:has([aria-current="true"]) { border-color: var(--color-ink-2); }
 .pipeline-card.is-dragging { opacity: .4; }
@@ -371,6 +374,7 @@ summary:hover { color: var(--color-ink); }
 /* Help follows the actual setup sequence, then the conversation handoff and reference links. */
 .help-steps { margin: 0; padding-left: 1.25em; display: grid; gap: var(--spacing-8); color: var(--color-ink-2); line-height: 1.6; max-width: var(--reading); }
 .help-links code { font: 400 14px/1.6 var(--font-geist-mono); color: var(--color-ink); user-select: all; }
+.help-links a { display: inline-flex; align-items: center; min-height: 44px; color: var(--color-ink); text-decoration: underline; text-underline-offset: .2em; }
 /* Extension setup: four numbered steps per browser, each with its action inline. */
 .browser-setup { display: grid; gap: var(--spacing-8); }
 .browser-setup h3 { font: 500 14px/1.5 var(--font-geist-mono); }

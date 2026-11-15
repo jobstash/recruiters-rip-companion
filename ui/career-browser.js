@@ -1,12 +1,12 @@
 'use strict';
 (() => {
   const categories = {
-    sources: { title: 'CVs', empty: 'No CV added yet. Choose Import CV to add yours.', locked: 'Unlock to see your saved work.', select: 'Select a document' },
-    facts: { title: 'Facts', empty: 'No details saved yet. Tell your AI app about your experience.', locked: 'Unlock to see your saved work.', select: 'Select an answer' },
-    preferences: { title: 'Preferences', empty: 'No preferences saved. Tell your AI app what you want and what you want to avoid.', locked: 'Unlock to see your saved preferences.', select: 'Select a preference group' },
-    jobs: { title: 'Jobs', locked: 'Unlock to see your saved jobs.', select: 'Select a job' },
-    applications: { title: 'Job Applications', empty: 'No saved applications.', locked: 'Unlock to see your saved applications.', select: 'Select an application' },
-    blocks: { title: 'Blocked jobs', empty: 'Nothing blocked. Open a job to block it, its company or its category.', locked: 'Unlock to see your blocked jobs.', select: 'Select a block' },
+    sources: { title: 'CVs', empty: 'No CV added yet. Choose Import CV to add yours.', locked: 'Saved work is unavailable.', select: 'Select a document' },
+    facts: { title: 'Facts', empty: 'No details saved yet. Tell your AI app about your experience.', locked: 'Saved work is unavailable.', select: 'Select an answer' },
+    preferences: { title: 'Preferences', empty: 'No preferences saved. Tell your AI app what you want and what you want to avoid.', locked: 'Saved preferences are unavailable.', select: 'Select a preference group' },
+    jobs: { title: 'Jobs', locked: 'Saved jobs are unavailable.', select: 'Select a job' },
+    applications: { title: 'Job Applications', empty: 'No saved applications.', locked: 'Saved applications are unavailable.', select: 'Select an application' },
+    blocks: { title: 'Blocked jobs', empty: 'Nothing blocked. Open a job to block it, its company or its category.', locked: 'Blocked jobs are unavailable.', select: 'Select a block' },
   };
   const dateFormat = new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium', timeZone: 'UTC' });
   const displayDate = value => typeof value === 'string' && Number.isFinite(Date.parse(value)) ? dateFormat.format(new Date(value)) : null;
@@ -88,6 +88,12 @@
     const content = element('reader-content');
     const persistent = () => persistentReader && sideBySide.matches;
     let enabled = false;
+    let dirty = false, refreshing = null;
+    const visible = () => !document.hidden && !root.closest('[hidden]');
+    function currentLoad(currentGeneration) {
+      if (!visible()) { dirty = true; return false; }
+      return enabled && currentGeneration === generation;
+    }
     let kind = initialKind;
     let view = 'jobs';
     const viewEmpty = { reviewed: 'Nothing reviewed yet. Continue in Codex or Claude to review the jobs in this window.' };
@@ -132,6 +138,7 @@
       readerRetry.hidden = true;
       reader.removeAttribute('aria-busy');
       records.querySelectorAll('[aria-current]').forEach(button => button.removeAttribute('aria-current'));
+      boardView?.select(null);
       if (restoreFocus && returnTo?.isConnected) returnTo.focus();
     }
 
@@ -373,21 +380,22 @@
     }) : null;
     async function loadBoard() {
       if (!enabled || !boardView) return;
+      if (!visible()) { dirty = true; return; }
       const currentGeneration = ++generation;
       listRetry.hidden = true;
       if (!records.childElementCount) listStatus.textContent = 'Loading applications…';
       try {
         const result = await request('career-pipeline', {});
-        if (!enabled || currentGeneration !== generation) return;
+        if (!currentLoad(currentGeneration)) return;
         records.hidden = !result.total;
-        if (!result.total) { records.replaceChildren(); listStatus.textContent = categories.applications.empty; return; }
+        if (!result.total) { boardView.clear(); closeReader(); listStatus.textContent = categories.applications.empty; return; }
         if (listStatus.textContent === 'Loading applications…' || listStatus.textContent === categories.applications.empty) listStatus.textContent = '';
         boardView.render(result, { selectedId: selected?.id ?? null });
         // The open card keeps its reader; its button may be new after the redraw.
         const button = selected && boardView.button(selected.id);
-        if (button) { selectedButton = button; void refreshRecord(selected, button); }
+        if (button) { selectedButton = button; await refreshRecord(selected, button); }
       } catch (error) {
-        if (!enabled || currentGeneration !== generation) return;
+        if (!currentLoad(currentGeneration)) return;
         listStatus.textContent = `Could not load Pipeline. ${error.message} Retry to load it again.`;
         listRetry.hidden = false;
       }
@@ -514,6 +522,7 @@
       selected = item;
       selectedButton = button;
       button.setAttribute('aria-current', 'true');
+      boardView?.select(item.id);
       reader.hidden = false;
       root.classList.add('is-reading');
       readerTitle.textContent = item.heading ?? item.title;
@@ -618,6 +627,7 @@
     }
     async function loadPage(focusList = false, place = null) {
       if (!enabled) return;
+      if (!visible()) { dirty = true; return; }
       const currentGeneration = ++generation;
       // A background refresh (the record the user had open is remembered) swaps rows in place and keeps the reader; a
       // navigation clears the list, closes the reader and shows the loading state.
@@ -641,7 +651,7 @@
       let reopen = null;
       try {
         const result = await request('career-list', { kind, offset, limit: 25, ...(kind === 'jobs' ? { view } : {}) });
-        if (!enabled || currentGeneration !== generation) return;
+        if (!currentLoad(currentGeneration)) return;
         if (kind === 'jobs') renderCounts(result.counts);
         const existing = new Map([...records.children].map(row => [row.dataset.id, row]));
         const rows = result.items.map(item => {
@@ -684,7 +694,7 @@
           target.focus();
         }
       } catch (error) {
-        if (!enabled || currentGeneration !== generation) return;
+        if (!currentLoad(currentGeneration)) return;
         records.replaceChildren();
         records.hidden = true;
         listStatus.textContent = `Could not load ${category.title.toLowerCase()}. ${error.message} Retry to load them again.`;
@@ -699,7 +709,7 @@
           records.removeAttribute('aria-busy');
         }
       }
-      if (!enabled || currentGeneration !== generation) return;
+      if (!currentLoad(currentGeneration)) return;
       // A refresh keeps the record the user had open, re-reading it quietly; a navigation opens the first record on wide
       // layouts. A record that left this page (say, a stage filter no longer matches it) keeps its reader, still re-read
       // quietly, rather than being replaced by another record.
@@ -710,7 +720,7 @@
     // Re-read the open record without the loading state; the reader is rewritten only when its content changed.
     let detailSignature = '';
     async function refreshRecord(item, button) {
-      if (!enabled) return;
+      if (!enabled || !visible()) return;
       selected = item;
       selectedButton = button;
       records.querySelectorAll('[aria-current]').forEach(current => { if (current !== button) current.removeAttribute('aria-current'); });
@@ -719,17 +729,24 @@
       const currentRead = ++readGeneration;
       try {
         const detail = kind !== 'jobs' && Array.isArray(item.sections) ? item : await request('career-read', { kind, id: item.id });
-        if (!enabled || currentGeneration !== generation || currentRead !== readGeneration) return;
+        if (!currentLoad(currentGeneration) || currentRead !== readGeneration) return;
         const signature = JSON.stringify(detail);
         if (signature === detailSignature) return;
         detailSignature = signature;
         const focusedAction = [...content.querySelectorAll('button')].includes(document.activeElement)
           ? document.activeElement.dataset.careerAction : null;
+        const focusedInput = [...content.querySelectorAll('input')].includes(document.activeElement)
+          ? { id: document.activeElement.id, value: document.activeElement.value } : null;
         const scrollTop = reader.scrollTop;
         renderDetail(detail, item);
         if (focusedAction) {
           const target = [...content.querySelectorAll('button')].find(button => button.dataset.careerAction === focusedAction);
           (target ?? readerTitle).focus({ preventScroll: true });
+        }
+        if (focusedInput) {
+          const target = [...content.querySelectorAll('input')].find(input => input.id === focusedInput.id);
+          if (target) { target.value = focusedInput.value; target.focus({ preventScroll: true }); }
+          else readerTitle.focus({ preventScroll: true });
         }
         reader.scrollTop = scrollTop;
       } catch { /* The reader keeps what it showed; the next navigation reports errors. */ }
@@ -794,6 +811,25 @@
     });
     if (persistentReader) sideBySide.addEventListener?.('change', () => { if (!selected) closeReader(); });
 
+    async function refreshVisible() {
+      if (refreshing || !dirty || !visible()) return refreshing;
+      refreshing = (async () => {
+        do {
+          dirty = false;
+          // Preserve the page, selected detail and controls when returning to a previously visited view.
+          const place = keepPlace ?? (enabled ? { offset, priorOffsets: [...priorOffsets], selectedId: selected?.id ?? null, focusId: null } : null);
+          enabled = true;
+          categoryButtons.forEach(button => { button.disabled = false; });
+          keepPlace = null;
+          if (place) { offset = place.offset; priorOffsets = place.priorOffsets; }
+          else { offset = 0; priorOffsets = []; }
+          showJobActions();
+          await (board ? loadBoard() : loadPage(false, place));
+        } while (dirty && enabled && visible());
+      })();
+      try { await refreshing; } finally { refreshing = null; }
+    }
+
     return {
       setContext({ review: nextReview, publicationRange, paired, catalogue } = {}) {
         if (nextReview?.hosts) review = nextReview;
@@ -804,26 +840,18 @@
         renderCounts();
         if (enabled && showingEmpty && !loading) renderEmpty();
       },
-      refresh() {
-        // A state broadcast while the list is already showing keeps the page and the open record; only the first load starts at the top.
-        const place = keepPlace ?? (enabled ? { offset, priorOffsets: [...priorOffsets], selectedId: selected?.id ?? null, focusId: null } : null);
-        enabled = true;
-        categoryButtons.forEach(button => { button.disabled = false; });
-        keepPlace = null;
-        if (place) { offset = place.offset; priorOffsets = place.priorOffsets; }
-        else { offset = 0; priorOffsets = []; }
-        showJobActions();
-        return board ? loadBoard() : loadPage(false, place);
-      },
+      refresh() { dirty = true; return refreshVisible(); },
+      activate: refreshVisible,
       clear() {
         enabled = false;
+        dirty = false;
         generation += 1;
         loading = false;
         closeReader();
         resetPlace();
         nextOffset = null;
         categoryButtons.forEach(button => { button.disabled = true; });
-        records.replaceChildren();
+        if (boardView) boardView.clear(); else records.replaceChildren();
         records.hidden = true;
         showingEmpty = false;
         if (listAction) listAction.hidden = true;
@@ -850,6 +878,7 @@
   const pipeline = createBrowser({ root: document.getElementById('pipeline-browser'), prefix: 'pipeline', kind: 'applications', board: true });
   window.careerBrowser = {
     refresh() { return Promise.all([me.refresh(), jobs.refresh(), pipeline.refresh()]); },
+    activate() { return Promise.all([me.activate(), jobs.activate(), pipeline.activate()]); },
     clear() { me.clear(); jobs.clear(); pipeline.clear(); },
     setContext(context) { jobs.setContext(context); },
   };

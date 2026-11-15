@@ -2,6 +2,7 @@
 const $ = id => document.getElementById(id);
 let state, busy = false, noticeKind = '', noticeTimer, careerViewVersion, stateRequest = 0, view = null;
 let requestedSection = null, stateNoticeKey = '';
+let stateRefresh = null, stateRefreshPending = false;
 const notice = (text, kind = '') => {
   clearTimeout(noticeTimer);
   $('notice-text').textContent = text || '';
@@ -32,6 +33,7 @@ function showView(next) {
   }
   for (const name of views) $(`view-${name}`).hidden = name !== next;
   if (next !== 'setup') window.decisionsUI?.clearInput();
+  void window.careerBrowser?.activate();
 }
 for (const button of document.querySelectorAll('[data-view]')) button.addEventListener('click', () => showView(button.dataset.view));
 function selectSettingsTab(next, focus = false) {
@@ -165,7 +167,20 @@ function renderIntegrations(current) {
     }
   }
 }
-async function refresh() {
+// State broadcasts can arrive in bursts while parallel exports finish. Read one snapshot at a time, then the latest
+// requested snapshot; never start competing reads that discard each other's results.
+function refresh() {
+  stateRefreshPending = true;
+  if (stateRefresh) return stateRefresh;
+  stateRefresh = (async () => {
+    do {
+      stateRefreshPending = false;
+      await refreshState();
+    } while (stateRefreshPending);
+  })().finally(() => { stateRefresh = null; });
+  return stateRefresh;
+}
+async function refreshState() {
   const request = ++stateRequest;
   try {
     const current = await invoke('state');
@@ -176,7 +191,7 @@ async function refresh() {
     const locked = state.execution.state === 'locked';
     window.backupsUI?.refresh(current);
     $('storage').hidden = !locked; $('settings').hidden = locked; $('views').hidden = locked;
-    $('storage-message').textContent = state.failure || 'Choose Unlock to open your saved work.';
+    $('storage-message').textContent = state.failure || 'Companion could not open your saved work. Choose Retry.';
     if (state.approval && !locked) {
       $('approval-title').textContent = state.approval.title; $('approval-detail').textContent = state.approval.detail;
       $('approval-cancel').disabled = false; $('approval-allow').disabled = false;
@@ -205,7 +220,7 @@ async function refresh() {
       careerViewVersion = state.careerViewVersion;
       void window.careerBrowser.refresh();
     }
-    $('agent-prompt').textContent = state.setup.agentPrompt;
+    if ($('agent-prompt').textContent !== state.setup.agentPrompt) $('agent-prompt').textContent = state.setup.agentPrompt;
     renderIntegrations(state);
     window.decisionsUI?.refresh(state.decisions);
     window.careerBrowser?.setContext({ review: state.review, publicationRange: state.publicationRange, paired: state.paired, catalogue: state.catalogue });
@@ -273,6 +288,10 @@ for (const [id, op, message] of [
   ['delete-rankings', 'delete-rankings', 'Job reviews cleared.'],
   ['unlock', 'unlock', 'Your saved work is open.'],
 ]) $(id).addEventListener('click', () => { void action(op, message); });
+$('support-link').addEventListener('click', event => {
+  event.preventDefault();
+  void action('open-support', 'Opened community support in your browser.');
+});
 for (const browser of ['chrome', 'firefox']) $(`copy-${browser}-browser-setup`).addEventListener('click', async () => {
   try { await navigator.clipboard.writeText($(`${browser}-browser-setup`).textContent); notice('Copied. Paste it into a terminal on this computer.', 'copy-browser-setup'); }
   catch { notice('Select the command and copy it.', 'error'); }
@@ -338,6 +357,9 @@ $('approval-cancel').addEventListener('click', () => { void answerApproval(false
 $('approval-allow').addEventListener('click', () => { void answerApproval(true); });
 $('approval-dialog').addEventListener('cancel', event => { event.preventDefault(); void answerApproval(false); });
 window.companion.onState(() => { void refresh(); });
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) { void window.careerBrowser?.activate(); void refresh(); }
+});
 window.companion.onSettingsSection(section => { requestedSection = section; void refresh(); });
 void refresh();
 setInterval(() => { if (!busy && !document.hidden) void refresh(); }, 5000);

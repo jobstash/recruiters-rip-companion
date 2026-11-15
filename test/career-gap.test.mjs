@@ -162,7 +162,7 @@ async function fixture(t) {
   await readyMaster(store, { document });
   const files = createDocumentFiles({ directory, store, assertAvailable() {} });
   const tools = new Map(createApplicationTools({ store, platform: async () => assert.fail('No platform call expected'), documents,
-    exportDocument: files.exportDocument, cleanupExports: files.cleanupExports, withExportTransaction: files.withExportTransaction }).map(tool => [tool.name, tool]));
+    exportDocument: files.exportDocument, withExportTransaction: files.withExportTransaction }).map(tool => [tool.name, tool]));
   const call = (name, args) => tools.get(`career_${name}`).invoke(args);
   const mutation = args => ({ requestId: randomUUID(), revision: state.career.revision, ...args });
   const { applicationId } = await call('application_create', mutation({ job: { title: 'Platform Engineer', company: 'Example Employer', description: 'Operate data services.', url: 'https://example.test/jobs/1' } }));

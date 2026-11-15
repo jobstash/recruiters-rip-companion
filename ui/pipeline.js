@@ -21,14 +21,14 @@
   };
 
   function create(container, handlers) {
-    let data = null, selectedId = null, signature = '', choice = null, drag = null, suppressClick = false;
+    let data = null, selectedId = null, choice = null, drag = null, suppressClick = false;
     // Where focus belongs after the next redraw: the control that acted, even if disabling it while saving dropped focus.
     let focusAfter = null;
-    let controls = new Map();
+    const controls = new Map(), lanes = new Map(), cards = new Map();
 
     function request(card, column, sent, focusKey = `${card.id}:open`) {
       focusAfter = focusKey;
-      if (column === 'closed') { choice = card.id; draw(`${card.id}:choice-rejected`); return; }
+      if (column === 'closed') { choice = card.id; draw(`${card.id}:choice-rejected`); focusAfter = null; return; }
       choice = null;
       void handlers.move(card, column, sent);
     }
@@ -101,30 +101,74 @@
       if (choice === card.id) item.append(closeChoice(card));
       return item;
     }
+    function forgetCard(id) {
+      for (const suffix of ['open', 'move', 'round', 'choice-rejected', 'choice-withdrawn', 'choice-cancel']) controls.delete(`${id}:${suffix}`);
+    }
     function draw(focusKey) {
-      controls = new Map();
-      const sections = data.columns.filter(entry => order.includes(entry.id)).map(entry => {
-        const section = node('section', 'pipeline-column');
-        section.dataset.column = entry.id;
-        const heading = node('h3', 'pipeline-column-head');
-        heading.id = `pipeline-column-${entry.id}`;
-        heading.append(node('span', 'pipeline-column-name', labels[entry.id]), node('span', 'pipeline-count', String(entry.cards.length)));
-        section.setAttribute('aria-labelledby', heading.id);
-        // Each lane has its own scrolling body; an empty lane says so instead of leaving a blank cell.
-        const body = node('div', 'pipeline-lane-body');
-        if (entry.cards.length) {
+      const active = focusKey && controls.get(focusKey);
+      const oldLane = active?.closest?.('[data-column]')?.dataset.column;
+      const seen = new Set();
+      const scrollPositions = [...lanes.values()].map(lane => [lane.body, lane.body.scrollTop]);
+      for (const entry of data.columns) {
+        if (!order.includes(entry.id)) continue;
+        let lane = lanes.get(entry.id);
+        if (!lane) {
+          const section = node('section', 'pipeline-column');
+          section.dataset.column = entry.id;
+          const heading = node('h3', 'pipeline-column-head');
+          heading.id = `pipeline-column-${entry.id}`;
+          const count = node('span', 'pipeline-count');
+          heading.append(node('span', 'pipeline-column-name', labels[entry.id]), count);
+          section.setAttribute('aria-labelledby', heading.id);
+          const body = node('div', 'pipeline-lane-body');
           const list = node('ol', 'pipeline-cards');
           list.setAttribute('aria-labelledby', heading.id);
-          list.append(...entry.cards.map(card => renderCard(card, entry.id)));
-          body.append(list);
-        } else body.append(node('p', 'pipeline-empty', 'No applications'));
-        section.append(heading, body);
-        return section;
-      });
-      container.replaceChildren(...sections);
-      // Focus follows the card it was on, into its new column; a control that no longer exists falls back to the card.
+          section.append(heading, body);
+          lane = { section, count, body, list, empty: node('p', 'pipeline-empty', 'No applications') };
+          lanes.set(entry.id, lane);
+        }
+        if (lane.section.parentNode !== container) container.append(lane.section);
+        const count = String(entry.cards.length);
+        if (lane.count.textContent !== count) lane.count.textContent = count;
+        if (entry.cards.length) {
+          lane.empty.remove();
+          if (lane.list.parentNode !== lane.body) lane.body.append(lane.list);
+        } else {
+          lane.list.remove();
+          if (lane.empty.parentNode !== lane.body) lane.body.append(lane.empty);
+        }
+        for (let index = 0; index < entry.cards.length; index += 1) {
+          const card = entry.cards[index];
+          seen.add(card.id);
+          // Include the progress snapshot: controls must never keep a stale concurrency token.
+          const signature = JSON.stringify([card, entry.id, choice === card.id]);
+          let saved = cards.get(card.id);
+          if (!saved || saved.signature !== signature) {
+            forgetCard(card.id);
+            const item = renderCard(card, entry.id);
+            if (saved) saved.item.replaceWith(item);
+            saved = { item, signature };
+            cards.set(card.id, saved);
+          }
+          const open = controls.get(`${card.id}:open`);
+          if (card.id === selectedId) open.setAttribute('aria-current', 'true');
+          else open.removeAttribute('aria-current');
+          // Do not detach unchanged nodes: their focus, native controls and lane scroll survive refreshes.
+          if (lane.list.children[index] !== saved.item) lane.list.insertBefore(saved.item, lane.list.children[index] ?? null);
+        }
+      }
+      for (const [id, saved] of cards) {
+        if (seen.has(id)) continue;
+        saved.item.remove();
+        cards.delete(id);
+        forgetCard(id);
+      }
+      for (const [body, scrollTop] of scrollPositions) if (body.scrollTop !== scrollTop) body.scrollTop = scrollTop;
       const target = focusKey && (controls.get(focusKey) ?? controls.get(`${focusKey.split(':')[0]}:open`));
-      target?.focus({ preventScroll: false });
+      if (target && target !== document.activeElement) {
+        const sameLane = oldLane === target.closest?.('[data-column]')?.dataset.column;
+        target.focus({ preventScroll: sameLane });
+      }
     }
 
     // Drag: a lifted copy follows the pointer; the lane under it is lit and an empty slot shows where the card will land
@@ -181,18 +225,26 @@
     window.addEventListener('keydown', event => { if (drag && event.key === 'Escape') endDrag(); });
 
     return {
-      /** Redraws only when the cards or selection changed, keeping focus on the same card or control. */
+      /** Reconciles keyed cards without replacing lanes or unrelated controls. */
       render(next, options = {}) {
-        const nextSignature = JSON.stringify([next, options.selectedId ?? null, choice]);
         data = next; selectedId = options.selectedId ?? null;
         if (choice && !next.columns.some(entry => entry.cards.some(card => card.id === choice && entry.id !== 'closed'))) choice = null;
-        if (nextSignature === signature && container.childElementCount) return;
-        signature = JSON.stringify([next, selectedId, choice]);
         const active = document.activeElement?.dataset?.focusKey;
         draw(focusAfter ?? active);
         focusAfter = null;
       },
       button: id => controls.get(`${id}:open`) ?? null,
+      select(id) {
+        controls.get(`${selectedId}:open`)?.removeAttribute('aria-current');
+        selectedId = id;
+        controls.get(`${selectedId}:open`)?.setAttribute('aria-current', 'true');
+      },
+      clear() {
+        endDrag();
+        data = null; selectedId = null; choice = null; focusAfter = null;
+        controls.clear(); cards.clear(); lanes.clear();
+        container.replaceChildren();
+      },
     };
   }
   window.pipelineBoard = { create };

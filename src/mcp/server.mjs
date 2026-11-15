@@ -129,8 +129,9 @@ function error(code, message) { return { isError: true, content: [{ type: 'text'
 
 export function createPlatformTools({ store, platform, connectAccount, openSettings }) {
   const empty = { type: 'object', properties: {}, additionalProperties: false };
-  const localStatus = () => ({ mode: 'local_mcp', paired: Boolean(store.get().pairing), account: store.get().pairing?.account ?? null, providerRequired: false,
-    platformAccess: store.get().pairing ? 'paired' : 'not_paired', note: 'Final reasoning, new application text and voice use your official subscription app. Optional Decisions API known form-value selection uses one separately billed key entered only in companion settings.' });
+  const projectStatus = state => ({ mode: 'local_mcp', paired: Boolean(state.pairing), account: state.pairing?.account ?? null, providerRequired: false,
+    platformAccess: state.pairing ? 'paired' : 'not_paired', note: 'Final reasoning, new application text and voice use your official subscription app. Optional Decisions API known form-value selection uses one separately billed key entered only in companion settings.' });
+  const localStatus = () => store.select ? store.select(projectStatus) : projectStatus(store.get());
   return [
     { name: 'account_status', description: 'Read local pairing and current platform membership. Does not start inference or reveal any credential.', inputSchema: empty, readOnly: true, async invoke() {
       const local = localStatus(); if (!local.paired) return local;

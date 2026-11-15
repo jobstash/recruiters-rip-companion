@@ -1,12 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import { fail, hash, mutateCareer, mutationSchema, readCareer, replayCareer } from './state.mjs';
+import { createCareerState, fail, hash, mutateCareer, mutationSchema, readCareer, replayCareer, selectCareer } from './state.mjs';
 import { ESSENTIAL_PREFERENCES, matchingProfileVersion, missingPreferences } from './assessment-policy.mjs';
 import { introductionsStatus } from './introduction-tools.mjs';
 import { FACT_KINDS, compareFacts, factInputSchema, factKey, needsDetail, normalizeFact } from './facts.mjs';
 import { chatText, formAnswers, formRequest, parseReply, prepareQuestions, questionSchema } from './interview.mjs';
 import { patchProfile, profileFields } from './profile-fields.mjs';
 import { assertJobNotBlocked } from './blocklist.mjs';
-import { masterCvState } from './master-cv.mjs';
+import { masterCvSummary } from './master-cv.mjs';
 
 const MAX_TEXT = 100_000;
 const MAX_FILE = 5 * 1024 * 1024;
@@ -205,7 +205,7 @@ function onboarding(career, pairing) {
     else question(`preferences.${field}`, 'career_preferences_update', ESSENTIAL_PREFERENCES[field]);
   }
   const askPreferences = questions.some(item => item.field.startsWith('preferences.'));
-  const master = masterCvState(career);
+  const master = masterCvSummary(career);
   const masterCv = { status: master.status, required: master.status !== 'ready' };
   if (masterCv.required) action('masterCv', 'career_master_cv_read', {},
     'Automatically continue preparing the master CV in this conversation: read every original CV and current facts, reuse known answers and preserve manual master edits. Ask only genuinely missing outcomes or context with career_interview_ask, respect skip or cancel, save actual answers as facts, then save the plain master with career_master_cv_save. Do not ask the candidate to start a separate prompt or workflow.');
@@ -237,7 +237,10 @@ export function createProfileTools({ store, selectSourceFile, extractFile, inter
     return promise;
   };
 
-  tool('onboarding_status', 'Read local onboarding readiness and pairing, without provider credentials or model setup.', object({}), true, async () => onboarding(readCareer(store), store.get().pairing));
+  tool('onboarding_status', 'Read local onboarding readiness and pairing, without provider credentials or model setup.', object({}), true, async () => {
+    const project = state => onboarding(state.career ?? createCareerState(), state.pairing);
+    return store.select ? store.select(project) : project(store.get());
+  });
   tool('onboarding_start', 'Choose CV or no-CV conversational onboarding. Existing sources and facts are kept.', mutation({ mode: { enum: ['cv', 'interview'] } }, ['mode']), false, async args => edit('onboarding_start', args, career => {
     career.profile.onboarding = { mode: args.mode };
     return { mode: args.mode, nextSteps: args.mode === 'cv' ? ['Import and read every original CV, reuse current facts, and save the profile with onboarding_commit. Automatically ask only missing outcome or context questions and save the master in this conversation.'] : ['Save the stated background in the profile, reuse current facts and collect missing narratives through career_interview_ask, then save the master in this conversation. Do not invent an original CV.'] };
@@ -262,17 +265,16 @@ export function createProfileTools({ store, selectSourceFile, extractFile, inter
     };
   }));
 
-  tool('career_profile_read', 'Read the saved profile, explicit future preferences and fact/source counts. Does not return document bodies.', object({}), true, async () => {
-    const career = readCareer(store);
-    const master = masterCvState(career);
+  tool('career_profile_read', 'Read the saved profile, explicit future preferences and fact/source counts. Does not return document bodies.', object({}), true, async () => selectCareer(store, career => {
+    const master = masterCvSummary(career);
     return {
       revision: career.revision, profile: profileView(career.profile), preferences: career.profile.preferences ?? {},
       // Unanswered basics: career paths are the agent's to save, the rest are questions; scans and reviews refuse to start until it is empty.
       missingPreferences: missingPreferences(career).map(field => ({ field, [field === 'careerPaths' ? 'action' : 'question']: ESSENTIAL_PREFERENCES[field] })),
       factCount: Object.keys(career.facts).length, sourceCount: currentSources(career).length, matchingProfileVersion: matchingProfileVersion(career),
-      masterCv: { version: master.master?.version ?? 0, status: master.status },
+      masterCv: { version: master.version, status: master.status },
     };
-  });
+  }));
 
   tool('career_profile_update', 'Set or clear profile fields. null clears a scalar and [] clears a list; omitted fields stay unchanged.', mutation({ patch: profilePatch }, ['patch']), false, async args => edit('career_profile_update', args, career => {
     const saved = patchProfile(career, args.patch);

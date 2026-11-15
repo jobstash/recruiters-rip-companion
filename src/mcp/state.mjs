@@ -109,7 +109,12 @@ export function upgradeCareer(old) {
   return { ...fresh, profile: old?.profile ?? fresh.profile, sources: old?.sources ?? {},
     evidenceRevision: (old?.evidenceRevision ?? 0) + 1, rankingVersion: (old?.rankingVersion ?? 0) + 1 };
 }
-export function readCareer(store) { return store.get().career ?? createCareerState(); }
+/** Project within the trusted read boundary; snapshot-only stores remain supported. */
+export function selectCareer(store, project) {
+  const select = state => project(state.career ?? createCareerState());
+  return store.select ? store.select(select) : select(store.get());
+}
+export function readCareer(store) { return selectCareer(store, career => career); }
 function preflight(career, { requestId, revision }, operation, input) {
   if (typeof requestId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requestId) || !Number.isSafeInteger(revision) || revision < 0)
     fail('INVALID_INPUT', 'Provide requestId as a UUID from request_id and revision as the integer returned by career_profile_read. Do not use a descriptive request label.');

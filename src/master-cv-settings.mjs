@@ -3,7 +3,7 @@ import { writeFile, unlink } from 'node:fs/promises';
 import { renameSync } from 'node:fs';
 import path from 'node:path';
 import { protectPrivatePath } from './platform-runtime.cjs';
-import { createCareerState, fail, hash } from './mcp/state.mjs';
+import { fail, hash, selectCareer } from './mcp/state.mjs';
 import { masterCvState, saveManualMaster, masterExportSnapshot, renderMaster } from './mcp/master-cv.mjs';
 
 export const MASTER_CV_ACTIONS = Object.freeze(['master-cv-read', 'master-cv-save', 'master-cv-export']);
@@ -48,14 +48,15 @@ export function createMasterCvSettings({ access, identity, documents, selectDest
     exact(input, op === 'master-cv-save' ? ['requestId', 'revision', 'baseVersion', 'contact', 'document', 'presentation']
       : op === 'master-cv-export' ? ['requestId', 'revision', 'baseVersion', 'format'] : []);
     const { scoped, currentIdentity, assertCurrent } = session();
-    const career = () => scoped.store.get().career ?? createCareerState();
-    if (op === 'master-cv-read') return masterCvState(career(), currentIdentity);
+    const select = project => selectCareer(scoped.store, project);
+    if (op === 'master-cv-read') return select(career => masterCvState(career, currentIdentity));
     if (op === 'master-cv-save') {
       assertCurrent();
       if (exports.has(input.requestId)) fail('REQUEST_CONFLICT', 'This request ID was already used for an export. Use a new request ID.');
       saving.add(input.requestId);
       try {
-        const savingStore = { get: () => scoped.store.get(), update: change => scoped.store.update(change, { beforeCommit: assertCurrent }) };
+        const savingStore = { get: () => scoped.store.get(), select: project => scoped.store.select(project),
+          update: change => scoped.store.update(change, { beforeCommit: assertCurrent }) };
         const result = await saveManualMaster({ store: savingStore, args: input, identity: currentIdentity });
         assertCurrent();
         afterSave();
@@ -64,13 +65,13 @@ export function createMasterCvSettings({ access, identity, documents, selectDest
     }
     if (typeof input.requestId !== 'string' || !uuid.test(input.requestId) || !Number.isSafeInteger(input.revision) || input.revision < 0 || !Number.isSafeInteger(input.baseVersion) || input.baseVersion < 1 || !['pdf', 'txt'].includes(input.format))
       fail('INVALID_INPUT', 'Choose PDF or text and export the current master CV version with a new request ID.');
-    if (saving.has(input.requestId) || career().receipts?.[input.requestId]) fail('REQUEST_CONFLICT', 'This request ID was already used for another action. Use a new request ID.');
+    if (saving.has(input.requestId) || select(career => Boolean(career.receipts?.[input.requestId]))) fail('REQUEST_CONFLICT', 'This request ID was already used for another action. Use a new request ID.');
     const inputHash = hash(input), prior = exports.get(input.requestId);
     if (prior && prior.inputHash !== inputHash) fail('REQUEST_CONFLICT', 'This request ID was already used with different content. Use a new request ID.');
-    const initial = snapshot(career(), input), initialHash = hash(initial);
+    const initial = select(career => snapshot(career, input)), initialHash = hash(initial);
     const assertSnapshot = () => {
       assertCurrent();
-      if (hash(snapshot(career(), input)) !== initialHash) fail('REVISION_CONFLICT', 'The saved CV changed. Reopen the master CV before exporting.');
+      if (hash(select(career => snapshot(career, input))) !== initialHash) fail('REVISION_CONFLICT', 'The saved CV changed. Reopen the master CV before exporting.');
     };
     assertSnapshot();
     if (prior) return prior.pending;

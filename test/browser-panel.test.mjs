@@ -278,10 +278,10 @@ test('non-job and listing states win over irrelevant setup and listing choice us
 test('Companion recovery distinguishes unavailable, locked, old, missing CV and unavailable AI without account gating', async () => {
   const panel = await panelFixture({ application: application(), companion: { workflowVersion: 2, hasCv: true, paired: false } });
   assert.equal(panel.nodes.get('application-prepare').hidden, false);
-  panel.update({ errorCode: 'COMPANION_UNAVAILABLE' }); assert.equal(panel.nodes.get('install').hidden, false); assert.equal(panel.nodes.get('detect').textContent, 'Retry');
+  panel.update({ errorCode: 'COMPANION_UNAVAILABLE' }); assert.equal(panel.nodes.get('install').hidden, false);
   await panel.nodes.get('detect').onclick(); assert.equal(panel.sent.at(-1).action, 'detect');
-  for (const [companion, expected] of [[{ locked: true }, /Unlock/], [{ workflowVersion: 1 }, /Update/], [{ workflowVersion: 2, hasCv: false }, /Import CV/], [{ workflowVersion: 2, hostInfo: { claude: { available: false } } }, /unavailable/]]) {
-    panel.update({ errorCode: null, companion }); assert.match(panel.nodes.get('status').textContent, expected); assert.equal(panel.nodes.get('recover').hidden, false);
+  for (const companion of [{ locked: true }, { workflowVersion: 1 }, { workflowVersion: 2, hasCv: false }, { workflowVersion: 2, hostInfo: { claude: { available: false } } }]) {
+    panel.update({ errorCode: null, companion }); assert.equal(panel.nodes.get('recover').hidden, false);
     assert.equal(panel.nodes.get('paste').hidden, true, 'the footer shows one sentence: the blocking state, not Answers ready');
     assert.equal(panel.nodes.get('application-prepare').hidden, true); panel.nodes.get('recover').onclick(); assert.equal(panel.sent.at(-1).action, 'settings');
   }

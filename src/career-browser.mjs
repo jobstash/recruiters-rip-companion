@@ -94,10 +94,11 @@ const readProgress = app => {
   const saved = applicationProgress(app);
   try { return replayProgress(saved.history, new Date(), saved.nextInterviewAt); } catch { return replayProgress([]); }
 };
+const shortProgressDate = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' });
+const fullProgressDate = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
 const progressDate = (value, now = new Date()) => {
   const date = new Date(`${value}T00:00:00Z`);
-  return new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC',
-    ...(date.getUTCFullYear() === now.getUTCFullYear() ? {} : { year: 'numeric' }) }).format(date);
+  return (date.getUTCFullYear() === now.getFullYear() ? shortProgressDate : fullProgressDate).format(date);
 };
 function stageLabel({ stage, round, atStage }) {
   if (stage === 'interviewing') return `Interview round ${round}`;
@@ -135,10 +136,10 @@ function cardDetail(app, progress) {
   if (!last) return Number.isFinite(Date.parse(app.createdAt)) ? `Created ${progressDate(app.createdAt.slice(0, 10))}` : 'Not applied yet';
   return `${progress.stage === 'interviewing' ? `Round ${progress.round}` : stageLabel(progress)} · ${progressDate(last.at)}`;
 }
-// Within a column: the later interview round, then the latest step, then the latest change.
+// Within a column: later interview round, latest progress step, then creation. Exporting never reorders cards.
 const latestStep = row => row.progress.history.at(-1)?.at ?? '';
 const byActivity = (a, b) => (a.progress.stage === 'interviewing' && b.progress.stage === 'interviewing' ? b.progress.round - a.progress.round : 0) ||
-  latestStep(b).localeCompare(latestStep(a)) || text(b.app.updatedAt, '').localeCompare(text(a.app.updatedAt, '')) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+  latestStep(b).localeCompare(latestStep(a)) || text(b.app.createdAt, '').localeCompare(text(a.app.createdAt, '')) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 function applicationDetail(app, career) {
   return { title: applicationTitle(app), jobPage: Boolean(record(app.job) && savedJobPage(currentApplicationJob(career, app))),
     progress: progressDetail(app), sections: [
@@ -388,6 +389,23 @@ export function createCareerBrowser({ store, files, openPath }) {
   // List/read projections share one immutable career snapshot.
   const detail = (kind, item, career) => kind === 'sources' ? sourceDetail(item) :
     kind === 'facts' ? factDetail(item, career) : applicationDetail(item, career);
+  const pipelineCache = new WeakMap();
+  function pipeline(career) {
+    // Dates depend on today's validation boundary and the display year, not just data.
+    const now = new Date(), day = `${now.getFullYear()}:${now.toISOString().slice(0, 10)}`;
+    const cached = pipelineCache.get(career);
+    if (cached?.day === day) return cached.result;
+    const rows = entries(career.applications).map(([id, app]) => ({ id, app, progress: readProgress(app) }));
+    const grouped = Object.fromEntries(PIPELINE_COLUMNS.map(column => [column, []]));
+    for (const row of rows) grouped[pipelineColumn(row.progress.stage)].push(row);
+    const columns = PIPELINE_COLUMNS.map(column => ({ id: column, cards: grouped[column]
+      .sort(byActivity).map(({ id, app, progress }) => ({ id, title: text(app.job?.title, 'Untitled role'), company: text(app.job?.company, ''),
+        stage: progress.stage, detail: cardDetail(app, progress),
+        ...(progress.nextInterviewAt ? { nextInterviewAt: progress.nextInterviewAt } : {}), from: progressKey(progress) })) }));
+    const result = { columns, total: rows.length };
+    if (Object.isFrozen(career)) pipelineCache.set(career, { day, result });
+    return result;
+  }
   async function documents(career, kind, id) {
     let binding;
     try { binding = documentApplication(career, kind, id); }
@@ -443,12 +461,7 @@ export function createCareerBrowser({ store, files, openPath }) {
     /** Pipeline: every application in its column, as compact cards; the reader (`read`) holds the rest. */
     async pipeline(args = {}) {
       if (!record(args) || Reflect.ownKeys(args).length) fail('INVALID_INPUT', 'Pipeline takes no options.');
-      const rows = entries(readCareer(store).applications).map(([id, app]) => ({ id, app, progress: readProgress(app) }));
-      const columns = PIPELINE_COLUMNS.map(column => ({ id: column, cards: rows.filter(row => pipelineColumn(row.progress.stage) === column)
-        .sort(byActivity).map(({ id, app, progress }) => ({ id, title: text(app.job?.title, 'Untitled role'), company: text(app.job?.company, ''),
-          stage: progress.stage, detail: cardDetail(app, progress),
-          ...(progress.nextInterviewAt ? { nextInterviewAt: progress.nextInterviewAt } : {}), from: progressKey(progress) })) }));
-      return { columns, total: rows.length };
+      return store.select ? store.select(state => pipeline(state.career ?? {})) : pipeline(readCareer(store));
     },
     async list(args = {}) {
       validate(args, ['kind', 'offset', 'limit', 'view']);

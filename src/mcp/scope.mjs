@@ -1,22 +1,37 @@
 import { fail } from './state.mjs';
 
-/** A socket's pending operations never inherit a later account or unlock epoch. */
+/** A socket's pending operations never inherit a later account or profile epoch. */
 export function createScopedAccess(store, { assertAvailable, epoch }) {
   const generation = epoch();
   let deviceId;
-  function check(mutation) {
+  function guard(mutation) {
     assertAvailable(mutation);
     if (epoch() !== generation)
       fail('IDENTITY_CHANGED', 'The local device connection changed. Reconnect the MCP server and read the current account before continuing.');
-    const current = store.get().deviceId;
+  }
+  function identity(current) {
     if (deviceId === undefined) deviceId = current;
     if (current !== deviceId)
       fail('IDENTITY_CHANGED', 'The local device connection changed. Reconnect the MCP server and read the current account before continuing.');
   }
+  function check(mutation) {
+    guard(mutation);
+    identity(store.select ? store.select(state => state.deviceId) : store.get().deviceId);
+  }
   return {
     assertAvailable: check,
     store: {
-      get() { check(false); return store.get(); },
+      get() {
+        guard(false);
+        const state = store.get();
+        identity(state.deviceId);
+        return state;
+      },
+      select(project) {
+        guard(false);
+        const select = state => { identity(state.deviceId); return project(state); };
+        return store.select ? store.select(select) : structuredClone(select(store.get()));
+      },
       update(change, { beforeCommit } = {}) {
         check(true);
         return store.update(async state => {

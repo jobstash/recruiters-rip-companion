@@ -137,7 +137,7 @@
   function renderState() {
     const saved = incoming || baseline;
     const status = saved?.status;
-    el('readiness').textContent = !online ? baseline ? 'Companion unavailable. Your edits are still here.' : 'Unlock or retry to see your master CV.'
+    el('readiness').textContent = !online ? baseline ? 'Companion unavailable. Your edits are still here.' : 'Master CV unavailable. Choose Retry.'
       : !saved ? reading ? 'Loading master CV…' : 'Master CV unavailable. Choose Retry.'
         : ({ missing: 'No master CV yet.', draft: 'Draft · Not ready to export.', stale: 'Update needed · Your original CVs changed.', ready: 'Ready to export.' }[status] || 'Master CV status unavailable.');
     const onboarding = online && ['missing', 'draft', 'stale'].includes(status);

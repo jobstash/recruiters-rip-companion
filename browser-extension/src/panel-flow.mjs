@@ -25,7 +25,7 @@ export function derivePanelFlow(state = {}) {
   if (state.pageKind === 'none') return result('no-job', 'No job found on this page. Open a job ad or application form.', action('detect', 'Read page'));
   if (state.pageKind === 'listing') return result('listing', 'Open the job you want to apply for, or select the jobs you applied to and save them.', null);
   if (state.errorCode === 'COMPANION_UNAVAILABLE') return result('unavailable', 'Companion is not running. Open it, then retry. Not installed? Choose Get Companion.', action('detect', 'Retry'), { recovery: true, install: true });
-  if (state.companion?.locked || state.errorCode === 'LOCAL_LOCKED') return result('locked', 'Unlock your saved data in Companion, then read the page again.', action('settings', 'Open Companion'), { recovery: true });
+  if (state.companion?.locked || state.errorCode === 'LOCAL_LOCKED') return result('locked', 'Saved work is unavailable. Open Companion and choose Retry, then read the page again.', action('settings', 'Open Companion'), { recovery: true });
   if (state.errorCode === 'COMPANION_UPDATE_REQUIRED' || (state.companion && !(state.companion.workflowVersion >= 2))) return result('update', 'Update Companion to prepare this application, then read the page again.', action('settings', 'Open Companion'), { recovery: true });
   if (state.errorCode && /^(DECISIONS_|OPENAI_|API_)/.test(state.errorCode)) return result('extra-help-error', 'Extra form help is unavailable. You can still use saved answers.', action('prepare-saved', 'Use saved answers'));
   if (state.error) return result('error', state.error, action('detect', 'Read again'));

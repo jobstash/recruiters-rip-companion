@@ -99,7 +99,7 @@ function context(career, app) {
     guide: CV_WRITING_GUIDE };
 }
 
-export function createApplicationTools({ store, platform, documents, exportDocument, cleanupExports = async () => {}, withExportTransaction = action => action() }) {
+export function createApplicationTools({ store, platform, documents, exportDocument, withExportTransaction = action => action() }) {
   const tools = [];
   const guard = (args, result) => {
     const career = readCareer(store);
@@ -269,7 +269,7 @@ export function createApplicationTools({ store, platform, documents, exportDocum
         if (!textValidation.passed) fail('EXPORT_CORRUPT', `The generated PDF did not preserve its text and reading order. Missing text: ${textValidation.missingTokens.slice(0, 12).join(', ') || 'none; reading order or extra text differs'}.`);
       }
       // Render outside both locks; keep file transaction → store queue ordering for commit/rollback.
-      const result = await withExportTransaction(() => commitDocument(career, app, args.kind, async (current, target) => {
+      return withExportTransaction(() => commitDocument(career, app, args.kind, async (current, target) => {
         assertApplicationClarificationsResolved(current, target.id);
         const exported = await exportDocument({ applicationId: app.id, kind: args.kind, documentVersion: draft.version, bytes,
           mediaType: format === 'pdf' ? 'application/pdf' : 'text/plain' });
@@ -279,9 +279,6 @@ export function createApplicationTools({ store, platform, documents, exportDocum
         target.updatedAt = now();
         return { applicationId: target.id, export: record };
       }));
-      try { await cleanupExports(); }
-      catch { return { ...result, cleanupWarning: 'The current document is saved, but some obsolete generated files could not be removed.' }; }
-      return result;
     });
 
   return tools;

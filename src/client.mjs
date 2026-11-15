@@ -19,10 +19,11 @@ async function rejectionReason(response) {
 export function createDeviceClient(store, localOnly, { onUnpaired } = {}) {
   const originAllowed = origin => origin === PRODUCT_ORIGINS[localOnly ? 1 : 0];
   const limits = { '/device/activate': 16 * 1024, '/device/heartbeat': 16 * 1024, '/device/platform': 16 * 1024 };
+  const credentials = state => ({ deviceId: state.deviceId, privateKey: state.privateKey, origin: state.pairing?.origin });
   async function request(method, backendPath, body, options = {}) {
     if (!['GET', 'POST'].includes(method) || !Object.hasOwn(limits, backendPath)) throw new Error('Device operation is unavailable.');
-    const state = store.get();
-    const origin = options.origin ?? state.pairing?.origin;
+    const state = store.select ? store.select(credentials) : credentials(store.get());
+    const origin = options.origin ?? state.origin;
     if (!originAllowed(origin)) throw new Error('Pair this computer with recruiters.rip.');
     const raw = method === 'GET' ? '' : JSON.stringify(body ?? {});
     if (Buffer.byteLength(raw) > limits[backendPath]) throw new Error('The request exceeds the 16 KiB device transfer limit.');

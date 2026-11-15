@@ -42,7 +42,7 @@
 <main>
 <section id="storage" class="setup-view locked" hidden>
 <img class="mark-large" src="brand/recruiters-rip-mark-reversed.svg" width="75" height="64" alt="">
-<h1>Your saved work is locked</h1><p id="storage-message"></p><button id="unlock" class="primary" type="button">Unlock</button>
+<h1>Your saved work is unavailable</h1><p id="storage-message"></p><button id="unlock" class="primary" type="button">Retry</button>
 </section>
 <div id="settings" hidden>
 <section id="view-me" class="career-view" aria-label="Me" hidden>
@@ -84,7 +84,7 @@
 <section id="master-cv" class="master-cv" role="tabpanel" aria-labelledby="me-tab-master" hidden>
 <header class="master-cv-head">
 <h2>Master CV</h2>
-<p id="master-cv-readiness" role="status" aria-live="polite">Unlock to see your master CV.</p>
+<p id="master-cv-readiness" role="status" aria-live="polite">Loading your master CV…</p>
 <p id="master-cv-review" class="caption"></p>
 <div class="actions">
 <button id="master-cv-retry" type="button" class="text" hidden>Retry</button>
@@ -115,7 +115,7 @@
 </section>
 <div id="me-saved-panes" class="career-panes" role="tabpanel" aria-labelledby="me-tab-sources">
 <section class="career-list panel" aria-label="Saved records">
-<div class="panel-head"><p id="me-list-status" role="status">Unlock to see your saved work.</p></div>
+<div class="panel-head"><p id="me-list-status" role="status">Loading your saved work…</p></div>
 <button id="me-list-retry" class="ghost" type="button" hidden>Retry</button>
 <ul id="me-records" class="career-records" aria-label="Saved records" hidden></ul>
 <nav id="me-pagination" class="actions pagination" aria-label="Record pages" hidden>
@@ -156,7 +156,7 @@
 <section class="career-list panel" aria-label="Saved jobs">
 <div class="panel-head career-list-head">
 <div class="career-list-tools">
-<p id="career-list-status" role="status">Unlock to see your saved jobs.</p>
+<p id="career-list-status" role="status">Loading your saved jobs…</p>
 <button id="delete-rankings" class="text" type="button" disabled hidden>Clear reviews</button>
 </div>
 </div>
@@ -183,7 +183,7 @@
 <div id="pipeline-browser" class="career-browser pipeline-browser">
 <div class="career-panes pipeline-panes">
 <section class="pipeline-list" aria-label="Applications by stage">
-<p id="pipeline-list-status" class="pipeline-status" role="status">Unlock to see your saved applications.</p>
+<p id="pipeline-list-status" class="pipeline-status" role="status">Loading your saved applications…</p>
 <button id="pipeline-list-retry" class="ghost" type="button" hidden>Retry</button>
 <div id="pipeline-records" class="pipeline-board" hidden></div>
 </section>
@@ -276,7 +276,7 @@
 <h2 id="decisions-title">Form filling</h2>
 <div class="settings-content">
 <p>Optional. With your own OpenAI API key, OpenAI helps pick form answers from your saved details. OpenAI bills you for this, and you don’t need it to review jobs with Codex or Claude.</p>
-<p id="decisions-key-status" class="decisions-key-status" role="status" aria-live="polite">Unlock your saved work to use help with forms.</p>
+<p id="decisions-key-status" class="decisions-key-status" role="status" aria-live="polite">Loading form settings…</p>
 <form id="decisions-form" autocomplete="off">
 <div id="decisions-key-saved" class="actions" hidden>
 <button id="decisions-replace" class="ghost" type="button" disabled>Replace key</button>
@@ -353,7 +353,7 @@
 </section>
 <section class="setup-section" aria-labelledby="help-extension-title">
 <h2 id="help-extension-title">Apply from your browser</h2>
-<div class="settings-content"><p>Add the extension in Settings → Browser extensions, then keep Companion open.</p><ol class="help-steps"><li>Open a job ad or application form and choose the <strong>recruiters.rip</strong> toolbar icon. It reads the page and gets any saved answers ready.</li><li>Choose <strong>Prepare application</strong>. <span class="host-only">Codex or Claude opens with a request for your CV, introduction and answers. Click <strong>Send</strong> there, or press <strong>Enter</strong> in the text window.</span><span class="container-only">The extension copies a request for your CV, introduction and answers. Paste it into Codex or Claude and send it.</span> To switch AI app, use <strong>Options</strong> in the extension.</li><li>When it is ready, click an empty answer box and press <strong>⌘V</strong> on Mac or <strong>Ctrl+V</strong> on Windows and Linux. <strong>Show CV</strong> shows the file to upload; <strong>Copy intro</strong> copies your introduction for a cover letter or message box.</li><li>Check the form, then submit it yourself.</li></ol><p>Saved answers work without an API key. If you’ve already prepared a job, the extension reuses that work.</p><details><summary>The extension cannot prepare this page</summary><ul class="help-steps"><li><strong>No job found on this page:</strong> open the job ad or application form itself, then choose <strong>Read page</strong>.</li><li><strong>Choose the job you want to apply for:</strong> select a job. It opens in a new tab; choose the toolbar icon there.</li><li><strong>Companion is not open:</strong> open it, then choose <strong>Retry</strong>. Not installed? Choose <strong>Get Companion</strong>.</li><li><strong>Locked:</strong> unlock your saved data in Companion, then read the page again.</li><li><strong>Update Companion:</strong> install the update in Settings → Updates, then read the page again.</li><li><strong>Import your CV:</strong> in Me, choose <strong>Import CV</strong>.</li><li><strong>Codex or Claude is unavailable:</strong> choose the other app under <strong>Options</strong>, or set it up in Settings → AI apps.</li><li><strong>Extra form help is unavailable:</strong> choose <strong>Use saved answers</strong>.</li><li><strong>The job or your saved details changed:</strong> choose <strong>Refresh answers</strong> or <strong>Update application</strong>.</li></ul></details></div>
+<div class="settings-content"><p>Add the extension in Settings → Browser extensions, then keep Companion open.</p><ol class="help-steps"><li>Open a job ad or application form and choose the <strong>recruiters.rip</strong> toolbar icon. It reads the page and gets any saved answers ready.</li><li>Choose <strong>Prepare application</strong>. <span class="host-only">Codex or Claude opens with a request for your CV, introduction and answers. Click <strong>Send</strong> there, or press <strong>Enter</strong> in the text window.</span><span class="container-only">The extension copies a request for your CV, introduction and answers. Paste it into Codex or Claude and send it.</span> To switch AI app, use <strong>Options</strong> in the extension.</li><li>When it is ready, click an empty answer box and press <strong>⌘V</strong> on Mac or <strong>Ctrl+V</strong> on Windows and Linux. <strong>Show CV</strong> shows the file to upload; <strong>Copy intro</strong> copies your introduction for a cover letter or message box.</li><li>Check the form, then submit it yourself.</li></ol><p>Saved answers work without an API key. If you’ve already prepared a job, the extension reuses that work.</p><details><summary>The extension cannot prepare this page</summary><ul class="help-steps"><li><strong>No job found on this page:</strong> open the job ad or application form itself, then choose <strong>Read page</strong>.</li><li><strong>Choose the job you want to apply for:</strong> select a job. It opens in a new tab; choose the toolbar icon there.</li><li><strong>Companion is not open:</strong> open it, then choose <strong>Retry</strong>. Not installed? Choose <strong>Get Companion</strong>.</li><li><strong>Saved work is unavailable:</strong> open Companion and choose <strong>Retry</strong>, then read the page again.</li><li><strong>Update Companion:</strong> install the update in Settings → Updates, then read the page again.</li><li><strong>Import your CV:</strong> in Me, choose <strong>Import CV</strong>.</li><li><strong>Codex or Claude is unavailable:</strong> choose the other app under <strong>Options</strong>, or set it up in Settings → AI apps.</li><li><strong>Extra form help is unavailable:</strong> choose <strong>Use saved answers</strong>.</li><li><strong>The job or your saved details changed:</strong> choose <strong>Refresh answers</strong> or <strong>Update application</strong>.</li></ul></details></div>
 </section>
 <section class="setup-section" aria-labelledby="help-backups-title">
 <h2 id="help-backups-title">Backups</h2>
@@ -361,7 +361,7 @@
 </section>
 <section class="setup-section" aria-labelledby="help-links-title">
 <h2 id="help-links-title">Links</h2>
-<div class="settings-content help-links"><p>Instructions: <code>https://recruiters.rip/docs</code></p><p>Downloads: <code>https://recruiters.rip/downloads</code></p></div>
+<div class="settings-content help-links"><p><a id="support-link" href="https://www.reddit.com/r/recruitersrip/" target="_blank" rel="noopener noreferrer">Support on Reddit</a></p><p>Instructions: <code>https://recruiters.rip/docs</code></p><p>Downloads: <code>https://recruiters.rip/downloads</code></p></div>
 </section>
 <section class="setup-section" aria-labelledby="help-version-title">
 <h2 id="help-version-title">Version</h2>

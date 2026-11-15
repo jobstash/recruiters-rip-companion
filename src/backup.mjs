@@ -445,7 +445,6 @@ export function createBackups({ directory, store, selectBackup, selectDestinatio
       return exclusive(async () => {
         check(selected.context);
         const createdFiles = new Set();
-        const previousRecords = Object.values(store.get().career.applications ?? {}).flatMap(app => app.exports ?? []);
         let materializing;
         const localFiles = createDocumentFiles({ directory, store: { get: () => materializing ?? store.get() }, assertAvailable,
           onCreated: filename => createdFiles.add(filename) });
@@ -462,22 +461,10 @@ export function createBackups({ directory, store, selectBackup, selectDestinatio
             const career = structuredClone(profile.career);
             materializing = { deviceId: state.deviceId, career };
             for (const app of Object.values(career.applications)) {
-              const current = new Map();
+              // Rebind every backed-up export to a new immutable local file.
+              // Existing files, including older fixed-name exports, stay untouched.
               for (const ref of app.exports) {
                 for (const field of ['folderNumber', 'companyLimit', 'jobLimit']) delete ref[field];
-                if (!ref.uri || ref.uri.endsWith('.csv')) continue;
-                const key = `${ref.kind}:${ref.format ?? (ref.uri.endsWith('.txt') ? 'txt' : 'pdf')}`;
-                const previous = current.get(key);
-                if (!previous || (ref.documentVersion ?? 0) >= (previous.documentVersion ?? 0)) current.set(key, ref);
-              }
-              const selectedDocuments = new Set(current.values());
-              for (const ref of app.exports) {
-                if (!ref.uri || ref.uri.endsWith('.csv')) continue;
-                if (!selectedDocuments.has(ref)) { delete ref.uri; ref.unavailable = true; continue; }
-                // Only this device's prior application may reserve an existing readable folder.
-                const prior = [...(state.career.applications[app.id]?.exports ?? [])].reverse().find(item =>
-                  item.applicationId === app.id && item.company === app.job.company && item.jobTitle === app.job.title && Number.isSafeInteger(item.folderNumber));
-                if (prior) for (const field of ['folderNumber', 'companyLimit', 'jobLimit', 'company', 'jobTitle', 'applicationId']) ref[field] = prior[field];
               }
             }
             const owned = new Map(Object.values(career.applications).flatMap(app => app.exports.map(ref => [ref, app])));
@@ -504,10 +491,7 @@ export function createBackups({ directory, store, selectBackup, selectDestinatio
           throw error;
         }
         onRestored();
-        const result = { restored: true, profileName: profile.name, safetyBackupSaved: true };
-        try { await createDocumentFiles({ directory, store, assertAvailable }).cleanupExports(previousRecords); }
-        catch { result.cleanupWarning = 'Your profile was restored, but some obsolete generated files could not be removed.'; }
-        return result;
+        return { restored: true, profileName: profile.name, safetyBackupSaved: true };
       }, operation);
     },
     async openFolder() { assertAvailable(); const target = await privateFolder(); await openFolder(target); return { opened: true }; },

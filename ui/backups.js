@@ -173,8 +173,8 @@
     setBusy(value) { externalBusy = value; renderControls(); },
     refresh(current) {
       available = current?.execution?.state !== 'locked' && Boolean(current?.execution);
-      element('availability').textContent = available ? '' : 'Unlock your saved work to use backups.';
-      if (!available && pending !== 'backup-restore') invalidate('Your saved work is locked. Unlock it, then choose Restore backup again.');
+      element('availability').textContent = available ? '' : 'Saved work is unavailable. Backups will be available when Companion opens it.';
+      if (!available && pending !== 'backup-restore') invalidate('Saved work is unavailable. Retry in Companion, then choose Restore backup again.');
       else if (contextVersion !== undefined && contextVersion !== current.careerViewVersion && (preview || pending === 'backup-preview') && pending !== 'backup-restore') {
         invalidate('Your profile changed. Choose Restore backup again to review the latest details.');
       }

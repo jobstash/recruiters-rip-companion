@@ -1,15 +1,17 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { open, readdir, lstat, unlink, rmdir, mkdir, rename, copyFile } from 'node:fs/promises';
+import { open, readdir, lstat, unlink, rmdir, mkdir } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import path from 'node:path';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { privateDirectory, readPrivateFile } from '../vault.mjs';
-import { fail } from './state.mjs';
+import { fail, selectCareer } from './state.mjs';
 import { assertPrivatePath } from '../platform-runtime.cjs';
 import { currentApplicationJob, applicationContextFingerprint, pendingApplicationInterviews } from '../application-workflow.mjs';
-import { masterCvState } from './master-cv.mjs';
+import { masterCvSummary } from './master-cv.mjs';
 import { blockFilter } from './blocklist.mjs';
 
 const MAX_SOURCE = 5 * 1024 * 1024, MAX_EXPORT = 12 * 1024 * 1024;
+const MAX_DOCUMENT_PATH = process.platform === 'win32' ? 248 : 1023;
 export const exportTypes = Object.freeze({ pdf: 'application/pdf', csv: 'text/csv', txt: 'text/plain' });
 export const documentURI = /^recruiters:\/\/documents\/([a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})\.(pdf|txt)$/;
 const rankingURI = /^recruiters:\/\/exports\/([a-f0-9]{64})\.csv$/;
@@ -66,47 +68,28 @@ export function createDocumentFiles(options) { return documentStorage(options); 
 export function createBackupDocumentReader(options) { return documentStorage(options, true); }
 
 function documentStorage({ directory, store, assertAvailable, onCreated = () => {} }, backupOnly = false) {
-  let transaction, queue = Promise.resolve();
-  const allocated = new Map();
+  let queue = Promise.resolve();
+  const transactions = new AsyncLocalStorage(), allocated = new Map();
   async function withExportTransaction(action) {
-    const run = queue.then(async () => {
-      const changes = [];
-      transaction = changes;
-      let result;
-      try {
-        result = await action();
-        transaction = undefined;
-      } catch (error) {
-        transaction = undefined;
-        for (const change of changes.reverse()) {
+    const run = queue.then(() => transactions.run([], async () => {
+      try { return await action(); }
+      catch (error) {
+        for (const change of transactions.getStore().reverse()) {
           if (change.folder) {
             allocated.delete(change.key);
             await rmdir(change.folder).catch(cleanup => { if (!['ENOENT', 'ENOTEMPTY'].includes(cleanup.code)) throw cleanup; });
             continue;
           }
-          // Paths originate only from this transaction's validated private layout.
-          const parts = path.relative(directory, path.dirname(change.filename)).split(path.sep);
-          await privateDirectories([directory, ...parts.map((_, index) => path.join(directory, ...parts.slice(0, index + 1)))], false);
-          if (change.backup) {
-            assertPrivatePath(change.backup, { info: await lstat(change.backup), maxSize: MAX_EXPORT });
-            await rename(change.backup, change.filename);
-          }
-          else await unlink(change.filename).catch(cleanup => { if (cleanup.code !== 'ENOENT') throw cleanup; });
+          await removeNewExport(change.filename);
         }
         throw error;
       }
-      let cleanupFailed = false;
-      for (const change of changes) if (change.backup) {
-        try { await unlink(change.backup); } catch (error) { if (error.code !== 'ENOENT') cleanupFailed = true; }
-      }
-      return cleanupFailed && result && typeof result === 'object'
-        ? { ...result, cleanupWarning: 'The current document is saved, but a private temporary file could not be removed.' } : result;
-    });
+    }));
     queue = run.catch(() => {});
     return run;
   }
   const root = () => {
-    const deviceId = store.get().deviceId;
+    const deviceId = store.select ? store.select(state => state.deviceId) : store.get().deviceId;
     if (typeof deviceId !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(deviceId)) fail('EXPORT_CORRUPT', 'The local export identity is unavailable.');
     return path.join(directory, 'career-files', deviceId, 'exports');
   };
@@ -118,11 +101,22 @@ function documentStorage({ directory, store, assertAvailable, onCreated = () => 
       catch { fail('EXPORT_CORRUPT', 'The local export directory changed or is not private.'); }
     }
   }
+  async function removeNewExport(filename) {
+    // Recheck this attempt's private parents even after an account/session change,
+    // without resolving a different identity's root.
+    const parts = path.relative(directory, path.dirname(filename)).split(path.sep);
+    await privateDirectories([directory, ...parts.map((_, index) => path.join(directory, ...parts.slice(0, index + 1)))], false);
+    await unlink(filename).catch(error => { if (error.code !== 'ENOENT') throw error; });
+  }
   async function privateRoot(create = false) {
     const dir = root();
     await privateDirectories([directory, path.join(directory, 'career-files'), path.dirname(dir), dir], create);
     if (root() !== dir) fail('IDENTITY_CHANGED', 'The local account changed. Open the application again.');
     return dir;
+  }
+  function documentFilename(record) {
+    const name = documentName(record.candidateName, record.filenameVersion === 2 ? 48 : 96);
+    return `${name} - ${record.kind === 'cv' ? 'CV' : 'COVER LETTER'}${record.filenameVersion === 2 ? ` - ${record.resourceId}` : ''}.${record.format}`;
   }
   function documentParts(record) {
     const match = documentURI.exec(record.uri);
@@ -130,12 +124,13 @@ function documentStorage({ directory, store, assertAvailable, onCreated = () => 
       !/^[a-f0-9]{64}$/.test(record.sha256) || record.mediaType !== exportTypes[match[2]] || !Number.isSafeInteger(record.documentVersion) || record.documentVersion < 1 ||
       !Number.isSafeInteger(record.folderNumber) || record.folderNumber < 1 || record.folderNumber > 999999 ||
       !Number.isSafeInteger(record.companyLimit) || record.companyLimit < 4 || record.companyLimit > 96 ||
-      !Number.isSafeInteger(record.jobLimit) || record.jobLimit < 4 || record.jobLimit > 96)
+      !Number.isSafeInteger(record.jobLimit) || record.jobLimit < 4 || record.jobLimit > 96 ||
+      (record.filenameVersion !== undefined && record.filenameVersion !== 2))
       fail('EXPORT_CORRUPT', 'The saved document identity is invalid.');
     const parts = [documentName(record.company, record.companyLimit),
       `${documentName(record.jobTitle, record.jobLimit)}${record.folderNumber > 1 ? ` (${record.folderNumber})` : ''}`,
-      `${documentName(record.candidateName)} - ${record.kind === 'cv' ? 'CV' : 'COVER LETTER'}.${match[2]}`];
-    if (Buffer.byteLength(path.join(root(), ...parts)) > 248) fail('INVALID_INPUT', 'The document storage path is too long. Use a shorter private storage location.');
+      documentFilename(record)];
+    if (Buffer.byteLength(path.join(root(), ...parts)) > MAX_DOCUMENT_PATH) fail('INVALID_INPUT', 'The document storage path is too long. Use a shorter private storage location.');
     return parts;
   }
   async function documentPath(record, create = false) {
@@ -144,60 +139,71 @@ function documentStorage({ directory, store, assertAvailable, onCreated = () => 
     if (root() !== dir) fail('IDENTITY_CHANGED', 'The local account changed. Open the application again.');
     return path.join(dir, ...parts);
   }
-  function currentRecords(readyOnly = true) {
-    const records = [];
-    const career = store.get().career;
-    const master = career?.masterCv?.current;
-    if (readyOnly && (!career || masterCvState(career).status !== 'ready')) return records;
-    const blocked = blockFilter(career);
-    for (const app of Object.values(career?.applications ?? {})) {
-      if (readyOnly && (pendingApplicationInterviews(career, app.id).length || blocked(app.job))) continue;
-      const seen = new Set();
-      for (const record of [...(app.exports ?? [])].reverse()) {
-        const key = `${record.kind}:${record.format}`;
-        const draft = record.kind === 'cv' ? app.cv : app.coverLetter;
-        if (readyOnly && (!draft || draft.masterVersion !== master.version || record.masterVersion !== master.version ||
-          draft.contextFingerprint !== applicationContextFingerprint(career, app) || record.contextFingerprint !== draft.contextFingerprint ||
-          record.documentVersion !== draft.version)) continue;
-        if (record.applicationId !== app.id || !documentURI.test(record.uri) || seen.has(key)) continue;
-        seen.add(key);
-        records.push(record);
+  function currentRecords(uri) {
+    return selectCareer(store, career => {
+      const records = [], master = career?.masterCv?.current;
+      if (!career || masterCvSummary(career).status !== 'ready') return records;
+      const blocked = blockFilter(career);
+      for (const app of Object.values(career.applications ?? {})) {
+        if (!app.exports?.length || (uri && !app.exports.some(record => record.uri === uri))) continue;
+        if (pendingApplicationInterviews(career, app.id).length || blocked(app.job)) continue;
+        const seen = new Set(), fingerprint = applicationContextFingerprint(career, app);
+        for (let index = app.exports.length - 1; index >= 0; index--) {
+          const record = app.exports[index];
+          if (uri && record.uri !== uri) continue;
+          const key = `${record.kind}:${record.format}`;
+          const draft = record.kind === 'cv' ? app.cv : app.coverLetter;
+          if (!draft || draft.masterVersion !== master.version || record.masterVersion !== master.version ||
+            draft.contextFingerprint !== fingerprint || record.contextFingerprint !== draft.contextFingerprint ||
+            record.documentVersion !== draft.version) continue;
+          if (record.applicationId !== app.id || !documentURI.test(record.uri) || seen.has(key)) continue;
+          seen.add(key);
+          records.push(record);
+        }
       }
-    }
-    return records;
+      return records;
+    });
   }
   function currentRecord(uri) {
-    const record = currentRecords().find(item => item.uri === uri);
+    const record = currentRecords(uri).find(item => item.uri === uri);
     if (!record) fail('NOT_FOUND', 'Choose a current document exported for this application.');
     return record;
   }
   function backupRecord(uri) {
-    let saved;
-    for (const [applicationId, app] of Object.entries(store.get().career?.applications ?? {})) {
-      for (const record of app.exports ?? []) {
-        if (record.uri !== uri) continue;
-        if (app.id !== applicationId || (documentURI.test(uri) && record.applicationId !== applicationId))
-          fail('EXPORT_CORRUPT', 'The saved document belongs to a different application.');
-        if (saved && JSON.stringify(saved) !== JSON.stringify(record))
-          fail('EXPORT_CORRUPT', 'The saved document has conflicting registrations.');
-        saved = record;
+    return selectCareer(store, career => {
+      let saved;
+      for (const [applicationId, app] of Object.entries(career?.applications ?? {})) {
+        for (const record of app.exports ?? []) {
+          if (record.uri !== uri) continue;
+          if (app.id !== applicationId || (documentURI.test(uri) && record.applicationId !== applicationId))
+            fail('EXPORT_CORRUPT', 'The saved document belongs to a different application.');
+          if (saved && JSON.stringify(saved) !== JSON.stringify(record))
+            fail('EXPORT_CORRUPT', 'The saved document has conflicting registrations.');
+          saved = record;
+        }
       }
-    }
-    if (!saved) fail('NOT_FOUND', 'Only a registered saved export can be included in a backup.');
-    if (!Number.isSafeInteger(saved.bytes) || saved.bytes < 1 || saved.bytes > MAX_EXPORT)
-      fail('EXPORT_CORRUPT', 'The saved document size is invalid.');
-    return saved;
+      if (!saved) fail('NOT_FOUND', 'Only a registered saved export can be included in a backup.');
+      if (!Number.isSafeInteger(saved.bytes) || saved.bytes < 1 || saved.bytes > MAX_EXPORT)
+        fail('EXPORT_CORRUPT', 'The saved document size is invalid.');
+      return saved;
+    });
   }
   async function allocateFolder(record, app) {
     const key = JSON.stringify([root(), app.id, record.company, record.jobTitle]);
-    const existing = allocated.get(key) ?? [...(app.exports ?? [])].reverse().find(item => item.applicationId === app.id &&
+    const existing = allocated.get(key) ?? (app.exports ?? []).findLast(item => item.applicationId === app.id &&
       item.company === record.company && item.jobTitle === record.jobTitle && Number.isSafeInteger(item.folderNumber));
     if (existing) {
       for (const field of ['folderNumber', 'companyLimit', 'jobLimit']) record[field] = existing[field];
-      await documentPath(record, true);
-      return;
+      // Old fixed-name folders can be longer than the immutable filename budget.
+      const parts = [documentName(record.company, record.companyLimit),
+        `${documentName(record.jobTitle, record.jobLimit)}${record.folderNumber > 1 ? ` (${record.folderNumber})` : ''}`, documentFilename(record)];
+      if (Buffer.byteLength(path.join(root(), ...parts)) <= MAX_DOCUMENT_PATH) {
+        await documentPath(record, true);
+        return;
+      }
     }
-    const remaining = 248 - Buffer.byteLength(root()) - Math.max(41, Buffer.byteLength(`${documentName(record.candidateName)} - COVER LETTER.pdf`)) - 11;
+    const remaining = MAX_DOCUMENT_PATH - Buffer.byteLength(root()) -
+      Buffer.byteLength(documentFilename({ ...record, kind: 'cover_letter', format: 'pdf' })) - 11;
     if (remaining < 8) fail('INVALID_INPUT', 'The document storage path is too long. Use a shorter private storage location.');
     record.companyLimit = Math.min(64, Math.floor(remaining / 2), Math.max(4, Buffer.byteLength(documentName(record.company)) + 1));
     record.jobLimit = Math.min(96, remaining - record.companyLimit);
@@ -210,7 +216,7 @@ function documentStorage({ directory, store, assertAvailable, onCreated = () => 
         await mkdir(folder, { mode: 0o700 });
         await privateDirectories([folder], true);
         allocated.set(key, { folderNumber: record.folderNumber, companyLimit: record.companyLimit, jobLimit: record.jobLimit });
-        transaction?.push({ folder, key });
+        transactions.getStore()?.push({ folder, key });
         return;
       } catch (error) { if (error.code !== 'EEXIST') throw error; }
     }
@@ -226,12 +232,17 @@ function documentStorage({ directory, store, assertAvailable, onCreated = () => 
       filename = path.join(dir, `${sha256}.csv`);
       record = { sha256, bytes: bytes.length, mediaType, uri: `recruiters://exports/${sha256}.csv` };
     } else {
-      const career = store.get().career, app = career?.applications?.[applicationId];
-      if (!app || app.id !== applicationId || !['cv', 'cover_letter'].includes(kind)) fail('INVALID_INPUT', 'Choose a saved application and document kind.');
-      const job = currentApplicationJob(career, app), resourceId = randomUUID();
-      record = { applicationId, resourceId, candidateName: career.profile.name, company: job.company, jobTitle: job.title,
-        kind, format: extension, documentVersion: documentVersion ?? (kind === 'cv' ? app.cv?.version : app.coverLetter?.version) ?? 1,
-        sha256, bytes: bytes.length, mediaType, uri: `recruiters://documents/${resourceId}.${extension}` };
+      const selected = selectCareer(store, career => {
+        const app = career?.applications?.[applicationId];
+        if (!app || app.id !== applicationId || !['cv', 'cover_letter'].includes(kind)) fail('INVALID_INPUT', 'Choose a saved application and document kind.');
+        const job = currentApplicationJob(career, app);
+        return { app: { id: app.id, exports: app.exports }, candidateName: career.profile.name, company: job.company, jobTitle: job.title,
+          version: documentVersion ?? (kind === 'cv' ? app.cv?.version : app.coverLetter?.version) ?? 1 };
+      });
+      const { app } = selected, resourceId = randomUUID();
+      record = { applicationId, resourceId, candidateName: selected.candidateName, company: selected.company, jobTitle: selected.jobTitle,
+        kind, format: extension, documentVersion: selected.version,
+        sha256, bytes: bytes.length, mediaType, filenameVersion: 2, uri: `recruiters://documents/${resourceId}.${extension}` };
       await allocateFolder(record, app);
       filename = await documentPath(record);
     }
@@ -245,29 +256,22 @@ function documentStorage({ directory, store, assertAvailable, onCreated = () => 
         await readExport(filename, sha256, extension);
       }
     } else {
-      const temporary = path.join(path.dirname(filename), `.${randomUUID()}.tmp`);
-      let backup, existed = false;
+      assertAvailable(true);
+      await documentPath(record);
+      if (root() !== dir) fail('IDENTITY_CHANGED', 'The local account changed. Export the document again.');
+      // The URI identity also names the file. Exclusive creation cannot replace a
+      // prior export, even across factories or case/Unicode-equivalent folders.
+      const handle = await open(filename, 'wx', 0o600);
       try {
-        const handle = await open(temporary, 'wx', 0o600);
-        try { await handle.writeFile(bytes); } finally { await handle.close(); }
-        try {
-          assertPrivatePath(filename, { info: await lstat(filename), maxSize: MAX_EXPORT });
-          existed = true;
-          if (transaction) {
-            backup = path.join(path.dirname(filename), `.${randomUUID()}.tmp`);
-            await copyFile(filename, backup, constants.COPYFILE_EXCL);
-          }
-        } catch (error) { if (error.code !== 'ENOENT') throw error; }
+        try { onCreated(filename); await handle.writeFile(bytes); } finally { await handle.close(); }
         assertAvailable(true);
         await documentPath(record);
         if (root() !== dir) fail('IDENTITY_CHANGED', 'The local account changed. Export the document again.');
-        await rename(temporary, filename);
-        if (transaction) transaction.push({ filename, backup });
-        if (!existed) onCreated(filename);
+        transactions.getStore()?.push({ filename });
       } catch (error) {
-        if (backup) await unlink(backup).catch(cleanup => { if (cleanup.code !== 'ENOENT') throw cleanup; });
+        await removeNewExport(filename);
         throw error;
-      } finally { await unlink(temporary).catch(error => { if (error.code !== 'ENOENT') throw error; }); }
+      }
     }
     assertAvailable(false);
     if (root() !== dir) fail('IDENTITY_CHANGED', 'The local account changed. Export the document again.');
@@ -339,46 +343,6 @@ function documentStorage({ directory, store, assertAvailable, onCreated = () => 
       ...names.map(name => ({ uri: `recruiters://exports/${name}`, name, mimeType: 'text/csv', description: 'Saved complete assessment ranking CSV snapshot.' }))].slice(0, 200);
     } catch (error) { if (error.code === 'ENOENT') return []; throw error; }
   }
-  async function cleanupExports(previousRecords = []) {
-    assertAvailable(true);
-    let dir;
-    try { dir = await privateRoot(); } catch (error) { if (error.code === 'ENOENT') return; throw error; }
-    const active = new Set(currentRecords(false).map(record => record.uri));
-    const activePaths = new Set(currentRecords(false).map(record => path.join(dir, ...documentParts(record))));
-    const activeIdentities = new Set();
-    for (const filename of activePaths) {
-      try {
-        const info = await lstat(filename);
-        assertPrivatePath(filename, { info, maxSize: MAX_EXPORT });
-        activeIdentities.add(`${info.dev}:${info.ino}`);
-      } catch (error) { if (error.code !== 'ENOENT') throw error; }
-    }
-    const obsolete = [...previousRecords, ...Object.values(store.get().career?.applications ?? {}).flatMap(app => app.exports ?? [])];
-    for (const record of obsolete) {
-      if (!documentURI.test(record.uri) || active.has(record.uri)) continue;
-      try {
-        const filename = await documentPath(record);
-        if (activePaths.has(filename)) continue;
-        const info = await lstat(filename);
-        assertPrivatePath(filename, { info, maxSize: MAX_EXPORT });
-        if (activeIdentities.has(`${info.dev}:${info.ino}`)) continue;
-        assertAvailable(true);
-        await unlink(filename);
-        const folder = path.dirname(filename);
-        const reserved = Object.values(store.get().career?.applications ?? {}).some(app => (app.exports ?? []).some(item => {
-          if (item.applicationId !== app.id || !documentURI.test(item.uri ?? '')) return false;
-          try { return path.dirname(path.join(dir, ...documentParts(item))) === folder; } catch { return false; }
-        }));
-        if (!reserved) await rmdir(folder).catch(error => { if (!['ENOENT', 'ENOTEMPTY'].includes(error.code)) throw error; });
-      } catch (error) { if (error.code !== 'ENOENT') throw error; }
-    }
-    // Only the old generated flat PDF/TXT namespace is retired. Never recurse or follow links.
-    for (const name of await readdir(dir)) {
-      if (!/^[a-f0-9]{64}\.(pdf|txt)$/.test(name)) continue;
-      const filename = path.join(dir, name), info = await lstat(filename);
-      if (info.isFile() && !info.isSymbolicLink()) { assertAvailable(true); await unlink(filename); }
-    }
-  }
   if (backupOnly) return { read: readBackup };
-  return { exportDocument, readResource, resolveExport, listResources, cleanupExports, withExportTransaction, exportDirectory: root };
+  return { exportDocument, readResource, resolveExport, listResources, withExportTransaction, exportDirectory: root };
 }

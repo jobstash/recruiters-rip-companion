@@ -49,6 +49,15 @@ const LEGACY_LOCKED = 'Allow keychain access for Recruiters Companion to import 
 const legacyLocked = () => Object.assign(new Error(LEGACY_LOCKED), { code: 'LEGACY_VAULT_LOCKED' });
 const validEnvelope = value => value?.version === 2 && value.deviceId && value.privateKey && value.publicKey;
 const pristine = value => !value.pairing && value.career?.revision === 0 && !Object.keys(value.career.sources ?? {}).length && !Object.keys(value.identityArchives ?? {}).length;
+// Committed JSON is immutable: trusted projections can inspect it without copying
+// original documents or histories, and a retained write callback cannot alter it.
+function freezeState(value) {
+  if (value && typeof value === 'object') {
+    for (const key of Object.keys(value)) freezeState(value[key]);
+    Object.freeze(value);
+  }
+  return value;
+}
 /** Plain JSON in a private (0700) directory, file mode 0600: no OS keychain or at-rest encryption. */
 export function createVault(directory, { decryptLegacy } = {}) {
   const filename = path.join(directory, 'vault.json');
@@ -95,13 +104,18 @@ export function createVault(directory, { decryptLegacy } = {}) {
       for (const archive of Object.values(loaded.identityArchives ?? {}))
         normalized = normalizeIntroductions(archive.career) || normalized;
       if (normalized) await persist(loaded);
-      state = loaded;
+      state = freezeState(loaded);
     },
     get() { if (!state) throw new Error('Local storage is locked.'); return structuredClone(state); },
+    /** Trusted synchronous read; only the selected result crosses the snapshot boundary. */
+    select(project) {
+      if (!state) throw new Error('Local storage is locked.');
+      return structuredClone(project(state));
+    },
     update(change, { beforeCommit } = {}) {
       const pending = writes.then(async () => {
         if (!state) throw new Error('Local storage is locked.');
-        const next = structuredClone(state); await change(next); await persist(next, beforeCommit); state = next;
+        const next = structuredClone(state); await change(next); freezeState(next); await persist(next, beforeCommit); state = next;
       });
       writes = pending.catch(() => {}); return pending;
     },

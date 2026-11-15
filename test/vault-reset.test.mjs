@@ -9,6 +9,10 @@ import { createVault } from '../src/vault.mjs';
 import { CAREER_SCHEMA, createCareerState, mutateCareer, replayCareer, readCareer, upgradeCareer } from '../src/mcp/state.mjs';
 import { createDecisionCredentials } from '../src/decisions/credentials.mjs';
 import { assertPrivatePath } from '../src/platform-runtime.cjs';
+import { createScopedAccess } from '../src/mcp/scope.mjs';
+import { createMasterCvTools, masterCvState, masterCvSummary } from '../src/mcp/master-cv.mjs';
+import { createMasterCvSettings } from '../src/master-cv-settings.mjs';
+import { createProfileTools } from '../src/mcp/profile-tools.mjs';
 
 async function fixture(t) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'recruiters-career-vault-'));
@@ -17,6 +21,105 @@ async function fixture(t) {
   return { vault, directory, reopen: () => createVault(directory) };
 }
 const publicKey = state => createPublicKey({ key: Buffer.from(state.publicKey, 'base64url'), format: 'der', type: 'spki' });
+
+test('trusted vault projections freeze backing state and return isolated mutable snapshots', async t => {
+  const { vault } = await fixture(t);
+  let retained;
+  await vault.update(state => {
+    retained = state;
+    state.career.profile.name = 'Saved candidate';
+    state.career.sources.cv = { originalBase64: 'PRIVATE_BINARY', text: 'Saved evidence' };
+  });
+  assert.throws(() => { retained.career.profile.name = 'Late mutation'; }, TypeError);
+  const selected = vault.select(state => {
+    assert.ok(Object.isFrozen(state));
+    assert.ok(Object.isFrozen(state.career.profile));
+    assert.throws(() => { state.career.profile.name = 'Projection mutation'; }, TypeError);
+    return { profile: state.career.profile };
+  });
+  selected.profile.name = 'Caller mutation';
+  const snapshot = vault.get();
+  snapshot.career.profile.name = 'Full snapshot mutation';
+  assert.equal(vault.select(state => state.career.profile.name), 'Saved candidate');
+  const before = vault.select(state => state.career);
+  await vault.update(state => { state.career.profile.name = 'Next candidate'; });
+  assert.equal(before.profile.name, 'Saved candidate');
+  assert.equal(vault.select(state => state.career.profile.name), 'Next candidate');
+});
+
+test('scoped projections preserve availability and identity boundaries', async t => {
+  const { vault } = await fixture(t);
+  let unavailable = false, epoch = 0;
+  const store = {
+    get: () => vault.get(),
+    select: project => vault.select(project),
+    update: (...args) => vault.update(...args),
+  };
+  const options = { epoch: () => epoch, assertAvailable() { if (unavailable) throw new Error('Unavailable'); } };
+  const access = createScopedAccess(store, options);
+  access.assertAvailable(false);
+  assert.equal(access.store.select(state => state.career.revision), 0);
+  unavailable = true;
+  assert.throws(() => access.store.select(() => assert.fail('Must not project')), /Unavailable/);
+  unavailable = false;
+  epoch++;
+  assert.throws(() => access.store.select(() => assert.fail('Must not project')), { code: 'IDENTITY_CHANGED' });
+  const replaced = createScopedAccess(store, options);
+  replaced.assertAvailable(false);
+  await vault.update(state => { state.deviceId = 'replacement-device'; });
+  assert.throws(() => replaced.store.select(() => assert.fail('Must not project')), { code: 'IDENTITY_CHANGED' });
+});
+
+test('scoped snapshot reads reject a replacement device', () => {
+  let deviceId = 'device';
+  const access = createScopedAccess({ get() { return { deviceId, career: createCareerState() }; } },
+    { assertAvailable() {}, epoch: () => 0 });
+  assert.equal(access.store.get().deviceId, 'device');
+  deviceId = 'replacement';
+  assert.throws(() => access.store.get(), { code: 'IDENTITY_CHANGED' });
+});
+
+test('master summary matches editor metadata without projecting its document or contact', () => {
+  const career = createCareerState();
+  for (const current of [null, { version: 1, sourceIds: [], document: { headline: 'Engineer', summary: 'Saved summary', experience: [] }, presentation: { template: 'classic', paper: 'A4' } }]) {
+    career.masterCv = { current };
+    const full = masterCvState(career, 'identity'), summary = masterCvSummary(career, () => 'identity');
+    assert.deepEqual(summary, { version: full.master?.version ?? 0, revision: full.revision, status: full.status, identity: full.identity });
+    assert.equal(Object.hasOwn(summary, 'document'), false);
+    assert.equal(Object.hasOwn(summary, 'contact'), false);
+  }
+});
+
+test('master, profile and onboarding reads project before copying private histories', async t => {
+  const { vault } = await fixture(t);
+  await vault.update(state => {
+    state.career.profile.name = 'Saved candidate';
+    state.career.sources.cv = { id: 'cv', name: 'CV', purpose: 'cv', text: 'Evidence', originalBase64: 'BINARY_SENTINEL' };
+    state.career.applications.private = { cvHistory: ['HISTORY_SENTINEL'] };
+  });
+  const store = {
+    get: () => vault.get(),
+    select: project => vault.select(project),
+  };
+  const master = createMasterCvTools({ store }).find(tool => tool.name === 'career_master_cv_read');
+  const profile = createProfileTools({ store });
+  const settings = createMasterCvSettings({
+    access: () => createScopedAccess(store, { assertAvailable() {}, epoch: () => 0 }),
+    identity: () => 'identity',
+  });
+  for (const result of [
+    await master.invoke(),
+    await profile.find(tool => tool.name === 'career_profile_read').invoke(),
+    await profile.find(tool => tool.name === 'onboarding_status').invoke(),
+    await settings('master-cv-read'),
+  ]) {
+    assert.equal(JSON.stringify(result).includes('BINARY_SENTINEL'), false);
+    assert.equal(JSON.stringify(result).includes('HISTORY_SENTINEL'), false);
+  }
+  const editor = await settings('master-cv-read');
+  editor.contact.name = 'Caller change';
+  assert.equal((await settings('master-cv-read')).contact.name, 'Saved candidate');
+});
 
 test('opening a vault persists only GitHub introduction fields for current and archived profiles', async t => {
   const { vault, reopen, directory } = await fixture(t);

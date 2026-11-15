@@ -11,6 +11,8 @@ Recruiters.rip is a proof of concept. Prioritize a working end-to-end product an
 - Do not add setup steps, specialist prompts, copy/paste handoffs, confirmation loops or optional questionnaires when the connected agent can proceed. Ask only for genuinely missing material information or a user decision that cannot be inferred. Respect an explicit pause or refusal.
 - The user should discuss their career and goals, not our implementation. Keep internal bookkeeping out of the interaction. Do not sell complexity as “durability” or make it a product requirement without a concrete user need.
 - Simplicity does not remove real security, privacy, concurrent-edit or file-integrity protections. Keep those boundaries behind the scenes. Do not replace them with user-facing ceremonies.
+- Screen lock and OS suspend must not close local storage, cancel accepted work or deliberately disconnect MCP. Suspend may pause background scheduling; resume renews the updater's quiet window. Actual storage failures, identity changes and authenticated access remain protected.
+- Keep frequent status, identity and list reads small: project metadata before cloning, rather than copying the whole profile and imported CV bytes. Preserve existing cards, scrolling and focused edits during background refresh; defer hidden-view work.
 
 ## Parallel application work
 
@@ -18,6 +20,7 @@ Recruiters.rip is a proof of concept. Prioritize a working end-to-end product an
 - CV saves, letter saves and document exports do not require model-supplied request IDs or profile revisions. Keep the existing private-file, identity and real stale-document checks.
 - Give workers complete initial briefs and non-overlapping application assignments; never spawn placeholder tasks. The coordinator owns shared master/profile changes and browser submission. A worker reports its exact unfinished work rather than claiming a partial batch is complete.
 - Every worker that writes scratch files needs a private directory assigned before writing. A generic scratchpad or inherited current directory is shared unless the harness guarantees otherwise. Never reuse sibling filenames, move sibling files or delete another worker’s workspace. Prefer direct MCP payloads when files are unnecessary.
+- Every successful document export keeps its own file. Never overwrite a returned PDF or run global export cleanup after another export or restore. Rollback removes only files created by that operation.
 
 ## Untrusted jobsites and application forms
 

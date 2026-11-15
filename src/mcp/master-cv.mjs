@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import Ajv from 'ajv';
 import addFormats from 'ajv-formats';
-import { fail, mutateCareer, mutationSchema, readCareer } from './state.mjs';
+import { fail, mutateCareer, mutationSchema, selectCareer } from './state.mjs';
 import { patchProfile, profileFields } from './profile-fields.mjs';
 import { resolveCareerGaps, savedCareerGap } from './career-gap.mjs';
 import { CV_WRITING_GUIDE } from './cv-writing-policy.mjs';
@@ -86,6 +86,11 @@ function currentStatus(career) {
   if (!validDocument(master.document)) return 'draft';
   return 'ready';
 }
+/** Status chrome needs metadata, not a copy of the editable document and contact. */
+export function masterCvSummary(career, identity = '') {
+  return { version: career.masterCv?.current?.version ?? 0, revision: career.revision,
+    status: currentStatus(career), identity: typeof identity === 'function' ? identity() : identity };
+}
 export function masterCvState(career, identity = '') {
   const current = career.masterCv?.current;
   return { revision: career.revision, identity: typeof identity === 'function' ? identity() : identity,
@@ -111,14 +116,13 @@ function storeMaster(career, { document, presentation, editedBy }) {
 }
 export function createMasterCvTools({ store, identity = '' }) {
   return [
-    { name: 'career_master_cv_read', description: 'Read the saved editable master, original CV list, facts and drafting guidance. If missing or stale, complete it automatically in the current conversation. Preserve existing user edits and ask only genuinely missing questions.', inputSchema: object({}), readOnly: true, invoke: () => {
-      const career = readCareer(store);
-      return { ...masterCvState(career, identity), guide: CV_WRITING_GUIDE,
-        sources: activeSources(career).map(source => ({ id: source.id, name: source.name })), facts: structuredClone(Object.values(career.facts ?? {})) };
-    } },
+    { name: 'career_master_cv_read', description: 'Read the saved editable master, original CV list, facts and drafting guidance. If missing or stale, complete it automatically in the current conversation. Preserve existing user edits and ask only genuinely missing questions.', inputSchema: object({}), readOnly: true, invoke: () => selectCareer(store, career => ({
+      ...masterCvState(career, identity), guide: CV_WRITING_GUIDE,
+      sources: activeSources(career).map(source => ({ id: source.id, name: source.name })), facts: structuredClone(Object.values(career.facts ?? {})),
+    })) },
     { name: 'career_master_cv_save', description: 'Save a plain master CV after reading originals and known facts. Use the current baseVersion, preserve candidate edits, and leave unknown dates empty. No citations, claim IDs or review bookkeeping are required.', inputSchema: masterSaveSchema, readOnly: false, invoke: args => {
       validate(validSave, args, 'Master CV');
-      const mutation = { requestId: randomUUID(), revision: readCareer(store).revision };
+      const mutation = { requestId: randomUUID(), revision: selectCareer(store, career => career.revision) };
       return mutateCareer(store, mutation, 'career_master_cv_save', args, career => {
         assertVersion(career, args.baseVersion);
         storeMaster(career, { document: args.document, presentation: args.presentation ?? career.masterCv?.current?.presentation ?? defaultPresentation, editedBy: 'agent' });

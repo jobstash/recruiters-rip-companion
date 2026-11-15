@@ -187,7 +187,7 @@ function isApplication(form, bound = false) {
     (careerFields && (form.fields.length >= 3 || /\b(job|position|role|apply|careers?)\b/i.test(title)));
 }
 function requireWorkflow() {
-  if (state.companion?.locked) throw Object.assign(new Error('Unlock Companion, then read this page again.'), { code: 'LOCAL_LOCKED' });
+  if (state.companion?.locked) throw Object.assign(new Error('Saved work is unavailable. Open Companion and choose Retry, then read this page again.'), { code: 'LOCAL_LOCKED' });
   if (!state.companion) throw Object.assign(new Error('Open Companion, then read this page again.'), { code: 'COMPANION_UNAVAILABLE' });
   if (state.companion.workflowVersion < 2) throw Object.assign(new Error('Update Companion to prepare this application.'), { code: 'COMPANION_UPDATE_REQUIRED' });
 }

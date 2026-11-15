@@ -5,6 +5,7 @@ for (const operation of ['backup-preview', 'backup-restore', 'backup-cancel', 'b
 allowed.add('update-preferences');
 allowed.add('update-source-guide');
 allowed.add('career-gap-set');
+allowed.add('open-support');
 for (const operation of ['master-cv-read', 'master-cv-save', 'master-cv-export']) allowed.add(operation);
 contextBridge.exposeInMainWorld('companion', Object.freeze({
   invoke(op, input = {}) {

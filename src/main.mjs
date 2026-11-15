@@ -22,7 +22,7 @@ import { createMcpServer, createPlatformTools } from './mcp/server.mjs';
 import { createProfileTools } from './mcp/profile-tools.mjs';
 import { createApplicationTools } from './mcp/application-tools.mjs';
 import { startMcpBroker } from './mcp/broker.mjs';
-import { createMasterCvTools, masterCvState } from './mcp/master-cv.mjs';
+import { createMasterCvTools, masterCvSummary } from './mcp/master-cv.mjs';
 import { createMasterCvSettings, MASTER_CV_ACTIONS } from './master-cv-settings.mjs';
 import { createDocumentFiles, readSelectedSource } from './mcp/files.mjs';
 import { createScopedAccess } from './mcp/scope.mjs';
@@ -75,7 +75,7 @@ if (!legacyVault) app.commandLine.appendSwitch('use-mock-keychain');
 const uiURL = pathToFileURL(path.join(root, 'ui', 'index.html')).href;
 const vault = createVault(directory, legacyVault ? { decryptLegacy: encrypted => safeStorage.decryptString(encrypted) } : {});
 let window, client, nativeBridge, mcpBridge, documents, files, locked = true, failure = '', mcpClients = [];
-let pendingApproval, confirmation = Promise.resolve(), initializing, exiting = false, screenLocked = false, sleeping = false;
+let pendingApproval, confirmation = Promise.resolve(), initializing, exiting = false, sleeping = false;
 let heartbeatTimer, heartbeatBusy = false, browserConnection = 'pending', queuedPairing, pairingReturn;
 let browserRegistrations = { chrome: false, firefox: false };
 const browserExtensions = {};
@@ -92,9 +92,10 @@ const workGate = createUpdateWorkGate();
 let restoringBackup = false;
 const identityKey = state => JSON.stringify([state.deviceId, state.pairing?.origin, state.pairing?.account?.id]);
 const masterSessionId = randomUUID();
-const masterIdentity = () => `${vault.get().deviceId}:${masterSessionId}:${sessionEpoch}`;
+const masterIdentity = (deviceId = vault.select(state => state.deviceId)) => `${deviceId}:${masterSessionId}:${sessionEpoch}`;
 const store = {
   get() { assertAvailable(false); return vault.get(); },
+  select(project) { assertAvailable(false); return vault.select(project); },
   update(change, options) {
     assertAvailable(false);
     const generation = sessionEpoch;
@@ -124,7 +125,7 @@ browserForms = createBrowserForms({ store, credentials: decisionCredentials, ass
 // Jobs shows the selected window's real count before any AI review: while an account is connected, Companion loads the feed itself.
 const jobsCatalogue = createJobsCatalogue({ store, platform: (operation, args) => platform(operation, args), onChange: () => { careerViewRevision++; emit(); } });
 function loadJobs(force = false) {
-  if (locked || screenLocked || sleeping || quitDraining || updateInstalling) return;
+  if (locked || sleeping || quitDraining || updateInstalling) return;
   void workGate.run(() => jobsCatalogue.load({ force }), { meaningful: false }).catch(() => {});
 }
 const backups = createBackups({
@@ -285,7 +286,7 @@ async function startUpdates() {
   void updateScheduler.start();
 }
 function assertStorageAvailable() {
-  if (locked || screenLocked || sleeping) fail('LOCAL_LOCKED', 'Open the companion and unlock local storage.');
+  if (locked) fail('LOCAL_LOCKED', 'Companion could not open your saved work. Open Companion and choose Retry.');
 }
 function assertAvailable() {
   assertStorageAvailable();
@@ -297,10 +298,12 @@ function safeFailure(error) {
   return { code: known ? error.code : 'LOCAL_OPERATION_FAILED', message: known ? error.message : 'This action could not be completed. Reopen the companion and try again.' };
 }
 function status() {
-  if (locked || screenLocked || sleeping) return { installed: true, mode: 'local_mcp', paired: false, hasCv: false, applicationWorkflowVersion: 2,
+  if (locked) return { installed: true, mode: 'local_mcp', paired: false, hasCv: false, applicationWorkflowVersion: 2,
     companionVersion: packageMetadata.version, browserExtensions: { ...browserExtensions },
     decisionApiConfigured: false, connections: [], execution: { state: 'locked' } };
-  const state = vault.get();
+  return vault.select(publicStatus);
+}
+function publicStatus(state) {
   return { installed: true, mode: 'local_mcp', deviceId: state.deviceId, publicKey: state.publicKey, label: state.label,
     applicationWorkflowVersion: 2, hostInfo: reviewHostInfo,
     companionVersion: packageMetadata.version, browserExtensions: { ...browserExtensions },
@@ -358,23 +361,23 @@ function noteSessions(clients) {
   ({ pending: restartPending, counts: sessionCounts } = settleRestartNotices(restartPending, sessionCounts, clients));
 }
 function localState() {
-  const publicState = status();
   const browserIntegration = { registered: browserRegistrations, connected: [...new Set([...sockets].map(socket => socket.browser))] };
-  if (locked || screenLocked || sleeping) return { ...publicState, failure, browserConnection, browserIntegration, mcpClients };
-  const state = vault.get();
-  const master = masterCvState(state.career ?? createCareerState(), masterIdentity());
-  return { ...publicState, account: state.pairing?.account ?? null, reconnectAccount: state.reconnectAccount ?? null, origin: state.pairing?.origin ?? null, browserConnection, browserIntegration, mcpClients, failure,
-    shell: { web: webShell, container, browserSetup: container ? Object.fromEntries(['chrome', 'firefox'].map(browser => [browser, `docker exec ${container} companion browser ${browser} | sh`])) : null },
-    setup: setup(), careerViewVersion: `${state.deviceId}:${sessionEpoch}:${careerViewRevision}`,
-    masterCv: { version: master.master?.version ?? 0, revision: master.revision, status: master.status, identity: master.identity },
-    catalogue: jobsCatalogue.state(), hasReviews: Object.keys(state.career?.matching?.scores ?? {}).length > 0,
-    decisions: { credentials: decisionCredentialStatus(state) },
-    publicationRange: savedPublicationRange(state.career ?? {}),
-    careerGap: savedCareerGap(state.career ?? {}),
-    updates: updateState(),
-    review: { hosts: reviewHosts, hostInfo: reviewHostInfo, added: hostsAdded, ...liveSessions(mcpClients), restart: restartPending, errors: hostRefreshErrors,
-      preferredHost: ['claude', 'codex'].includes(state.browserPreferences?.applicationHost) ? state.browserPreferences.applicationHost : reviewHosts.codex ? 'codex' : 'claude' },
-    approval: pendingApproval ? { id: pendingApproval.id, title: pendingApproval.title, detail: pendingApproval.detail } : null };
+  if (locked) return { ...status(), failure, browserConnection, browserIntegration, mcpClients };
+  return vault.select(state => {
+    const publicState = publicStatus(state);
+    return { ...publicState, account: state.pairing?.account ?? null, reconnectAccount: state.reconnectAccount ?? null, origin: state.pairing?.origin ?? null, browserConnection, browserIntegration, mcpClients, failure,
+      shell: { web: webShell, container, browserSetup: container ? Object.fromEntries(['chrome', 'firefox'].map(browser => [browser, `docker exec ${container} companion browser ${browser} | sh`])) : null },
+      setup: setup(), careerViewVersion: `${state.deviceId}:${sessionEpoch}:${careerViewRevision}`,
+      masterCv: masterCvSummary(state.career ?? createCareerState(), masterIdentity(state.deviceId)),
+      catalogue: jobsCatalogue.state(), hasReviews: Object.keys(state.career?.matching?.scores ?? {}).length > 0,
+      decisions: { credentials: decisionCredentialStatus(state) },
+      publicationRange: savedPublicationRange(state.career ?? {}),
+      careerGap: savedCareerGap(state.career ?? {}),
+      updates: updateState(),
+      review: { hosts: reviewHosts, hostInfo: reviewHostInfo, added: hostsAdded, ...liveSessions(mcpClients), restart: restartPending, errors: hostRefreshErrors,
+        preferredHost: publicState.preferredHost },
+      approval: pendingApproval ? { id: pendingApproval.id, title: pendingApproval.title, detail: pendingApproval.detail } : null };
+  });
 }
 function emit(event = 'status', payload = status()) {
   const bytes = encode({ version: 1, event, payload });
@@ -433,15 +436,24 @@ function confirm(title, detail, signal) {
   }));
   confirmation = pending.catch(() => false); return pending;
 }
+function observePowerEvents() {
+  // OS screen locking does not change this private local profile or its sessions.
+  // Suspend only pauses background scheduling; accepted work continues on wake.
+  powerMonitor.on('suspend', () => { sleeping = true; });
+  powerMonitor.on('resume', () => {
+    sleeping = false;
+    workGate.activity();
+    emit(); loadJobs();
+    void updateScheduler.resume();
+  });
+}
 async function initialize() {
-  if (screenLocked || sleeping) fail('LOCAL_LOCKED', 'Unlock this computer before opening saved career data.');
   if (!locked) return;
   if (initializing) return initializing;
   initializing = (async () => {
     await vault.open();
     vaultOpened = true;
     await vault.update(state => { state.career = upgradeCareer(state.career); });
-    if (screenLocked || sleeping) fail('LOCAL_LOCKED', 'Unlock this computer before opening saved career data.');
     locked = false; failure = ''; client = createDeviceClient(store, localOnly, { onUnpaired: forgetRevokedPairing });
     files = createDocumentFiles({ directory, store, assertAvailable });
   })();
@@ -506,7 +518,7 @@ function acceptPairingURL(raw) {
 }
 async function platform(operation, args) {
   assertAvailable(false);
-  if (!store.get().pairing) fail('PAIRING_REQUIRED', 'Connect your account in companion settings.');
+  if (!store.select(state => Boolean(state.pairing))) fail('PAIRING_REQUIRED', 'Connect your account in companion settings.');
   return client.request('POST', '/device/platform', { operation, args });
 }
 async function selectSourceFile() {
@@ -556,7 +568,7 @@ function applicationAccess() {
   const view = async result => {
     const hostInfo = await launcher.info(); scoped.assertAvailable(false);
     const hosts = Object.fromEntries(Object.entries(hostInfo).map(([key, value]) => [key, value.available]));
-    const saved = scoped.store.get().browserPreferences?.applicationHost;
+    const saved = scoped.store.select(state => state.browserPreferences?.applicationHost);
     return { ...result, hosts, hostInfo, preferredHost: ['claude', 'codex'].includes(saved) ? saved : hosts.codex ? 'codex' : 'claude' };
   };
   return { ...scoped, localFiles, workflow, launcher, view };
@@ -585,7 +597,7 @@ function createSessionServer() {
       scoped.assertAvailable(true); const result = await selectSourceFile(); scoped.assertAvailable(true); return result;
     }, extractFile: documents.extractFile }),
     ...createMasterCvTools({ store: scoped.store, identity: masterIdentity }),
-    ...createApplicationTools({ store: scoped.store, platform: scopedPlatform, documents, exportDocument: localFiles.exportDocument, cleanupExports: localFiles.cleanupExports, withExportTransaction: localFiles.withExportTransaction }),
+    ...createApplicationTools({ store: scoped.store, platform: scopedPlatform, documents, exportDocument: localFiles.exportDocument, withExportTransaction: localFiles.withExportTransaction }),
     ...createApplicationPreparationTools({ workflow: applicationFlow, openInBrowser: async url => {
       scoped.assertAvailable(false); const result = await openInBrowser(url); scoped.assertAvailable(false); return result;
     } }),
@@ -695,12 +707,12 @@ async function nativeOperation(op, payload, socket = null) {
     if (op === 'application_resolve') return mutation(async () => {
       const result = await access.workflow.resolve(payload);
       access.assertAvailable(false);
-      applicationSockets.set(result.bindingId, { socket, epoch: sessionEpoch, identity: identityKey(store.get()) });
+      applicationSockets.set(result.bindingId, { socket, epoch: sessionEpoch, identity: store.select(identityKey) });
       careerViewRevision++; emit();
       return access.view(result);
     });
     const bound = applicationSockets.get(payload.bindingId);
-    if (!bound || !socket || socket.destroyed || !socket.writable || bound.socket !== socket || bound.epoch !== sessionEpoch || bound.identity !== identityKey(store.get()))
+    if (!bound || !socket || socket.destroyed || !socket.writable || bound.socket !== socket || bound.epoch !== sessionEpoch || bound.identity !== store.select(identityKey))
       fail('FORM_CONTEXT_CHANGED', 'Read this application page again before using its documents.');
     if (op === 'application_status') return access.view(await access.workflow.status(payload));
     if (op === 'application_copy_intro') {
@@ -753,7 +765,7 @@ async function nativeOperation(op, payload, socket = null) {
   }
   if (op === 'forms_answer_save') {
     const session = browserSessions.get(payload.formId);
-    if (!session || session.socket !== socket || session.epoch !== sessionEpoch || session.identity !== identityKey(store.get()))
+    if (!session || session.socket !== socket || session.epoch !== sessionEpoch || session.identity !== store.select(identityKey))
       fail('FORM_CONTEXT_CHANGED', 'Read this application page before saving answers.');
     const before = session.evidence, result = await browserForms.saveAnswer(payload);
     // The save re-binds current drafts to the new evidence; keep prepared clipboard sessions bound to them too.
@@ -904,6 +916,11 @@ async function startNativeBridge() {
 async function settingsOperation(op, input, ownMutation) {
   try {
     if (op === 'state') return { ok: true, result: localState() };
+    if (op === 'open-support') {
+      exact(input, []);
+      await shell.openExternal('https://www.reddit.com/r/recruitersrip/');
+      return { ok: true, result: { opened: true } };
+    }
     if (MASTER_CV_ACTIONS.includes(op)) {
       assertWorkAllowed();
       return { ok: true, result: await masterSettings(op, input) };
@@ -990,13 +1007,13 @@ async function settingsOperation(op, input, ownMutation) {
     // GitHub linking happens on the website through Privy; middleware's copy of the link is what the platform status reports.
     if (op === 'account-platform') {
       assertAvailable(false); exact(input, []);
-      if (!store.get().pairing) return { ok: true, result: { paired: false } };
+      if (!store.select(state => Boolean(state.pairing))) return { ok: true, result: { paired: false } };
       try { const status = await platform('status', {}); return { ok: true, result: { paired: true, github: status?.github ?? null, membership: status?.membership ?? null } }; }
       catch (error) { return { ok: true, result: { paired: true, unavailable: error?.code === 'DEVICE_UNAUTHORIZED' ? 'reconnect' : 'offline' } }; }
     }
     if (op === 'connect-github') {
       assertAvailable(false); exact(input, []);
-      if (!store.get().pairing) fail('PAIRING_REQUIRED', 'Connect your account first.');
+      if (!store.select(state => Boolean(state.pairing))) fail('PAIRING_REQUIRED', 'Connect your account first.');
       await shell.openExternal(new URL('/account#github', productOrigin).href);
       return { ok: true, result: { opened: true } };
     }
@@ -1160,16 +1177,12 @@ else {
     await refreshReviewHosts();
     loadJobs();
     heartbeatTimer = setInterval(() => {
-      if (locked || heartbeatBusy || quitDraining || updateInstalling || !vault.get().pairing) return;
+      if (locked || sleeping || heartbeatBusy || quitDraining || updateInstalling || !vault.select(state => Boolean(state.pairing))) return;
       heartbeatBusy = true;
       void workGate.run(() => client.request('POST', '/device/heartbeat', {}), { meaningful: false })
         .catch(() => {}).finally(() => { heartbeatBusy = false; });
     }, 30000);
-    const lock = () => { backups.cancel(); browserForms.cancelAll(); jobsCatalogue.reset(); sessionEpoch++; locked = true; pairingReturn?.close(); pendingApproval?.finish(false); mcpBridge.disconnect(); emit(); };
-    const unlock = () => { if (screenLocked || sleeping) return; workGate.activity(); void initialize().then(startUpdates).then(() => { emit(); loadJobs(); }).catch(() => { failure = 'Local storage could not be reopened. Your saved data has not been replaced.'; }); };
-    powerMonitor.on('lock-screen', () => { screenLocked = true; lock(); }); powerMonitor.on('suspend', () => { sleeping = true; lock(); });
-    powerMonitor.on('unlock-screen', () => { screenLocked = false; unlock(); });
-    powerMonitor.on('resume', () => { sleeping = false; unlock(); void updateScheduler.resume(); });
+    observePowerEvents();
     const link = process.argv.find(value => value.startsWith('recruiters-companion:')); if (link) acceptPairingURL(link);
     if (queuedPairing && !locked) { const payload = queuedPairing; queuedPairing = undefined; void pair(payload).catch(error => { failure = safeFailure(error).message; emit(); }); }
     if ((process.argv.includes('--bridge') || process.argv.includes('--mcp-background')) && !locked && !pendingApproval) window.hide();

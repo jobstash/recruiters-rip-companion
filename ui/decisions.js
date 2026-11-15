@@ -30,7 +30,7 @@
     }
     element('form').setAttribute('aria-busy', String(pending));
     const since = savedDate(credentials?.savedAt);
-    element('key-status').textContent = !available ? 'Unlock your saved work to use help with forms.'
+    element('key-status').textContent = !available ? 'Saved form settings are unavailable.'
       : !configured ? 'No key saved. Read page can still use your saved details in Chrome and Firefox.'
         : replacing ? `The key …${credentials.keyHint} stays active until you save a new one.`
           : `Key saved${since ? ` on ${since}` : ''}.`;

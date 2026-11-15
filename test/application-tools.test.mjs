@@ -76,7 +76,7 @@ async function fixture(t, options = {}) {
   const files = createDocumentFiles({ directory, store, assertAvailable() {} });
   const exportDocument = async input => { exported.push(input); return files.exportDocument(input); };
   const tools = new Map(createApplicationTools({ store, platform, documents: options.documents ?? documents, exportDocument,
-    cleanupExports: files.cleanupExports, withExportTransaction: files.withExportTransaction }).map(tool => [tool.name, tool]));
+    withExportTransaction: files.withExportTransaction }).map(tool => [tool.name, tool]));
   const call = (name, args = {}) => tools.get(`career_${name}`).invoke(args);
   const mutation = args => ({ requestId: randomUUID(), revision: state.career.revision, ...args });
   const create = (args = { job: pastedJob }) => call('application_create', mutation(args));
@@ -241,6 +241,31 @@ test('a plain CV saves with layout and notes, keeps history, and exports readabl
   assert.deepEqual(app.cvHistory.map(draft => draft.version), [1, 2]);
   assert.equal(app.exports.length, 2);
   assert.equal(f.exported.length, 2);
+});
+
+test('repeated application exports keep prior current bytes and paths through unrelated exports', { timeout: nativeIoTimeout }, async t => {
+  const f = await fixture(t);
+  const first = (await f.create()).applicationId;
+  const second = (await f.create({ job: { ...pastedJob, url: 'https://example.test/jobs/identical-labels' } })).applicationId;
+  for (const id of [first, second]) {
+    await f.saveCv(id, tailoredCv());
+    await f.saveLetter(id, letter);
+  }
+  const original = (await f.exportDraft(first, 'cv')).export;
+  const before = await readFile(original.path);
+  const later = await Promise.all([
+    f.exportDraft(first, 'cv'), f.exportDraft(first, 'cover_letter'),
+    f.exportDraft(second, 'cv'), f.exportDraft(second, 'cover_letter'),
+  ]);
+  assert.equal(new Set([original.path, ...later.map(result => result.export.path)]).size, 5);
+  assert.deepEqual(await readFile(original.path), before);
+  assert.equal(await f.files.resolveExport(original.uri), original.path);
+  assert.deepEqual(Buffer.from((await f.files.readResource(original.uri)).blob, 'base64'), before);
+  for (const { export: record } of later) {
+    const bytes = await readFile(record.path);
+    assert.equal(digest(bytes), record.sha256);
+    assert.equal(await f.files.resolveExport(record.uri), record.path);
+  }
 });
 
 test('the CV header is rendered from the current profile and TXT export equals the text rendering', async t => {

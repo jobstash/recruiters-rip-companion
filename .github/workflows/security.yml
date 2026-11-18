@@ -39,7 +39,9 @@ jobs:
       - name: Exercise synthetic authentication and storage boundaries without external network
         run: docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges companion-headless
       - name: Audit the locked dependency graph
-        run: docker run --rm companion-headless pnpm audit
+        # Explicitly accepted existing picomatch ReDoS risk; all other advisories still fail.
+        # GHSA-fc5q-39xc-vjpf / CVE-2026-112366 has no published fix.
+        run: docker run --rm companion-headless pnpm audit --ignore CVE-2026-112366
 
   container:
     runs-on: ubuntu-24.04

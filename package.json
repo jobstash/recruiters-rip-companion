@@ -74,6 +74,11 @@
       "cpu": [
         "current"
       ]
+    },
+    "auditConfig": {
+      "ignoreCves": [
+        "CVE-2026-112366"
+      ]
     }
   },
   "build": {

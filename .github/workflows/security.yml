@@ -41,7 +41,7 @@ jobs:
       - name: Audit the locked dependency graph
         # Explicitly accepted existing picomatch ReDoS risk; all other advisories still fail.
         # GHSA-fc5q-39xc-vjpf / CVE-2026-112366 has no published fix.
-        run: docker run --rm companion-headless pnpm audit --ignore CVE-2026-112366
+        run: docker run --rm companion-headless pnpm audit
 
   container:
     runs-on: ubuntu-24.04

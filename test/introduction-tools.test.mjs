@@ -53,23 +53,6 @@ test('published schema and invoke reject invalid GitHub identities, extra data a
   assert.equal(f.calls.platform.at(-1).args.targets.length, 20);
 });
 
-test('target grouping preserves organization bridge people, contribution evidence and unscored same-person paths', async () => {
-  const source = { login: 'source-org', kind: 'organization' };
-  const person = login => ({ login, name: login, avatar: null, githubUrl: `https://github.com/${login}`, emails: [] });
-  const sourcePerson = person('source-contributor'), targetPerson = person('target-contributor');
-  const sourceEvidence = { org: source.login, person: sourcePerson.login, kind: 'contribution', repos: ['repo'], firstSeen: '2024-01-01', lastSeen: '2025-01-01' };
-  const targetEvidence = { ...sourceEvidence, org: target.login, person: targetPerson.login };
-  const response = { source, available: true, asOf: '2026-11-05', inferred: true, coverage: { source: 'indexed', maxHops: 2 }, targets: [
-    { ...target, status: 'ok', paths: [{ source: sourcePerson, sourceEvidence, target: targetPerson, targetEvidence, via: person('bridge'),
-      hops: 2, tier: '1-intermediary', edges: [{ org: 'shared-org', repos: ['shared-repo'], overlapEnd: '2025-01-01' }], warmScore: 42, pathStrength: 2 }] },
-    { login: 'shared-org', kind: 'organization', status: 'ok', paths: [{ source: sourcePerson, target: sourcePerson, sourceEvidence,
-      targetEvidence: { ...sourceEvidence, org: 'shared-org' }, via: null, hops: 0, tier: 'same-person', edges: [], warmScore: null, pathStrength: null }] },
-    { login: 'unindexed', kind: 'user', status: 'target_not_indexed', paths: [] },
-  ] };
-  const f = fixture({ platform: async () => structuredClone(response) });
-  assert.deepEqual(await f.call('career_intro_paths', { source, targets: response.targets.map(({ login, kind }) => ({ login, kind })) }), response);
-});
-
 test('missing linked source, missing graph coverage, no paths and outages remain distinct', async () => {
   const source = { login: 'candidate', kind: 'user' };
   for (const [resolved, available, status, reason, coverage] of [

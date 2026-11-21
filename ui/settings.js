@@ -25,13 +25,13 @@ async function invoke(op, input = {}) {
   if (!response.ok) throw Object.assign(new Error(response.error.message), { code: response.error.code });
   return response.result;
 }
-const views = ['me', 'jobs', 'pipeline', 'setup', 'help'];
 function showView(next) {
   view = next;
   for (const button of document.querySelectorAll('[data-view]')) {
     if (button.dataset.view === next) button.setAttribute('aria-current', 'page'); else button.removeAttribute('aria-current');
+    $(`view-${button.dataset.view}`).hidden = button.dataset.view !== next;
   }
-  for (const name of views) $(`view-${name}`).hidden = name !== next;
+  window.referralsUI?.setVisible(next === 'referrals');
   if (next !== 'setup') window.decisionsUI?.clearInput();
   void window.careerBrowser?.activate();
 }
@@ -189,6 +189,7 @@ async function refreshState() {
     document.documentElement.toggleAttribute('data-container', Boolean(state.shell?.container));
     if (noticeKind === 'state-unavailable') notice('');
     const locked = state.execution.state === 'locked';
+    window.referralsUI?.refresh(current);
     window.backupsUI?.refresh(current);
     $('storage').hidden = !locked; $('settings').hidden = locked; $('views').hidden = locked;
     $('storage-message').textContent = state.failure || 'Companion could not open your saved work. Choose Retry.';
@@ -210,8 +211,7 @@ async function refreshState() {
     $('connect-account').textContent = state.paired ? 'Open account' : 'Connect account';
     $('connect-account').classList.toggle('primary', !state.paired);
     $('connect-account').classList.toggle('ghost', state.paired);
-    $('account-hint').textContent = state.paired ? 'Account connected. A paid membership is needed for new jobs. You can still use your saved work without a membership.'
-      : state.reconnectAccount ? `This computer was disconnected from recruiters.rip. Connect ${state.reconnectAccount.label} again to see new jobs. Your saved work is still available.` : 'Not connected. Connect to see new jobs, or keep working with your CV and saved jobs.';
+    if (!state.paired) $('account-hint').textContent = state.reconnectAccount ? `Reconnect ${state.reconnectAccount.label}.` : 'Not connected.';
     renderSetup(state);
     syncGithub(state.paired);
     if (!view) showView('me');
@@ -239,6 +239,7 @@ async function refreshState() {
     renderSetup(null);
     window.backupsUI?.unavailable();
     window.masterCvUI?.unavailable();
+    window.referralsUI?.refresh(null);
     $('codex-status').textContent = ''; $('claude-status').textContent = '';
     stateNotice('Could not reach Companion. Choose Retry in Me, or reopen Companion. Your saved work is unchanged.', 'state-unavailable');
   }
@@ -248,7 +249,7 @@ async function action(op, success) {
   busy = true;
   window.backupsUI?.setBusy(true);
   // Browser instances manage their own controls; the Jobs toolbar's Copy review prompt is an ordinary action.
-  const controls = [...document.querySelectorAll('button')].filter(button => (!button.closest('#notice, #me-browser, #career-browser, #pipeline-browser, #views, #decisions, #update-settings, #settings-backups, .settings-tabs') || ['copy-review-prompt', 'review-codex', 'review-claude'].includes(button.id)) && !['approval-cancel', 'approval-allow'].includes(button.id));
+  const controls = [...document.querySelectorAll('button')].filter(button => (!button.closest('#notice, #me-browser, #career-browser, #pipeline-browser, #view-referrals, #views, #decisions, #update-settings, #settings-backups, .settings-tabs') || ['copy-review-prompt', 'review-codex', 'review-claude'].includes(button.id)) && !['approval-cancel', 'approval-allow'].includes(button.id));
   const disabled = controls.map(control => control.disabled); controls.forEach(control => { control.disabled = true; });
   try {
     const result = await invoke(op);
@@ -300,6 +301,27 @@ for (const browser of ['chrome', 'firefox']) $(`copy-${browser}-browser-setup`).
 // so the row reads the platform status rather than a local flag, and re-reads it when the window regains focus after linking.
 let github = { paired: false, state: 'unknown', login: null };
 let githubRequest = 0, githubPollUntil = 0;
+function billingText(membership) {
+  if (!membership?.status) return 'Open your account to check your billing details.';
+  if (membership.status === 'none') return 'No subscription.';
+  if (membership.status === 'pending') return 'Subscription pending.';
+  if (!membership.active) return 'Subscription ended.';
+  const date = value => value && Number.isFinite(Date.parse(value))
+    ? new Date(value).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : '';
+  const period = date(membership.periodEnd);
+  if (membership.renewalOff) return period ? `Renewal is off. Your access ends ${period}.` : 'Renewal is off.';
+  const price = membership.price;
+  const rate = price?.currency === 'USD' && ['month', 'year'].includes(price.interval) ? `$${price.amount}/${price.interval}` : '';
+  const offer = membership.discount;
+  const end = date(offer?.endsAt);
+  if (offer?.percentOff === 100) {
+    if (!offer.endsAt) return 'Your subscription is free on renewal.';
+    if (end) return `Your free period ends ${end}.${rate ? ` Standard price after that: ${rate}.` : ''}`;
+  }
+  const renewal = period ? `Renews ${period}.` : 'Subscription active.';
+  if (offer?.percentOff) return `${renewal} ${offer.percentOff}% off${end ? ` until ${end}` : ' on renewals'}.${rate ? ` Standard price: ${rate}.` : ''}`;
+  return `${renewal}${rate ? ` Standard price: ${rate}.` : ''}`;
+}
 function renderGithub() {
   const button = $('connect-github'), status = $('github-status');
   $('github-ask').hidden = github.state !== 'linked';
@@ -322,16 +344,24 @@ function renderGithub() {
   button.disabled = github.state === 'loading' || github.state === 'reconnect';
 }
 async function syncGithub(paired, force = false) {
-  if (!paired) { github = { paired: false, state: 'unknown', login: null }; githubPollUntil = 0; renderGithub(); return; }
+  if (!paired) { if (github.paired) ++githubRequest; github = { paired: false, state: 'unknown', login: null }; githubPollUntil = 0; renderGithub(); return; }
   if (!force && github.paired && github.state !== 'unknown') return;
   const request = ++githubRequest;
-  if (github.state === 'unknown') { github = { paired: true, state: 'loading', login: null }; renderGithub(); }
+  if (github.state === 'unknown') {
+    github = { paired: true, state: 'loading', login: null }; renderGithub();
+    $('account-hint').textContent = 'Checking billing details…';
+  }
   try {
     const result = await invoke('account-platform');
     if (request !== githubRequest) return;
+    $('account-hint').textContent = billingText(result.membership);
     github = result.unavailable ? { paired: true, state: result.unavailable, login: null }
       : { paired: true, state: result.github?.login ? 'linked' : 'unlinked', login: result.github?.login ?? null };
-  } catch { if (request === githubRequest) github = { paired: true, state: 'offline', login: null }; }
+  } catch {
+    if (request !== githubRequest) return;
+    github = { paired: true, state: 'offline', login: null };
+    $('account-hint').textContent = billingText(null);
+  }
   renderGithub();
   // The website links instantly, but the platform learns of it through a webhook; keep checking briefly after a link attempt.
   if (github.state !== 'linked' && Date.now() < githubPollUntil) setTimeout(() => { void syncGithub(true, true); }, 4000);

@@ -8,6 +8,7 @@
 <link rel="stylesheet" href="design-tokens.css">
 <link rel="stylesheet" href="settings.css">
 <script src="jobs-empty.js" defer></script>
+<script src="referrals.js" defer></script>
 <script src="pipeline.js" defer></script>
 <script src="career-browser.js" defer></script>
 <script src="decisions.js" defer></script>
@@ -34,6 +35,7 @@
 <div class="tab"><button type="button" class="text" data-view="me">Me</button></div>
 <div class="tab"><button type="button" class="text" data-view="jobs">Jobs</button></div>
 <div class="tab"><button type="button" class="text" data-view="pipeline">Pipeline</button></div>
+<div class="tab"><button type="button" class="text" data-view="referrals">Free months</button></div>
 <div class="tab"><button type="button" class="text" data-view="setup">Settings</button></div>
 <div class="tab"><button type="button" class="text" data-view="help">Help</button></div>
 </nav>
@@ -198,6 +200,33 @@
 </div>
 </div>
 </section>
+<section id="view-referrals" class="setup-view" aria-labelledby="referral-heading" hidden>
+<header class="page-heading"><h1 id="referral-heading" tabindex="-1">Give a month, get a month</h1><p>Give a friend their first month free on the monthly plan. You earn a month when their subscription starts, even if they use another discount.</p></header>
+<section class="setup-section" aria-labelledby="referral-invite-title">
+<h2 id="referral-invite-title">Your invite</h2>
+<div class="settings-content">
+<p id="referral-status" role="status"></p>
+<button id="referral-connect" type="button" class="primary" hidden>Account settings</button>
+<button id="referral-retry" type="button" class="ghost" hidden>Retry</button>
+<div id="referral-invite" class="settings-content" hidden>
+<button id="referral-copy" type="button" class="primary">Copy invite link</button>
+<label class="decisions-field">Invite link<input id="referral-link" type="text" readonly></label>
+<p>Or give your friend this code: <code id="referral-code"></code></p>
+</div>
+</div>
+</section>
+<section id="referral-balance" class="setup-section" aria-labelledby="referral-balance-title" hidden>
+<h2 id="referral-balance-title">Your credits</h2>
+<div class="settings-content">
+<dl class="backup-counts"><dt>Months available</dt><dd id="referral-available"></dd><dt>Total months earned</dt><dd id="referral-earned"></dd></dl>
+<p>One credit covers a month on the monthly plan or one twelfth of your annual renewal. Unused credits stay in your account.</p>
+</div>
+</section>
+<section class="setup-section" aria-labelledby="referral-pipeline-title">
+<h2 id="referral-pipeline-title">Pipeline sharing</h2>
+<div class="settings-content"><label class="referral-sharing-option"><input id="referral-sharing" type="checkbox" disabled>Show sharing actions on interview, offer and hired cards</label><p>Moving a card stays private. Sharing on X opens a draft you can edit or discard. Posting earns no credit.</p></div>
+</section>
+</section>
 <section id="view-setup" class="setup-view" aria-label="Settings" hidden>
 <div class="tabs settings-tabs" role="tablist" aria-label="Settings">
 <button id="settings-tab-general" class="tab" type="button" role="tab" aria-controls="settings-general" aria-selected="true" tabindex="0" data-settings-tab="general">General</button>
@@ -205,17 +234,16 @@
 </div>
 <div id="settings-general" role="tabpanel" aria-labelledby="settings-tab-general">
 <section id="account-settings" class="setup-section account" aria-labelledby="account-title">
-<h2 id="account-title">Account</h2>
-<div class="settings-content"><p id="account-hint">Not connected.</p><button id="connect-account" type="button">Connect account</button></div>
+<h2 id="account-title">Account and billing</h2>
+<div class="settings-content"><p id="account-hint" role="status">Not connected.</p><button id="connect-account" type="button">Connect account</button></div>
 </section>
 <section id="introduction-settings" class="setup-section" aria-labelledby="introductions-title">
-<h2 id="introductions-title">Introductions</h2>
+<h2 id="introductions-title">Warm intros</h2>
 <div class="settings-content">
-<p>Your AI app can find people who could introduce you at a company that’s hiring: people you’ve worked with on GitHub, and people they’ve worked with.</p>
-<p>It looks only at public GitHub activity. Link your GitHub account so recruiters.rip knows which work is yours.</p>
+<p>Who do you know at a company that’s hiring? Your AI app can use public GitHub activity to find someone you’ve worked with, or a former collaborator who knows someone there.</p>
 <p id="github-status" role="status" aria-live="polite"></p>
 <button id="connect-github" class="ghost" type="button" disabled>Link GitHub</button>
-<p id="github-ask" class="caption" hidden>Ask your AI app: “Who could introduce me to this company?”</p>
+<p id="github-ask" class="caption" hidden>Ask your AI app: “Who could introduce me at this company?”</p>
 </div>
 </section>
 <section id="chat-app-settings" class="setup-section" aria-labelledby="chat-app-title">

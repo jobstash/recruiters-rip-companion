@@ -59,7 +59,7 @@ button:focus-visible { box-shadow: var(--shadow-focus-ring); z-index: 1; }
 .topbar { flex: none; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--spacing-16) var(--spacing-32); padding: var(--spacing-16) var(--page-pad); border-bottom: 1px solid var(--color-facet); }
 .brand { display: flex; flex-wrap: wrap; align-items: center; gap: var(--spacing-24); min-height: 44px; }
 .brand-lockup { display: block; width: 180px; height: 32px; object-fit: contain; object-position: left center; }
-.view-nav { display: flex; gap: var(--spacing-16); }
+.view-nav { display: flex; flex-wrap: wrap; gap: 0 var(--spacing-16); }
 .tab button { color: var(--color-smoke); }
 .tab button[aria-current="page"] { color: var(--color-ink); }
 .tab button[aria-current="page"]::after, .tab button:hover::after { content: ""; position: absolute; bottom: 0; left: var(--spacing-8); right: var(--spacing-8); height: 1px; background: var(--rr-dispersion); box-shadow: var(--shadow-edge-glow); }
@@ -240,6 +240,8 @@ button.pipeline-card-open { display: grid; gap: 4px; width: 100%; padding: 0; bo
 .pipeline-card-detail { font: 400 12px/1.5 var(--font-geist-mono); color: var(--color-ink); font-variant-numeric: tabular-nums; }
 .pipeline-card-interview { font: 400 12px/1.5 var(--font-geist-mono); color: var(--color-ink-2); font-variant-numeric: tabular-nums; }
 .pipeline-card-actions { display: flex; flex-direction: column; align-items: flex-start; }
+.pipeline-card-share { display: grid; border-top: 1px solid var(--color-facet); }
+:root:not([data-pipeline-sharing]) .pipeline-card-share { display: none; }
 .pipeline-choice { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--spacing-8); }
 .pipeline-move { flex: none; width: 15ch; max-width: 100%; min-height: 44px; padding: 0; border: 0; border-radius: 0; background: var(--color-canvas); color: var(--color-smoke); font: 400 12px/1.5 var(--font-geist-mono); cursor: pointer; }
 .pipeline-move:hover { color: var(--color-ink); }
@@ -275,6 +277,9 @@ button.pipeline-card-open { display: grid; gap: 4px; width: 100%; padding: 0; bo
 .setup-section { display: grid; grid-template-columns: 160px minmax(0, 1fr); gap: var(--spacing-32); min-width: 0; padding-block: var(--spacing-32); border-top: 1px solid var(--color-facet); }
 .setup-section.account { border-top-color: var(--color-ink); }
 .settings-content { display: grid; gap: var(--spacing-24); min-width: 0; }
+#view-referrals p { max-width: var(--reading); }
+#referral-status:empty { display: none; }
+.referral-sharing-option { display: flex; align-items: center; gap: var(--spacing-8); min-height: 44px; cursor: pointer; }
 /* The subtab bar sticks at the very top of the scrolling main, covering main's top padding so nothing shows above it. */
 #view-setup { --tabs-lift: var(--spacing-32); }
 .settings-tabs { position: sticky; top: calc(-1 * var(--tabs-lift)); z-index: 2; margin: calc(-1 * var(--tabs-lift)) 0 var(--spacing-16); padding-top: var(--tabs-lift); background: var(--color-canvas); }

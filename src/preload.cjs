@@ -7,6 +7,7 @@ allowed.add('update-source-guide');
 allowed.add('career-gap-set');
 allowed.add('open-support');
 for (const operation of ['master-cv-read', 'master-cv-save', 'master-cv-export']) allowed.add(operation);
+for (const operation of ['referrals', 'referral-copy', 'milestone-share', 'pipeline-sharing-set']) allowed.add(operation);
 contextBridge.exposeInMainWorld('companion', Object.freeze({
   invoke(op, input = {}) {
     if (!allowed.has(op)) return Promise.reject(new Error('Unavailable local settings action.'));

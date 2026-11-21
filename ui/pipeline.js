@@ -6,6 +6,7 @@
   const columns = [['prepared', 'Prepared'], ['applied', 'Applied'], ['interviewing', 'Interviewing'], ['offer', 'Offer'], ['hired', 'Hired'], ['closed', 'Closed']];
   const order = columns.map(([id]) => id);
   const labels = Object.fromEntries(columns);
+  const milestones = { interviewing: 'interview', offer: 'offer', hired: 'new job' };
   const node = (tag, className, text) => {
     const created = document.createElement(tag);
     created.className = className;
@@ -97,12 +98,19 @@
         const next = button('Next round', 'text', `${card.id}:round`, () => handlers.nextRound(card, [next]));
         actions.append(next);
       }
+      // Render from the saved stage only. A move never copies a link or opens X.
+      if (Object.hasOwn(milestones, card.stage)) {
+        const share = node('div', 'pipeline-card-share');
+        share.append(button('Give a friend a free month', 'text', `${card.id}:invite`, () => window.referralsUI.invite()),
+          button(`Share my ${milestones[card.stage]} on X`, 'text', `${card.id}:share`, () => window.referralsUI.share(card.stage)));
+        actions.append(share);
+      }
       item.append(open, actions);
       if (choice === card.id) item.append(closeChoice(card));
       return item;
     }
     function forgetCard(id) {
-      for (const suffix of ['open', 'move', 'round', 'choice-rejected', 'choice-withdrawn', 'choice-cancel']) controls.delete(`${id}:${suffix}`);
+      for (const suffix of ['open', 'move', 'round', 'invite', 'share', 'choice-rejected', 'choice-withdrawn', 'choice-cancel']) controls.delete(`${id}:${suffix}`);
     }
     function draw(focusKey) {
       const active = focusKey && controls.get(focusKey);

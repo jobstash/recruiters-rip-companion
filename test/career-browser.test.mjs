@@ -1294,7 +1294,7 @@ test('the Jobs list column keeps Previous/Next on its own last grid row regardle
   // Applications left Jobs for its own Pipeline section: no tab, filter row or list code remains.
   for (const removed of ['career-category-applications', 'data-career-kind="applications"', 'data-stage-count="applications"', 'career-stage-filter'])
     assert.equal(html.includes(removed) || css.includes(removed), false, removed);
-  assert.deepEqual([...html.matchAll(/data-view="([a-z]+)">([^<]+)</g)].map(match => match[2]), ['Me', 'Jobs', 'Pipeline', 'Settings', 'Help']);
+  assert.deepEqual([...html.matchAll(/data-view="([a-z]+)">([^<]+)</g)].map(match => match[2]), ['Me', 'Jobs', 'Pipeline', 'Free months', 'Settings', 'Help']);
   const me = html.match(/<div class="tabs" role="tablist" aria-label="Saved career records">[\s\S]*?<\/div>/)[0];
   assert.deepEqual([...me.matchAll(/data-career-kind="([^"]+)"/g)].map(match => match[1]), ['master', 'sources', 'facts', 'preferences']);
   assert.match(html, /<section id="view-pipeline" class="career-view pipeline-view" aria-label="Pipeline" hidden>/);
@@ -1875,7 +1875,13 @@ test('the Pipeline board moves cards by keyboard and Set status…, closes inlin
   assert.equal(open('tangem').attributes.get('aria-label'), 'tangem, Example, Round 1 · 24 Oct 2025');
   assert.equal(ui.byClass(card('tangem'), 'pipeline-card-interview'), null);
   assert.equal(ui.byClass(card('tangem'), 'pipeline-card-documents'), null);
-  assert.deepEqual(card('tangem').querySelectorAll('button').map(button => button.textContent).slice(1), ['Next round']);
+  const sharing = [], cardActions = card('tangem').querySelectorAll('button').slice(1);
+  ui.window.referralsUI = { invite: (...args) => sharing.push(['invite', ...args]), share: (...args) => sharing.push(['share', ...args]) };
+  assert.deepEqual(cardActions.map(button => button.textContent), ['Next round', 'Give a friend a free month', 'Share my interview on X']);
+  assert.deepEqual(sharing, []);
+  cardActions[1].fire('click');
+  cardActions[2].fire('click');
+  assert.deepEqual(sharing, [['invite'], ['share', 'interviewing']], 'neither action gets the card or employer');
   assert.deepEqual(card('example').querySelectorAll('button').length, 1);
   // The reader is closed until a card is chosen; nothing opens by itself.
   assert.equal(ui.nodes['pipeline-reader'].hidden, true);
@@ -1946,6 +1952,12 @@ test('the Pipeline board moves cards by keyboard and Set status…, closes inlin
   await ui.settle(); await ui.settle(); await ui.settle();
   assert.equal(ui.calls.filter(call => call.operation === 'application-progress' && call.args.move === 'offer').length, 1);
   assert.deepEqual(titles('offer'), ['tangem']);
+  const offerActions = card('tangem').querySelectorAll('button');
+  assert.equal(offerActions.at(-1).textContent, 'Share my offer on X');
+  assert.deepEqual(sharing, [['invite'], ['share', 'interviewing']], 'a saved move never opens another draft');
+  offerActions.at(-1).focus();
+  await ui.window.careerBrowser.refresh(); await ui.settle();
+  assert.equal(card('tangem').querySelectorAll('button').at(-1), offerActions.at(-1), 'an unchanged card keeps the focused share control');
   assert.match(ui.byClass(progress(), 'career-progress-current').textContent, /^Offer · /);
   assert.deepEqual(buttons().map(button => button.textContent), ['Change date', 'Undo last step', 'Accepted', 'Declined']);
   ui.nodes['pipeline-reader'].fire('keydown', { key: 'Escape' });

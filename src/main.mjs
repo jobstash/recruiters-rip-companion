@@ -44,6 +44,7 @@ import { inspectManagedSource } from './source-updates.mjs';
 import { createApplicationWorkflow, createApplicationPreparationTools, saveAppliedJobs, currentApplicationExport } from './application-workflow.mjs';
 import { createApplicationLauncher, REVIEW_PROMPT } from './application-launcher.mjs';
 import { createJobsCatalogue } from './jobs-catalogue.mjs';
+import { createReferralActions } from './referrals.mjs';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const packageMetadata = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
@@ -124,6 +125,12 @@ const decisionCredentials = createDecisionCredentials({ store, onChange: async (
 browserForms = createBrowserForms({ store, credentials: decisionCredentials, assertAvailable });
 // Jobs shows the selected window's real count before any AI review: while an account is connected, Companion loads the feed itself.
 const jobsCatalogue = createJobsCatalogue({ store, platform: (operation, args) => platform(operation, args), onChange: () => { careerViewRevision++; emit(); } });
+const referrals = createReferralActions({
+  platform, origin: productOrigin,
+  accountKey: () => store.select(state => state.pairing ? `${sessionEpoch}:${identityKey(state)}` : null),
+  copyText: text => { clipboard.writeText(text); return !webShell; },
+  openExternal: url => shell.openExternal(url),
+});
 function loadJobs(force = false) {
   if (locked || sleeping || quitDraining || updateInstalling) return;
   void workGate.run(() => jobsCatalogue.load({ force }), { meaningful: false }).catch(() => {});
@@ -373,6 +380,7 @@ function localState() {
       setup: setup(), careerViewVersion: `${state.deviceId}:${sessionEpoch}:${careerViewRevision}`,
       masterCv: masterCvSummary(state.career ?? createCareerState(), masterIdentity(state.deviceId)),
       catalogue: jobsCatalogue.state(), hasReviews: Object.keys(state.career?.matching?.scores ?? {}).length > 0,
+      showPipelineSharing: state.showPipelineSharing !== false,
       decisions: { credentials: decisionCredentialStatus(state) },
       publicationRange: savedPublicationRange(state.career ?? {}),
       careerGap: savedCareerGap(state.career ?? {}),
@@ -1007,6 +1015,20 @@ async function settingsOperation(op, input, ownMutation) {
       clipboard.writeText(prompt);
       return { ok: true, result: { copied: true } };
     }
+    if (op === 'referrals' || op === 'referral-copy' || op === 'milestone-share') {
+      assertWorkAllowed();
+      exact(input, op === 'referral-copy' ? ['code'] : op === 'milestone-share' ? ['stage'] : []);
+      const result = op === 'referrals' ? await referrals.read() : op === 'referral-copy' ? referrals.copy(input.code) : await referrals.share(input.stage);
+      return { ok: true, result };
+    }
+    if (op === 'pipeline-sharing-set') {
+      assertWorkAllowed(); exact(input, ['show']);
+      if (typeof input.show !== 'boolean') fail('INVALID_INPUT', 'Choose whether to show sharing actions.');
+      const scoped = createScopedAccess(store, { assertAvailable, epoch: () => sessionEpoch });
+      await scoped.store.update(state => { state.showPipelineSharing = input.show; });
+      scoped.assertAvailable(false);
+      emit(); return { ok: true, result: input.show };
+    }
     // GitHub linking happens on the website through Privy; middleware's copy of the link is what the platform status reports.
     if (op === 'account-platform') {
       assertAvailable(false); exact(input, []);
@@ -1128,7 +1150,7 @@ ipcMain.handle('local-settings', async (event, op, input = {}) => {
     if (typeof op !== 'string') fail('INVALID_INPUT', 'Choose a local settings action.');
     if (op === 'state' || op.startsWith('update-')) return await settingsOperation(op, input);
     return await workGate.run(() => {
-      if (['decisions-key-save', 'decisions-key-remove', 'publication-range-set', 'career-gap-set', 'import-cv', 'cv-delete', 'delete-rankings', 'connect-account', 'backup', 'backup-preview', 'backup-restore', 'master-cv-save', 'master-cv-export'].includes(op))
+      if (['decisions-key-save', 'decisions-key-remove', 'publication-range-set', 'career-gap-set', 'pipeline-sharing-set', 'import-cv', 'cv-delete', 'delete-rankings', 'connect-account', 'backup', 'backup-preview', 'backup-restore', 'master-cv-save', 'master-cv-export'].includes(op))
         return mutation(ownMutation => settingsOperation(op, input, ownMutation));
       return settingsOperation(op, input);
     }, { meaningful: !['career-list', 'career-read', 'career-pipeline', 'account-platform', 'master-cv-read'].includes(op) });
